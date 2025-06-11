@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "ai-evaluation"
+version = "0.1.0"
+description = "We help GenAI teams maintain high-accuracy for their Models in production."
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "fi" }
+]
+
+
+[tool.poetry.dependencies]
+python = ">3.9"
+futureagi = ">=0.6.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
