@@ -35,7 +35,7 @@ pip install ai-evaluation
 ```
 Then initialise the Evaluator:
 ```python
-from fi.eval import Evaluator
+from fi.evals import Evaluator
 
 evaluator = Evaluator(
     fi_api_key="your_api_key",
@@ -68,7 +68,7 @@ You can also directly send the data through a dictionary with valid keys. Howeve
 
 For Tone Evaluation, we use the Tone Evaluation Template to analyse the sentiment and emotional tone of the input.
 ```python
-from fi.eval.templates import Tone
+from fi.evals.templates import Tone
 
 tone_eval = Tone() # This is the evaluation template to use provided by Future AGI
 ```
@@ -85,7 +85,7 @@ tone_result = result.eval_results[0].metrics[0].value
 To Evaluate the data on your own evaluation template which you have created, you can use the evaluate function with the eval_templates parameter.
 
 ```python
-from fi.eval import evaluate
+from fi.evals import evaluate
 
 result = evaluate(eval_templates="name-of-your-eval", inputs={
     "input": "your_input_text",
