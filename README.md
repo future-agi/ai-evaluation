@@ -6,8 +6,6 @@
 **Empowering GenAI Teams with Instant, Accurate, and Scalable Model Evaluation**  
 Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com) | [Platform](https://app.futureagi.com)
 
-https://github.com/user-attachments/assets/bb0baf4a-ba63-47e7-be1e-7446e8838a56
-
 </div>
 
 ---
@@ -21,6 +19,36 @@ No human-in-the-loop, no ground truth, no latency trade-offs.
 - 🧠 **Smart Templates**: Ready-to-use and configurable evaluation criteria
 - 📊 **Error Analytics**: Built-in error tagging and explainability
 - 🔧 **SDK + UI**: Use Python or our low-code visual platform
+---
+
+## 📏 Metrics & Evaluation Coverage
+The ai-evaluation package supports a wide spectrum of evaluation metrics across text, image, and audio modalities. From functional validations to safety, bias, and summarization quality, our eval templates are curated to support both early-stage prototyping and production-grade guardrails.
+
+✅ Supported Modalities
+- 📝 Text
+
+- 🖼️ Image
+
+- 🔊 Audio
+
+🧮 Categories of Evaluations
+| Category                      | Example Metrics / Templates                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Groundedness & Context**    | `context_adherence`, `groundedness_assessment`, `chunk_utilization`, `detect_hallucination_missing_info` |
+| **Functionality Checks**      | `is_json`, `evaluate_function_calling`, `json_schema_validation`, `api_response_validation`              |
+| **Safety & Guardrails**       | `content_moderation`, `answer_refusal`, `prompt_injection`, `is_harmful_advice`                          |
+| **Bias & Ethics**             | `no_gender_bias`, `no_racial_bias`, `comprehensive_bias_detection`                                       |
+| **Conversation Quality**      | `conversation_coherence`, `conversation_resolution`, `tone_analysis`                                     |
+| **Summarization & Fidelity**  | `is_good_summary`, `summary_quality_assessment`, `is_factually_consistent`                               |
+| **Behavioral/Agentic Output** | `task_completion`, `is_helpful`, `is_polite`, `completion_consistency`                                   |
+| **Similarity & Heuristics**   | `rouge_score`, `embedding_similarity`, `fuzzy_match`, `exact_equality_check`                             |
+| **Custom & Regex-based**      | `custom_code_execution`, `multi_keyword_inclusion`, `regex_matching`, `length_constraints`               |
+| **Compliance & Privacy**      | `data_privacy_compliance`, `pii_detection`, `is_compliant`, `safe_for_work_assessment`                   |
+| **Modality-Specific Evals**   | `audio_transcription_accuracy`, `image-instruction_alignment`, `cross-modal_coherence_scoring`           |
+
+
+💡 All evaluations can be run standalone or composed in batches. Tracing support is available via [traceAI](https://github.com/future-agi/traceAI).
+
 
 ---
 
@@ -295,6 +323,13 @@ result = evaluator.evaluate(
     model_name="turing_flash"
 )
 ```
+---
+## 🗝️ Integrations
+- Langfuse: [Evaluate your Langfuse instrumented application](https://docs.futureagi.com/future-agi/products/observability/tracing-manual/langfuse-intergation#langfuse-integration)
+- TraceAI: [Evaluate your traceai instrumented application](https://docs.futureagi.com/future-agi/products/observability/tracing-manual/in-line-evals)
+---
+
+
 ## 🔌 Related Projects
 
 * 🚦 [traceAI](https://github.com/future-agi/traceAI): Add Tracing & Observability to Your Evals
@@ -308,6 +343,38 @@ Instrument LangChain, OpenAI SDKs, and more to trace and monitor evaluation metr
 * 🧩 [Custom Eval Creation](https://docs.futureagi.com/future-agi/products/evaluation/how-to/creating-own-evals)
 * 🧠 [Understanding Model Evaluation](https://docs.futureagi.com/future-agi/products/evaluation/concept/overview)
 * ⏲️ [Cookbook](https://docs.futureagi.com/cookbook/cookbook1/AI-Evaluation-for-Meeting-Summarization)
+---
+## 🚀 LLM Evaluation with Future AGI Platform
+
+Future AGI delivers a **complete, iterative evaluation lifecycle** so you can move from prototype to production with confidence:
+
+| Stage                             | What you can do                                                                                                                 
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- 
+| **1. Curate & Annotate Datasets** | Build, import, label, and enrich evaluation datasets in‑cloud. Synthetic‑data generation and Hugging Face imports are built in. 
+| **2. Benchmark & Compare**        | Run prompt / model experiments on those datasets, track scores, and pick the best variant in Prompt Workbench or via the SDK.   
+| **3. Fine‑Tune Metrics**          | Create fully custom eval templates with your own rules, scoring logic, and models to match domain needs.                        
+| **4. Debug with Traces**          | Inspect every failing datapoint through rich traces—latency, cost, spans, and evaluation scores side‑by‑side.                   
+| **5. Monitor in Production**      | Schedule Eval Tasks to score live or historical traffic, set sampling rates, and surface alerts right in the Observe dashboard. 
+| **6. Close the Loop**             | Promote real‑world failures back into your dataset, retrain / re‑prompt, and rerun the cycle until performance meets spec.      
+
+> Everything you need—including SDK guides, UI walkthroughs, and API references—is in the [Future AGI docs](https://docs.futureagi.com). Add your platform screenshot below to illustrate the flow.
+
+<img width="2880" height="2048" alt="image" src="https://github.com/user-attachments/assets/e3ab2b32-6b44-49f5-aa66-0a3d65ba176e" />
+ 
+---
+
+## 🗺️ Roadmap 
+
+* [x] **Agentic Evaluation Stack**
+* [x] **GuardRails** 
+* [x] **Evals in Prompt Workbench**
+* [x] **Evals in Observability Stack**
+* [x] **Inline Evals in SDK** 
+* [x] **Langfuse Integration** 
+* [ ] **Inline Evaluations on UI** 
+* [ ] **CI/CD Evaluation Pipelines**
+* [ ] **AI Agent Evaluations**
+* [ ] **Session-Level Evaluations (Tracing-Aware)**
 
 ---
 
