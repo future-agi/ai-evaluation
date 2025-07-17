@@ -366,7 +366,7 @@ Future AGI delivers a **complete, iterative evaluation lifecycle** so you can 
 ## 🗺️ Roadmap 
 
 * [x] **Agentic Evaluation Stack**
-* [x] **GuardRails** 
+* [x] **Protect** 
 * [x] **Evals in Prompt Workbench**
 * [x] **Evals in Observability Stack**
 * [x] **Inline Evals in SDK** 
