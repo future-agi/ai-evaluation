@@ -371,7 +371,6 @@ Future AGI delivers a **complete, iterative evaluation lifecycle** so you can 
 * [x] **Evals in Observability Stack**
 * [x] **Inline Evals in SDK** 
 * [x] **Langfuse Integration** 
-* [ ] **Inline Evaluations on UI** 
 * [ ] **CI/CD Evaluation Pipelines**
 * [ ] **AI Agent Evaluations**
 * [ ] **Session-Level Evaluations (Tracing-Aware)**
