@@ -102,7 +102,7 @@ result = evaluator.evaluate(
     model_name="turing_flash"
 )
 
-print(result.eval_results[0].metrics[0].value)
+print(result.eval_results[0].output)
 print(result.eval_results[0].reason)
 ```
 
