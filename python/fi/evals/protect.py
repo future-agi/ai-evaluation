@@ -6,19 +6,20 @@ from urllib.parse import urlparse
 
 from fi.api.types import HttpMethod, RequestConfig
 # from fi.evals import EvalClient  # Removed, as EvalClient does not exist
-from fi.evals.evaluator import EvalResponseHandler
-from fi.evals import Evaluator
+from fi.evals.evaluator import EvalResponseHandler, Evaluator
 from fi.evals.templates import (
     DataPrivacyCompliance,
     PromptInjection,
     Sexist,
     Tone,
     Toxicity,
+    BiasDetection,
 )
 from fi.testcases.mllm_test_case import MLLMTestCase
 from fi.utils.routes import Routes
 from fi.utils.utils import get_keys_from_env, get_base_url_from_env
 from fi.utils.errors import InvalidAuthError, SDKException, InvalidValueType, MissingRequiredKey
+
 
 PROTECT_FLASH_ID = "76"
 
@@ -51,11 +52,10 @@ class Protect:
 
         # Map metric names to their corresponding template classes
         self.metric_map = {
-            "Toxicity": Toxicity,
-            "Tone": Tone,
-            "Sexism": Sexist,
-            "Prompt Injection": PromptInjection,
-            "Data Privacy": DataPrivacyCompliance,
+            "content_moderation": Toxicity,
+            "bias_detection": BiasDetection,
+            "security": PromptInjection,
+            "data_privacy_compliance": DataPrivacyCompliance,
         }
 
     def _check_rule_sync(
@@ -106,7 +106,7 @@ class Protect:
 
         if eval_result.eval_results:
             result = eval_result.eval_results[0]
-            detected_values = result.data
+            detected_values = [result.output]
 
             should_trigger = False
             if rule["type"] == "any":
@@ -151,7 +151,7 @@ class Protect:
         uncompleted_rules = [rule["metric"] for rule in rules]
         failure_messages = []
         failure_reasons = []
-        failed_rule = None
+        failed_rule = []
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             # Submit all rules to the thread pool
@@ -175,12 +175,11 @@ class Protect:
                             failure_messages.append(message)
                             if reason_text:
                                 failure_reasons.append(reason_text)
-                            failed_rule = rule_name
+                            failed_rule.append(rule_name)
                             # Cancel remaining futures if a rule fails
                             for f_key, f_val in future_to_rule.items():
                                 if not f_key.done():
                                     f_key.cancel()
-                            break
 
                     except Exception as e:
                         if rule_name in uncompleted_rules:
@@ -271,7 +270,7 @@ class Protect:
             inputs: Text or list of texts to check for harmful content
             timeout: Time limit for evaluation in milliseconds (default: 30000)
             protect_rules: Rules to check against. Each rule needs:
-                metric: What to check (e.g. 'Toxicity', 'Tone')
+                metric: What to check (e.g. 'content_moderation', 'bias_detection')
                 contains: Values to look for
                 type: 'any' or 'all' matching required
                 action: Message to show if rule fails
@@ -298,7 +297,7 @@ class Protect:
 
         # When using ProtectFlash and no protect_rules provided, create default rules
         if use_flash and not protect_rules:
-            protect_rules = [{"metric": "Toxicity"}]
+            protect_rules = [{"metric": "content_moderation"}]
         elif use_flash and protect_rules:
             print("Note: When using ProtectFlash, Rules are not considered as it performs binary harmful/not harmful classification only.")
 
@@ -377,7 +376,7 @@ class Protect:
             # Process the response
             if hasattr(response, "eval_results") and response.eval_results:
                 result = response.eval_results[0]
-                is_harmful = result.failure
+                is_harmful = result.output
                 elapsed_time = result.runtime / 1000 if result.runtime else 0
                 
                 ans = {
@@ -538,7 +537,7 @@ class Protect:
                 all_failure_messages[0] if all_failure_messages else "All checks passed"
             ),
             "reasons": (
-                all_failure_reasons[0] if all_failure_reasons else "All checks passed"
+                all_failure_reasons if all_failure_reasons else "All checks passed"
             ),
             "time_taken": final_processing_duration_seconds, # Use final calculated duration in seconds
         }

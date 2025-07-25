@@ -1,10 +1,13 @@
+import logging
+import re
+from typing import Any, Dict, List, Optional, Union
+
 import nltk
 from nltk.translate.bleu_score import (
     sentence_bleu,
     corpus_bleu,
     SmoothingFunction
 )
-from typing import List, Union, Any, Dict, Optional
 
 from fi.evals.templates import EvalTemplate
 from fi.evals.types import EvalResult, EvalResultMetric, BatchRunResult
@@ -100,31 +103,21 @@ class BLEUScore(EvalTemplate):
             try:
                 score = self._calculate_bleu_score(test_case)
                 eval_result = EvalResult(
-                    data=[score],
-                    failure=False,
-                    reason="",
+                    name="bleu_score",
+                    output=score,
+                    reason=None,
                     runtime=0,
-                    metadata={},
-                    metrics=[
-                        EvalResultMetric(
-                            id="bleu_score",
-                            value=score
-                        )
-                    ]
+                    output_type="score",
+                    eval_id=None,
                 )
             except Exception as e:
                 eval_result = EvalResult(
-                    data=[0.0],
-                    failure=True,
+                    name="bleu_score",
+                    output=0.0,
                     reason=str(e),
                     runtime=0,
-                    metadata={},
-                    metrics=[
-                        EvalResultMetric(
-                            id="bleu_score",
-                            value=0.0
-                        )
-                    ]
+                    output_type="score",
+                    eval_id=None,
                 )
             eval_results.append(eval_result)
         return BatchRunResult(eval_results=eval_results)

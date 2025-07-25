@@ -127,17 +127,12 @@ class EmbeddingSimilarity(EvalTemplate):
                 failure = True
                 reason = str(e)
             eval_result = EvalResult(
-                data=[similarity_score],
-                failure=failure,
+                name="embedding_similarity",
+                output=similarity_score,
                 reason=reason,
                 runtime=0,
-                metadata={},
-                metrics=[
-                    EvalResultMetric(
-                        id="embedding_similarity",
-                        value=similarity_score
-                    )
-                ]
+                output_type="score",
+                eval_id=None,
             )
             eval_results.append(eval_result)
         return BatchRunResult(eval_results=eval_results)

@@ -60,12 +60,12 @@ class EvalResult(BaseModel):
     Represents the LLM evaluation result.
     """
 
-    data: Optional[Union[Dict[str, Any], List[Any]]] = None
-    failure: Optional[bool]
-    reason: str
-    runtime: int
-    metadata: Optional[Union[str, List[Any], Dict[str, Any]]] = None
-    metrics: List[EvalResultMetric]
+    name: str 
+    output: Optional[Any] = None
+    reason: Optional[str] = None
+    runtime: int = 0
+    output_type: Optional[str] = None
+    eval_id: Optional[str] = None
 
 
 class BatchRunResult(BaseModel):
