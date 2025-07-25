@@ -86,40 +86,34 @@ class ROUGEScore(EvalTemplate):
             self.validate_input(inputs)
         except Exception as e:
             return BatchRunResult(eval_results=[EvalResult(
-                data=None,
-                failure=True,
+                name="rouge_score",
+                output=None,
                 reason=str(e),
                 runtime=0,
-                metadata={},
-                metrics=[]
+                output_type="score",
+                eval_id=None,
             )])
 
         eval_results = []
         for test_case in inputs:
             try:
                 scores = self._calculate_rouge_score(test_case)
-                metrics = [
-                    EvalResultMetric(
-                        id=f"rouge_{self.rouge_type}_{metric}",
-                        value=scores.get(metric, 0.0)
-                    ) for metric in self.METRIC_KEYS
-                ]
                 eval_result = EvalResult(
-                    data=[scores],
-                    failure=False,
-                    reason="",
+                    name="rouge_score",
+                    output=scores,
+                    reason=None,
                     runtime=0,
-                    metadata={},
-                    metrics=metrics
+                    output_type="score",
+                    eval_id=None,
                 )
             except Exception as e:
                 eval_result = EvalResult(
-                    data=None,
-                    failure=True,
-                    reason=f"Exception during evaluation: {e}",
+                    name="rouge_score",
+                    output=None,
+                    reason=str(e),
                     runtime=0,
-                    metadata={},
-                    metrics=[]
+                    output_type="score",
+                    eval_id=None,
                 )
             eval_results.append(eval_result)
         return BatchRunResult(eval_results=eval_results)

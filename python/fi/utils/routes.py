@@ -30,9 +30,16 @@ class Routes(str, Enum):
     improve_prompt = "model-hub/prompt-templates/improve-prompt/"
     run_template = "model-hub/prompt-templates/{template_id}/run_template/"
     create_template = "model-hub/prompt-templates/create-draft/"
-    delete_template = "model-hub/prompt-templates/{template_id}"
-    get_template_by_id = "model-hub/prompt-templates/{template_id}"
+    delete_template = "model-hub/prompt-templates/{template_id}/"
+    get_template_by_id = "model-hub/prompt-templates/{template_id}/"
     get_template_id_by_name = "model-hub/prompt-templates/"
+    list_templates = "model-hub/prompt-templates/"
+    get_template_by_name = "model-hub/prompt-templates/get-template-by-name/"
+    add_new_draft = "model-hub/prompt-templates/{template_id}/add-new-draft/"
+    get_template_version_history = "model-hub/prompt-history-executions/"
+    get_model_details = "model-hub/api/models_list/"
+    get_run_status = "model-hub/prompt-templates/{template_id}/get-run-status/"
+    commit_template = "model-hub/prompt-templates/{template_id}/commit/"
 
     # model provider
     model_hub_api_keys = "model-hub/api-keys/"
@@ -45,3 +52,6 @@ class Routes(str, Enum):
     knowledge_base = "model-hub/knowledge-base/"
     knowledge_base_list = "model-hub/knowledge-base/list/"
     knowledge_base_files = "model-hub/knowledge-base/files/"
+
+    # configure evaluations
+    configure_evaluations = "sdk/api/v1/configure-evaluations/"

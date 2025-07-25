@@ -113,6 +113,41 @@ class ServerError(DatasetError):  # For 500 and other 5xx
 
     def __repr__(self) -> str:
         return "Server_Error"
+  
+class UnexpectedDataFormatError(DatasetError):
+    """Raised when the data format is unexpected."""
+    
+    def get_message(self) -> str:
+        return "Messages Data Format is unexpected, please send in correct format for example:\n\n" \
+            "messages = [\n" \
+            "    {\n" \
+            "        'role': 'user',\n" \
+            "        'content': [\n" \
+            "            {\n" \
+            "                'type': 'text',\n" \
+            "                'text': 'What is the capital of France?'\n" \
+            "            }\n" \
+            "        ]\n" \
+            "    },\n" \
+            "    {\n" \
+            "        'role': 'assistant',\n" \
+            "        'content': [\n" \
+            "            {\n" \
+            "                'type': 'text',\n" \
+            "                'text': 'The capital of France is Paris.'\n" \
+            "            }\n" \
+            "        ]\n" \
+            "    }\n" \
+            "]\n\n" \
+            "Note: You can also use simple string format for content:\n" \
+            "messages = [{'role': 'user', 'content': 'What is the capital of France?'}]\n" \
+            "The SDK will automatically convert it to the expected format."
+    
+    def get_error_code(self) -> str:
+        return "UNEXPECTED_DATA_FORMAT"
+    
+    def __repr__(self) -> str:
+        return "Unexpected_Data_Format"
 
 
 class ServiceUnavailableError(DatasetError):  # For 503
@@ -320,8 +355,9 @@ class UnsupportedFileType(SDKException):
     def get_error_code(self) -> str:
         return "UNSUPPORTED_FILE_TYPE"
 
-
+# Prompt template errors
 class TemplateAlreadyExists(SDKException):
+    """Raised when attempting to create a template that already exists"""
     def __init__(self, template_name: str, message: Optional[str] = None, cause: Optional[Exception] = None) -> None:
         self.template_name = template_name
         super().__init__(message=message or f"Template '{self.template_name}' already exists. Please use a different name to create a new template.", cause=cause)
@@ -329,3 +365,15 @@ class TemplateAlreadyExists(SDKException):
 
     def get_error_code(self) -> str:
         return "TEMPLATE_ALREADY_EXISTS"
+
+class TemplateNotFound(SDKException):
+    """Raised when a prompt template cannot be located by the given name or ID."""
+
+    def __init__(self, template_name: str, cause: Optional[Exception] = None) -> None:
+        self.template_name = template_name
+        super().__init__(
+            message=f"Prompt template '{template_name}' not found.", cause=cause
+        )
+
+    def get_error_code(self) -> str:
+        return "TEMPLATE_NOT_FOUND"

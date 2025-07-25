@@ -1,3 +1,5 @@
+import logging
+import re
 from typing import List, Union, Any, Dict, Optional, Tuple
 import json
 import string
@@ -113,12 +115,12 @@ class SemanticListContains(EvalTemplate):
             self.validate_input(inputs)
         except Exception as e:
             eval_result = EvalResult(
-                data=[0.0],
-                failure=True,
+                name="semantic_list_contains",
+                output=0.0,
                 reason=str(e),
                 runtime=0,
-                metadata={},
-                metrics=[EvalResultMetric(id=self.METRIC_ID, value=0.0)]
+                output_type="score",
+                eval_id=None,
             )
             return BatchRunResult(eval_results=[eval_result])
 
@@ -135,12 +137,12 @@ class SemanticListContains(EvalTemplate):
                 reason = str(e)
                 details = {}
             eval_result = EvalResult(
-                data=[score],
-                failure=failure,
+                name="semantic_list_contains",
+                output=score,
                 reason=reason,
                 runtime=0,
-                metadata=details,
-                metrics=[EvalResultMetric(id=self.METRIC_ID, value=score)]
+                output_type="score",
+                eval_id=None,
             )
             eval_results.append(eval_result)
         return BatchRunResult(eval_results=eval_results)

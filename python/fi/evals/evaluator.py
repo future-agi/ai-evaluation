@@ -1,11 +1,11 @@
 import inspect
 import json
 import logging
+import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from collections import defaultdict
-import os
 
 from requests import Response
 
@@ -16,7 +16,13 @@ from fi.evals.types import BatchRunResult, EvalResult, EvalResultMetric
 from fi.testcases import TestCase, MLLMImage, MLLMAudio
 from fi.utils.errors import InvalidAuthError
 from fi.utils.routes import Routes
-from fi.utils.utils import get_keys_from_env, get_base_url_from_env
+
+try:
+    from opentelemetry import trace
+    from fi_instrumentation.otel import check_custom_eval_config_exists
+    from opentelemetry import trace as otel_trace_api
+except ImportError:
+    pass
 
 
 class EvalResponseHandler(ResponseHandler[BatchRunResult, None]):
@@ -67,15 +73,12 @@ class EvalResponseHandler(ResponseHandler[BatchRunResult, None]):
                     new_metadata["explanation"] = metadata.get("explanation", {})
                 eval_results.append(
                     EvalResult(
-                        data=evaluation.get("data"),
-                        failure=evaluation.get("failure"),
+                        name=evaluation.get("name", ""),
+                        output=evaluation.get("output", None),
                         reason=evaluation.get("reason", ""),
                         runtime=evaluation.get("runtime", 0),
-                        metadata=new_metadata,
-                        metrics=[
-                            EvalResultMetric(id=metric["id"], value=metric["value"])
-                            for metric in evaluation.get("metrics", [])
-                        ],
+                        output_type=evaluation.get("outputType", ""),
+                        eval_id=evaluation.get("evalId", ""),
                     )
                 )
 
@@ -124,21 +127,29 @@ class Evaluator(APIKeyAuth):
             timeout: Optional timeout value in seconds (default: 200)
             max_queue_bound: Optional maximum queue size (default: 5000)
             max_workers: Optional maximum number of workers (default: 8)
+            langfuse_secret_key: Optional Langfuse secret key
+            langfuse_public_key: Optional Langfuse public key
+            langfuse_host: Optional Langfuse host
         """
         super().__init__(fi_api_key, fi_secret_key, fi_base_url, **kwargs)
         self._max_workers = kwargs.get("max_workers", 8)  # Default to 8 if not provided
+        
+        # Handle Langfuse credentials
+        self.langfuse_secret_key = kwargs.get("langfuse_secret_key") or os.getenv("LANGFUSE_SECRET_KEY")
+        self.langfuse_public_key = kwargs.get("langfuse_public_key") or os.getenv("LANGFUSE_PUBLIC_KEY")
+        self.langfuse_host = kwargs.get("langfuse_host") or os.getenv("LANGFUSE_HOST")
+
 
     def evaluate(
         self,
         eval_templates: Union[str, type[EvalTemplate]],
-        inputs: Union[
-            TestCase,
-            List[TestCase],
-            Dict[str, Any],
-            List[Dict[str, Any]],
-        ],
+        inputs: Dict[str, Any],
         timeout: Optional[int] = None,
         model_name: Optional[str] = None,
+        custom_eval_name: Optional[str] = None,
+        trace_eval: Optional[bool] = False,
+        platform: Optional[str] = None,
+        **kwargs,
     ) -> BatchRunResult:
         """
         Run a single or batch of evaluations independently
@@ -148,7 +159,8 @@ class Evaluator(APIKeyAuth):
             inputs: Single test case or list of test cases
             timeout: Optional timeout value for the evaluation
             model_name: Optional model name to use for the evaluation for Future AGI Agents
-
+            span_id: Optional span_id to attach to the evaluation. If not provided, it will be retrieved from the OpenTelemetry context if available.
+            custom_eval_name: Optional custom evaluation name to use for the evaluation. If not provided, eval will not be added to the span.
         Returns:
             BatchRunResult containing evaluation results
 
@@ -156,8 +168,19 @@ class Evaluator(APIKeyAuth):
             ValidationError: If the inputs do not match the evaluation templates
             Exception: If the API request fails
         """
-        if not isinstance(inputs, list):
-            inputs = [inputs]
+        if platform:
+            if isinstance(eval_templates, str) and isinstance(inputs, dict) and custom_eval_name:
+                return self._configure_evaluations(
+                    eval_templates=eval_templates,
+                    inputs=inputs,
+                    platform=platform,
+                    custom_eval_name=custom_eval_name,
+                    model_name=model_name,
+                    **kwargs
+                )
+            else:
+                raise ValueError("Invalid arguments for platform configuration")
+
 
         def _extract_name(t) -> str | None:
             if isinstance(t, str):
@@ -167,76 +190,76 @@ class Evaluator(APIKeyAuth):
             if inspect.isclass(t) and issubclass(t, EvalTemplate):
                 return t.eval_name
             return None
+          
         eval_name = _extract_name(
             eval_templates[0] if isinstance(eval_templates, list) else eval_templates
         )
+
+        span_id = None
+        project_name = None
+        if trace_eval:
+            if not custom_eval_name:
+                trace_eval = False
+                logging.warning("Failed to trace the evaluation. Please set the custom_eval_name.")
+            else:
+                try:
+                    from opentelemetry import trace
+                    from fi_instrumentation.otel import check_custom_eval_config_exists
+
+                    current_span = trace.get_current_span()
+                    if current_span and current_span.is_recording():
+                        span_context = current_span.get_span_context()
+                        if span_context.is_valid:
+                            span_id = format(span_context.span_id, "016x")
+                            tracer_provider = trace.get_tracer_provider()
+                            if hasattr(tracer_provider, "resource"):
+                                attributes = tracer_provider.resource.attributes
+                                project_name = attributes.get("project_name")
+                    
+                    if project_name:
+                        eval_tags = [
+                            {
+                                "custom_eval_name": custom_eval_name,
+                                "eval_name": eval_name,
+                                "mapping": {},
+                                "config": {},
+                            }
+                        ]
+                        custom_eval_exists = check_custom_eval_config_exists(
+                            project_name=project_name,
+                            eval_tags=eval_tags,
+                        )
+
+                        if custom_eval_exists:
+                            trace_eval = False
+                            logging.warning("Failed to trace the evaluation. Custom eval configuration with the same name already exists for this project")
+                    else:
+                        trace_eval = False
+                        logging.warning(
+                            "Could not determine project_name from OpenTelemetry context. "
+                            "Skipping check for existing custom eval configuration."
+                        )
+
+                except ImportError:
+                    logging.exception(
+                        "Future AGI SDK not found. "
+                        "Please install 'fi-instrumentation-otel' to automatically enrich the evaluation with project context."
+                    )
+                    return
+
         if eval_name is None:
             raise TypeError(
                 "Unsupported eval_templates argument. "
                 "Expect eval template class/obj or name str."
             )
 
-        
-
-        transformed_api_inputs = defaultdict(list)
-
-        if not inputs:
-            # Allows an empty transformed_api_inputs if the original inputs list was empty.
-            pass
-        else:
-            for tc in inputs:
-                dumped_tc: Dict[str, Any]
-                # Handle both TestCase objects and raw dictionaries
-                if isinstance(tc, TestCase):
-                    # TestCase object
-                    dumped_tc = tc.model_dump(exclude_none=True, by_alias=False)
-                elif isinstance(tc, dict):
-                    # Raw dictionary
-                    processed_tc = {}
-                    for key, value in tc.items():
-                        if isinstance(value, str):
-                            original_value = value # Keep a copy for fallback
-                            try:
-                                mllm_image = MLLMImage(url=value)
-                                processed_tc[key] = mllm_image.url
-                                logging.debug(f"Processed key '{key}' as MLLMImage.")
-                                continue 
-                            except ValueError as e_img: 
-                                logging.debug(f"Key '{key}' not processed as MLLMImage (Error: {e_img}). Trying MLLMAudio.")
-                                try:
-                                    mllm_audio = MLLMAudio(url=value)
-                                    if not mllm_audio.is_plain_text:
-                                        processed_tc[key] = mllm_audio.url
-                                        logging.debug(f"Processed key '{key}' as MLLMAudio.")
-                                        continue 
-                                    else:
-                                        logging.debug(f"Key '{key}' treated as plain text by MLLMAudio. Using original value.")
-                                        processed_tc[key] = original_value
-                                except ValueError as e_audio: 
-                                    logging.debug(f"Key '{key}' not processed as MLLMAudio (Error: {e_audio}). Using original value.")
-                                    processed_tc[key] = original_value
-                                except Exception as e_gen_audio: 
-                                    logging.warning(f"Unexpected error processing key '{key}' as MLLMAudio (Error: {e_gen_audio}). Using original value.")
-                                    processed_tc[key] = original_value
-                            except Exception as e_gen_image: 
-                                logging.warning(f"Unexpected error processing key '{key}' as MLLMImage (Error: {e_gen_image}). Using original value.")
-                                processed_tc[key] = original_value
-                        else:
-                            # Not a string, keep original value
-                            processed_tc[key] = value
-                    dumped_tc = processed_tc
-                else:
-                    raise TypeError(
-                        f"Invalid input type: {type(tc)}. Each input must be a TestCase object or a dictionary with valid keys."
-                    )
-                
-                for key, value in dumped_tc.items():
-                    transformed_api_inputs[key].append(value)
-
         final_api_payload = {
             "eval_name": eval_name,
-            "inputs": dict(transformed_api_inputs),
+            "inputs": inputs,
             "model": model_name,
+            "span_id": span_id,
+            "custom_eval_name": custom_eval_name,
+            "trace_eval": trace_eval,
         }
 
         
@@ -274,6 +297,91 @@ class Evaluator(APIKeyAuth):
             logging.warning(f"Failed to evaluate {len(failed_inputs)} inputs out of {len(inputs)} total inputs")
 
         return BatchRunResult(eval_results=all_results)
+
+    def _configure_evaluations(
+        self,
+        eval_templates: str,
+        inputs: Dict[str, Any],
+        platform: str,
+        custom_eval_name: str,
+        model_name: Optional[str] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """
+        Configure evaluations on a specified platform.
+
+        This will not return any evaluation results, but rather a
+        confirmation message from the backend.
+
+        Args:
+            eval_config: The evaluation configuration dictionary.
+            platform: The platform to which the evaluations should be sent.
+            timeout: Optional timeout for the API request.
+            **kwargs: Additional configuration parameters to be sent with the request.
+
+        Returns:
+            A dictionary containing the backend's response message.
+        """
+        try:
+            from fi.evals.otel_utils import _get_current_otel_span
+            
+            if platform == "langfuse":
+                kwargs["langfuse_secret_key"] = self.langfuse_secret_key
+                kwargs["langfuse_public_key"] = self.langfuse_public_key
+                kwargs["langfuse_host"] = self.langfuse_host
+
+            current_span = _get_current_otel_span()
+            if current_span:
+                span_context = current_span.get_span_context()
+                if span_context.is_valid:
+                    span_id = format(span_context.span_id, "016x")
+                    trace_id = format(span_context.trace_id, "032x")
+                    kwargs["span_id"] = span_id
+                    kwargs["trace_id"] = trace_id
+                
+            # Check if span_id and trace_id are present in kwargs
+            if "span_id" not in kwargs or "trace_id" not in kwargs:
+                logging.warning(
+                    "span_id and/or trace_id not found in kwargs ."
+                    "Please run this function within a span context."
+                )
+                return
+
+            api_payload = {
+                "eval_config": {
+                    "eval_templates": eval_templates,
+                    "inputs": inputs,
+                    "model_name": model_name
+                },
+                "custom_eval_name": custom_eval_name,
+                "platform": platform,
+                **kwargs,
+            }
+            
+            response = self.request(
+                config=RequestConfig(
+                    method=HttpMethod.POST,
+                    url=f"{self._base_url}/{Routes.configure_evaluations.value}",
+                    json=api_payload,
+                    timeout=self._default_timeout,
+                ),
+            )
+
+            if response.status_code != 200:
+                logging.warning(
+                    f"Received non-200 status code from backend: {response.status_code}. "
+                    f"Response: {response.text}"
+                )
+
+            return response.json()
+        
+        except ImportError:
+            logging.exception(
+                "Future AGI SDK not found. "
+                "Please install 'fi-instrumentation-otel' to use these evaluations."
+            )
+            return
+
 
     def _validate_inputs(
         self,
@@ -370,6 +478,10 @@ class Evaluator(APIKeyAuth):
         response = self.request(config=config, response_handler=EvalInfoResponseHandler)
 
         return response
+
 evaluate = lambda eval_templates, inputs, timeout=None: Evaluator().evaluate(eval_templates, inputs, timeout)
 
 list_evaluations = lambda: Evaluator().list_evaluations()
+
+
+

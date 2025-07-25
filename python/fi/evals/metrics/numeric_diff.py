@@ -95,17 +95,12 @@ class NumericDiff(EvalTemplate):
                 failure = True
                 reason = str(e)
             eval_result = EvalResult(
-                data=[diff_score],
-                failure=failure,
+                name="numeric_diff",
+                output=diff_score,
                 reason=reason,
                 runtime=0,
-                metadata={},
-                metrics=[
-                    EvalResultMetric(
-                        id="numeric_diff",
-                        value=diff_score
-                    )
-                ]
+                output_type="score",
+                eval_id=None,
             )
             eval_results.append(eval_result)
         return BatchRunResult(eval_results=eval_results)

@@ -92,22 +92,12 @@ class AggregatedMetric(EvalTemplate):
             self.validate_input(inputs)
         except Exception as e:
             eval_result = EvalResult(
-                data=[0.0, {}],
-                failure=True,
+                name="aggregated_metric",
+                output=0.0,
                 reason=f"Input validation failed: {str(e)}",
                 runtime=0,
-                metadata={
-                    "aggregator": self.aggregator,
-                    "metrics": self.metric_names,
-                    "weights": self.weights,
-                    "individual_scores": {}
-                },
-                metrics=[
-                    EvalResultMetric(
-                        id="aggregated_metric_score",
-                        value=0.0
-                    )
-                ]
+                output_type="score",
+                eval_id=None,
             )
             return BatchRunResult(eval_results=[eval_result])
 
@@ -146,23 +136,14 @@ class AggregatedMetric(EvalTemplate):
                 metric_details = {}
                 failure = True
                 reason = f"Evaluation failed: {str(e)}"
+                
             eval_result = EvalResult(
-                data=[aggregated_score, metric_details],
-                failure=failure,
+                name="aggregated_metric",
+                output=aggregated_score,
                 reason=reason,
                 runtime=0,
-                metadata={
-                    "aggregator": self.aggregator,
-                    "metrics": self.metric_names,
-                    "weights": self.weights,
-                    "individual_scores": metric_details
-                },
-                metrics=[
-                    EvalResultMetric(
-                        id="aggregated_metric_score",
-                        value=aggregated_score
-                    )
-                ]
+                output_type="score",
+                eval_id=None,
             )
             eval_results.append(eval_result)
         return BatchRunResult(eval_results=eval_results)
