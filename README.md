@@ -339,10 +339,11 @@ Instrument LangChain, OpenAI SDKs, and more to trace and monitor evaluation metr
 
 ## 🔍 Docs and Tutorials
 
-* 📚 [Full Template Catalog](https://docs.futureagi.com/future-agi/products/evaluation/eval-definition/overview)
-* 🧩 [Custom Eval Creation](https://docs.futureagi.com/future-agi/products/evaluation/how-to/creating-own-evals)
-* 🧠 [Understanding Model Evaluation](https://docs.futureagi.com/future-agi/products/evaluation/concept/overview)
+* 📚 [How to run your first eval](https://docs.futureagi.com/future-agi/get-started/evaluation/running-your-first-eval)
+* 🧩 [Custom Eval Creation](https://docs.futureagi.com/future-agi/get-started/evaluation/create-custom-evals)
+* 🧠 [Future AGI Models](https://docs.futureagi.com/future-agi/get-started/evaluation/future-agi-models)
 * ⏲️ [Cookbook](https://docs.futureagi.com/cookbook/cookbook1/AI-Evaluation-for-Meeting-Summarization)
+* 🔍 [Evaluate CI/CD Pipeline](https://docs.futureagi.com/future-agi/get-started/evaluation/evaluate-ci-cd-pipeline)
 ---
 ## 🚀 LLM Evaluation with Future AGI Platform
 
@@ -371,8 +372,8 @@ Future AGI delivers a **complete, iterative evaluation lifecycle** so you can 
 * [x] **Evals in Observability Stack**
 * [x] **Inline Evals in SDK** 
 * [x] **Langfuse Integration** 
-* [ ] **CI/CD Evaluation Pipelines**
-* [ ] **AI Agent Evaluations**
+* [x] **CI/CD Evaluation Pipelines**
+* [x] **AI Agent Evaluations**
 * [ ] **Session-Level Evaluations (Tracing-Aware)**
 
 ---
