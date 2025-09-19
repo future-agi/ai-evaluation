@@ -325,8 +325,8 @@ result = evaluator.evaluate(
 ```
 ---
 ## 🗝️ Integrations
-- Langfuse: [Evaluate your Langfuse instrumented application](https://docs.futureagi.com/future-agi/products/observability/tracing-manual/langfuse-intergation#langfuse-integration)
-- TraceAI: [Evaluate your traceai instrumented application](https://docs.futureagi.com/future-agi/products/observability/tracing-manual/in-line-evals)
+- Langfuse: [Evaluate your Langfuse instrumented application](https://docs.futureagi.com/future-agi/get-started/observability/manual-tracing/langfuse-intergation)
+- TraceAI: [Evaluate your traceai instrumented application](https://docs.futureagi.com/future-agi/products/observability/auto-instrumentation/overview)
 ---
 
 
