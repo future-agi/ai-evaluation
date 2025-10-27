@@ -1,0 +1,4 @@
+packages:
+  - 'futureagi'
+  - 'ai-evaluation'
+  - 'packages/*'
