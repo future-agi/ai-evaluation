@@ -1,4 +1,3 @@
-
 <div align="center">
 
 # 🧪 AI-Evaluation SDK
@@ -6,7 +5,37 @@
 **Empowering GenAI Teams with Instant, Accurate, and Scalable Model Evaluation**  
 Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com) | [Platform](https://app.futureagi.com)
 
+[![PyPI version](https://badge.fury.io/py/ai-evaluation.svg)](https://badge.fury.io/py/ai-evaluation)
+[![npm version](https://badge.fury.io/js/%40future-agi%2Fai-evaluation.svg)](https://badge.fury.io/js/%40future-agi%2Fai-evaluation)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Documentation](https://img.shields.io/badge/docs-latest-green.svg)](https://docs.futureagi.com)
+
 </div>
+
+---
+
+## 📖 Table of Contents
+
+- [Overview](#-overview)
+- [Installation](#-installation)
+  - [Python](#python-installation)
+  - [TypeScript/JavaScript](#typescriptjavascript-installation)
+- [Quick Start](#-quick-start)
+  - [Python Quick Start](#python-quick-start)
+  - [TypeScript Quick Start](#typescript-quick-start)
+- [Metrics & Evaluation Coverage](#-metrics--evaluation-coverage)
+- [Evaluation Templates Gallery](#-evaluation-templates-gallery)
+- [CLI & CI/CD Integration](#%EF%B8%8F-cli--cicd-integration)
+- [Datasets](#-datasets)
+- [Benchmarks](#-benchmarks)
+- [Integrations](#%EF%B8%8F-integrations)
+- [Examples](#-examples)
+- [Platform Features](#-llm-evaluation-with-future-agi-platform)
+- [Documentation](#-docs-and-tutorials)
+- [Roadmap](#%EF%B8%8F-roadmap)
+- [Contributing](#-contributing)
 
 ---
 
@@ -18,7 +47,9 @@ No human-in-the-loop, no ground truth, no latency trade-offs.
 - ⚡ **Instant Evaluation**: Get results 10x faster than traditional QA teams
 - 🧠 **Smart Templates**: Ready-to-use and configurable evaluation criteria
 - 📊 **Error Analytics**: Built-in error tagging and explainability
-- 🔧 **SDK + UI**: Use Python or our low-code visual platform
+- 🔧 **SDK + UI**: Use Python/TypeScript SDKs or our low-code visual platform
+- 🔌 **Integrations**: Works with LangChain, Langfuse, TraceAI, and more
+
 ---
 
 ## 📏 Metrics & Evaluation Coverage
@@ -54,46 +85,54 @@ The ai-evaluation package supports a wide spectrum of evaluation metrics across 
 
 ## 🔧 Installation
 
+### Python Installation
+
 ```bash
 pip install ai-evaluation
-````
+```
+
+**Requirements:**
+- Python 3.10 or higher
+- pip or poetry
+
+### TypeScript/JavaScript Installation
+
+```bash
+npm install @future-agi/ai-evaluation
+# or
+yarn add @future-agi/ai-evaluation
+# or
+pnpm add @future-agi/ai-evaluation
+```
+
+**Requirements:**
+- Node.js 18.0.0 or higher
+- npm, yarn, or pnpm
 
 ---
 
-## 🧑‍💻 Quickstart
+## 🚀 Quick Start
 
-### 1. 🔐 Access API Keys
+### 🔐 Get Your API Keys
 
-* Login to [Future AGI](https://app.futureagi.com)
-* Go to `Developer → Keys`
-* Copy both **API Key** and **Secret Key**
+1. Login to [Future AGI Platform](https://app.futureagi.com)
+2. Navigate to `Keys`
+3. Copy both **API Key** and **Secret Key**
 
----
+### Python Quick Start
 
-### 2. ⚙️ Initialize Evaluator
+**60-Second Quickstart** - Evaluate tone in 3 lines:
 
 ```python
 from fi.evals import Evaluator
 
+# Initialize (or set FI_API_KEY and FI_SECRET_KEY env vars)
 evaluator = Evaluator(
     fi_api_key="your_api_key",
     fi_secret_key="your_secret_key"
 )
-```
 
-Alternatively, set your keys as environment variables:
-
-```bash
-export FI_API_KEY=your_api_key
-export FI_SECRET_KEY=your_secret_key
-```
-
----
-
-### 3. ✅ Run an Evaluation (Tone Example)
-
-```python
-# tone
+# Run evaluation
 result = evaluator.evaluate(
     eval_templates="tone",
     inputs={
@@ -102,9 +141,223 @@ result = evaluator.evaluate(
     model_name="turing_flash"
 )
 
-print(result.eval_results[0].output)
-print(result.eval_results[0].reason)
+# Get results
+print(result.eval_results[0].output)  # e.g., "FORMAL"
+print(result.eval_results[0].reason)  # Explanation of the evaluation
 ```
+
+**Environment Variables (Recommended):**
+
+```bash
+export FI_API_KEY=your_api_key
+export FI_SECRET_KEY=your_secret_key
+```
+
+Then initialize without passing keys:
+
+```python
+evaluator = Evaluator()  # Automatically uses env vars
+```
+
+### TypeScript Quick Start
+
+**60-Second Quickstart** - Evaluate factual accuracy:
+
+```typescript
+import { Evaluator } from "@future-agi/ai-evaluation";
+
+// Initialize (or set FI_API_KEY and FI_SECRET_KEY env vars)
+const evaluator = new Evaluator({
+  apiKey: "your_api_key",
+  secretKey: "your_secret_key"
+});
+
+// Run evaluation
+const result = await evaluator.evaluate(
+  "factual_accuracy",
+  {
+    input: "What is the capital of France?",
+    output: "The capital of France is Paris.",
+    context: "France is a country in Europe with Paris as its capital city."
+  },
+  {
+    modelName: "turing_flash"
+  }
+);
+
+console.log(result);
+```
+
+**Environment Variables (Recommended):**
+
+```bash
+export FI_API_KEY=your_api_key
+export FI_SECRET_KEY=your_secret_key
+```
+
+Then initialize without passing keys:
+
+```typescript
+const evaluator = new Evaluator();  // Automatically uses env vars
+```
+
+---
+
+## 🎨 Evaluation Templates Gallery
+
+AI-Evaluation comes with 60+ pre-built templates organized by category. Each template is production-ready and customizable.
+
+### 📂 Template Categories
+
+<table>
+<tr>
+<td valign="top" width="33%">
+
+**🧠 RAG & Context**
+- `context_adherence`
+- `groundedness`
+- `chunk_utilization`
+- `detect_hallucination`
+- `answer_relevance`
+
+**🔐 Safety & Guardrails**
+- `content_moderation`
+- `answer_refusal`
+- `prompt_injection`
+- `is_harmful_advice`
+- `toxicity_detection`
+
+</td>
+<td valign="top" width="33%">
+
+**📐 Structure & Format**
+- `is_json`
+- `evaluate_function_calling`
+- `json_schema_validation`
+- `api_response_validation`
+- `code_syntax_check`
+
+**🧾 Summarization**
+- `is_good_summary`
+- `summary_quality`
+- `is_factually_consistent`
+- `summary_completeness`
+- `key_points_coverage`
+
+</td>
+<td valign="top" width="33%">
+
+**🎭 Behavior & Tone**
+- `tone`
+- `is_helpful`
+- `is_polite`
+- `sentiment_analysis`
+- `professionalism_check`
+
+**📊 Metrics & Similarity**
+- `rouge_score`
+- `embedding_similarity`
+- `fuzzy_match`
+- `exact_equality_check`
+- `bleu_score`
+
+</td>
+</tr>
+</table>
+
+### 💡 Quick Examples
+
+<details>
+<summary><b>RAG Evaluation</b></summary>
+
+```python
+# Check if answer is grounded in provided context
+result = evaluator.evaluate(
+    eval_templates="groundedness",
+    inputs={
+        "context": "Honey never spoils due to its low moisture content and high acidity.",
+        "output": "Honey doesn't spoil because of its unique properties."
+    },
+    model_name="turing_flash"
+)
+```
+</details>
+
+<details>
+<summary><b>Safety Check</b></summary>
+
+```python
+# Detect harmful content
+result = evaluator.evaluate(
+    eval_templates="content_moderation",
+    inputs={"text": "User input to check for safety..."},
+    model_name="protect_flash"
+)
+```
+</details>
+
+<details>
+<summary><b>JSON Validation</b></summary>
+
+```python
+# Validate function calling output
+result = evaluator.evaluate(
+    eval_templates="evaluate_function_calling",
+    inputs={
+        "input": "Get weather in Tokyo",
+        "output": '{"function": "get_weather", "parameters": {"city": "Tokyo"}}'
+    },
+    model_name="turing_flash"
+)
+```
+</details>
+
+**📚 See all 60+ templates:** [Evaluation Templates Documentation](https://docs.futureagi.com/future-agi/products/evaluation/eval-definition/overview)
+
+---
+
+## ⚙️ CLI & CI/CD Integration
+
+Run evaluations locally or in your CI/CD pipeline using our CLI and YAML configuration.
+
+### 🔄 GitHub Actions Integration
+
+Add to `.github/workflows/eval.yml`:
+
+```yaml
+name: AI Evaluation CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install ai-evaluation
+        run: pip install ai-evaluation
+      
+      - name: Run Evaluations
+        env:
+          FI_API_KEY: ${{ secrets.FI_API_KEY }}
+          FI_SECRET_KEY: ${{ secrets.FI_SECRET_KEY }}
+        run: |
+          ai-eval run eval-config.yaml --output results.json
+      
+      - name: Check Thresholds
+        run: |
+          ai-eval check-thresholds results.json
+```
+
+**📖 Full CLI documentation:** [CI/CD Integration Guide](https://docs.futureagi.com/future-agi/get-started/evaluation/evaluate-ci-cd-pipeline)
 
 ---
 
@@ -324,7 +577,7 @@ result = evaluator.evaluate(
 )
 ```
 ---
-## 🗝️ Integrations
+## �️ Integrations
 - Langfuse: [Evaluate your Langfuse instrumented application](https://docs.futureagi.com/future-agi/get-started/observability/manual-tracing/langfuse-intergation)
 - TraceAI: [Evaluate your traceai instrumented application](https://docs.futureagi.com/future-agi/products/observability/auto-instrumentation/overview)
 ---
@@ -380,6 +633,30 @@ Future AGI delivers a **complete, iterative evaluation lifecycle** so you can 
 
 ## 🤝 Contributing
 
-We welcome contributions! To report issues, suggest templates, or contribute improvements, please open a GitHub issue or PR.
+We welcome contributions from the community! Whether you're fixing bugs, adding features, or improving documentation, your help is appreciated.
+
+### How to Contribute
+- 🐛 **Report Bugs**: Use our [GitHub Issues](https://github.com/future-agi/ai-evaluation/issues)
+- 📝 **Improve Docs**: Submit PRs for documentation improvements
+- 🧪 **Add Templates**: Contribute new evaluation templates
+- 🔧 **Submit Code**: Fork, create a branch, and submit a PR using [GitHub Pull Requests](https://github.com/future-agi/ai-evaluation/pulls)
+
+### Quick Start for Contributors
+
+```bash
+# Fork and clone the repository
+git clone https://github.com/YOUR_USERNAME/ai-evaluation.git
+cd ai-evaluation
+
+# For Python development
+cd python
+poetry install
+poetry run pytest
+
+# For TypeScript development
+cd typescript/ai-evaluation
+pnpm install
+pnpm test
+```
 
 ---
