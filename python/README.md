@@ -94,7 +94,7 @@ from fi.evals.templates import Tone
 tone_eval = Tone() # This is the evaluation template to use provided by Future AGI
 ```
 
-[Click here to read more about all the Evals provided by Future AGI](/future-agi/products/evaluation/eval-definition/overview)
+[Click here to read more about all the Evals provided by Future AGI](https://docs.futureagi.com/future-agi/products/evaluation/eval-definition/overview)
 
 **Run the Evaluation**
 
@@ -125,7 +125,7 @@ print(result.eval_results[0].metrics[0].value)
 
 Before running an evaluation, ensure you have selected a dataset. If no dataset is available, follow the steps to **Add Dataset** on the Future AGI platform.
 
-[Read more about all the ways you can add dataset](/future-agi/products/dataset/overview)
+[Read more about all the ways you can add dataset](https://docs.futureagi.com/future-agi/products/dataset/overview)
 
 **Access the Evaluation Panel**
 
