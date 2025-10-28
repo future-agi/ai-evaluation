@@ -1,3 +1,5 @@
+![Company Logo](Logo.png)
+
 <div align="center">
 
 # 🧪 AI-Evaluation SDK
@@ -633,30 +635,13 @@ Future AGI delivers a **complete, iterative evaluation lifecycle** so you can 
 
 ## 🤝 Contributing
 
-We welcome contributions from the community! Whether you're fixing bugs, adding features, or improving documentation, your help is appreciated.
+We welcome contributions! Whether it's bug reports, feature requests, or code improvements.
 
-### How to Contribute
-- 🐛 **Report Bugs**: Use our [GitHub Issues](https://github.com/future-agi/ai-evaluation/issues)
-- 📝 **Improve Docs**: Submit PRs for documentation improvements
-- 🧪 **Add Templates**: Contribute new evaluation templates
-- 🔧 **Submit Code**: Fork, create a branch, and submit a PR using [GitHub Pull Requests](https://github.com/future-agi/ai-evaluation/pulls)
+- 🐛 **Report Bugs** - [Open an issue](https://github.com/future-agi/ai-evaluation/issues)
+- 💡 **Suggest Features** - Share your ideas
+- 📝 **Improve Docs** - Fix typos, add examples
+- 🔧 **Submit Code** - Fork, create branch, submit PR
 
-### Quick Start for Contributors
-
-```bash
-# Fork and clone the repository
-git clone https://github.com/YOUR_USERNAME/ai-evaluation.git
-cd ai-evaluation
-
-# For Python development
-cd python
-poetry install
-poetry run pytest
-
-# For TypeScript development
-cd typescript/ai-evaluation
-pnpm install
-pnpm test
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
