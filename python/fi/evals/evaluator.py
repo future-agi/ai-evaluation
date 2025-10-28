@@ -5,15 +5,14 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-from collections import defaultdict
-
+import pandas as pd
 from requests import Response
 
 from fi.api.auth import APIKeyAuth, ResponseHandler
 from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.templates import EvalTemplate
-from fi.evals.types import BatchRunResult, EvalResult, EvalResultMetric
-from fi.testcases import TestCase, MLLMImage, MLLMAudio
+from fi.evals.types import BatchRunResult, EvalResult
+from fi.testcases import TestCase
 from fi.utils.errors import InvalidAuthError
 from fi.utils.routes import Routes
 
@@ -149,6 +148,8 @@ class Evaluator(APIKeyAuth):
         custom_eval_name: Optional[str] = None,
         trace_eval: Optional[bool] = False,
         platform: Optional[str] = None,
+        is_async: Optional[bool] = False,
+        error_localizer: Optional[bool] = False,
         **kwargs,
     ) -> BatchRunResult:
         """
@@ -260,6 +261,8 @@ class Evaluator(APIKeyAuth):
             "span_id": span_id,
             "custom_eval_name": custom_eval_name,
             "trace_eval": trace_eval,
+            "is_async": is_async,
+            "error_localizer": error_localizer,
         }
 
         
@@ -297,6 +300,24 @@ class Evaluator(APIKeyAuth):
             logging.warning(f"Failed to evaluate {len(failed_inputs)} inputs out of {len(inputs)} total inputs")
 
         return BatchRunResult(eval_results=all_results)
+
+
+    def get_eval_result(self, eval_id: str):
+        """
+        Get the result of an evaluation by its ID
+        """
+        url = f"{self._base_url}/{Routes.get_eval_result.value}"
+        response = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET,
+                url=url,
+                params={"eval_id": eval_id},
+                timeout=self._default_timeout,
+            ),
+        )
+
+        return response.json()
+
 
     def _configure_evaluations(
         self,
@@ -478,6 +499,57 @@ class Evaluator(APIKeyAuth):
         response = self.request(config=config, response_handler=EvalInfoResponseHandler)
 
         return response
+    
+
+    def evaluate_pipeline(
+            self,
+            project_name: str,
+            version : str,
+            eval_data : List[Dict[str, Any]],
+    ):
+        api_payload = {
+            "project_name": project_name,
+            "version": version,
+            "eval_data": eval_data
+        }
+
+        response = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=f"{self._base_url}/{Routes.evaluate_pipeline.value}",
+                json=api_payload,
+                timeout=self._default_timeout,
+            ),
+        )
+    
+        return response.json()
+    
+    
+    def get_pipeline_results(
+            self,
+            project_name: str,
+            versions : List[str],
+    ):
+        
+        if not isinstance(versions, list) or not all(isinstance(v, str) for v in versions):
+            raise TypeError("versions must be a list of strings")
+        
+        api_payload = {
+            "project_name": project_name,
+            "versions": ",".join(versions),
+        }
+
+        response = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET,
+                url=f"{self._base_url}/{Routes.evaluate_pipeline.value}",
+                params=api_payload,
+                timeout=self._default_timeout,
+            ),
+        )
+
+        return response.json()
+
 
 evaluate = lambda eval_templates, inputs, timeout=None: Evaluator().evaluate(eval_templates, inputs, timeout)
 

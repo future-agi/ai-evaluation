@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ai-evaluation"
-version = "0.1.5"
+version = "0.2.1"
 description = "We help GenAI teams maintain high-accuracy for their Models in production."
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -10,8 +10,12 @@ packages = [
 
 
 [tool.poetry.dependencies]
-python = ">3.9"
-futureagi = ">=0.6.4"
+python = ">=3.10, <3.14"
+futureagi = ">=0.6.7"
+jsonschema = "^4.25.1"
+requests = "^2.32.5"
+litellm = "^1.77.4"
+openai = "^1.109.1"
 
 [build-system]
 requires = ["poetry-core"]

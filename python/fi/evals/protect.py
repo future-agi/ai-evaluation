@@ -1,11 +1,11 @@
+import re
 import copy
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse
 
 from fi.api.types import HttpMethod, RequestConfig
-# from fi.evals import EvalClient  # Removed, as EvalClient does not exist
 from fi.evals.evaluator import EvalResponseHandler, Evaluator
 from fi.evals.templates import (
     DataPrivacyCompliance,
@@ -15,13 +15,14 @@ from fi.evals.templates import (
     Toxicity,
     BiasDetection,
 )
-from fi.testcases.mllm_test_case import MLLMTestCase
+from fi.evals.protect_input_adapter import ProtectInputAdapter
 from fi.utils.routes import Routes
 from fi.utils.utils import get_keys_from_env, get_base_url_from_env
 from fi.utils.errors import InvalidAuthError, SDKException, InvalidValueType, MissingRequiredKey
-
+from pydantic import ValidationError  
 
 PROTECT_FLASH_ID = "76"
+SUPPORT_PROTECT_FLASH = True  # feature toggle
 
 class Protect:
     """Client for protecting against unwanted content using various metrics"""
@@ -58,8 +59,21 @@ class Protect:
             "data_privacy_compliance": DataPrivacyCompliance,
         }
 
+    def _sanitize_reason(self, text: Optional[str]) -> Optional[str]:
+        """Ensure the traceback or server URL doesn't reach the end user."""
+        if not text:
+            return None
+        # Strip URLs, tracebacks, and noisy client errors
+        text = re.sub(r'https?://\S+', '[redacted]', text)
+        text = re.sub(r'(Traceback.*?$)', '[redacted]', text, flags=re.I|re.S)
+        text = re.sub(r'\b\d{3}\s+(Client|Server)\s+Error:.*', 'Request failed.', text, flags=re.I)
+        # Also redact bare hostnames/IPs (defense-in-depth)
+        text = re.sub(r'\b([a-z0-9-]+\.)+[a-z]{2,}\b', '[redacted]', text, flags=re.I)
+        text = re.sub(r'\b\d{1,3}(?:\.\d{1,3}){3}\b', '[redacted]', text)
+        return text.strip()
+
     def _check_rule_sync(
-        self, rule: Dict, test_case: MLLMTestCase
+        self, rule: Dict, test_case: ProtectInputAdapter
     ) -> Tuple[str, bool, Optional[str], Optional[str]]:
         """
         Synchronous version of rule checking
@@ -87,17 +101,26 @@ class Protect:
                 template.eval_id: template.config
             },
         }
+        # print("sending the request to: ", f"{self.evaluator._base_url}/{Routes.evaluate.value}")
+        # print("payload: ", payload["inputs"][0]["input"][:100])
 
-        eval_result = self.evaluator.request(
-            config=RequestConfig(
-                method=HttpMethod.POST,
-                url=f"{self.evaluator._base_url}/{Routes.evaluate.value}",
-                json=payload,
-                timeout=3000
-            ),
-            response_handler=EvalResponseHandler,
-        )
-
+        try:
+            eval_result = self.evaluator.request(
+                config=RequestConfig(
+                    method=HttpMethod.POST,
+                    url=f"{self.evaluator._base_url}/{Routes.evaluate.value}",
+                    json=payload,
+                    timeout=3000
+                ),
+                response_handler=EvalResponseHandler,
+            )
+        except Exception as e:
+            err_msg = (
+                "We couldn't process this request. Check your input or your credit balance."
+                "If it keeps failing, contact support." 
+            )
+            # Return a synthetic “failed” for this rule so the outer loop can present a clean error.
+            return rule["metric"], True, err_msg, None
 
         # end_time = time.time()
         # print(f"Completed rule check for {rule['metric']} in thread {thread_name} at {end_time} (took {end_time - start_time:.2f}s)")
@@ -122,7 +145,7 @@ class Protect:
                 if rule["_internal_reason_flag"]:
                     # message = rule['action'] + f' Reason: {result.reason}'
                     message = rule["action"]
-                    reason_text = result.reason
+                    reason_text = self._sanitize_reason(result.reason) if rule["_internal_reason_flag"] else None
                 else:
                     message = rule["action"]
                 return rule["metric"], True, message, reason_text
@@ -130,8 +153,8 @@ class Protect:
         return rule["metric"], False, None, None
 
     def _process_rules_batch(
-        self, rules: List[Dict], test_case: MLLMTestCase, remaining_time: float
-    ) -> Tuple[List[str], List[str], List[str]]:
+        self, rules: List[Dict], test_case: ProtectInputAdapter, remaining_time: float
+    ) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
         """
         Process a batch of rules in parallel
 
@@ -141,8 +164,8 @@ class Protect:
             remaining_time: Time remaining for processing
 
         Returns:
-            Tuple[List[str], List[str], List[str]]:
-                (failure_messages, completed_rules, uncompleted_rules)
+            Tuple[List[str], List[str], List[str], List[str], List[str]]:
+                (failure_messages, completed_rules, uncompleted_rules, failure_reasons, failed_rule)
         """
         # print(f"\nProcessing batch of {len(rules)} rules")
         # batch_start = time.time()
@@ -254,6 +277,48 @@ class Protect:
         # Check if what remains is a URL
         return self._is_url(text)
 
+    def _format_adapter_error(self, ve: ValidationError) -> str:
+        """
+        Convert Pydantic validation errors into a single, user-friendly line.
+        No stack traces, no class names, no internal URLs.
+        """
+        # Default fallback:
+        friendly = (
+            "We couldn't read that input. Please use text, a direct media URL, "
+            "or a supported file type (MP3/WAV for audio; JPG/PNG/WebP/GIF/BMP/TIFF/SVG for images)."
+        )
+
+        try:
+            for err in ve.errors():
+                msg = (err.get("msg") or "").lower()
+
+                # Specific: unsupported local file type (e.g., .ogg)
+                if "unsupported local file type" in msg:
+                    return (
+                        "Unsupported file type. Supported audio: MP3, WAV. "
+                        "Supported image: JPG, PNG, WebP, GIF, BMP, TIFF, SVG."
+                    )
+
+                # Specific: data: URI with non-media
+                if "unsupported data uri mime" in msg:
+                    return "Only audio/* or image/* data: URIs are supported."
+
+                # Specific: empty/whitespace
+                if "input cannot be empty" in msg:
+                    return "Input cannot be empty."
+
+                # Specific: looks like a preview page not a raw file
+                if "preview page, not a direct file" in msg:
+                    return (
+                        "This link looks like a preview page. Please use a direct download URL "
+                        "(e.g., raw.githubusercontent.com for GitHub; export=download for Google Drive; "
+                        "dl.dropboxusercontent.com for Dropbox)."
+                    )
+        except Exception:
+            pass
+
+        return friendly
+    
     def protect(
         self,
         inputs: str,
@@ -262,7 +327,7 @@ class Protect:
         reason: bool = False,
         timeout: float = 30000, #milliseconds
         use_flash: bool = False,
-    ) -> List[str]:
+    ) -> Dict[str, Any]:
         """
         Evaluate input strings against protection rules
 
@@ -294,6 +359,16 @@ class Protect:
 
 
         timeout_seconds = timeout / 1000.0
+
+        if protect_rules is None:
+            protect_rules = []
+
+        # If the caller asked for Flash but we don’t support it yet, fall back.
+        if use_flash and not SUPPORT_PROTECT_FLASH:
+            # Provide a sensible default so behavior is still helpful.
+            if not protect_rules:
+                protect_rules = [{"metric": "content_moderation"}]
+            use_flash = False  # force normal path
 
         # When using ProtectFlash and no protect_rules provided, create default rules
         if use_flash and not protect_rules:
@@ -340,9 +415,9 @@ class Protect:
                 )
 
         # If using ProtectFlash, we can use a simpler approach by directly calling the API with protect_flash=True
-        if use_flash:
+        if use_flash and SUPPORT_PROTECT_FLASH:
             # Create a test case with appropriate payload
-            test_case = MLLMTestCase(input=inputs, call_type="protect")
+            test_case = ProtectInputAdapter(input=inputs, call_type="protect")
             
             # Prepare the protect API call with protect_flash flag
             template_class = self.metric_map[protect_rules_copy[0]["metric"]]
@@ -385,9 +460,7 @@ class Protect:
                     "uncompleted_rules": [],
                     "failed_rule": "ProtectFlash" if is_harmful else None,  # Use ProtectFlash instead of rule metric
                     "messages": protect_rules_copy[0]["action"] if is_harmful else inputs[0],
-                    "reasons": (
-                        f"Content detected as harmful." if is_harmful else "All checks passed"
-                    ),
+                    "reasons": [f"Content detected as harmful." if is_harmful else "All checks passed"],
                     "time_taken": elapsed_time,
                 }
                 return ans
@@ -399,15 +472,26 @@ class Protect:
                     "completed_rules": [],
                     "uncompleted_rules": ["ProtectFlash"],
                     "failed_rule": None,
-                    "reasons": "No evaluation results returned",
+                    "reasons": ["No evaluation results returned"],
                     "time_taken": 0,
                 }
 
         
         # Original implementation for standard Protect (non-flash)
         # Convert inputs to MLLMTestCase instances with call_type="protect"
-        test_cases = [MLLMTestCase(input=input_text, call_type="protect") for input_text in inputs_list]
-
+        try:
+            test_cases = [ProtectInputAdapter(input=input_text, call_type="protect") for input_text in inputs_list]
+        except ValidationError as ve:
+            msg = self._format_adapter_error(ve)
+            return {
+                "status": "failed",
+                "completed_rules": [],
+                "uncompleted_rules": [r["metric"] for r in protect_rules_copy],
+                "failed_rule": [],
+                "messages": msg,
+                "reasons": ["No evaluation results returned"],
+                "time_taken": 0,
+            }
         # Validate protect_rules_copy
         if not isinstance(protect_rules_copy, list):
             raise InvalidValueType(value_name="protect_rules", value=protect_rules_copy, correct_type="list")
@@ -537,7 +621,7 @@ class Protect:
                 all_failure_messages[0] if all_failure_messages else "All checks passed"
             ),
             "reasons": (
-                all_failure_reasons if all_failure_reasons else "All checks passed"
+                all_failure_reasons if all_failure_reasons else ["All checks passed"]
             ),
             "time_taken": final_processing_duration_seconds, # Use final calculated duration in seconds
         }

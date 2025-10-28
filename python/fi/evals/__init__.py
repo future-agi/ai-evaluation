@@ -1,9 +1,8 @@
 import inspect
 
-from fi.evals.evaluator import Evaluator, evaluate, list_evaluations  # noqa: F401
-from fi.evals.protect import Protect, protect  # noqa: F401
-from fi.evals.templates import *  # noqa: F403, F401
-from fi.evals.metrics import BLEUScore, ROUGEScore, NumericDiff, LevenshteinDistance, EmbeddingSimilarity, SemanticListContains, AggregatedMetric
+from .evaluator import Evaluator, evaluate, list_evaluations  # noqa: F401
+from .protect import Protect, protect  # noqa: F401
+from .templates import *  # noqa: F403, F401
 
 # Dynamically generate __all__ from imported templates
 _globals = globals()
