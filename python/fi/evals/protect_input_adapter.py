@@ -105,7 +105,7 @@ class ProtectInputAdapter(BaseModel):
         if host == "www.dropbox.com" and "/s/" in path:
             return True
         # OneDrive viewer links
-        if "onedrive.live.com" in host and "redir" in path:
+        if host == "onedrive.live.com" and "redir" in path:
             return True
 
         return False
