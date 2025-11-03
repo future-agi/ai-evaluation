@@ -12,7 +12,6 @@ from fi.api.auth import APIKeyAuth, ResponseHandler
 from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.templates import EvalTemplate
 from fi.evals.types import BatchRunResult, EvalResult
-from fi.testcases import TestCase
 from fi.utils.errors import InvalidAuthError
 from fi.utils.routes import Routes
 
@@ -406,7 +405,7 @@ class Evaluator(APIKeyAuth):
 
     def _validate_inputs(
         self,
-        inputs: List[TestCase],
+        inputs: List[Dict[str, Any]],
         eval_objects: List[EvalTemplate],
     ):
         """
