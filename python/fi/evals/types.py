@@ -1,7 +1,60 @@
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, RootModel, create_model
+
+
+class OutputType(Enum):
+    SCORE = "score"
+    BOOLEAN = "boolean"
+    JSON = "json"
+    TEXT = "text"
+
+
+class RequiredKeys(Enum):
+    text = "text"
+    response = "response"
+    query = "query"
+    context = "context"
+    expected_response = "expected_response"
+    expected_text = "expected_text"
+    document = "document"
+    input = "input"
+    output = "output"
+    prompt = "prompt"
+    image_url = "image_url"
+    input_image_url = "input_image_url"
+    output_image_url = "output_image_url"
+    actual_json = "actual_json"
+    expected_json = "expected_json"
+    messages = "messages"
+
+
+class BaseMetricInput(BaseModel):
+    pass
+
+
+class BaseMetricOutput(BaseModel):
+    pass
+
+
+class TextMetricInput(BaseMetricInput):
+    response: str = Field(..., description="The text response to be evaluated.")
+    expected_response: Optional[Union[str, List[str]]] = Field(
+        None, description="The ground truth reference text(s)."
+    )
+
+
+class JsonMetricInput(BaseMetricInput):
+    response: Union[str, Dict, List] = Field(
+        ..., description="The JSON output from the model."
+    )
+    expected_response: Optional[Union[str, Dict, List]] = Field(
+        None, description="The ground truth JSON."
+    )
+    schema: Optional[Union[str, Dict]] = Field(
+        None, description="The JSON schema for validation."
+    )
 
 
 class ConfigParam(BaseModel):
@@ -60,12 +113,12 @@ class EvalResult(BaseModel):
     Represents the LLM evaluation result.
     """
 
-    data: Optional[Union[Dict[str, Any], List[Any]]] = None
-    failure: Optional[bool]
-    reason: str
-    runtime: int
-    metadata: Optional[Union[str, List[Any], Dict[str, Any]]] = None
-    metrics: List[EvalResultMetric]
+    name: str
+    output: Optional[Any] = None
+    reason: Optional[str] = None
+    runtime: int = 0
+    output_type: Optional[str] = None
+    eval_id: Optional[str] = None
 
 
 class BatchRunResult(BaseModel):
@@ -74,25 +127,6 @@ class BatchRunResult(BaseModel):
     """
 
     eval_results: List[Optional[EvalResult]]
-
-
-class RequiredKeys(Enum):
-    text = "text"
-    response = "response"
-    query = "query"
-    context = "context"
-    expected_response = "expected_response"
-    expected_text = "expected_text"
-    document = "document"
-    input = "input"
-    output = "output"
-    prompt = "prompt"
-    image_url = "image_url"
-    input_image_url = "input_image_url"
-    output_image_url = "output_image_url"
-    actual_json = "actual_json"
-    expected_json = "expected_json"
-    messages = "messages"
 
 
 class EvalTags(Enum):
