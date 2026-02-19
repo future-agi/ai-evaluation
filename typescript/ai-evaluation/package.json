@@ -6,11 +6,23 @@
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/src/index.d.ts",
+  "bin": {
+    "fi": "./dist/src/cli/main.js"
+  },
   "exports": {
     ".": {
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js",
       "types": "./dist/src/index.d.ts"
+    },
+    "./local": {
+      "import": "./dist/esm/local/index.js",
+      "require": "./dist/src/local/index.js",
+      "types": "./dist/src/local/index.d.ts"
+    },
+    "./cli": {
+      "import": "./dist/esm/cli/main.js",
+      "require": "./dist/src/cli/main.js"
     }
   },
   "files": [
@@ -21,15 +33,17 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "build:watch": "tsc --build --watch tsconfig.json",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test": "jest --config jest.config.cjs",
+    "test:local": "jest --config jest.config.cjs --testPathPattern=local",
+    "test:watch": "jest --config jest.config.cjs --watch",
+    "test:coverage": "jest --config jest.config.cjs --coverage",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "clean": "rimraf dist",
     "dev": "tsx src/index.ts",
+    "cli": "tsx src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "prepare": "pnpm run build"
   },
@@ -76,29 +90,16 @@
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "ora": "^8.0.0",
     "winston": "^3.11.0",
+    "yaml": "^2.3.0",
+    "zod": "^3.22.0",
     "@future-agi/sdk": ">=0.1.0",
     "@traceai/fi-core": ">=0.1.15"
   },
   "peerDependencies": {},
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "roots": [
-      "<rootDir>/src"
-    ],
-    "testMatch": [
-      "**/__tests__/**/*.ts",
-      "**/?(*.)+(spec|test).ts",
-      "**/?(*.)+(integration.test).ts"
-    ],
-    "collectCoverageFrom": [
-      "src/**/*.ts",
-      "!src/**/*.d.ts",
-      "!src/**/__tests__/**",
-      "!src/**/index.ts"
-    ]
-  },
   "publishConfig": {
     "access": "public"
   }

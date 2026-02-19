@@ -1,0 +1,76 @@
+# Example fi-evaluation.yaml with assertions for CI/CD integration
+# This config demonstrates how to use assertions to enforce quality gates
+
+version: "1.0"
+
+# Default settings for all evaluations
+defaults:
+  model: "gpt-4o"
+  timeout: 200
+  parallel_workers: 8
+
+# Define your evaluations
+evaluations:
+  - name: "rag_quality_tests"
+    templates:
+      - "groundedness"
+      - "context_adherence"
+    data: "./data/rag_test_cases.json"
+
+  - name: "safety_tests"
+    templates:
+      - "content_moderation"
+      - "pii"
+    data: "./data/safety_test_cases.json"
+
+# Assertions - Define pass/fail criteria for CI/CD
+# These are checked after evaluations complete
+assertions:
+  # Template-level assertions - specific thresholds per evaluation type
+  - template: "groundedness"
+    conditions:
+      - "pass_rate >= 0.85"        # 85% of evaluations must pass
+      - "avg_score >= 0.7"         # Average score must be >= 0.7
+    on_fail: "error"               # Fail the CI pipeline if not met
+
+  - template: "context_adherence"
+    conditions:
+      - "pass_rate >= 0.80"
+      - "p90_score >= 0.6"         # 90th percentile must be >= 0.6
+    on_fail: "error"
+
+  - template: "content_moderation"
+    conditions:
+      - "pass_rate >= 0.95"        # Safety evals need higher pass rate
+    on_fail: "error"
+
+  - template: "pii"
+    conditions:
+      - "pass_rate >= 0.99"        # PII detection should be near-perfect
+    on_fail: "error"
+
+  # Global assertions - across all templates
+  - global: true
+    conditions:
+      - "total_pass_rate >= 0.90"  # Overall 90% pass rate required
+      - "failed_count < 10"        # Less than 10 failures total
+    on_fail: "error"
+
+# Alternative: Use threshold shortcuts for simpler config
+# Uncomment below to use instead of explicit assertions
+#
+# thresholds:
+#   default_pass_rate: 0.80        # Default for all templates
+#   fail_fast: true                # Stop on first assertion failure
+#
+#   # Per-template overrides
+#   overrides:
+#     groundedness: 0.85
+#     content_moderation: 0.95
+#     pii: 0.99
+
+# Output configuration
+output:
+  format: "table"
+  path: "./results/"
+  include_metadata: true

@@ -298,7 +298,20 @@ class Evaluator(APIKeyAuth):
         if failed_inputs:
             logging.warning(f"Failed to evaluate {len(failed_inputs)} inputs out of {len(inputs)} total inputs")
 
-        return BatchRunResult(eval_results=all_results)
+        # Automatically enrich current span with evaluation results
+        result = BatchRunResult(eval_results=all_results)
+        try:
+            from fi.evals.otel.enrichment import enrich_span_with_batch_result, is_auto_enrichment_enabled
+            if is_auto_enrichment_enabled():
+                enriched_count = enrich_span_with_batch_result(result)
+                if enriched_count > 0:
+                    logging.debug(f"Enriched active span with {enriched_count} evaluation results")
+        except ImportError:
+            pass  # OTEL enrichment not available
+        except Exception as e:
+            logging.debug(f"Failed to enrich span with evaluation results: {e}")
+
+        return result
 
 
     def get_eval_result(self, eval_id: str):

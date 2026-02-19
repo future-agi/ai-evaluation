@@ -2,3 +2,6 @@ export * from './evaluator';
 export * from './templates';
 export * from './types';
 export * from './protect';
+
+// Local execution module - available as subpath import
+// import { LocalEvaluator } from '@future-agi/ai-evaluation/local'

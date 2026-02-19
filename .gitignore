@@ -52,11 +52,15 @@ output/
 #csv files
 *.csv
 #virtual environments
-**/venv
+**/.venv
 **/env
 **/.env
 *.DS_Store
 *.pdf
+**/.fi
+**/.pytest_cache
+planning/
+
 
 # typescript    
 node_modules/

@@ -451,7 +451,13 @@ class Protect:
             # Process the response
             if hasattr(response, "eval_results") and response.eval_results:
                 result = response.eval_results[0]
-                is_harmful = result.output
+                # result.output can be:
+                # - A float score (0.0 = harmful, 1.0 = safe) from ProtectFlash metrics
+                # - A string "Failed" or "Passed" from other evaluators
+                if isinstance(result.output, (int, float)):
+                    is_harmful = result.output == 0.0
+                else:
+                    is_harmful = result.output == "Failed"
                 elapsed_time = result.runtime / 1000 if result.runtime else 0
                 
                 ans = {
