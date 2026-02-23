@@ -25,6 +25,8 @@ Example:
         batch = result.batch
 """
 
+import logging
+import time
 from typing import Dict, Any, List, Optional, Union, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -39,6 +41,8 @@ from .evaluators.non_blocking import (
     EvalFuture,
 )
 from .backends import Backend, ThreadPoolBackend, ThreadPoolConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -296,13 +300,83 @@ class Evaluator:
         """
         Run evaluations in distributed mode.
 
-        Uses the configured backend for execution.
-        Falls back to non-blocking if no distributed backend available.
+        Uses the configured backend for execution. Submits each evaluation
+        as a task to the backend, collects results, and returns a BatchEvalResult.
+        Falls back to non-blocking if no backend is configured.
         """
-        # For now, distributed mode uses the same non-blocking infrastructure
-        # but with a different backend. If no backend is configured,
-        # fall back to thread pool.
-        return self._run_non_blocking(inputs, context, callback)
+        if self._backend is None:
+            return self._run_non_blocking(inputs, context, callback)
+
+        context_dict = None
+        if context and hasattr(context, "to_dict"):
+            context_dict = context.to_dict()
+
+        # Submit each evaluation as a task to the backend, collecting handles
+        # or immediate failure results
+        handles = []  # List of (index, handle) for successful submissions
+        results = [None] * len(self.evaluations)  # Pre-allocate result slots
+
+        for i, evaluation in enumerate(self.evaluations):
+            eval_name = getattr(evaluation, "name", evaluation.__class__.__name__)
+            eval_version = getattr(evaluation, "version", "1.0.0")
+            try:
+                handle = self._backend.submit(
+                    _execute_single_evaluation,
+                    args=(evaluation, inputs, self.validate_inputs),
+                    context=context_dict,
+                )
+                handles.append((i, handle))
+            except Exception as e:
+                error_result = EvalResult(
+                    value=None,
+                    eval_name=eval_name,
+                    eval_version=eval_version,
+                    latency_ms=0.0,
+                    status=EvalStatus.FAILED,
+                    error=str(e),
+                )
+                results[i] = error_result
+                if callback:
+                    callback(error_result)
+
+        # Collect results from successful submissions
+        timeout = self._backend_timeout
+        for i, handle in handles:
+            evaluation = self.evaluations[i]
+            eval_name = getattr(evaluation, "name", evaluation.__class__.__name__)
+            eval_version = getattr(evaluation, "version", "1.0.0")
+            try:
+                result = self._backend.get_result(handle, timeout=timeout)
+                results[i] = result
+                if callback:
+                    callback(result)
+            except Exception as e:
+                error_result = EvalResult(
+                    value=None,
+                    eval_name=eval_name,
+                    eval_version=eval_version,
+                    latency_ms=0.0,
+                    status=EvalStatus.FAILED,
+                    error=str(e),
+                )
+                results[i] = error_result
+                if callback:
+                    callback(error_result)
+
+        batch = BatchEvalResult.from_results(results)
+        return EvaluatorResult(
+            batch=batch,
+            mode=ExecutionMode.DISTRIBUTED,
+        )
+
+    @property
+    def _backend_timeout(self) -> float:
+        """Get timeout from backend config, defaulting to 300s."""
+        if self._backend and hasattr(self._backend, "config"):
+            config = self._backend.config
+            if hasattr(config, "timeout_seconds"):
+                return config.timeout_seconds
+        return 300.0
 
     def _get_blocking_evaluator(self) -> BlockingEvaluator:
         """Get or create the blocking evaluator."""
@@ -442,6 +516,73 @@ def distributed_evaluator(
     )
 
 
+def _execute_single_evaluation(
+    evaluation: BaseEvaluation,
+    inputs: Dict[str, Any],
+    validate: bool = True,
+) -> EvalResult:
+    """
+    Execute a single evaluation, suitable for submission to any backend.
+
+    Handles validation, timing, and error capture.
+
+    Args:
+        evaluation: The evaluation to run
+        inputs: Input data
+        validate: Whether to validate inputs
+
+    Returns:
+        EvalResult with value or error
+    """
+    eval_name = getattr(evaluation, "name", evaluation.__class__.__name__)
+    eval_version = getattr(evaluation, "version", "1.0.0")
+
+    # Validate inputs if enabled
+    if validate and hasattr(evaluation, "validate_inputs"):
+        try:
+            validation_error = evaluation.validate_inputs(inputs)
+            if validation_error:
+                return EvalResult(
+                    value=None,
+                    eval_name=eval_name,
+                    eval_version=eval_version,
+                    latency_ms=0.0,
+                    status=EvalStatus.FAILED,
+                    error=f"Validation error: {validation_error}",
+                )
+        except Exception as e:
+            return EvalResult(
+                value=None,
+                eval_name=eval_name,
+                eval_version=eval_version,
+                latency_ms=0.0,
+                status=EvalStatus.FAILED,
+                error=f"Validation exception: {e}",
+            )
+
+    start = time.perf_counter()
+    try:
+        value = evaluation.evaluate(inputs)
+        latency_ms = (time.perf_counter() - start) * 1000
+        return EvalResult(
+            value=value,
+            eval_name=eval_name,
+            eval_version=eval_version,
+            latency_ms=latency_ms,
+            status=EvalStatus.COMPLETED,
+        )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start) * 1000
+        return EvalResult(
+            value=None,
+            eval_name=eval_name,
+            eval_version=eval_version,
+            latency_ms=latency_ms,
+            status=EvalStatus.FAILED,
+            error=str(e),
+        )
+
+
 # Convenience function for one-off evaluation
 
 
@@ -492,3 +633,64 @@ def evaluate(
             pass
         else:
             evaluator.shutdown()
+
+
+def resilient_evaluator(
+    *evaluations: BaseEvaluation,
+    backend: Optional[Backend] = None,
+    resilience: Optional[Any] = None,
+    fallback_backend: Optional[Backend] = None,
+    event_callback: Optional[Callable] = None,
+    auto_enrich_span: bool = True,
+) -> Evaluator:
+    """
+    Create a distributed evaluator with resilience protections.
+
+    Wraps a backend with circuit breaker, rate limiting, retry, and fallback
+    capabilities, then creates an Evaluator in DISTRIBUTED mode.
+
+    Args:
+        *evaluations: Evaluations to run
+        backend: Execution backend (uses ThreadPoolBackend if None)
+        resilience: ResilienceConfig for resilience settings (optional)
+        fallback_backend: Optional fallback backend for degradation
+        event_callback: Callback for resilience events
+        auto_enrich_span: Whether to enrich OTEL spans
+
+    Returns:
+        Configured Evaluator in distributed mode with resilience
+
+    Example:
+        from fi.evals.framework import resilient_evaluator, ResilienceConfig
+        from fi.evals.framework import CircuitBreakerConfig, RateLimitConfig
+
+        evaluator = resilient_evaluator(
+            ToxicityEval(),
+            BiasEval(),
+            resilience=ResilienceConfig(
+                circuit_breaker=CircuitBreakerConfig(failure_threshold=5),
+                rate_limit=RateLimitConfig(requests_per_second=10),
+            ),
+        )
+        result = evaluator.run({"response": "..."})
+    """
+    from .resilience import ResilientBackend, ResilienceConfig
+
+    # Create underlying backend if not provided
+    underlying = backend or ThreadPoolBackend()
+
+    # Wrap with resilience
+    resilience_config = resilience or ResilienceConfig()
+    resilient = ResilientBackend(
+        underlying=underlying,
+        config=resilience_config,
+        fallback_backend=fallback_backend,
+        event_callback=event_callback,
+    )
+
+    return Evaluator(
+        evaluations=list(evaluations),
+        mode=ExecutionMode.DISTRIBUTED,
+        backend=resilient,
+        auto_enrich_span=auto_enrich_span,
+    )

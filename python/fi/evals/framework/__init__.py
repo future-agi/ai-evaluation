@@ -150,6 +150,18 @@ from .backends import (
     ThreadPoolConfig,
 )
 
+# Resilience
+from .resilience import (
+    ResilientBackend,
+    ResilienceConfig,
+    CircuitBreakerConfig,
+    RateLimitConfig,
+    RetryConfig,
+    DegradationConfig,
+    HealthCheckConfig,
+    wrap_backend,
+)
+
 # Unified API
 from .evaluator import (
     Evaluator,
@@ -158,6 +170,7 @@ from .evaluator import (
     async_evaluator,
     distributed_evaluator,
     evaluate,
+    resilient_evaluator,
 )
 
 __all__ = [
@@ -225,6 +238,15 @@ __all__ = [
     "TaskStatus",
     "ThreadPoolBackend",
     "ThreadPoolConfig",
+    # Resilience
+    "ResilientBackend",
+    "ResilienceConfig",
+    "CircuitBreakerConfig",
+    "RateLimitConfig",
+    "RetryConfig",
+    "DegradationConfig",
+    "HealthCheckConfig",
+    "wrap_backend",
     # Unified API
     "Evaluator",
     "EvaluatorResult",
@@ -232,4 +254,5 @@ __all__ = [
     "async_evaluator",
     "distributed_evaluator",
     "evaluate",
+    "resilient_evaluator",
 ]
