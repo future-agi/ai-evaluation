@@ -8,7 +8,16 @@ Routing logic:
     4. Otherwise → None (caller must provide engine)
 """
 
+from enum import Enum
 from typing import Optional
+
+
+class Turing(str, Enum):
+    """Model options for the Turing (FutureAGI) cloud engine."""
+
+    FLASH = "turing_flash"
+    SMALL = "turing_small"
+    LARGE = "turing_large"
 
 
 TURING_MODEL_PREFIXES = ("turing",)

@@ -21,6 +21,10 @@ class OutputOnly(BaseModel):
     """Templates that only need the model output."""
     output: str
 
+class InputOnly(BaseModel):
+    """Templates whose backend expects 'input' instead of 'output'."""
+    input: str
+
 class OutputWithContext(BaseModel):
     """Templates that need output + context."""
     output: str
@@ -121,7 +125,7 @@ class ContentModeration(EvalTemplate):
 class PII(EvalTemplate):
     eval_name = "pii"
     eval_id = "14"
-    Input = OutputOnly
+    Input = InputOnly
 
 
 class Toxicity(EvalTemplate):

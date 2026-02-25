@@ -26,6 +26,9 @@ fi = "fi.cli.main:main"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
 pytest-cov = ">=4.0.0"
+transformers = "^5.2.0"
+sentence-transformers = "^5.2.3"
+torch = "^2.10.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,9 +1,14 @@
 import inspect
+import warnings
+
+# Suppress Pydantic field-shadowing warnings from our models and the installed fi.api package
+warnings.filterwarnings("ignore", message='Field name "json" in .* shadows an attribute in parent')
+warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an attribute in parent')
 
 # ---------------------------------------------------------------------------
 # Unified evaluate() API (new)
 # ---------------------------------------------------------------------------
-from .core import evaluate, EvalResult, BatchResult  # noqa: F401
+from .core import evaluate, EvalResult, BatchResult, Turing  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Cloud Evaluator + Protect (existing)
@@ -46,7 +51,7 @@ if _evaluator_available:
     ]
 
 # New unified API
-new_api_names = ["evaluate", "EvalResult", "BatchResult"]
+new_api_names = ["evaluate", "EvalResult", "BatchResult", "Turing"]
 
 # Existing clients
 client_names = ["Evaluator", "Protect", "protect", "list_evaluations"]

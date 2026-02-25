@@ -220,6 +220,20 @@ class TuringEngine(Engine):
                 error=f"Cloud template '{eval_name}' not found",
             )
 
+        # Filter inputs to only keys the template's backend accepts,
+        # and remap output↔input when the template expects one but not the other.
+        accepted = set(template_cls.Input.model_fields.keys()) if hasattr(template_cls, 'Input') else None
+        if accepted is not None:
+            mapped = {}
+            for k, v in inputs.items():
+                if k in accepted:
+                    mapped[k] = v
+                elif k == "output" and "input" in accepted and "output" not in accepted:
+                    mapped["input"] = v
+                elif k == "input" and "output" in accepted and "input" not in accepted:
+                    mapped["output"] = v
+            inputs = mapped
+
         start = time.perf_counter()
         try:
             batch = self._get_evaluator().evaluate(

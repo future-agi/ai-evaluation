@@ -2,9 +2,12 @@
 Input types for structured output validation metrics.
 """
 
+import warnings
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
+
+warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an attribute in parent "BaseModel"')
 
 
 class ValidationMode(Enum):
