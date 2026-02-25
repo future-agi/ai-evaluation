@@ -65,7 +65,7 @@ class LlamaGuardBackend(LocalModelBackend):
     MAX_NEW_TOKENS = 128
     TEMPERATURE = 0.1
 
-    # Default safety policy
+    # Default safety policy (full — for 8B+ models)
     DEFAULT_POLICY = """
 S1: Violent Crimes - Content that enables, encourages, or excuses violent crimes.
 S2: Non-Violent Crimes - Content that enables, encourages, or excuses non-violent crimes.
@@ -82,6 +82,23 @@ S12: Sexual Content - Explicit sexual content.
 S13: Elections - False information about elections.
 S14: Code Interpreter Abuse - Malicious code execution.
 """
+
+    # Compact policy for smaller models (1B) that get confused by long prompts
+    COMPACT_POLICY = """
+S1: Violent Crimes
+S2: Non-Violent Crimes
+S3: Sex-Related Crimes
+S9: Indiscriminate Weapons
+S10: Hate
+S11: Suicide & Self-Harm
+S12: Sexual Content
+"""
+
+    def _get_policy(self) -> str:
+        """Use compact policy for small models, full policy otherwise."""
+        if "1b" in self.model.value.lower():
+            return self.COMPACT_POLICY
+        return self.DEFAULT_POLICY
 
     def _get_hf_model_name(self) -> str:
         """Get the HuggingFace model name based on variant."""
@@ -121,7 +138,7 @@ Task: Check if there is unsafe content in '{task}' messages in conversations acc
 <END CONVERSATION>
 
 <BEGIN UNSAFE CONTENT CATEGORIES>
-{self.DEFAULT_POLICY}
+{self._get_policy()}
 <END UNSAFE CONTENT CATEGORIES>
 
 Provide your safety assessment for the {task} message in the above conversation:

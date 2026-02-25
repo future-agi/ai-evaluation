@@ -276,8 +276,12 @@ class LocalModelBackend(BaseBackend):
 
             # Generate response
             if self._use_vllm and self._vllm_client:
-                vllm_response = self._vllm_client.generate(
-                    prompt=prompt,
+                # Use chat endpoint — lets the server apply its own chat
+                # template (required for ollama, also works with VLLM).
+                # Send raw content so safety models use their built-in training
+                # rather than getting confused by our prompt template.
+                vllm_response = self._vllm_client.chat(
+                    messages=[{"role": "user", "content": content}],
                     max_tokens=self.MAX_NEW_TOKENS,
                     temperature=self.TEMPERATURE,
                 )
@@ -353,8 +357,8 @@ class LocalModelBackend(BaseBackend):
 
             # Generate response
             if self._use_vllm and self._vllm_client:
-                vllm_response = await self._vllm_client.generate_async(
-                    prompt=prompt,
+                vllm_response = await self._vllm_client.chat_async(
+                    messages=[{"role": "user", "content": content}],
                     max_tokens=self.MAX_NEW_TOKENS,
                     temperature=self.TEMPERATURE,
                 )

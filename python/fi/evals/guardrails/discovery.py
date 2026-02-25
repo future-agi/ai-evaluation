@@ -181,8 +181,13 @@ class BackendDiscovery:
         """Check if VLLM server is healthy."""
         try:
             import httpx
+            base = url.rstrip('/')
             with httpx.Client(timeout=5.0) as client:
-                response = client.get(f"{url.rstrip('/')}/health")
+                # Try /health (VLLM), fall back to / (ollama)
+                response = client.get(f"{base}/health")
+                if response.status_code == 200:
+                    return True
+                response = client.get(base)
                 return response.status_code == 200
         except Exception:
             return False
