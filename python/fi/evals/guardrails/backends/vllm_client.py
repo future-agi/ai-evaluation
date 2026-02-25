@@ -67,7 +67,11 @@ class VLLMClient:
         """
         try:
             with httpx.Client(timeout=5.0) as client:
+                # Try /health (VLLM), fall back to / (ollama)
                 response = client.get(f"{self.base_url}/health")
+                if response.status_code == 200:
+                    return True
+                response = client.get(self.base_url)
                 return response.status_code == 200
         except Exception:
             return False
