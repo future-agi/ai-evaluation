@@ -10,15 +10,7 @@ Usage:
     # Cloud template (turing model → auto-routes to Turing)
     result = evaluate("toxicity", output="hello world", model="turing_flash")
 
-    # Custom prompt on Turing
-    result = evaluate(
-        prompt="Rate the clarity of: {output}",
-        output="ML is a subset of AI.",
-        engine="turing",
-        model="turing_flash",
-    )
-
-    # Custom prompt on any LLM
+    # Custom prompt on any LLM (use engine="llm", not "turing")
     result = evaluate(
         prompt="Rate the clarity of: {output}",
         output="ML is a subset of AI.",
@@ -61,6 +53,7 @@ def evaluate(
                    using a custom prompt.
         prompt: Custom evaluation prompt with {output}/{context}/{input}
                 placeholders. Requires explicit engine or a model hint.
+                Note: custom prompts only work with engine='llm'.
         engine: Force a specific engine — "local", "turing", or "llm".
         model: Model to use. Turing models (e.g. "turing_flash") auto-route
                to the Turing engine. Other model strings (e.g.
@@ -135,6 +128,17 @@ def evaluate(
     )
 
 
+_ENGINE_FACTORIES = {
+    "local": lambda **_: LocalEngine(),
+    "turing": lambda **kw: TuringEngine(
+        fi_api_key=kw.get("fi_api_key"),
+        fi_secret_key=kw.get("fi_secret_key"),
+        fi_base_url=kw.get("fi_base_url"),
+    ),
+    "llm": lambda **_: LLMEngine(),
+}
+
+
 def _get_engine(
     engine_type: str,
     *,
@@ -142,15 +146,10 @@ def _get_engine(
     fi_secret_key: Optional[str] = None,
     fi_base_url: Optional[str] = None,
 ) -> Engine:
-    engine_type = engine_type.lower()
-    if engine_type == "local":
-        return LocalEngine()
-    if engine_type == "turing":
-        return TuringEngine(
-            fi_api_key=fi_api_key,
-            fi_secret_key=fi_secret_key,
-            fi_base_url=fi_base_url,
+    factory = _ENGINE_FACTORIES.get(engine_type.lower())
+    if factory is None:
+        raise ValueError(
+            f"Unknown engine: '{engine_type}'. "
+            f"Use one of: {', '.join(sorted(_ENGINE_FACTORIES))}."
         )
-    if engine_type == "llm":
-        return LLMEngine()
-    raise ValueError(f"Unknown engine: '{engine_type}'. Use 'local', 'turing', or 'llm'.")
+    return factory(fi_api_key=fi_api_key, fi_secret_key=fi_secret_key, fi_base_url=fi_base_url)
