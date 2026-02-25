@@ -13,7 +13,7 @@ import time
 import logging
 
 from ..types import BatchRunResult, EvalResult
-from .execution_mode import ExecutionMode, can_run_locally, select_execution_mode
+from .execution_mode import RoutingMode, can_run_locally, select_routing_mode
 from .registry import get_registry, LocalMetricRegistry
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ class LocalEvaluatorConfig:
         timeout: Timeout in seconds for individual evaluations.
     """
 
-    execution_mode: ExecutionMode = ExecutionMode.HYBRID
+    execution_mode: RoutingMode = RoutingMode.HYBRID
     fail_on_unsupported: bool = False
     parallel_workers: int = 4
     timeout: int = 60
@@ -251,7 +251,7 @@ class HybridEvaluator:
         ...     {"metric_name": "contains", "inputs": [{"response": "test"}]},
         ...     {"metric_name": "groundedness", "inputs": [{"response": "test"}]},
         ... ])
-        >>> local_results = evaluator.evaluate_local_partition(partitions[ExecutionMode.LOCAL])
+        >>> local_results = evaluator.evaluate_local_partition(partitions[RoutingMode.LOCAL])
 
         >>> # With local LLM for LLM-based evaluations
         >>> from fi.evals.local.llm import OllamaLLM
@@ -298,7 +298,7 @@ class HybridEvaluator:
             fallback_to_cloud: If True, fall back to cloud when local fails.
             offline_mode: If True, never use cloud (raise error if metric requires it).
         """
-        self.config = config or LocalEvaluatorConfig(execution_mode=ExecutionMode.HYBRID)
+        self.config = config or LocalEvaluatorConfig(execution_mode=RoutingMode.HYBRID)
         self.local_evaluator = local_evaluator or LocalEvaluator(self.config)
         self.local_llm = local_llm
         self.cloud_evaluator = cloud_evaluator
@@ -342,7 +342,7 @@ class HybridEvaluator:
         metric_name: str,
         force_local: bool = False,
         force_cloud: bool = False,
-    ) -> ExecutionMode:
+    ) -> RoutingMode:
         """Determine the execution mode for a metric.
 
         Args:
@@ -354,28 +354,28 @@ class HybridEvaluator:
             The recommended execution mode.
         """
         if force_cloud and not self.offline_mode:
-            return ExecutionMode.CLOUD
+            return RoutingMode.CLOUD
         if force_local:
-            return ExecutionMode.LOCAL
+            return RoutingMode.LOCAL
 
         # Check if it's a heuristic metric that can run locally
         if can_run_locally(metric_name):
-            return ExecutionMode.LOCAL
+            return RoutingMode.LOCAL
 
         # Check if it's an LLM metric and we have local LLM
         if self.can_use_local_llm(metric_name) and self.prefer_local:
-            return ExecutionMode.LOCAL
+            return RoutingMode.LOCAL
 
         # Default to cloud unless in offline mode
         if self.offline_mode:
             raise ValueError(
                 f"Metric '{metric_name}' requires cloud execution but offline_mode is enabled"
             )
-        return ExecutionMode.CLOUD
+        return RoutingMode.CLOUD
 
     def partition_evaluations(
         self, evaluations: List[Dict[str, Any]]
-    ) -> Dict[ExecutionMode, List[Dict[str, Any]]]:
+    ) -> Dict[RoutingMode, List[Dict[str, Any]]]:
         """Partition evaluations by execution mode.
 
         Args:
@@ -384,9 +384,9 @@ class HybridEvaluator:
         Returns:
             Dictionary mapping execution modes to their evaluations.
         """
-        partitions: Dict[ExecutionMode, List[Dict[str, Any]]] = {
-            ExecutionMode.LOCAL: [],
-            ExecutionMode.CLOUD: [],
+        partitions: Dict[RoutingMode, List[Dict[str, Any]]] = {
+            RoutingMode.LOCAL: [],
+            RoutingMode.CLOUD: [],
         }
 
         for eval_spec in evaluations:
@@ -400,7 +400,7 @@ class HybridEvaluator:
             except ValueError as e:
                 # Offline mode violation - add to errors
                 logger.error(f"Routing error for {metric_name}: {e}")
-                partitions[ExecutionMode.CLOUD].append(eval_spec)
+                partitions[RoutingMode.CLOUD].append(eval_spec)
 
         return partitions
 
@@ -541,7 +541,7 @@ class HybridEvaluator:
 
         mode = self.route_evaluation(template)
 
-        if mode == ExecutionMode.LOCAL:
+        if mode == RoutingMode.LOCAL:
             result = self.evaluate_local_partition([eval_spec])
         else:
             result = self._evaluate_cloud([eval_spec])
@@ -573,11 +573,11 @@ class HybridEvaluator:
         partitions = self.partition_evaluations(evaluations)
 
         # Run local evaluations
-        local_result = self.evaluate_local_partition(partitions[ExecutionMode.LOCAL])
+        local_result = self.evaluate_local_partition(partitions[RoutingMode.LOCAL])
 
         # Run cloud evaluations
-        if partitions[ExecutionMode.CLOUD]:
-            cloud_result = self._evaluate_cloud(partitions[ExecutionMode.CLOUD])
+        if partitions[RoutingMode.CLOUD]:
+            cloud_result = self._evaluate_cloud(partitions[RoutingMode.CLOUD])
 
             # Merge results
             local_result.results.eval_results.extend(cloud_result.results.eval_results)

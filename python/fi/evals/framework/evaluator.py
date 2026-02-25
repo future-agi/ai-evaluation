@@ -31,7 +31,10 @@ from typing import Dict, Any, List, Optional, Union, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from .types import ExecutionMode, EvalResult, BatchEvalResult, EvalStatus
+from .types import ExecutionMode, FrameworkEvalResult, BatchEvalResult, EvalStatus
+
+# Internal alias for brevity — this is the framework-level EvalResult
+EvalResult = FrameworkEvalResult
 from .context import EvalContext
 from .protocols import BaseEvaluation, EvalRegistry
 from .evaluators.blocking import BlockingEvaluator
@@ -105,7 +108,7 @@ class EvaluatorResult:
         return self.wait().success_rate
 
 
-class Evaluator:
+class FrameworkEvaluator:
     """
     Unified evaluator for all execution modes.
 
@@ -115,12 +118,12 @@ class Evaluator:
 
     Example:
         # Simple blocking usage
-        evaluator = Evaluator([ToxicityEval()])
+        evaluator = FrameworkEvaluator([ToxicityEval()])
         result = evaluator.run({"response": "..."})
         print(f"Score: {result.results[0].value}")
 
         # Non-blocking for production
-        evaluator = Evaluator(
+        evaluator = FrameworkEvaluator(
             [ToxicityEval(), BiasEval()],
             mode=ExecutionMode.NON_BLOCKING,
         )
@@ -129,7 +132,7 @@ class Evaluator:
         batch = result.wait()  # Get results when needed
 
         # With custom backend
-        evaluator = Evaluator(
+        evaluator = FrameworkEvaluator(
             [ToxicityEval()],
             mode=ExecutionMode.NON_BLOCKING,
             backend=MyTemporalBackend(),
@@ -173,7 +176,7 @@ class Evaluator:
         self._blocking: Optional[BlockingEvaluator] = None
         self._non_blocking: Optional[NonBlockingEvaluator] = None
 
-    def add(self, evaluation: BaseEvaluation) -> "Evaluator":
+    def add(self, evaluation: BaseEvaluation) -> "FrameworkEvaluator":
         """
         Add an evaluation to run.
 
@@ -186,7 +189,7 @@ class Evaluator:
         self.evaluations.append(evaluation)
         return self
 
-    def add_by_name(self, name: str, version: str = "latest") -> "Evaluator":
+    def add_by_name(self, name: str, version: str = "latest") -> "FrameworkEvaluator":
         """
         Add an evaluation by name from the registry.
 
@@ -414,7 +417,7 @@ class Evaluator:
         if self._backend:
             self._backend.shutdown(wait=wait)
 
-    def __enter__(self) -> "Evaluator":
+    def __enter__(self) -> "FrameworkEvaluator":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -428,7 +431,7 @@ def blocking_evaluator(
     *evaluations: BaseEvaluation,
     auto_enrich_span: bool = True,
     fail_fast: bool = False,
-) -> Evaluator:
+) -> FrameworkEvaluator:
     """
     Create a blocking evaluator.
 
@@ -444,7 +447,7 @@ def blocking_evaluator(
         evaluator = blocking_evaluator(ToxicityEval(), BiasEval())
         result = evaluator.run({"response": "..."})
     """
-    return Evaluator(
+    return FrameworkEvaluator(
         evaluations=list(evaluations),
         mode=ExecutionMode.BLOCKING,
         auto_enrich_span=auto_enrich_span,
@@ -457,7 +460,7 @@ def async_evaluator(
     max_workers: int = 4,
     auto_enrich_span: bool = True,
     backend: Optional[Backend] = None,
-) -> Evaluator:
+) -> FrameworkEvaluator:
     """
     Create a non-blocking (async) evaluator.
 
@@ -475,7 +478,7 @@ def async_evaluator(
         result = evaluator.run({"response": "..."})  # Returns immediately
         batch = result.wait()  # Get results when needed
     """
-    return Evaluator(
+    return FrameworkEvaluator(
         evaluations=list(evaluations),
         mode=ExecutionMode.NON_BLOCKING,
         max_workers=max_workers,
@@ -488,7 +491,7 @@ def distributed_evaluator(
     *evaluations: BaseEvaluation,
     backend: Backend,
     auto_enrich_span: bool = True,
-) -> Evaluator:
+) -> FrameworkEvaluator:
     """
     Create a distributed evaluator with custom backend.
 
@@ -508,7 +511,7 @@ def distributed_evaluator(
         )
         result = evaluator.run({"response": "..."})
     """
-    return Evaluator(
+    return FrameworkEvaluator(
         evaluations=list(evaluations),
         mode=ExecutionMode.DISTRIBUTED,
         backend=backend,
@@ -619,7 +622,7 @@ def evaluate(
         )
         batch = result.wait()
     """
-    evaluator = Evaluator(
+    evaluator = FrameworkEvaluator(
         evaluations=list(evaluations),
         mode=mode,
         auto_enrich_span=auto_enrich_span,
@@ -642,7 +645,7 @@ def resilient_evaluator(
     fallback_backend: Optional[Backend] = None,
     event_callback: Optional[Callable] = None,
     auto_enrich_span: bool = True,
-) -> Evaluator:
+) -> FrameworkEvaluator:
     """
     Create a distributed evaluator with resilience protections.
 
@@ -688,7 +691,7 @@ def resilient_evaluator(
         event_callback=event_callback,
     )
 
-    return Evaluator(
+    return FrameworkEvaluator(
         evaluations=list(evaluations),
         mode=ExecutionMode.DISTRIBUTED,
         backend=resilient,

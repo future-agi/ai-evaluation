@@ -40,7 +40,7 @@ class EvalStatus(Enum):
 
 
 @dataclass
-class EvalResult(Generic[T]):
+class FrameworkEvalResult(Generic[T]):
     """
     Result from any evaluation.
 
@@ -95,7 +95,7 @@ class EvalResult(Generic[T]):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EvalResult":
+    def from_dict(cls, data: Dict[str, Any]) -> "FrameworkEvalResult":
         """Create from dictionary."""
         return cls(
             value=data["value"],
@@ -132,7 +132,7 @@ class EvalResult(Generic[T]):
         eval_version: str,
         error: str,
         latency_ms: float = 0.0,
-    ) -> "EvalResult":
+    ) -> "FrameworkEvalResult":
         """Create a failed result."""
         return cls(
             value=None,
@@ -160,7 +160,7 @@ class BatchEvalResult:
         batch = BatchEvalResult.from_results(results)
         print(f"Success rate: {batch.success_rate:.1%}")
     """
-    results: List[EvalResult]
+    results: List[FrameworkEvalResult]
     total_count: int
     success_count: int
     failure_count: int
@@ -182,7 +182,7 @@ class BatchEvalResult:
         return self.total_latency_ms / self.total_count
 
     @classmethod
-    def from_results(cls, results: List[EvalResult], **metadata) -> "BatchEvalResult":
+    def from_results(cls, results: List[FrameworkEvalResult], **metadata) -> "BatchEvalResult":
         """Create from a list of EvalResult objects."""
         return cls(
             results=results,
@@ -193,11 +193,11 @@ class BatchEvalResult:
             metadata=metadata,
         )
 
-    def get_by_name(self, eval_name: str) -> List[EvalResult]:
+    def get_by_name(self, eval_name: str) -> List[FrameworkEvalResult]:
         """Get all results for a specific evaluation name."""
         return [r for r in self.results if r.eval_name == eval_name]
 
-    def get_failures(self) -> List[EvalResult]:
+    def get_failures(self) -> List[FrameworkEvalResult]:
         """Get all failed results."""
         return [r for r in self.results if r.status == EvalStatus.FAILED]
 

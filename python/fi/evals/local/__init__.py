@@ -47,10 +47,10 @@ Example:
 """
 
 from .execution_mode import (
-    ExecutionMode,
+    RoutingMode,
     LOCAL_CAPABLE_METRICS,
     can_run_locally,
-    select_execution_mode,
+    select_routing_mode,
 )
 from .registry import (
     LocalMetricRegistry,
@@ -70,11 +70,11 @@ from .llm import (
 
 
 __all__ = [
-    # Execution mode
-    "ExecutionMode",
+    # Routing mode
+    "RoutingMode",
     "LOCAL_CAPABLE_METRICS",
     "can_run_locally",
-    "select_execution_mode",
+    "select_routing_mode",
     # Registry
     "LocalMetricRegistry",
     "get_registry",

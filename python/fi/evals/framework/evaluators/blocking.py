@@ -7,7 +7,7 @@ and optionally enriches the current OTEL span with results.
 
 import time
 from typing import List, Any, Dict, Optional, Union
-from ..types import EvalResult, EvalStatus, BatchEvalResult
+from ..types import FrameworkEvalResult as EvalResult, EvalStatus, BatchEvalResult
 from ..protocols import BaseEvaluation
 from ..context import EvalContext
 from ..enrichment import enrich_current_span, add_eval_event

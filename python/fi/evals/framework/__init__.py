@@ -76,7 +76,7 @@ __version__ = "0.1.0"
 from .types import (
     ExecutionMode,
     EvalStatus,
-    EvalResult,
+    FrameworkEvalResult,
     BatchEvalResult,
     EvalInputs,
     SpanAttributes,
@@ -164,7 +164,7 @@ from .resilience import (
 
 # Unified API
 from .evaluator import (
-    Evaluator,
+    FrameworkEvaluator,
     EvaluatorResult,
     blocking_evaluator,
     async_evaluator,
@@ -180,7 +180,7 @@ __all__ = [
     # Types
     "ExecutionMode",
     "EvalStatus",
-    "EvalResult",
+    "FrameworkEvalResult",
     "BatchEvalResult",
     "EvalInputs",
     "SpanAttributes",
@@ -248,7 +248,7 @@ __all__ = [
     "HealthCheckConfig",
     "wrap_backend",
     # Unified API
-    "Evaluator",
+    "FrameworkEvaluator",
     "EvaluatorResult",
     "blocking_evaluator",
     "async_evaluator",

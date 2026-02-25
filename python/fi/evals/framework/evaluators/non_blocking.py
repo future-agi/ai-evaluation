@@ -13,7 +13,7 @@ import threading
 import uuid
 import time
 
-from ..types import EvalResult, EvalStatus, BatchEvalResult
+from ..types import FrameworkEvalResult as EvalResult, EvalStatus, BatchEvalResult
 from ..context import EvalContext
 from ..protocols import BaseEvaluation
 from ..registry import register_span, get_span, register_current_span

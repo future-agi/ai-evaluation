@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Optional, Set
 
 
-class ExecutionMode(Enum):
+class RoutingMode(Enum):
     """Defines how evaluations should be executed."""
 
     LOCAL = "local"
@@ -74,12 +74,12 @@ def can_run_locally(metric_name: str) -> bool:
     return metric_name.lower() in LOCAL_CAPABLE_METRICS
 
 
-def select_execution_mode(
+def select_routing_mode(
     metric_name: str,
-    preferred_mode: ExecutionMode,
+    preferred_mode: RoutingMode,
     force_local: bool = False,
     force_cloud: bool = False,
-) -> ExecutionMode:
+) -> RoutingMode:
     """Select the execution mode for a metric based on preferences and capabilities.
 
     Args:
@@ -95,7 +95,7 @@ def select_execution_mode(
         ValueError: If force_local is True but the metric cannot run locally.
     """
     if force_cloud:
-        return ExecutionMode.CLOUD
+        return RoutingMode.CLOUD
 
     if force_local:
         if not can_run_locally(metric_name):
@@ -103,19 +103,19 @@ def select_execution_mode(
                 f"Metric '{metric_name}' cannot run locally. "
                 f"Local-capable metrics: {sorted(LOCAL_CAPABLE_METRICS)}"
             )
-        return ExecutionMode.LOCAL
+        return RoutingMode.LOCAL
 
-    if preferred_mode == ExecutionMode.LOCAL:
+    if preferred_mode == RoutingMode.LOCAL:
         if can_run_locally(metric_name):
-            return ExecutionMode.LOCAL
+            return RoutingMode.LOCAL
         # Fall back to cloud if metric can't run locally
-        return ExecutionMode.CLOUD
+        return RoutingMode.CLOUD
 
-    if preferred_mode == ExecutionMode.HYBRID:
+    if preferred_mode == RoutingMode.HYBRID:
         # In hybrid mode, prefer local for capable metrics
         if can_run_locally(metric_name):
-            return ExecutionMode.LOCAL
-        return ExecutionMode.CLOUD
+            return RoutingMode.LOCAL
+        return RoutingMode.CLOUD
 
     # Default: CLOUD mode
-    return ExecutionMode.CLOUD
+    return RoutingMode.CLOUD
