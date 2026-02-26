@@ -2,26 +2,28 @@
 Natural Language Inference utilities for hallucination detection.
 
 Provides entailment checking between claims and context.
-Supports both transformer-based NLI and heuristic fallbacks.
-
-Follows the same pattern as metrics.rag.utils.nli for consistency.
+Uses transformer-based NLI when available (pip install ai-evaluation[nli]),
+falls back to word-overlap heuristic with a warning.
 """
 
 import re
+import warnings
 from typing import Tuple, List, Optional
 from enum import Enum
 
 
-# Try to load NLI model
-_NLI_AVAILABLE = False
-_nli_pipeline = None
+_NLI_MODEL = "cross-encoder/nli-deberta-v3-base"
 
+# Try to import transformers
+_NLI_AVAILABLE = False
 try:
     from transformers import pipeline as _hf_pipeline
-
     _NLI_AVAILABLE = True
 except ImportError:
     pass
+
+_nli_pipeline = None
+_heuristic_warning_issued = False
 
 
 class NLILabel(Enum):
@@ -33,18 +35,56 @@ class NLILabel(Enum):
 
 
 def _get_nli_pipeline():
-    """Lazy-load NLI pipeline."""
+    """Lazy-load NLI pipeline. Returns the pipeline or False on failure."""
     global _nli_pipeline
-    if _nli_pipeline is None and _NLI_AVAILABLE:
-        try:
-            _nli_pipeline = _hf_pipeline(
-                "text-classification",
-                model="microsoft/deberta-v3-xsmall-mnli-fever-anli",
-                device=-1,  # CPU
-            )
-        except Exception:
-            _nli_pipeline = False
+    if _nli_pipeline is not None:
+        return _nli_pipeline
+
+    if not _NLI_AVAILABLE:
+        _nli_pipeline = False
+        return False
+
+    try:
+        _nli_pipeline = _hf_pipeline(
+            "text-classification",
+            model=_NLI_MODEL,
+            device=-1,  # CPU
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to load NLI model '{_NLI_MODEL}': {exc}. "
+            "Falling back to word-overlap heuristic. "
+            "Install with: pip install ai-evaluation[nli]",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _nli_pipeline = False
+
     return _nli_pipeline
+
+
+def _warn_heuristic_fallback():
+    """Issue a one-time warning that we're using the heuristic fallback."""
+    global _heuristic_warning_issued
+    if not _heuristic_warning_issued:
+        _heuristic_warning_issued = True
+        warnings.warn(
+            "NLI model not available — using word-overlap heuristic for "
+            "hallucination detection. Results will be approximate. "
+            "For accurate NLI, install: pip install ai-evaluation[nli]",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+_LABEL_MAP = {
+    "ENTAILMENT": NLILabel.ENTAILMENT,
+    "CONTRADICTION": NLILabel.CONTRADICTION,
+    "NEUTRAL": NLILabel.NEUTRAL,
+    "entailment": NLILabel.ENTAILMENT,
+    "contradiction": NLILabel.CONTRADICTION,
+    "neutral": NLILabel.NEUTRAL,
+}
 
 
 def check_entailment(premise: str, hypothesis: str) -> Tuple[NLILabel, float]:
@@ -61,26 +101,27 @@ def check_entailment(premise: str, hypothesis: str) -> Tuple[NLILabel, float]:
     nli = _get_nli_pipeline()
 
     if not nli:
+        _warn_heuristic_fallback()
         return check_entailment_heuristic(premise, hypothesis)
 
     try:
-        result = nli(f"{premise} [SEP] {hypothesis}", truncation=True, max_length=512)
-
-        label_map = {
-            "ENTAILMENT": NLILabel.ENTAILMENT,
-            "CONTRADICTION": NLILabel.CONTRADICTION,
-            "NEUTRAL": NLILabel.NEUTRAL,
-            "entailment": NLILabel.ENTAILMENT,
-            "contradiction": NLILabel.CONTRADICTION,
-            "neutral": NLILabel.NEUTRAL,
-        }
-
-        label = label_map.get(result[0]["label"], NLILabel.NEUTRAL)
-        score = result[0]["score"]
+        result = nli(
+            {"text": premise, "text_pair": hypothesis},
+            truncation=True,
+            max_length=512,
+        )
+        # Dict input returns a single dict, not a list
+        entry = result[0] if isinstance(result, list) else result
+        label = _LABEL_MAP.get(entry["label"], NLILabel.NEUTRAL)
+        score = entry["score"]
         return label, score
     except Exception:
         return check_entailment_heuristic(premise, hypothesis)
 
+
+# ---------------------------------------------------------------------------
+# Heuristic fallback
+# ---------------------------------------------------------------------------
 
 _STOPWORDS = frozenset({
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
@@ -107,7 +148,7 @@ def check_entailment_heuristic(
     """
     Heuristic entailment check using word overlap and similarity.
 
-    Improved fallback when NLI model is not available. Uses:
+    Fallback when NLI model is not available. Uses:
     - Content word overlap for entailment signal
     - Negation asymmetry for contradiction detection
     - Numeric mismatch detection
@@ -145,8 +186,6 @@ def check_entailment_heuristic(
     if hypothesis_numbers and premise_numbers and coverage > 0.5:
         novel_numbers = hypothesis_numbers - premise_numbers
         if novel_numbers and len(novel_numbers) <= 2:
-            # Only flag when claim introduces a small number of novel numbers
-            # on a clearly overlapping topic
             return NLILabel.CONTRADICTION, 0.55
 
     if coverage >= 0.65:
@@ -198,14 +237,14 @@ def nli_score_for_claim(
 
         if label == NLILabel.CONTRADICTION and score > 0.5:
             # Contradiction takes priority if confident
-            return label, score, ctx[:200] + "..." if len(ctx) > 200 else ctx
+            snippet = ctx[:200] + "..." if len(ctx) > 200 else ctx
+            return label, score, snippet
 
         if label == NLILabel.ENTAILMENT and score > best_score:
             best_label = label
             best_score = score
             best_context = ctx[:200] + "..." if len(ctx) > 200 else ctx
         elif label == NLILabel.NEUTRAL and best_label != NLILabel.ENTAILMENT:
-            # Track neutral score when we don't have an entailment yet
             if score > best_score:
                 best_label = label
                 best_score = score
