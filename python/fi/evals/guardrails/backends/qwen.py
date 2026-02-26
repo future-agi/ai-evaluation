@@ -42,6 +42,7 @@ class Qwen3GuardBackend(LocalModelBackend):
     MODEL_VARIANTS = {
         "qwen3guard-8b": "Qwen/Qwen3Guard-8B",
         "qwen3guard-4b": "Qwen/Qwen3Guard-4B",
+        "qwen3guard-0.6b": "Qwen/Qwen3Guard-0.6B",
     }
 
     MAX_NEW_TOKENS = 64
@@ -167,24 +168,4 @@ Classify this content:
 
         return results
 
-    def _infer_categories(self, content: str, response: str) -> List[str]:
-        """Infer safety categories from content and response."""
-        categories = []
-        combined = (content + " " + response).lower()
-
-        # Check for various categories
-        category_keywords = {
-            "violence": ["violence", "violent", "kill", "murder", "attack", "weapon", "harm"],
-            "self_harm": ["suicide", "self-harm", "self harm", "cut myself", "end my life"],
-            "hate_speech": ["hate", "racist", "sexist", "discrimination", "slur"],
-            "sexual_content": ["sexual", "explicit", "nude", "porn"],
-            "illegal_activity": ["illegal", "drug", "hack", "steal", "fraud", "crime"],
-            "jailbreak": ["jailbreak", "ignore", "bypass", "pretend"],
-            "prompt_injection": ["injection", "override", "system prompt"],
-        }
-
-        for category, keywords in category_keywords.items():
-            if any(kw in combined for kw in keywords):
-                categories.append(category)
-
-        return categories if categories else ["harmful_content"]
+    # _infer_categories inherited from LocalModelBackend

@@ -14,7 +14,7 @@ import functools
 import logging
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Type
 
 from fi.evals.guardrails.config import (
@@ -43,34 +43,32 @@ def _trace_guardrail(fn):
                 GuardrailAttributes,
             )
             from opentelemetry import trace as _trace
-
-            tracer = _trace.get_tracer("fi.evals.guardrails")
-            # Infer rail_type from args or default
-            rail_type = args[0] if args else kwargs.get("rail_type", RailType.INPUT)
-            span_name = f"guardrail.screen_{rail_type.value}"
-
-            with tracer.start_as_current_span(span_name) as span:
-                span.set_attribute(GenAIAttributes.SPAN_KIND, "GUARDRAIL")
-                span.set_attribute(GuardrailAttributes.GEN_AI_NAME, span_name)
-                span.set_attribute(GuardrailAttributes.GEN_AI_TYPE, rail_type.value)
-                span.set_attribute(GenAIAttributes.INPUT_MESSAGES, content)
-
-                response = fn(self, content, *args, **kwargs)
-
-                result_str = "allow" if response.passed else "block"
-                span.set_attribute(GuardrailAttributes.GEN_AI_RESULT, result_str)
-                if response.blocked_categories:
-                    span.set_attribute(
-                        GuardrailAttributes.GEN_AI_CATEGORIES,
-                        str(response.blocked_categories),
-                    )
-                if response.total_latency_ms:
-                    span.set_attribute(GuardrailAttributes.LATENCY_MS, response.total_latency_ms)
-
-                return response
         except ImportError:
-            pass
-        return fn(self, content, *args, **kwargs)
+            return fn(self, content, *args, **kwargs)
+
+        tracer = _trace.get_tracer("fi.evals.guardrails")
+        rail_type = args[0] if args else kwargs.get("rail_type", RailType.INPUT)
+        span_name = f"guardrail.screen_{rail_type.value}"
+
+        with tracer.start_as_current_span(span_name) as span:
+            span.set_attribute(GenAIAttributes.SPAN_KIND, "GUARDRAIL")
+            span.set_attribute(GuardrailAttributes.GEN_AI_NAME, span_name)
+            span.set_attribute(GuardrailAttributes.GEN_AI_TYPE, rail_type.value)
+            span.set_attribute(GenAIAttributes.INPUT_MESSAGES, content)
+
+            response = fn(self, content, *args, **kwargs)
+
+            result_str = "allow" if response.passed else "block"
+            span.set_attribute(GuardrailAttributes.GEN_AI_RESULT, result_str)
+            if response.blocked_categories:
+                span.set_attribute(
+                    GuardrailAttributes.GEN_AI_CATEGORIES,
+                    str(response.blocked_categories),
+                )
+            if response.total_latency_ms:
+                span.set_attribute(GuardrailAttributes.LATENCY_MS, response.total_latency_ms)
+
+            return response
     return wrapper
 
 
@@ -507,6 +505,11 @@ class Guardrails:
                 errors.append(f"scanner_pipeline: {str(e)}")
 
         # Step 2: Run model backends
+        use_weighted_early_exit = (
+            self.config.aggregation == AggregationStrategy.WEIGHTED
+            and len(self.backends) > 1
+        )
+
         if self.config.parallel and len(self.backends) > 1:
             # Run backends in parallel
             with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
@@ -522,6 +525,12 @@ class Guardrails:
                 }
 
                 timeout_seconds = self.config.timeout_ms / 1000.0
+                weights = self.config.model_weights
+                total_weight = sum(
+                    weights.get(m.value, 1.0) for m in self.backends
+                )
+                failed_weight = 0.0
+                passed_weight = 0.0
 
                 try:
                     for future in as_completed(future_to_model, timeout=timeout_seconds):
@@ -529,16 +538,60 @@ class Guardrails:
                         try:
                             results = future.result()
                             all_results.extend(results)
+
+                            # Early exit for WEIGHTED: if accumulated weight
+                            # already decides the outcome, cancel remaining futures
+                            if use_weighted_early_exit:
+                                w = weights.get(model.value, 1.0)
+                                has_fail = any(not r.passed for r in results)
+                                if has_fail:
+                                    failed_weight += w
+                                else:
+                                    passed_weight += w
+                                threshold = self.config.weighted_threshold
+                                if failed_weight > threshold * total_weight:
+                                    # Enough weight to block — cancel the rest
+                                    for f in future_to_model:
+                                        f.cancel()
+                                    break
+                                if passed_weight >= (1 - threshold) * total_weight:
+                                    # Remaining models can't tip the balance — pass early
+                                    for f in future_to_model:
+                                        f.cancel()
+                                    break
+
                         except Exception as e:
                             errors.append(f"{model.value}: {str(e)}")
-                except TimeoutError:
+                except FuturesTimeoutError:
                     errors.append("Timeout waiting for backends")
         else:
             # Run backends sequentially
+            weights = self.config.model_weights
+            total_weight = sum(
+                weights.get(m.value, 1.0) for m in self.backends
+            )
+            failed_weight = 0.0
+            passed_weight = 0.0
+
             for model, backend in self.backends.items():
                 try:
                     results = backend.classify(content, rail_type, context, metadata)
                     all_results.extend(results)
+
+                    # Early exit for WEIGHTED sequential
+                    if use_weighted_early_exit:
+                        w = weights.get(model.value, 1.0)
+                        has_fail = any(not r.passed for r in results)
+                        if has_fail:
+                            failed_weight += w
+                        else:
+                            passed_weight += w
+                        threshold = self.config.weighted_threshold
+                        if failed_weight > threshold * total_weight:
+                            break
+                        if passed_weight >= (1 - threshold) * total_weight:
+                            break
+
                 except Exception as e:
                     errors.append(f"{model.value}: {str(e)}")
 
@@ -710,6 +763,11 @@ class Guardrails:
         # Apply category thresholds
         processed_results = self._apply_thresholds(results)
 
+        # Count total distinct models/scanners that produced results.
+        # Models that didn't flag a category are implicit "pass" votes.
+        all_model_names = set(r.model for r in processed_results)
+        total_voters = len(all_model_names)
+
         # Group results by category
         category_results: Dict[str, List[GuardrailResult]] = {}
         for result in processed_results:
@@ -725,10 +783,7 @@ class Guardrails:
             if category in ("safe", "empty", "error"):
                 continue
 
-            failed_count = sum(1 for r in cat_results if not r.passed)
-            total_count = len(cat_results)
-
-            should_block = self._should_block(failed_count, total_count)
+            should_block = self._should_block(cat_results, total_voters)
 
             if should_block:
                 category_config = self.config.categories.get(category)
@@ -780,20 +835,26 @@ class Guardrails:
             processed.append(result)
         return processed
 
-    def _should_block(self, failed_count: int, total_count: int) -> bool:
+    def _should_block(self, cat_results: List[GuardrailResult], total_voters: int = 0) -> bool:
         """
         Determine if content should be blocked based on aggregation strategy.
 
         Args:
-            failed_count: Number of models that flagged the content
-            total_count: Total number of models
+            cat_results: Results for a single category from all models.
+            total_voters: Total distinct models/scanners that ran.
+                Models that didn't flag this category are implicit passes.
 
         Returns:
             True if content should be blocked
         """
-        if total_count == 0:
+        if not cat_results:
             return False
 
+        failed_count = sum(1 for r in cat_results if not r.passed)
+        # Use total_voters (all models that ran) as denominator, not just
+        # models that flagged this specific category. Models that returned
+        # "safe" instead are implicit passes for any category they didn't flag.
+        total_count = max(total_voters, len(cat_results))
         strategy = self.config.aggregation
 
         if strategy == AggregationStrategy.ANY:
@@ -803,9 +864,22 @@ class Guardrails:
         elif strategy == AggregationStrategy.MAJORITY:
             return failed_count > total_count / 2
         elif strategy == AggregationStrategy.WEIGHTED:
-            # For weighted, use simple majority for now
-            # TODO: Implement proper weighted voting
-            return failed_count > total_count / 2
+            weights = self.config.model_weights
+            # Total weight includes ALL models that ran (from backends dict),
+            # not just those that flagged this specific category.
+            total_weight = sum(
+                weights.get(m.value, 1.0) for m in self.backends
+            )
+            if total_weight == 0:
+                # Fallback: just use weights from cat_results
+                total_weight = sum(weights.get(r.model, 1.0) for r in cat_results)
+            if total_weight == 0:
+                return False
+            failed_weight = 0.0
+            for r in cat_results:
+                if not r.passed:
+                    failed_weight += weights.get(r.model, 1.0)
+            return failed_weight > self.config.weighted_threshold * total_weight
         else:
             return failed_count > 0
 

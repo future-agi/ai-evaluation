@@ -134,6 +134,27 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         description="Alibaba Qwen3Guard 4B (lightweight, 119 languages)",
     ),
 
+    "qwen3guard-0.6b": ModelInfo(
+        model=GuardrailModel.QWEN3GUARD_0_6B,
+        backend_class="Qwen3GuardBackend",
+        backend_module="fi.evals.guardrails.backends.qwen",
+        model_type="local",
+        hf_model_name="Qwen/Qwen3Guard-0.6B",
+        vram_required_gb=1.0,
+        description="Alibaba Qwen3Guard 0.6B (ultra-lightweight, 119 languages)",
+    ),
+
+    # Generic LLM as guard (prompted for safety classification)
+    "llama3.2-3b": ModelInfo(
+        model=GuardrailModel.LLAMA_3_2_3B,
+        backend_class="GenericLLMGuardBackend",
+        backend_module="fi.evals.guardrails.backends.generic_llm",
+        model_type="local",
+        hf_model_name="meta-llama/Llama-3.2-3B-Instruct",
+        vram_required_gb=4.0,
+        description="Llama 3.2 3B as prompted safety classifier",
+    ),
+
     # ShieldGemma (Local)
     "shieldgemma-2b": ModelInfo(
         model=GuardrailModel.SHIELDGEMMA_2B,

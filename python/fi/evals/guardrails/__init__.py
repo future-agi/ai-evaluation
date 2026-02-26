@@ -1,77 +1,46 @@
 """
-Guardrails Module - Modal Gateway for AI Safety.
+Guardrails — content screening for AI applications.
 
-Comprehensive content screening system with support for:
-- Multiple models (Turing, OpenAI, Azure, local models)
-- Input, output, and retrieval rails
-- Ensemble mode with configurable aggregation
-- Async and sync APIs
-- Auto-discovery of available backends
+Screen user input, LLM output, and RAG chunks for safety threats
+using scanners (fast, local, no API keys) and model backends
+(Turing, OpenAI, Azure, or local models via VLLM/HuggingFace).
 
-Quick Start:
-    from fi.evals.guardrails import Guardrails
+Quick Start — Scanners Only (no API keys needed):
+    from fi.evals.guardrails.scanners import (
+        ScannerPipeline, JailbreakScanner, CodeInjectionScanner, SecretsScanner,
+    )
 
-    # Default: Uses Turing Flash for speed
-    guardrails = Guardrails()
+    pipeline = ScannerPipeline([
+        JailbreakScanner(),
+        CodeInjectionScanner(),
+        SecretsScanner(),
+    ])
+    result = pipeline.scan("user input here")
+    if not result.passed:
+        print(f"Blocked: {result.blocked_by}")
 
-    # Screen user input
-    result = guardrails.screen_input("How can I help you today?")
-    if result.passed:
-        print("Content is safe")
-    else:
-        print(f"Blocked: {result.blocked_categories}")
-
-Discover Available Backends:
-    from fi.evals.guardrails import Guardrails
-
-    # See what's available
-    available = Guardrails.discover_backends()
-    print(f"Available: {[m.value for m in available]}")
-
-    # Get detailed info
-    details = Guardrails.get_backend_details()
-    for model, info in details.items():
-        print(f"{model}: {info['status']}")
-
-Using OpenAI Moderation (FREE):
-    import os
-    os.environ["OPENAI_API_KEY"] = "sk-..."
-
+Full Guardrails (with model backend):
     from fi.evals.guardrails import Guardrails, GuardrailsConfig, GuardrailModel
 
     guardrails = Guardrails(
         config=GuardrailsConfig(models=[GuardrailModel.OPENAI_MODERATION])
     )
-    result = guardrails.screen_input("some content")
+    result = guardrails.screen_input("user message")
 
-Using Local Models (WildGuard, LlamaGuard, etc.):
-    # Option 1: Via VLLM server
-    os.environ["VLLM_SERVER_URL"] = "http://localhost:28000"
-
-    # Option 2: Direct model loading (requires GPU)
-    guardrails = Guardrails(
-        config=GuardrailsConfig(models=[GuardrailModel.WILDGUARD_7B])
-    )
-
-Ensemble Mode:
+Ensemble with Weighted Voting:
     from fi.evals.guardrails import (
-        Guardrails,
-        GuardrailsConfig,
-        GuardrailModel,
-        AggregationStrategy,
+        Guardrails, GuardrailsConfig, GuardrailModel, AggregationStrategy,
     )
 
     config = GuardrailsConfig(
-        models=[
-            GuardrailModel.TURING_FLASH,
-            GuardrailModel.OPENAI_MODERATION,
-        ],
-        aggregation=AggregationStrategy.MAJORITY,
+        models=[GuardrailModel.TURING_FLASH, GuardrailModel.OPENAI_MODERATION],
+        aggregation=AggregationStrategy.WEIGHTED,
+        model_weights={"turing_flash": 2.0, "openai-moderation": 1.0},
     )
     guardrails = Guardrails(config=config)
 """
 
-# Config classes (always available - no external dependencies)
+# Config classes (always available — no external dependencies)
 from fi.evals.guardrails.config import (
     GuardrailModel,
     RailType,
@@ -89,44 +58,18 @@ from fi.evals.guardrails.types import (
 )
 
 # Optional imports that depend on fi.api (backends, etc.)
-# These may fail if the futureagi package is not installed
 _full_api_available = False
 try:
     from fi.evals.guardrails.base import Guardrails
-    from fi.evals.guardrails.discovery import (
-        discover_backends,
-        get_backend_details,
-        BackendDiscovery,
-    )
-    from fi.evals.guardrails.registry import (
-        MODEL_REGISTRY,
-        ModelInfo,
-        get_model_info,
-        list_models,
-        list_api_models,
-        list_local_models,
-    )
     from fi.evals.guardrails.gateway import (
         GuardrailsGateway,
-        Gateway,
         ScreeningSession,
         AsyncScreeningSession,
     )
     _full_api_available = True
 except (ImportError, ModuleNotFoundError):
-    # Provide stubs for missing components
     Guardrails = None
-    discover_backends = None
-    get_backend_details = None
-    BackendDiscovery = None
-    MODEL_REGISTRY = {}
-    ModelInfo = None
-    get_model_info = None
-    list_models = None
-    list_api_models = None
-    list_local_models = None
     GuardrailsGateway = None
-    Gateway = None
     ScreeningSession = None
     AsyncScreeningSession = None
 
@@ -146,20 +89,8 @@ __all__ = [
     # Response types
     "GuardrailResult",
     "GuardrailsResponse",
-    # Discovery
-    "discover_backends",
-    "get_backend_details",
-    "BackendDiscovery",
-    # Registry
-    "MODEL_REGISTRY",
-    "ModelInfo",
-    "get_model_info",
-    "list_models",
-    "list_api_models",
-    "list_local_models",
     # Gateway
     "GuardrailsGateway",
-    "Gateway",
     "ScreeningSession",
     "AsyncScreeningSession",
 ]

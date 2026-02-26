@@ -152,28 +152,4 @@ Answer with only "Yes" or "No" followed by a brief explanation.<end_of_turn>
 
         return results
 
-    def _infer_categories(self, content: str, response: str) -> List[str]:
-        """Infer safety categories from content and response."""
-        categories = []
-        combined = (content + " " + response).lower()
-
-        # Category detection based on keywords
-        if any(kw in combined for kw in ["dangerous", "weapon", "bomb", "attack", "kill"]):
-            categories.append("violence")
-
-        if any(kw in combined for kw in ["harass", "bully", "threaten", "intimidate"]):
-            categories.append("harassment")
-
-        if any(kw in combined for kw in ["hate", "racist", "sexist", "discriminat"]):
-            categories.append("hate_speech")
-
-        if any(kw in combined for kw in ["sexual", "explicit", "nude", "porn"]):
-            categories.append("sexual_content")
-
-        if any(kw in combined for kw in ["self-harm", "suicide", "cut myself", "kill myself"]):
-            categories.append("self_harm")
-
-        if any(kw in combined for kw in ["illegal", "drug", "hack", "steal"]):
-            categories.append("illegal_activity")
-
-        return categories if categories else ["harmful_content"]
+    # _infer_categories inherited from LocalModelBackend

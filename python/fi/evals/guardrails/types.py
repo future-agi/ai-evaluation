@@ -78,6 +78,7 @@ class GuardrailsResponse:
             total_latency_ms=latency_ms,
             models_used=models_used or [],
             results=results or [],
+            error=reason,
         )
 
     @classmethod

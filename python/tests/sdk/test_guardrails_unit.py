@@ -153,7 +153,6 @@ class TestGuardrailModel:
     def test_api_models(self):
         """Test third-party API model values."""
         assert GuardrailModel.OPENAI_MODERATION.value == "openai-moderation"
-        assert GuardrailModel.ANTHROPIC_SAFETY.value == "anthropic-safety"
         assert GuardrailModel.AZURE_CONTENT_SAFETY.value == "azure-content-safety"
 
 
@@ -325,15 +324,6 @@ class TestGuardrailsClass:
         )
 
         with pytest.raises(NotImplementedError, match="OpenAI backend"):
-            Guardrails(config=config)
-
-    def test_anthropic_not_implemented(self):
-        """Test that Anthropic backend raises NotImplementedError."""
-        config = GuardrailsConfig(
-            models=[GuardrailModel.ANTHROPIC_SAFETY],
-        )
-
-        with pytest.raises(NotImplementedError, match="Anthropic backend"):
             Guardrails(config=config)
 
     def test_azure_not_implemented(self):

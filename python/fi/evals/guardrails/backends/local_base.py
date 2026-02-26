@@ -86,6 +86,46 @@ class LocalModelBackend(BaseBackend):
             if client.health_check():
                 self._use_vllm = True
                 self._vllm_client = client
+                # Resolve which model on the server matches this backend
+                self._resolve_server_model()
+
+    def _resolve_server_model(self):
+        """Match this backend's model to an available model on the VLLM/ollama server."""
+        try:
+            available = self._vllm_client.get_models()
+        except Exception:
+            return
+
+        if not available:
+            return
+
+        # Our enum value e.g. "llamaguard-3-1b", "qwen3guard-0.6b"
+        our_key = self.model.value.lower()
+        # Normalize: strip hyphens/underscores/dots for fuzzy matching
+        our_norm = our_key.replace("-", "").replace("_", "").replace(".", "")
+        # Also get the HF model name for matching
+        hf_name = self._get_hf_model_name().lower()
+
+        for server_model in available:
+            sm = server_model.lower()
+            sm_norm = sm.replace("-", "").replace("_", "").replace(".", "").replace("/", "").replace(":", "")
+
+            # Exact match on enum value
+            if our_key in sm or sm.startswith(our_key):
+                self._vllm_client.model = server_model
+                return
+
+            # Normalized fuzzy match (e.g. "llamaguard31b" in "llamaguard31b")
+            if our_norm in sm_norm or sm_norm in our_norm:
+                self._vllm_client.model = server_model
+                return
+
+            # HF name match
+            if hf_name and (hf_name in sm or sm in hf_name):
+                self._vllm_client.model = server_model
+                return
+
+        # No match found — VLLMClient will fall back to server default
 
     def _get_hf_model_name(self) -> str:
         """Get the HuggingFace model name. Override in subclasses if needed."""
@@ -395,6 +435,28 @@ class LocalModelBackend(BaseBackend):
                     latency_ms=elapsed_ms,
                 )
             ]
+
+    # Shared keyword-based category inference for local models that
+    # return binary safe/unsafe without fine-grained categories.
+    _CATEGORY_KEYWORDS = {
+        "violence": ["violence", "violent", "kill", "murder", "attack", "weapon", "harm", "bomb", "gun", "hurt"],
+        "self_harm": ["suicide", "self-harm", "self harm", "cut myself", "end my life", "kill myself"],
+        "hate_speech": ["hate", "racist", "sexist", "discrimination", "discriminate", "slur"],
+        "sexual_content": ["sexual", "explicit", "nude", "porn"],
+        "harassment": ["harass", "bully", "threaten", "intimidate"],
+        "illegal_activity": ["illegal", "drug", "hack", "steal", "fraud", "crime", "counterfeit"],
+        "jailbreak": ["jailbreak", "ignore", "bypass", "pretend", "roleplay", "dan"],
+        "prompt_injection": ["ignore previous", "new instructions", "system prompt", "override", "injection"],
+    }
+
+    def _infer_categories(self, content: str, response: str) -> List[str]:
+        """Infer safety categories from content + response via keyword matching."""
+        combined = (content + " " + response).lower()
+        categories = [
+            cat for cat, keywords in self._CATEGORY_KEYWORDS.items()
+            if any(kw in combined for kw in keywords)
+        ]
+        return categories if categories else ["harmful_content"]
 
     def is_available(self) -> bool:
         """

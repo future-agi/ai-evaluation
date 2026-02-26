@@ -186,39 +186,4 @@ Answer: [/INST]"""
 
         return "unknown"
 
-    def _infer_categories(self, content: str, response: str) -> List[str]:
-        """Infer safety categories from content and response."""
-        categories = []
-        content_lower = content.lower()
-
-        # Check for violence-related keywords
-        violence_keywords = ["kill", "murder", "harm", "hurt", "attack", "weapon", "bomb", "gun"]
-        if any(kw in content_lower for kw in violence_keywords):
-            categories.append("violence")
-
-        # Check for self-harm keywords
-        self_harm_keywords = ["suicide", "self-harm", "cut myself", "end my life", "kill myself"]
-        if any(kw in content_lower for kw in self_harm_keywords):
-            categories.append("self_harm")
-
-        # Check for hate speech keywords
-        hate_keywords = ["hate", "racist", "sexist", "discriminate"]
-        if any(kw in content_lower for kw in hate_keywords):
-            categories.append("hate_speech")
-
-        # Check for illegal activity keywords
-        illegal_keywords = ["hack", "steal", "fraud", "illegal", "drug", "counterfeit"]
-        if any(kw in content_lower for kw in illegal_keywords):
-            categories.append("illegal_activity")
-
-        # Check for jailbreak keywords
-        jailbreak_keywords = ["ignore", "bypass", "pretend", "roleplay", "dan", "jailbreak"]
-        if any(kw in content_lower for kw in jailbreak_keywords):
-            categories.append("jailbreak")
-
-        # Check for prompt injection
-        injection_keywords = ["ignore previous", "new instructions", "system prompt", "override"]
-        if any(kw in content_lower for kw in injection_keywords):
-            categories.append("prompt_injection")
-
-        return categories if categories else ["harmful_content"]
+    # _infer_categories inherited from LocalModelBackend

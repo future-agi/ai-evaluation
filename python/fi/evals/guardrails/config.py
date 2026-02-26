@@ -24,6 +24,7 @@ class GuardrailModel(Enum):
     # Local Models
     QWEN3GUARD_8B = "qwen3guard-8b"
     QWEN3GUARD_4B = "qwen3guard-4b"
+    QWEN3GUARD_0_6B = "qwen3guard-0.6b"
     GRANITE_GUARDIAN_8B = "granite-guardian-3.3-8b"
     GRANITE_GUARDIAN_5B = "granite-guardian-3.2-5b"
     WILDGUARD_7B = "wildguard-7b"
@@ -31,9 +32,11 @@ class GuardrailModel(Enum):
     LLAMAGUARD_3_1B = "llamaguard-3-1b"
     SHIELDGEMMA_2B = "shieldgemma-2b"
 
+    # Generic LLM as guard (any chat model prompted for safety)
+    LLAMA_3_2_3B = "llama3.2-3b"
+
     # Third-party API Models
     OPENAI_MODERATION = "openai-moderation"
-    ANTHROPIC_SAFETY = "anthropic-safety"
     AZURE_CONTENT_SAFETY = "azure-content-safety"
 
 
@@ -49,7 +52,7 @@ class AggregationStrategy(Enum):
     ANY = "any"           # Fail if ANY model flags
     ALL = "all"           # Fail if ALL models flag
     MAJORITY = "majority" # Fail if majority flags
-    WEIGHTED = "weighted" # Weighted voting
+    WEIGHTED = "weighted" # Weighted voting (uses model_weights)
 
 
 @dataclass
@@ -191,9 +194,15 @@ class GuardrailsConfig:
     })
 
     # Performance settings
-    timeout_ms: int = 100
+    timeout_ms: int = 1000
     parallel: bool = True
     max_workers: int = 5
+
+    # Weighted aggregation — maps model value to weight (default 1.0 for unlisted)
+    # Example: {"turing_flash": 2.0, "openai-moderation": 1.0}
+    # weighted_threshold: fraction of total weight needed to block (0.5 = majority)
+    model_weights: Dict[str, float] = field(default_factory=dict)
+    weighted_threshold: float = 0.5
 
     # Fallback behavior
     fail_open: bool = False
