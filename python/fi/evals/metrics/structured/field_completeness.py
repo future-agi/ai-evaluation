@@ -86,15 +86,21 @@ class FieldCompleteness(BaseMetric[StructuredInput]):
         required_score = analysis["required_present"] / max(analysis["required_total"], 1)
         optional_score = analysis["optional_present"] / max(analysis["optional_total"], 1)
 
-        # Weight the scores
-        if analysis["required_total"] > 0:
+        # Weight the scores — only include components that exist
+        has_required = analysis["required_total"] > 0
+        has_optional = analysis["optional_total"] > 0
+
+        if has_required and has_optional:
             score = (
                 self.required_weight * required_score +
                 self.optional_weight * optional_score
             )
+        elif has_required:
+            score = required_score
+        elif has_optional:
+            score = optional_score
         else:
-            # If no required fields, use optional only
-            score = optional_score if analysis["optional_total"] > 0 else 1.0
+            score = 1.0
 
         return {
             "output": round(score, 4),
