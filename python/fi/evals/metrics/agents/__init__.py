@@ -22,6 +22,8 @@ from .metrics import (
     ToolSelectionAccuracy,
     TrajectoryScore,
     GoalProgress,
+    ActionSafety,
+    ReasoningQuality,
 )
 
 __all__ = [
@@ -37,4 +39,6 @@ __all__ = [
     "ToolSelectionAccuracy",
     "TrajectoryScore",
     "GoalProgress",
+    "ActionSafety",
+    "ReasoningQuality",
 ]
