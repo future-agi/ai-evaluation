@@ -2,8 +2,8 @@
 Generic LLM judge prompt builder for augmenting local metric results.
 
 When a local metric supports LLM augmentation (supports_llm_judge = True)
-and the user passes a model= parameter, the local heuristic runs first,
-then this module builds a prompt that feeds the heuristic scores + reasoning
+and the user passes augment=True, the local heuristic runs first, then
+this module builds a prompt that feeds the heuristic scores + reasoning
 to the LLM for refinement.
 """
 
@@ -12,39 +12,6 @@ from typing import Any, Dict
 
 from .result import EvalResult
 
-
-METRIC_DESCRIPTIONS: Dict[str, str] = {
-    # Hallucination metrics
-    "faithfulness": (
-        "Whether every claim in the output is supported by the provided context."
-    ),
-    "claim_support": (
-        "Per-claim entailment analysis — how well each claim is supported by context."
-    ),
-    "factual_consistency": (
-        "Whether the output is factually consistent with a reference text."
-    ),
-    "contradiction_detection": (
-        "Whether the output contradicts the provided context."
-    ),
-    "hallucination_score": (
-        "Composite hallucination detection — how much of the output is fabricated "
-        "vs grounded in context."
-    ),
-    # Agent metrics
-    "task_completion": (
-        "Whether the agent completed the assigned task successfully, "
-        "including meeting success criteria and producing expected results."
-    ),
-    "action_safety": (
-        "Whether the agent's actions are safe — no destructive operations, "
-        "no sensitive data leaks, no permission boundary violations."
-    ),
-    "reasoning_quality": (
-        "Quality of the agent's reasoning — coherence, logical progression, "
-        "and justification depth across the trajectory."
-    ),
-}
 
 _PROMPT_TEMPLATE = """\
 You are an expert AI evaluator. Your task is to evaluate: **{metric_name}**
@@ -82,7 +49,6 @@ def _format_inputs(inputs: Dict[str, Any]) -> str:
         if value is None:
             continue
         if isinstance(value, str):
-            # Truncate long strings
             display = value if len(value) <= 1000 else value[:1000] + "..."
             parts.append(f"**{key}**:\n{display}")
         elif isinstance(value, (list, dict)):
@@ -100,6 +66,7 @@ def _format_inputs(inputs: Dict[str, Any]) -> str:
 
 def build_judge_prompt(
     metric_name: str,
+    description: str,
     inputs: Dict[str, Any],
     local_result: EvalResult,
 ) -> str:
@@ -107,20 +74,16 @@ def build_judge_prompt(
 
     Args:
         metric_name: The metric being evaluated (e.g. "faithfulness").
+        description: What this metric measures (from metric_cls.judge_description).
         inputs: The raw evaluation inputs (output, context, trajectory, etc.).
         local_result: The EvalResult from the local heuristic engine.
 
     Returns:
         A formatted prompt string ready for the LLM engine.
     """
-    description = METRIC_DESCRIPTIONS.get(
-        metric_name,
-        f"Evaluate the quality of the output for the '{metric_name}' metric.",
-    )
-
     return _PROMPT_TEMPLATE.format(
         metric_name=metric_name,
-        description=description,
+        description=description or f"Evaluate the quality of the output for '{metric_name}'.",
         local_score=local_result.score if local_result.score is not None else "N/A",
         local_reason=local_result.reason or "No reasoning provided.",
         formatted_inputs=_format_inputs(inputs),

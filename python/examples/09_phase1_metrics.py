@@ -313,33 +313,30 @@ heading("PART 4: LLM-AUGMENTED EVALUATION")
 if not HAS_GEMINI:
     print("\n  Skipped — set GOOGLE_API_KEY to enable.")
     print("  This section shows the quality ladder: local heuristic → LLM-augmented.")
-    print("  Just add model= to any judgment metric and the SDK builds the prompt")
-    print("  internally from the local heuristic scores.\n")
+    print("  Pass augment=True + model= to refine any judgment metric with an LLM.\n")
 else:
-    print("\n  Same metric, just add model= to get LLM-refined judgment.\n")
+    print("\n  Same metric, add augment=True + model= for LLM-refined judgment.\n")
 
     print("  --- Faithfulness ---")
     # Local only (heuristic)
     r_local = evaluate("faithfulness", output=AGENT_FINAL_ANSWER, context=TOOL_CONTEXT)
     show("faithfulness (local)", r_local)
+    print(f"    engine: {r_local.metadata.get('engine', 'local')}")
 
     # LLM-augmented — runs local first, then LLM refines using heuristic scores
-    r_augmented = evaluate("faithfulness", output=AGENT_FINAL_ANSWER, context=TOOL_CONTEXT,
-                           model="gemini/gemini-2.5-flash")
-    show("faithfulness (LLM-augmented)", r_augmented)
+    r_aug = evaluate("faithfulness", output=AGENT_FINAL_ANSWER, context=TOOL_CONTEXT,
+                     model="gemini/gemini-2.5-flash", augment=True)
+    show("faithfulness (LLM-augmented)", r_aug)
+    print(f"    engine: {r_aug.metadata.get('engine', '?')}")
 
     print("\n  --- Hallucinated answer ---")
     r_local = evaluate("faithfulness", output=HALLUCINATED_ANSWER, context=TOOL_CONTEXT)
     show("faithfulness (local)", r_local)
 
-    r_augmented = evaluate("faithfulness", output=HALLUCINATED_ANSWER, context=TOOL_CONTEXT,
-                           model="gemini/gemini-2.5-flash")
-    show("faithfulness (LLM-augmented)", r_augmented)
-
-    print("\n  --- Deterministic metrics ignore model= (no augmentation) ---")
-    r = evaluate("contains", output=AGENT_FINAL_ANSWER, keyword="JAL-5012",
-                 model="gemini/gemini-2.5-flash")
-    show("contains (stays local)", r)
+    r_aug = evaluate("faithfulness", output=HALLUCINATED_ANSWER, context=TOOL_CONTEXT,
+                     model="gemini/gemini-2.5-flash", augment=True)
+    show("faithfulness (LLM-augmented)", r_aug)
+    print(f"    engine: {r_aug.metadata.get('engine', '?')}")
 
 
 heading("DONE")

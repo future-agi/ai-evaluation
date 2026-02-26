@@ -37,6 +37,7 @@ class Faithfulness(BaseMetric[HallucinationInput]):
     """
 
     supports_llm_judge = True
+    judge_description = "Whether every claim in the output is supported by the provided context."
 
     @property
     def metric_name(self) -> str:
@@ -110,6 +111,7 @@ class ClaimSupport(BaseMetric[HallucinationInput]):
     """
 
     supports_llm_judge = True
+    judge_description = "Per-claim entailment analysis — how well each claim is supported by context."
 
     @property
     def metric_name(self) -> str:
@@ -166,6 +168,7 @@ class FactualConsistency(BaseMetric[FactualConsistencyInput]):
     """
 
     supports_llm_judge = True
+    judge_description = "Whether the output is factually consistent with a reference text."
 
     @property
     def metric_name(self) -> str:
@@ -234,6 +237,7 @@ class ContradictionDetection(BaseMetric[HallucinationInput]):
     """
 
     supports_llm_judge = True
+    judge_description = "Whether the output contradicts the provided context."
 
     @property
     def metric_name(self) -> str:
@@ -288,6 +292,10 @@ class HallucinationScore(BaseMetric[HallucinationInput]):
     """
 
     supports_llm_judge = True
+    judge_description = (
+        "Composite hallucination detection — how much of the output is fabricated "
+        "vs grounded in context."
+    )
 
     @property
     def metric_name(self) -> str:
