@@ -1,13 +1,14 @@
 """
 Hallucination Detection Metrics.
 
-NLI-based and semantic analysis for detecting hallucinations in LLM outputs.
+NLI-based evaluation for detecting hallucinations in LLM outputs.
 Provides fast, deterministic evaluation without LLM-as-judge dependency.
 
-Based on:
-- HaluGate methodology (vLLM)
-- Natural Language Inference (NLI) approaches
-- Semantic Entropy (Nature 2024)
+Architecture:
+- nli.py: NLI entailment checking (transformer or heuristic fallback)
+- sentinel.py: Fast rule-based pre-screening
+- detector.py: Main orchestrator combining sentinel + NLI
+- metrics.py: 5 BaseMetric classes for the evaluate() API
 """
 
 from .types import (
@@ -15,6 +16,8 @@ from .types import (
     ClaimExtractionInput,
     FactualConsistencyInput,
     Claim,
+    NLIResult,
+    HallucinationResult,
 )
 from .metrics import (
     Faithfulness,
@@ -23,6 +26,9 @@ from .metrics import (
     ContradictionDetection,
     HallucinationScore,
 )
+from .nli import NLILabel, check_entailment, check_contradiction
+from .sentinel import HallucinationSentinel
+from .detector import HallucinationDetector
 
 __all__ = [
     # Types
@@ -30,10 +36,19 @@ __all__ = [
     "ClaimExtractionInput",
     "FactualConsistencyInput",
     "Claim",
+    "NLIResult",
+    "HallucinationResult",
     # Metrics
     "Faithfulness",
     "ClaimSupport",
     "FactualConsistency",
     "ContradictionDetection",
     "HallucinationScore",
+    # NLI utilities
+    "NLILabel",
+    "check_entailment",
+    "check_contradiction",
+    # Components
+    "HallucinationSentinel",
+    "HallucinationDetector",
 ]

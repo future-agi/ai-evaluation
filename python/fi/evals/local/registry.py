@@ -206,6 +206,65 @@ def _register_builtin_metrics(registry: LocalMetricRegistry) -> None:
         from ..metrics.heuristics.similarity_metrics import SemanticListContains
         return SemanticListContains
 
+    # Import and register function calling metrics
+    from ..metrics.function_calling.metrics import (
+        FunctionNameMatch,
+        ParameterValidation,
+        FunctionCallAccuracy,
+        FunctionCallExactMatch,
+    )
+
+    # Import and register agent evaluation metrics
+    from ..metrics.agents.metrics import (
+        TaskCompletion,
+        StepEfficiency,
+        ToolSelectionAccuracy,
+        TrajectoryScore,
+        GoalProgress,
+        ActionSafety,
+        ReasoningQuality,
+    )
+
+    registry.register("task_completion", TaskCompletion)
+    registry.register("step_efficiency", StepEfficiency)
+    registry.register("tool_selection_accuracy", ToolSelectionAccuracy)
+    registry.register("trajectory_score", TrajectoryScore)
+    registry.register("goal_progress", GoalProgress)
+    registry.register("action_safety", ActionSafety)
+    registry.register("reasoning_quality", ReasoningQuality)
+
+    registry.register("function_name_match", FunctionNameMatch)
+    registry.register("parameter_validation", ParameterValidation)
+    registry.register("function_call_accuracy", FunctionCallAccuracy)
+    registry.register("function_call_exact_match", FunctionCallExactMatch)
+
+    # Register hallucination detection metrics (lazy — may load NLI models)
+    def load_faithfulness():
+        from ..metrics.hallucination.metrics import Faithfulness
+        return Faithfulness
+
+    def load_claim_support():
+        from ..metrics.hallucination.metrics import ClaimSupport
+        return ClaimSupport
+
+    def load_factual_consistency():
+        from ..metrics.hallucination.metrics import FactualConsistency
+        return FactualConsistency
+
+    def load_contradiction_detection():
+        from ..metrics.hallucination.metrics import ContradictionDetection
+        return ContradictionDetection
+
+    def load_hallucination_score():
+        from ..metrics.hallucination.metrics import HallucinationScore
+        return HallucinationScore
+
+    registry.register_lazy("faithfulness", load_faithfulness)
+    registry.register_lazy("claim_support", load_claim_support)
+    registry.register_lazy("factual_consistency", load_factual_consistency)
+    registry.register_lazy("contradiction_detection", load_contradiction_detection)
+    registry.register_lazy("hallucination_score", load_hallucination_score)
+
     registry.register_lazy("bleu_score", load_bleu_score)
     registry.register_lazy("rouge_score", load_rouge_score)
     registry.register_lazy("recall_score", load_recall_score)
