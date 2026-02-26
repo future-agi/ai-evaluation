@@ -10,6 +10,8 @@ Provides the primary interface for content screening with support for:
 """
 
 import asyncio
+import functools
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +26,45 @@ from fi.evals.guardrails.config import (
 from fi.evals.guardrails.types import GuardrailResult, GuardrailsResponse
 from fi.evals.guardrails.backends.base import BaseBackend
 from fi.evals.guardrails.scanners import ScannerPipeline, create_default_pipeline
+
+logger = logging.getLogger(__name__)
+
+
+def _trace_guardrail(fn):
+    """Decorator that wraps guardrail screen methods with OTEL spans."""
+    @functools.wraps(fn)
+    def wrapper(self, content, *args, **kwargs):
+        try:
+            from fi.evals.otel.enrichment import is_auto_enrichment_enabled
+            if not is_auto_enrichment_enabled():
+                raise ImportError
+            from fi.evals.otel.conventions import GuardrailAttributes
+            from opentelemetry import trace as _trace
+
+            tracer = _trace.get_tracer("fi.evals.guardrails")
+            # Infer rail_type from args or default
+            rail_type = args[0] if args else kwargs.get("rail_type", RailType.INPUT)
+            span_name = f"guardrail.screen_{rail_type.value}"
+
+            with tracer.start_as_current_span(span_name) as span:
+                span.set_attribute("guardrail.rail_type", rail_type.value)
+                span.set_attribute("guardrail.models", str([m.value for m in self.config.models]))
+                span.set_attribute("guardrail.aggregation", self.config.aggregation.value)
+
+                response = fn(self, content, *args, **kwargs)
+
+                span.set_attribute(GuardrailAttributes.PASSED, response.passed)
+                span.set_attribute(GuardrailAttributes.LATENCY_MS, response.total_latency_ms)
+                if response.blocked_categories:
+                    span.set_attribute(GuardrailAttributes.CATEGORIES, str(response.blocked_categories))
+                if response.models_used:
+                    span.set_attribute(GuardrailAttributes.BACKEND, str(response.models_used))
+
+                return response
+        except ImportError:
+            pass
+        return fn(self, content, *args, **kwargs)
+    return wrapper
 
 
 class Guardrails:
@@ -391,6 +432,7 @@ class Guardrails:
     # Internal Implementation
     # =========================================================================
 
+    @_trace_guardrail
     def _screen_sync(
         self,
         content: str,

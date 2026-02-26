@@ -102,6 +102,20 @@ def enrich_span_with_evaluation(
         # Normalize score to float
         if isinstance(score, bool):
             normalized_score = 1.0 if score else 0.0
+        elif isinstance(score, (int, float)):
+            normalized_score = float(score)
+        elif isinstance(score, str):
+            try:
+                normalized_score = float(score)
+            except ValueError:
+                low = score.strip().lower()
+                if low in ("true", "yes", "pass", "passed"):
+                    normalized_score = 1.0
+                elif low in ("false", "no", "fail", "failed"):
+                    normalized_score = 0.0
+                else:
+                    logger.debug(f"Cannot normalize score string '{score}' to float")
+                    return False
         else:
             normalized_score = float(score)
 

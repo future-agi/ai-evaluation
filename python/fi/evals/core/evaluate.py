@@ -119,13 +119,13 @@ def evaluate(
         fi_base_url=fi_base_url,
     )
 
-    return eng.run(
-        effective_name,
-        inputs,
-        model=model,
-        prompt=prompt,
-        config=config,
+    # Run with OTEL span if tracing is enabled
+    result = _run_with_tracing(
+        eng, effective_name, inputs,
+        model=model, prompt=prompt, config=config,
+        engine_type=resolved_engine,
     )
+    return result
 
 
 _ENGINE_FACTORIES = {
@@ -153,3 +153,44 @@ def _get_engine(
             f"Use one of: {', '.join(sorted(_ENGINE_FACTORIES))}."
         )
     return factory(fi_api_key=fi_api_key, fi_secret_key=fi_secret_key, fi_base_url=fi_base_url)
+
+
+def _run_with_tracing(
+    eng: Engine,
+    eval_name: str,
+    inputs: Dict[str, Any],
+    *,
+    model: Optional[str] = None,
+    prompt: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+    engine_type: str = "",
+) -> EvalResult:
+    """Run an engine with optional OTEL tracing."""
+    try:
+        from fi.evals.otel.enrichment import (
+            is_auto_enrichment_enabled,
+            create_evaluation_span,
+            enrich_span_with_evaluation,
+        )
+        if not is_auto_enrichment_enabled():
+            raise ImportError  # fall through to untraced path
+
+        with create_evaluation_span(eval_name) as span:
+            result = eng.run(eval_name, inputs, model=model, prompt=prompt, config=config)
+            # Enrich the span with the result
+            if hasattr(span, "set_attribute"):
+                span.set_attribute("eval.engine", engine_type)
+                if model:
+                    span.set_attribute("eval.model", model)
+            enrich_span_with_evaluation(
+                metric_name=result.eval_name,
+                score=result.score if result.score is not None else 0.0,
+                reason=result.reason,
+                latency_ms=result.latency_ms,
+                span=span if hasattr(span, "set_attribute") else None,
+            )
+            return result
+    except ImportError:
+        pass
+
+    return eng.run(eval_name, inputs, model=model, prompt=prompt, config=config)

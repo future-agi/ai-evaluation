@@ -35,6 +35,7 @@ _is_initialized = False
 def setup_tracing(
     config: Optional[TraceConfig] = None,
     service_name: Optional[str] = None,
+    project_name: Optional[str] = None,
     otlp_endpoint: Optional[str] = None,
     **kwargs,
 ) -> Any:
@@ -101,12 +102,34 @@ def setup_tracing(
     from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
     # Create resource
-    resource = Resource.create({
+    resource_attrs = {
         SERVICE_NAME: config.service_name,
         "service.version": config.service_version or "unknown",
         "deployment.environment": config.deployment_environment,
         **config.resource.attributes,
-    })
+    }
+
+    # Auto-inject FutureAGI project attributes when using FUTUREAGI exporter
+    has_fi_exporter = any(
+        e.type == ExporterType.FUTUREAGI for e in config.exporters
+    )
+    if has_fi_exporter:
+        import json as _json
+        import uuid as _uuid
+        resource_attrs.setdefault(
+            "project_name",
+            project_name or os.environ.get("FI_PROJECT_NAME", config.service_name),
+        )
+        resource_attrs.setdefault("project_type", "observe")
+        resource_attrs.setdefault(
+            "project_version_name",
+            os.environ.get("FI_PROJECT_VERSION_NAME", "v1"),
+        )
+        resource_attrs.setdefault("project_version_id", str(_uuid.uuid4()))
+        resource_attrs.setdefault("eval_tags", _json.dumps([]))
+        resource_attrs.setdefault("metadata", _json.dumps({}))
+
+    resource = Resource.create(resource_attrs)
 
     # Create tracer provider
     provider = TracerProvider(
@@ -269,9 +292,24 @@ def _create_exporter(config: ExporterConfig) -> Optional[Any]:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                 OTLPSpanExporter,
             )
+            if config.endpoint:
+                endpoint = config.endpoint
+            else:
+                base = os.environ.get("FI_BASE_URL", "https://api.futureagi.com")
+                endpoint = f"{base.rstrip('/')}/tracer/v1/traces"
+            # Auto-inject FI auth headers if not provided
+            headers = config.headers
+            if not headers:
+                api_key = os.environ.get("FI_API_KEY", "")
+                secret_key = os.environ.get("FI_SECRET_KEY", "")
+                if api_key and secret_key:
+                    headers = {
+                        "X-Api-Key": api_key,
+                        "X-Secret-Key": secret_key,
+                    }
             return OTLPSpanExporter(
-                endpoint=config.endpoint or "https://api.futureagi.com/v1/traces",
-                headers=config.headers or None,
+                endpoint=endpoint,
+                headers=headers or None,
             )
 
         else:

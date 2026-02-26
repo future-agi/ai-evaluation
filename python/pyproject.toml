@@ -19,6 +19,9 @@ openai = "^1.109.1"
 typer = ">=0.9.0,<1.0.0"
 rich = ">=13.0.0"
 pyyaml = ">=6.0"
+opentelemetry-sdk = "^1.39.1"
+opentelemetry-exporter-otlp = "^1.39.1"
+opentelemetry-api = "^1.39.1"
 
 [tool.poetry.scripts]
 fi = "fi.cli.main:main"
@@ -29,6 +32,7 @@ pytest-cov = ">=4.0.0"
 transformers = "^5.2.0"
 sentence-transformers = "^5.2.3"
 torch = "^2.10.0"
+fi-instrumentation-otel = "^0.1.16"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
