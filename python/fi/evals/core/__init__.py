@@ -3,14 +3,14 @@ Unified evaluation core — result types, registry, engines, and the evaluate() 
 """
 
 from .result import EvalResult, BatchResult
-from .registry import UnifiedRegistry, get_unified_registry, Turing
+from .registry import Turing, resolve_engine, is_turing_model
 from .evaluate import evaluate
 
 __all__ = [
     "EvalResult",
     "BatchResult",
     "Turing",
-    "UnifiedRegistry",
-    "get_unified_registry",
+    "resolve_engine",
+    "is_turing_model",
     "evaluate",
 ]

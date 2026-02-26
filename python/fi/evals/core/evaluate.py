@@ -38,7 +38,7 @@ Usage:
 import warnings
 from typing import Any, Dict, List, Optional, Union
 
-from .registry import get_unified_registry, is_turing_model
+from .registry import resolve_engine as _resolve_engine, is_turing_model
 from .result import BatchResult, EvalResult
 from .engines import LocalEngine, TuringEngine, LLMEngine, Engine
 
@@ -102,25 +102,16 @@ def evaluate(
         return BatchResult(results=results)
 
     # --- Single eval ---------------------------------------------------
-    registry = get_unified_registry()
-
     # Custom prompt with no eval_name
     effective_name = eval_name or "custom_prompt"
 
-    resolved_engine = registry.resolve_engine(
+    resolved_engine = _resolve_engine(
         eval_name,
         model=model,
         prompt=prompt,
         engine=engine,
     )
 
-    # If still ambiguous and we have a prompt, require engine
-    if resolved_engine is None and prompt:
-        raise ValueError(
-            "Cannot auto-detect engine for custom prompts. "
-            "Specify engine='turing' or engine='llm', or provide a model "
-            "(turing models auto-route to turing, others to llm)."
-        )
     if resolved_engine is None:
         raise ValueError(
             f"Cannot auto-detect engine for '{eval_name}'. "

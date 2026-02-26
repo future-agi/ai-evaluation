@@ -272,3 +272,89 @@ def _register_builtin_metrics(registry: LocalMetricRegistry) -> None:
     registry.register_lazy("numeric_similarity", load_numeric_similarity)
     registry.register_lazy("embedding_similarity", load_embedding_similarity)
     registry.register_lazy("semantic_list_contains", load_semantic_list_contains)
+
+    # Register RAG metrics (lazy — may load NLI models)
+    def _rag(cls_name):
+        """Helper to create lazy loaders for RAG metric classes."""
+        def loader():
+            import importlib
+            # Retrieval metrics
+            for mod_path in [
+                "..metrics.rag.retrieval.context_recall",
+                "..metrics.rag.retrieval.context_precision",
+                "..metrics.rag.retrieval.context_entity_recall",
+                "..metrics.rag.retrieval.noise_sensitivity",
+                "..metrics.rag.retrieval.ranking",
+                "..metrics.rag.generation.answer_relevancy",
+                "..metrics.rag.generation.context_utilization",
+                "..metrics.rag.generation.faithfulness",
+                "..metrics.rag.generation.groundedness",
+                "..metrics.rag.advanced.multi_hop",
+                "..metrics.rag.advanced.source_attribution",
+                "..metrics.rag.rag_score",
+            ]:
+                try:
+                    mod = importlib.import_module(mod_path, package=__package__)
+                    if hasattr(mod, cls_name):
+                        return getattr(mod, cls_name)
+                except ImportError:
+                    continue
+            raise ImportError(f"RAG metric class '{cls_name}' not found")
+        return loader
+
+    # RAG — retrieval
+    registry.register_lazy("context_recall", _rag("ContextRecall"))
+    registry.register_lazy("context_precision", _rag("ContextPrecision"))
+    registry.register_lazy("context_entity_recall", _rag("ContextEntityRecall"))
+    registry.register_lazy("noise_sensitivity", _rag("NoiseSensitivity"))
+    registry.register_lazy("ndcg", _rag("NDCG"))
+    registry.register_lazy("mrr", _rag("MRR"))
+    registry.register_lazy("precision_at_k", _rag("PrecisionAtK"))
+    registry.register_lazy("recall_at_k", _rag("RecallAtK"))
+    # RAG — generation
+    registry.register_lazy("answer_relevancy", _rag("AnswerRelevancy"))
+    registry.register_lazy("context_utilization", _rag("ContextUtilization"))
+    registry.register_lazy("context_relevance_to_response", _rag("ContextRelevanceToResponse"))
+    registry.register_lazy("rag_faithfulness", _rag("RAGFaithfulness"))
+    registry.register_lazy("rag_faithfulness_with_reference", _rag("RAGFaithfulnessWithReference"))
+    registry.register_lazy("groundedness", _rag("Groundedness"))
+    # RAG — advanced
+    registry.register_lazy("multi_hop_reasoning", _rag("MultiHopReasoning"))
+    registry.register_lazy("source_attribution", _rag("SourceAttribution"))
+    registry.register_lazy("citation_presence", _rag("CitationPresence"))
+    # RAG — composite
+    registry.register_lazy("rag_score", _rag("RAGScore"))
+    registry.register_lazy("rag_score_detailed", _rag("RAGScoreDetailed"))
+
+    # Register structured output metrics (lazy)
+    def _structured(cls_name):
+        """Helper to create lazy loaders for Structured metric classes."""
+        def loader():
+            import importlib
+            for mod_path in [
+                "..metrics.structured.schema_compliance",
+                "..metrics.structured.field_completeness",
+                "..metrics.structured.hierarchy_score",
+                "..metrics.structured.json_validation",
+                "..metrics.structured.structured_output_score",
+            ]:
+                try:
+                    mod = importlib.import_module(mod_path, package=__package__)
+                    if hasattr(mod, cls_name):
+                        return getattr(mod, cls_name)
+                except ImportError:
+                    continue
+            raise ImportError(f"Structured metric class '{cls_name}' not found")
+        return loader
+
+    registry.register_lazy("schema_compliance", _structured("SchemaCompliance"))
+    registry.register_lazy("type_compliance", _structured("TypeCompliance"))
+    registry.register_lazy("field_completeness", _structured("FieldCompleteness"))
+    registry.register_lazy("required_fields", _structured("RequiredFieldsOnly"))
+    registry.register_lazy("field_coverage", _structured("FieldCoverage"))
+    registry.register_lazy("hierarchy_score", _structured("HierarchyScore"))
+    registry.register_lazy("tree_edit_distance", _structured("TreeEditDistance"))
+    registry.register_lazy("json_validation", _structured("JSONValidation"))
+    registry.register_lazy("json_syntax", _structured("JSONSyntaxOnly"))
+    registry.register_lazy("structured_output_score", _structured("StructuredOutputScore"))
+    registry.register_lazy("quick_structured_check", _structured("QuickStructuredCheck"))

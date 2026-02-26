@@ -7,6 +7,7 @@ Engine implementations for evaluate().
 """
 
 import inspect
+import json as _json
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
@@ -17,6 +18,16 @@ from .result import EvalResult
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _try_parse_json(val: Any) -> Any:
+    """Try to parse a string as JSON, returning the parsed value or original."""
+    if isinstance(val, str):
+        try:
+            return _json.loads(val)
+        except (_json.JSONDecodeError, TypeError):
+            return val
+    return val
+
 
 def _normalise_score(output: Any) -> Optional[float]:
     """Convert various metric output types to a 0-1 float."""
@@ -144,18 +155,60 @@ class LocalEngine(Engine):
         Common mappings:
             output -> response
             keyword/context/expected_output -> expected_response
+            context (str/list) -> contexts (list)
+            input/question -> query
+            expected_output/expected_response/ground_truth -> reference
         """
         model_fields = set(metric.input_model.model_fields.keys())
-        mapped = {k: v for k, v in inputs.items() if k in model_fields}
+        # Merge both dicts so all user kwargs are searchable
+        combined = {**all_user_kwargs, **inputs}
+        mapped = {k: v for k, v in combined.items() if k in model_fields}
 
-        if "response" not in mapped and "output" in inputs:
-            mapped["response"] = inputs["output"]
+        # output -> response
+        if "response" not in mapped and "output" in combined:
+            if "response" in model_fields:
+                mapped["response"] = combined["output"]
 
+        # expected_response fallback chain (for string metrics)
         if "expected_response" not in mapped and "expected_response" in model_fields:
             for src in ("expected_response", "keyword", "context", "expected_output"):
-                if src in all_user_kwargs:
-                    mapped["expected_response"] = all_user_kwargs[src]
+                if src in combined:
+                    mapped["expected_response"] = combined[src]
                     break
+
+        # context (str or list) -> contexts (list) — for RAG metrics
+        if "contexts" not in mapped and "contexts" in model_fields:
+            for src in ("context", "contexts"):
+                if src in combined:
+                    val = combined[src]
+                    mapped["contexts"] = val if isinstance(val, list) else [val]
+                    break
+
+        # input/question -> query — for RAG metrics
+        if "query" not in mapped and "query" in model_fields:
+            for src in ("query", "input", "question"):
+                if src in combined:
+                    mapped["query"] = combined[src]
+                    break
+
+        # expected_output/ground_truth -> reference — for RAG metrics
+        if "reference" not in mapped and "reference" in model_fields:
+            for src in ("reference", "expected_response", "expected_output", "ground_truth"):
+                if src in combined:
+                    mapped["reference"] = combined[src]
+                    break
+
+        # expected -> expected (for structured metrics, also try expected_output)
+        if "expected" not in mapped and "expected" in model_fields:
+            for src in ("expected", "expected_output"):
+                if src in combined:
+                    mapped["expected"] = _try_parse_json(combined[src])
+                    break
+
+        # schema -> schema (try expected_response as schema for structured metrics)
+        if "schema" not in mapped and "schema" in model_fields:
+            if "expected_response" in combined:
+                mapped["schema"] = _try_parse_json(combined["expected_response"])
 
         return mapped
 
