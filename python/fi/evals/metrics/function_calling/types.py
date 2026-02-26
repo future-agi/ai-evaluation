@@ -85,35 +85,3 @@ class FunctionCallInput(BaseMetricInput):
         default=False,
         description="If True, for parallel calls, order must match. If False, set comparison."
     )
-
-
-class MultiTurnFunctionCallInput(BaseMetricInput):
-    """
-    Input for multi-turn function calling evaluation.
-
-    Evaluates a sequence of function calls in a conversation.
-    """
-
-    # Sequence of actual function calls
-    response_calls: List[FunctionCall] = Field(
-        ...,
-        description="Sequence of function calls made by the LLM"
-    )
-
-    # Expected sequence
-    expected_calls: List[FunctionCall] = Field(
-        ...,
-        description="Expected sequence of function calls"
-    )
-
-    # Function definitions
-    function_definitions: Optional[List[FunctionDefinition]] = Field(
-        default=None,
-        description="Available function definitions"
-    )
-
-    # Evaluation options
-    sequence_strict: bool = Field(
-        default=True,
-        description="If True, exact sequence must match. If False, allows reordering."
-    )

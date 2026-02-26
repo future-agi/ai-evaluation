@@ -56,6 +56,12 @@ def _parse_ast_call(call_str: str) -> Optional[FunctionCall]:
 
             # Extract arguments
             arguments = {}
+
+            # Handle positional arguments
+            for i, arg in enumerate(call_node.args):
+                arguments[f"__positional_{i}"] = _ast_to_value(arg)
+
+            # Handle keyword arguments
             for kw in call_node.keywords:
                 if kw.arg:
                     arguments[kw.arg] = _ast_to_value(kw.value)
@@ -116,6 +122,10 @@ def _types_compatible(actual: Any, expected: Any, strict: bool = False) -> bool:
     if actual is None or expected is None:
         return actual == expected
 
+    # Bool guard: bool is a subclass of int in Python, so must check before numeric
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return isinstance(actual, bool) and isinstance(expected, bool)
+
     # Numeric compatibility (int/float)
     if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
         return True
@@ -130,10 +140,6 @@ def _types_compatible(actual: Any, expected: Any, strict: bool = False) -> bool:
 
     # Dict compatibility
     if isinstance(actual, dict) and isinstance(expected, dict):
-        return True
-
-    # Bool compatibility
-    if isinstance(actual, bool) and isinstance(expected, bool):
         return True
 
     return type(actual) == type(expected)
@@ -498,7 +504,7 @@ class FunctionCallAccuracy(BaseMetric[FunctionCallInput]):
         }
 
 
-class FunctionCallAST(BaseMetric[FunctionCallInput]):
+class FunctionCallExactMatch(BaseMetric[FunctionCallInput]):
     """
     AST-based exact match evaluation.
 
@@ -510,7 +516,7 @@ class FunctionCallAST(BaseMetric[FunctionCallInput]):
 
     @property
     def metric_name(self) -> str:
-        return "function_call_ast"
+        return "function_call_exact_match"
 
     def compute_one(self, inputs: FunctionCallInput) -> Dict[str, Any]:
         actual = _parse_function_call(inputs.response)

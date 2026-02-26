@@ -17,7 +17,7 @@ from .metrics import (
     FunctionNameMatch,
     ParameterValidation,
     FunctionCallAccuracy,
-    FunctionCallAST,
+    FunctionCallExactMatch,
 )
 
 __all__ = [
@@ -30,5 +30,5 @@ __all__ = [
     "FunctionNameMatch",
     "ParameterValidation",
     "FunctionCallAccuracy",
-    "FunctionCallAST",
+    "FunctionCallExactMatch",
 ]

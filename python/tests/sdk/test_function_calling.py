@@ -5,7 +5,7 @@ Tests cover:
 - FunctionNameMatch
 - ParameterValidation
 - FunctionCallAccuracy
-- FunctionCallAST
+- FunctionCallExactMatch
 """
 
 import pytest
@@ -17,7 +17,7 @@ from fi.evals.metrics.function_calling import (
     FunctionNameMatch,
     ParameterValidation,
     FunctionCallAccuracy,
-    FunctionCallAST,
+    FunctionCallExactMatch,
 )
 
 
@@ -56,7 +56,7 @@ class TestFunctionCallParsing:
 
     def test_parse_function_call_python_style(self):
         """Test parsing Python-style function call string."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response="get_weather(city='NYC')",
             expected_response="get_weather(city='NYC')"
@@ -378,12 +378,12 @@ class TestFunctionCallAccuracy:
         assert result["output"] < 1.0  # Order mismatch
 
 
-class TestFunctionCallAST:
-    """Tests for FunctionCallAST metric."""
+class TestFunctionCallExactMatch:
+    """Tests for FunctionCallExactMatch metric."""
 
     def test_ast_exact_match(self):
         """Test exact AST match."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response="get_weather(city='NYC', unit='celsius')",
             expected_response="get_weather(city='NYC', unit='celsius')"
@@ -393,7 +393,7 @@ class TestFunctionCallAST:
 
     def test_ast_different_order(self):
         """Test AST match with different argument order."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response="get_weather(unit='celsius', city='NYC')",
             expected_response="get_weather(city='NYC', unit='celsius')"
@@ -403,7 +403,7 @@ class TestFunctionCallAST:
 
     def test_ast_wrong_value(self):
         """Test AST with wrong value."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response="get_weather(city='LA')",
             expected_response="get_weather(city='NYC')"
@@ -414,7 +414,7 @@ class TestFunctionCallAST:
 
     def test_ast_complex_args(self):
         """Test AST with complex argument types."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response="search(query='test', filters=['a', 'b'], limit=10)",
             expected_response="search(query='test', filters=['a', 'b'], limit=10)"
@@ -424,7 +424,7 @@ class TestFunctionCallAST:
 
     def test_ast_boolean_args(self):
         """Test AST with boolean arguments."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response="toggle(enabled=True)",
             expected_response="toggle(enabled=True)"
@@ -560,7 +560,7 @@ class TestEdgeCases:
 
     def test_nested_object_arguments(self):
         """Test function call with nested object arguments."""
-        metric = FunctionCallAST()
+        metric = FunctionCallExactMatch()
         input_data = FunctionCallInput(
             response=FunctionCall(
                 name="create_user",
