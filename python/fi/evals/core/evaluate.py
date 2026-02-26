@@ -28,7 +28,7 @@ Usage:
 
 from typing import Any, Dict, List, Optional, Union
 
-from .registry import get_unified_registry
+from .registry import get_unified_registry, is_turing_model
 from .result import BatchResult, EvalResult
 from .engines import LocalEngine, TuringEngine, LLMEngine, Engine
 
@@ -125,6 +125,17 @@ def evaluate(
         model=model, prompt=prompt, config=config,
         engine_type=resolved_engine,
     )
+
+    # LLM augmentation: if model provided + local metric supports it + not custom prompt
+    result = _maybe_augment_with_llm(
+        result,
+        effective_name=effective_name,
+        inputs=inputs,
+        model=model,
+        prompt=prompt,
+        resolved_engine=resolved_engine,
+    )
+
     return result
 
 
@@ -193,3 +204,43 @@ def _run_with_tracing(
         pass
 
     return eng.run(eval_name, inputs, model=model, prompt=prompt, config=config)
+
+
+def _maybe_augment_with_llm(
+    result: EvalResult,
+    *,
+    effective_name: str,
+    inputs: Dict[str, Any],
+    model: Optional[str],
+    prompt: Optional[str],
+    resolved_engine: str,
+) -> EvalResult:
+    """Augment a local heuristic result with LLM judgment if applicable.
+
+    Conditions for augmentation:
+    - A non-turing model was provided
+    - The resolved engine was "local" (not already LLM/turing)
+    - No custom prompt was given (that's the power-user path)
+    - The local metric opts in via supports_llm_judge = True
+    - The local result succeeded (no point augmenting a failure)
+    """
+    if not (model and not is_turing_model(model)
+            and resolved_engine == "local"
+            and not prompt
+            and result.status == "completed"):
+        return result
+
+    from ..local.registry import get_registry
+    metric_cls = get_registry().get(effective_name)
+    if metric_cls is None or not getattr(metric_cls, "supports_llm_judge", False):
+        return result
+
+    from .judge_prompt import build_judge_prompt
+
+    judge_prompt = build_judge_prompt(effective_name, inputs, result)
+    llm_eng = LLMEngine()
+    try:
+        return llm_eng.run(effective_name, inputs, model=model, prompt=judge_prompt)
+    except Exception:
+        # LLM failed — fall back to the local result we already have
+        return result

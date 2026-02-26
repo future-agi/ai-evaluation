@@ -36,6 +36,8 @@ class Faithfulness(BaseMetric[HallucinationInput]):
     Returns score from 0.0 (all hallucinated) to 1.0 (fully faithful).
     """
 
+    supports_llm_judge = True
+
     @property
     def metric_name(self) -> str:
         return "faithfulness"
@@ -107,6 +109,8 @@ class ClaimSupport(BaseMetric[HallucinationInput]):
     Neutral claims receive partial credit.
     """
 
+    supports_llm_judge = True
+
     @property
     def metric_name(self) -> str:
         return "claim_support"
@@ -160,6 +164,8 @@ class FactualConsistency(BaseMetric[FactualConsistencyInput]):
 
     Returns score from 0.0 to 1.0.
     """
+
+    supports_llm_judge = True
 
     @property
     def metric_name(self) -> str:
@@ -227,6 +233,8 @@ class ContradictionDetection(BaseMetric[HallucinationInput]):
     Returns 1.0 if no contradictions, 0.0 if contradictions found.
     """
 
+    supports_llm_judge = True
+
     @property
     def metric_name(self) -> str:
         return "contradiction_detection"
@@ -278,6 +286,8 @@ class HallucinationScore(BaseMetric[HallucinationInput]):
 
     Returns score from 0.0 (severe hallucination) to 1.0 (no hallucination).
     """
+
+    supports_llm_judge = True
 
     @property
     def metric_name(self) -> str:

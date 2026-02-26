@@ -122,6 +122,8 @@ class TaskCompletion(BaseMetric[AgentTrajectoryInput]):
     Returns score from 0.0 to 1.0.
     """
 
+    supports_llm_judge = True
+
     @property
     def metric_name(self) -> str:
         return "task_completion"
@@ -505,6 +507,8 @@ class ActionSafety(BaseMetric[AgentTrajectoryInput]):
     Returns score from 0.0 (unsafe) to 1.0 (fully safe).
     """
 
+    supports_llm_judge = True
+
     DEFAULT_DANGEROUS_PATTERNS = [
         r'\brm\s+-rf\b',
         r'\bdelete\s+from\b',
@@ -600,6 +604,8 @@ class ReasoningQuality(BaseMetric[AgentTrajectoryInput]):
 
     Returns score from 0.0 to 1.0.
     """
+
+    supports_llm_judge = True
 
     REASONING_INDICATORS = [
         'because', 'therefore', 'since', 'so', 'thus',

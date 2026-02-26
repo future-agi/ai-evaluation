@@ -305,52 +305,41 @@ show("factual consistency", evaluate("factual_consistency", output=AGENT_FINAL_A
 
 
 # =========================================================================
-# Part 4: LLM-as-Judge augmented eval (requires GOOGLE_API_KEY)
+# Part 4: LLM-Augmented Evaluation (requires GOOGLE_API_KEY)
 # =========================================================================
 
-heading("PART 4: LLM-AS-JUDGE (Gemini)")
+heading("PART 4: LLM-AUGMENTED EVALUATION")
 
 if not HAS_GEMINI:
     print("\n  Skipped — set GOOGLE_API_KEY to enable.")
-    print("  This section uses Gemini to judge the agent's answer for faithfulness,")
-    print("  going beyond heuristic word-overlap to real semantic understanding.\n")
+    print("  This section shows the quality ladder: local heuristic → LLM-augmented.")
+    print("  Just add model= to any judgment metric and the SDK builds the prompt")
+    print("  internally from the local heuristic scores.\n")
 else:
-    print("\n  Asking Gemini to judge the agent's answer against tool output...\n")
+    print("\n  Same metric, just add model= to get LLM-refined judgment.\n")
 
-    JUDGE_PROMPT = """You are evaluating an AI travel agent's response for factual accuracy.
+    print("  --- Faithfulness ---")
+    # Local only (heuristic)
+    r_local = evaluate("faithfulness", output=AGENT_FINAL_ANSWER, context=TOOL_CONTEXT)
+    show("faithfulness (local)", r_local)
 
-Context (what the agent's tools actually returned):
-{context}
+    # LLM-augmented — runs local first, then LLM refines using heuristic scores
+    r_augmented = evaluate("faithfulness", output=AGENT_FINAL_ANSWER, context=TOOL_CONTEXT,
+                           model="gemini/gemini-2.5-flash")
+    show("faithfulness (LLM-augmented)", r_augmented)
 
-Agent's response to the customer:
-{output}
+    print("\n  --- Hallucinated answer ---")
+    r_local = evaluate("faithfulness", output=HALLUCINATED_ANSWER, context=TOOL_CONTEXT)
+    show("faithfulness (local)", r_local)
 
-Score from 0.0 to 1.0:
-- 1.0 = every detail matches the tool output exactly
-- 0.5 = mostly correct but some minor inaccuracies
-- 0.0 = severely hallucinated, wrong facts
+    r_augmented = evaluate("faithfulness", output=HALLUCINATED_ANSWER, context=TOOL_CONTEXT,
+                           model="gemini/gemini-2.5-flash")
+    show("faithfulness (LLM-augmented)", r_augmented)
 
-Return ONLY a JSON object: {{"score": <float>, "reason": "<explanation>"}}"""
-
-    r = evaluate(
-        "llm_faithfulness_check",
-        prompt=JUDGE_PROMPT,
-        output=AGENT_FINAL_ANSWER,
-        context=TOOL_CONTEXT,
-        engine="llm",
-        model="gemini/gemini-2.5-flash",
-    )
-    show("Gemini judge (good answer)", r)
-
-    r = evaluate(
-        "llm_faithfulness_check",
-        prompt=JUDGE_PROMPT,
-        output=HALLUCINATED_ANSWER,
-        context=TOOL_CONTEXT,
-        engine="llm",
-        model="gemini/gemini-2.5-flash",
-    )
-    show("Gemini judge (hallucinated answer)", r)
+    print("\n  --- Deterministic metrics ignore model= (no augmentation) ---")
+    r = evaluate("contains", output=AGENT_FINAL_ANSWER, keyword="JAL-5012",
+                 model="gemini/gemini-2.5-flash")
+    show("contains (stays local)", r)
 
 
 heading("DONE")
