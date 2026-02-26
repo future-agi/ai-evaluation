@@ -32,7 +32,7 @@ pytest-cov = ">=4.0.0"
 transformers = "^5.2.0"
 sentence-transformers = "^5.2.3"
 torch = "^2.10.0"
-fi-instrumentation-otel = "^0.1.16"
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
