@@ -130,8 +130,15 @@ class StructuredOutputScore(BaseMetric[StructuredInput]):
         scores["syntax"] = 1.0
         parsed = syntax_result.parsed
 
+        # Track which dimensions are evaluable
+        evaluable = {"syntax": self.syntax_weight}
+
         # 2. Schema validation (if schema provided)
         if schema:
+            evaluable["schema"] = self.schema_weight
+            evaluable["completeness"] = self.completeness_weight
+            evaluable["types"] = self.type_weight
+
             schema_result = validator.validate_schema(response, schema, mode)
             scores["completeness"] = schema_result.completeness
 
@@ -149,14 +156,11 @@ class StructuredOutputScore(BaseMetric[StructuredInput]):
                 if total_fields > 0:
                     scores["schema"] = max(0.0, 1.0 - schema_errors / total_fields)
                     scores["types"] = max(0.0, 1.0 - type_errors / total_fields)
-        else:
-            # No schema: give full marks for schema-related aspects
-            scores["schema"] = 1.0
-            scores["completeness"] = 1.0
-            scores["types"] = 1.0
 
         # 3. Value accuracy (if expected provided)
         if expected is not None:
+            evaluable["values"] = self.value_weight
+
             compare_result = validator.compare(response, expected, mode)
             if compare_result.valid:
                 scores["values"] = 1.0
@@ -165,22 +169,14 @@ class StructuredOutputScore(BaseMetric[StructuredInput]):
                 value_errors = len(compare_result.errors)
                 total_values = self._count_values(expected)
                 scores["values"] = max(0.0, 1.0 - value_errors / max(total_values, 1))
-        else:
-            # No expected: give full marks for values
-            scores["values"] = 1.0
 
-        # Calculate weighted overall score
-        overall = (
-            self.syntax_weight * scores["syntax"] +
-            self.schema_weight * scores["schema"] +
-            self.completeness_weight * scores["completeness"] +
-            self.type_weight * scores["types"] +
-            self.value_weight * scores["values"]
-        )
+        # Calculate weighted overall score — only evaluable dimensions contribute
+        # Unevaluable dimensions score 0, not 1 (no data ≠ perfect)
+        overall = sum(evaluable[k] * scores[k] for k in evaluable)
 
         return {
             "output": round(overall, 4),
-            "reason": self._generate_reason(scores),
+            "reason": self._generate_reason(scores, evaluable),
             "breakdown": {k: round(v, 4) for k, v in scores.items()},
             "parsed": parsed,
         }
@@ -211,23 +207,30 @@ class StructuredOutputScore(BaseMetric[StructuredInput]):
         else:
             return 1
 
-    def _generate_reason(self, scores: Dict[str, float]) -> str:
+    def _generate_reason(self, scores: Dict[str, float], evaluable: Dict[str, float]) -> str:
         """Generate human-readable reason."""
         issues = []
         if scores["syntax"] < 1.0:
             issues.append("syntax errors")
-        if scores["schema"] < 1.0:
+        if "schema" in evaluable and scores["schema"] < 1.0:
             issues.append("schema violations")
-        if scores["completeness"] < 1.0:
+        if "completeness" in evaluable and scores["completeness"] < 1.0:
             issues.append("missing fields")
-        if scores["types"] < 1.0:
+        if "types" in evaluable and scores["types"] < 1.0:
             issues.append("type errors")
-        if scores["values"] < 1.0:
+        if "values" in evaluable and scores["values"] < 1.0:
             issues.append("value mismatches")
 
-        if not issues:
+        skipped = [k for k in ("schema", "completeness", "types", "values") if k not in evaluable]
+
+        if not issues and not skipped:
             return "Fully valid structured output"
-        return f"Issues: {', '.join(issues)}"
+        parts = []
+        if issues:
+            parts.append(f"Issues: {', '.join(issues)}")
+        if skipped:
+            parts.append(f"Not evaluated: {', '.join(skipped)}")
+        return "; ".join(parts) if parts else "Fully valid structured output"
 
 
 class QuickStructuredCheck(BaseMetric[JSONInput]):

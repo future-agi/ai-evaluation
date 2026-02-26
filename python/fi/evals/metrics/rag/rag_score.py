@@ -52,26 +52,34 @@ class RAGScore(BaseMetric[RAGInput]):
         scores = {}
         details = {}
 
-        # Prepare retrieval input
-        reference = inputs.reference or inputs.response
-        retrieval_input = RAGRetrievalInput(
-            query=inputs.query,
-            contexts=inputs.contexts,
-            reference=reference,
-        )
+        # Prepare retrieval input — only if reference is available
+        reference = inputs.reference
+        has_reference = bool(reference and reference.strip())
 
-        # Retrieval metrics
-        recall_metric = ContextRecall()
-        recall_result = recall_metric.compute_one(retrieval_input)
-        scores["context_recall"] = recall_result["output"]
-        if self.include_details:
-            details["context_recall"] = recall_result.get("reason", "")
+        if has_reference:
+            retrieval_input = RAGRetrievalInput(
+                query=inputs.query,
+                contexts=inputs.contexts,
+                reference=reference,
+            )
 
-        precision_metric = ContextPrecision()
-        precision_result = precision_metric.compute_one(retrieval_input)
-        scores["context_precision"] = precision_result["output"]
-        if self.include_details:
-            details["context_precision"] = precision_result.get("reason", "")
+            recall_metric = ContextRecall()
+            recall_result = recall_metric.compute_one(retrieval_input)
+            scores["context_recall"] = recall_result["output"]
+            if self.include_details:
+                details["context_recall"] = recall_result.get("reason", "")
+
+            precision_metric = ContextPrecision()
+            precision_result = precision_metric.compute_one(retrieval_input)
+            scores["context_precision"] = precision_result["output"]
+            if self.include_details:
+                details["context_precision"] = precision_result.get("reason", "")
+        else:
+            scores["context_recall"] = 0.0
+            scores["context_precision"] = 0.0
+            if self.include_details:
+                details["context_recall"] = "No reference provided — skipped"
+                details["context_precision"] = "No reference provided — skipped"
 
         retrieval_score = (scores["context_recall"] + scores["context_precision"]) / 2
 
@@ -166,29 +174,33 @@ class RAGScoreDetailed(BaseMetric[RAGInput]):
         all_scores = {}
         all_details = {}
 
-        # Prepare inputs
-        reference = inputs.reference or inputs.response
-        retrieval_input = RAGRetrievalInput(
-            query=inputs.query,
-            contexts=inputs.contexts,
-            reference=reference,
-        )
+        # Prepare retrieval input — only if reference is available
+        reference = inputs.reference
+        has_reference = bool(reference and reference.strip())
 
-        # === RETRIEVAL METRICS ===
-        # Context Recall
-        recall = ContextRecall().compute_one(retrieval_input)
-        all_scores["context_recall"] = recall["output"]
-        all_details["context_recall"] = recall
+        if has_reference:
+            retrieval_input = RAGRetrievalInput(
+                query=inputs.query,
+                contexts=inputs.contexts,
+                reference=reference,
+            )
 
-        # Context Precision
-        precision = ContextPrecision().compute_one(retrieval_input)
-        all_scores["context_precision"] = precision["output"]
-        all_details["context_precision"] = precision
+            # === RETRIEVAL METRICS ===
+            recall = ContextRecall().compute_one(retrieval_input)
+            all_scores["context_recall"] = recall["output"]
+            all_details["context_recall"] = recall
 
-        # Context Entity Recall
-        entity_recall = ContextEntityRecall().compute_one(retrieval_input)
-        all_scores["context_entity_recall"] = entity_recall["output"]
-        all_details["context_entity_recall"] = entity_recall
+            precision = ContextPrecision().compute_one(retrieval_input)
+            all_scores["context_precision"] = precision["output"]
+            all_details["context_precision"] = precision
+
+            entity_recall = ContextEntityRecall().compute_one(retrieval_input)
+            all_scores["context_entity_recall"] = entity_recall["output"]
+            all_details["context_entity_recall"] = entity_recall
+        else:
+            for key in ("context_recall", "context_precision", "context_entity_recall"):
+                all_scores[key] = 0.0
+                all_details[key] = {"output": 0.0, "reason": "No reference provided — skipped"}
 
         retrieval_avg = (
             all_scores["context_recall"] +

@@ -236,7 +236,7 @@ class RecallAtK(BaseMetric[RAGRankingInput]):
 
         if total_relevant == 0:
             return {
-                "output": 1.0,  # Trivially recalled all (none) relevant
+                "output": 0.0,
                 "reason": "No relevant items to recall",
                 "k": self.k,
                 "total_relevant": 0,

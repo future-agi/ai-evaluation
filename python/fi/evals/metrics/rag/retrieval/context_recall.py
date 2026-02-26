@@ -50,8 +50,8 @@ class ContextRecall(BaseMetric[RAGRetrievalInput]):
         # Handle empty inputs
         if not inputs.reference or not inputs.reference.strip():
             return {
-                "output": 1.0,
-                "reason": "No reference provided - recall is trivially 1.0",
+                "output": 0.0,
+                "reason": "No reference provided — cannot measure recall",
             }
 
         if not inputs.contexts:
@@ -71,7 +71,7 @@ class ContextRecall(BaseMetric[RAGRetrievalInput]):
 
         if not reference_sentences:
             return {
-                "output": 1.0,
+                "output": 0.0,
                 "reason": "No verifiable sentences in reference",
             }
 

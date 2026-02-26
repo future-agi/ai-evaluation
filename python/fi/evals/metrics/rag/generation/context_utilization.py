@@ -64,8 +64,8 @@ class ContextUtilization(BaseMetric[ContextUtilizationInput]):
 
         if not contexts:
             return {
-                "output": 1.0,
-                "reason": "No context provided - utilization is trivially 1.0",
+                "output": 0.0,
+                "reason": "No context provided — cannot measure utilization",
             }
 
         if not response or not response.strip():

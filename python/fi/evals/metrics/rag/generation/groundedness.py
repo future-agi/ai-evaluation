@@ -2,19 +2,16 @@
 Groundedness Metric.
 
 Ensures responses are grounded in the provided context,
-with detailed claim-level analysis.
+with detailed claim-level analysis. Uses the shared NLI pipeline
+for single-call claim verification (support + contradiction).
 """
 
 from typing import Any, Dict, List, Optional
 
 from ...base_metric import BaseMetric
+from ...hallucination.nli import NLILabel, nli_score_for_claim
 from ..types import RAGInput
-from ..utils import (
-    extract_claims,
-    check_claim_supported,
-    check_contradiction,
-    NLILabel,
-)
+from ..utils import extract_claims
 
 
 class Groundedness(BaseMetric[RAGInput]):
@@ -39,6 +36,12 @@ class Groundedness(BaseMetric[RAGInput]):
         ...     "contexts": ["Albert Einstein was born on March 14, 1879, in Ulm, Germany."]
         ... }])
     """
+
+    supports_llm_judge = True
+    judge_description = (
+        "Whether the response is grounded in the provided context. "
+        "Contradictions are penalized more heavily than unsupported claims."
+    )
 
     @property
     def metric_name(self) -> str:
@@ -70,35 +73,24 @@ class Groundedness(BaseMetric[RAGInput]):
 
         if not claims:
             return {
-                "output": 1.0,
+                "output": 0.0,
                 "reason": "No verifiable claims in response",
                 "claims_analyzed": 0,
             }
 
-        # Analyze each claim
+        # Analyze each claim — single NLI call detects both support and contradiction
         supported = 0
         unsupported = 0
         contradicted = 0
         claim_details = []
 
-        combined_context = " ".join(contexts)
-
         for claim in claims:
-            # Check support
-            is_supported, support_score, best_context = check_claim_supported(
-                claim, contexts, self.support_threshold
-            )
+            label, score, best_ctx = nli_score_for_claim(claim, contexts)
 
-            # Check contradiction
-            is_contradicted, contradiction_conf = check_contradiction(
-                claim, combined_context
-            )
-
-            # Determine status
-            if is_contradicted and contradiction_conf > 0.5:
+            if label == NLILabel.CONTRADICTION and score > 0.5:
                 status = "contradicted"
                 contradicted += 1
-            elif is_supported:
+            elif label == NLILabel.ENTAILMENT and score >= self.support_threshold:
                 status = "supported"
                 supported += 1
             else:
@@ -108,19 +100,14 @@ class Groundedness(BaseMetric[RAGInput]):
             claim_details.append({
                 "claim": claim[:100] + "..." if len(claim) > 100 else claim,
                 "status": status,
-                "support_score": round(support_score, 3),
-                "matched_context": best_context[:80] + "..." if best_context and len(best_context) > 80 else best_context,
+                "nli_score": round(score, 3),
+                "matched_context": best_ctx[:80] + "..." if best_ctx and len(best_ctx) > 80 else best_ctx,
             })
 
-        # Calculate groundedness score
-        # Contradictions are penalized more heavily
+        # Calculate groundedness score — contradictions penalized more heavily
         total = len(claims)
-        if total == 0:
-            groundedness = 1.0
-        else:
-            # Score = (supported - penalty * contradicted) / total
-            effective_score = supported - (self.contradiction_penalty * contradicted)
-            groundedness = max(0.0, effective_score / total)
+        effective_score = supported - (self.contradiction_penalty * contradicted)
+        groundedness = max(0.0, effective_score / total)
 
         # Determine severity
         if groundedness >= 0.8:

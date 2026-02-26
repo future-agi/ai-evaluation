@@ -51,8 +51,8 @@ class ContextEntityRecall(BaseMetric[RAGRetrievalInput]):
         # Handle empty inputs
         if not inputs.reference or not inputs.reference.strip():
             return {
-                "output": 1.0,
-                "reason": "No reference provided - entity recall is trivially 1.0",
+                "output": 0.0,
+                "reason": "No reference provided — cannot measure entity recall",
             }
 
         # Extract entities from reference
@@ -63,7 +63,7 @@ class ContextEntityRecall(BaseMetric[RAGRetrievalInput]):
 
         if not reference_entities:
             return {
-                "output": 1.0,
+                "output": 0.0,
                 "reason": "No entities found in reference",
                 "reference_entities": [],
             }

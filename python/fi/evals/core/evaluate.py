@@ -105,9 +105,10 @@ def evaluate(
     # Custom prompt with no eval_name
     effective_name = eval_name or "custom_prompt"
 
+    # When augment=True, force local engine for initial run — model is for LLM step
     resolved_engine = _resolve_engine(
         eval_name,
-        model=model,
+        model=None if augment else model,
         prompt=prompt,
         engine=engine,
     )

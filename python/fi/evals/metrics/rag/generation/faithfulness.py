@@ -1,21 +1,19 @@
 """
 RAG Faithfulness Metric.
 
-Enhanced faithfulness evaluation specifically designed for RAG systems,
-building on the existing hallucination detection capabilities.
+Enhanced faithfulness evaluation specifically designed for RAG systems.
+Uses the shared NLI pipeline (hallucination/nli.py) for claim verification.
 """
 
 from typing import Any, Dict, List, Optional
 
 from ...base_metric import BaseMetric
+from ...hallucination.nli import NLILabel, nli_score_for_claim
 from ..types import RAGInput
-from ..utils import (
-    extract_claims,
-    extract_atomic_claims,
-    check_claim_supported,
-    check_contradiction,
-    split_into_sentences,
-)
+from ..utils import extract_claims, extract_atomic_claims
+
+# Neutral claims get partial credit — consistent with hallucination/Faithfulness
+_NEUTRAL_SCORE = 0.4
 
 
 class RAGFaithfulness(BaseMetric[RAGInput]):
@@ -43,6 +41,12 @@ class RAGFaithfulness(BaseMetric[RAGInput]):
         ...     "contexts": ["Paris is the capital and largest city of France."]
         ... }])
     """
+
+    supports_llm_judge = True
+    judge_description = (
+        "Whether every claim in the RAG response is supported by the retrieved context. "
+        "Filters query echoing and handles multi-context retrieval."
+    )
 
     @property
     def metric_name(self) -> str:
@@ -83,48 +87,56 @@ class RAGFaithfulness(BaseMetric[RAGInput]):
 
         if not claims:
             return {
-                "output": 1.0,
+                "output": 0.0,
                 "reason": "No verifiable claims in response",
                 "claims_analyzed": 0,
             }
 
-        # Verify each claim against contexts
+        # Verify each claim against contexts using shared NLI pipeline
         supported = 0
-        unsupported = 0
-        total_confidence = 0.0
+        contradicted = 0
+        neutral_count = 0
         claim_results = []
 
         for claim in claims:
-            is_supported, confidence, best_context = check_claim_supported(
-                claim, contexts, self.support_threshold
-            )
+            label, score, best_ctx = nli_score_for_claim(claim, contexts)
 
-            if is_supported:
+            if label == NLILabel.ENTAILMENT and score >= self.support_threshold:
                 supported += 1
-                total_confidence += confidence
+                status = "supported"
+            elif label == NLILabel.CONTRADICTION:
+                contradicted += 1
+                status = "contradicted"
+            elif label == NLILabel.NEUTRAL:
+                neutral_count += 1
+                status = "neutral"
             else:
-                unsupported += 1
+                status = "unsupported"
 
             claim_results.append({
                 "claim": claim[:100] + "..." if len(claim) > 100 else claim,
-                "supported": is_supported,
-                "confidence": round(confidence, 3),
+                "status": status,
+                "nli_score": round(score, 3),
             })
 
-        # Calculate faithfulness
-        total_claims = len(claims)
-        faithfulness = supported / total_claims if total_claims > 0 else 1.0
+        total = len(claims)
+        unsupported = total - supported - contradicted - neutral_count
+        # Supported = 1.0, neutral = partial credit, contradicted/unsupported = 0.0
+        faithfulness = (supported + neutral_count * _NEUTRAL_SCORE) / total
 
-        # Calculate confidence-weighted faithfulness
-        avg_confidence = total_confidence / total_claims if total_claims > 0 else 0.0
+        reason_parts = [f"{supported}/{total} supported"]
+        if neutral_count > 0:
+            reason_parts.append(f"{neutral_count} neutral")
+        if contradicted > 0:
+            reason_parts.append(f"{contradicted} contradicted")
 
         return {
             "output": round(faithfulness, 4),
-            "reason": f"{supported}/{total_claims} claims supported by context",
-            "claims_analyzed": total_claims,
+            "reason": ", ".join(reason_parts),
+            "claims_analyzed": total,
             "supported_claims": supported,
-            "unsupported_claims": unsupported,
-            "average_confidence": round(avg_confidence, 4),
+            "contradicted_claims": contradicted,
+            "neutral_claims": neutral_count,
             "claim_results": claim_results,
         }
 
@@ -181,32 +193,32 @@ class RAGFaithfulnessWithReference(BaseMetric[RAGInput]):
 
         if not claims:
             return {
-                "output": 1.0,
+                "output": 0.0,
                 "reason": "No verifiable claims",
                 "claims_analyzed": 0,
             }
 
-        # Check faithfulness to context
+        # Check faithfulness to context via NLI
         context_supported = 0
         if contexts:
             for claim in claims:
-                is_supported, _, _ = check_claim_supported(
-                    claim, contexts, self.support_threshold
-                )
-                if is_supported:
+                label, score, _ = nli_score_for_claim(claim, contexts)
+                if label == NLILabel.ENTAILMENT and score >= self.support_threshold:
                     context_supported += 1
+                elif label == NLILabel.NEUTRAL:
+                    context_supported += _NEUTRAL_SCORE
 
         context_faithfulness = context_supported / len(claims) if contexts else 0.0
 
-        # Check faithfulness to reference
+        # Check faithfulness to reference via NLI
         reference_supported = 0
         if reference:
             for claim in claims:
-                is_supported, _, _ = check_claim_supported(
-                    claim, [reference], self.support_threshold
-                )
-                if is_supported:
+                label, score, _ = nli_score_for_claim(claim, [reference])
+                if label == NLILabel.ENTAILMENT and score >= self.support_threshold:
                     reference_supported += 1
+                elif label == NLILabel.NEUTRAL:
+                    reference_supported += _NEUTRAL_SCORE
 
         reference_faithfulness = reference_supported / len(claims) if reference else 0.0
 
