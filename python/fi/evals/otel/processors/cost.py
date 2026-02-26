@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Callable
 import logging
 
 from .base import BaseSpanProcessor, OTEL_AVAILABLE
-from ..conventions import GenAIAttributes, LLMCostAttributes
+from ..conventions import GenAIAttributes, CostAttributes
 from ..types import TokenPricing
 
 if OTEL_AVAILABLE:
@@ -349,11 +349,9 @@ class CostSpanProcessor(BaseSpanProcessor):
             Dictionary of cost attributes
         """
         return {
-            LLMCostAttributes.INPUT_COST_USD: input_cost,
-            LLMCostAttributes.OUTPUT_COST_USD: output_cost,
-            LLMCostAttributes.TOTAL_COST_USD: total_cost,
-            LLMCostAttributes.CURRENCY: self._currency,
-            LLMCostAttributes.PRICING_MODEL: self._pricing_source,
+            CostAttributes.INPUT: input_cost,
+            CostAttributes.OUTPUT: output_cost,
+            CostAttributes.TOTAL: total_cost,
         }
 
     def get_summary(self) -> Dict[str, Any]:

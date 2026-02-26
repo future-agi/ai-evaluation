@@ -179,9 +179,8 @@ def _run_with_tracing(
             result = eng.run(eval_name, inputs, model=model, prompt=prompt, config=config)
             # Enrich the span with the result
             if hasattr(span, "set_attribute"):
-                span.set_attribute("eval.engine", engine_type)
-                if model:
-                    span.set_attribute("eval.model", model)
+                span.set_attribute("gen_ai.span.kind", "EVALUATOR")
+                span.set_attribute("gen_ai.evaluation.name", eval_name)
             enrich_span_with_evaluation(
                 metric_name=result.eval_name,
                 score=result.score if result.score is not None else 0.0,

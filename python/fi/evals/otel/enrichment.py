@@ -12,7 +12,7 @@ import logging
 import time
 
 from .processors import OTEL_AVAILABLE
-from .conventions import EvaluationAttributes
+from .conventions import EvaluationAttributes, GenAIAttributes
 
 if OTEL_AVAILABLE:
     from opentelemetry import trace
@@ -119,31 +119,18 @@ def enrich_span_with_evaluation(
         else:
             normalized_score = float(score)
 
-        # Set evaluation attributes
-        target_span.set_attribute(
-            EvaluationAttributes.score(metric_name),
-            normalized_score
-        )
+        target_span.set_attribute(EvaluationAttributes.NAME, metric_name)
+        target_span.set_attribute(EvaluationAttributes.SCORE_VALUE, normalized_score)
 
         if reason:
-            # Truncate reason if too long
             reason_text = reason[:1000] if len(reason) > 1000 else reason
-            target_span.set_attribute(
-                EvaluationAttributes.reason(metric_name),
-                reason_text
-            )
+            target_span.set_attribute(EvaluationAttributes.EXPLANATION, reason_text)
 
         if latency_ms is not None:
             target_span.set_attribute(
                 EvaluationAttributes.latency(metric_name),
                 latency_ms
             )
-
-        # Add metadata if provided
-        if metadata:
-            for key, value in metadata.items():
-                if isinstance(value, (str, int, float, bool)):
-                    target_span.set_attribute(f"eval.{metric_name}.{key}", value)
 
         logger.debug(f"Enriched span with {metric_name}={normalized_score}")
         return True
@@ -243,7 +230,8 @@ def create_evaluation_span(
         return tracer.start_as_current_span(
             f"eval.{metric_name}",
             attributes={
-                "eval.metric": metric_name,
+                GenAIAttributes.SPAN_KIND: "EVALUATOR",
+                EvaluationAttributes.NAME: metric_name,
                 EvaluationAttributes.EVALUATED_AT: time.time(),
             }
         )
@@ -287,7 +275,10 @@ class EvaluationSpanContext:
                 tracer = trace.get_tracer("fi.evals.evaluation")
                 self._span = tracer.start_span(
                     f"eval.{self.metric_name}",
-                    attributes={"eval.metric": self.metric_name}
+                    attributes={
+                        GenAIAttributes.SPAN_KIND: "EVALUATOR",
+                        EvaluationAttributes.NAME: self.metric_name,
+                    }
                 )
                 # Make it the current span
                 self._token = trace.use_span(self._span, end_on_exit=False)

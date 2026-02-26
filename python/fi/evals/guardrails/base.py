@@ -38,7 +38,10 @@ def _trace_guardrail(fn):
             from fi.evals.otel.enrichment import is_auto_enrichment_enabled
             if not is_auto_enrichment_enabled():
                 raise ImportError
-            from fi.evals.otel.conventions import GuardrailAttributes
+            from fi.evals.otel.conventions import (
+                GenAIAttributes,
+                GuardrailAttributes,
+            )
             from opentelemetry import trace as _trace
 
             tracer = _trace.get_tracer("fi.evals.guardrails")
@@ -47,18 +50,22 @@ def _trace_guardrail(fn):
             span_name = f"guardrail.screen_{rail_type.value}"
 
             with tracer.start_as_current_span(span_name) as span:
-                span.set_attribute("guardrail.rail_type", rail_type.value)
-                span.set_attribute("guardrail.models", str([m.value for m in self.config.models]))
-                span.set_attribute("guardrail.aggregation", self.config.aggregation.value)
+                span.set_attribute(GenAIAttributes.SPAN_KIND, "GUARDRAIL")
+                span.set_attribute(GuardrailAttributes.GEN_AI_NAME, span_name)
+                span.set_attribute(GuardrailAttributes.GEN_AI_TYPE, rail_type.value)
+                span.set_attribute(GenAIAttributes.INPUT_MESSAGES, content)
 
                 response = fn(self, content, *args, **kwargs)
 
-                span.set_attribute(GuardrailAttributes.PASSED, response.passed)
-                span.set_attribute(GuardrailAttributes.LATENCY_MS, response.total_latency_ms)
+                result_str = "allow" if response.passed else "block"
+                span.set_attribute(GuardrailAttributes.GEN_AI_RESULT, result_str)
                 if response.blocked_categories:
-                    span.set_attribute(GuardrailAttributes.CATEGORIES, str(response.blocked_categories))
-                if response.models_used:
-                    span.set_attribute(GuardrailAttributes.BACKEND, str(response.models_used))
+                    span.set_attribute(
+                        GuardrailAttributes.GEN_AI_CATEGORIES,
+                        str(response.blocked_categories),
+                    )
+                if response.total_latency_ms:
+                    span.set_attribute(GuardrailAttributes.LATENCY_MS, response.total_latency_ms)
 
                 return response
         except ImportError:

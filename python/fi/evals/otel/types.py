@@ -36,17 +36,20 @@ class ExporterType(str, Enum):
 
 
 class SpanKind(str, Enum):
-    """Span kinds for LLM operations."""
+    """Span kinds for LLM operations (uppercase, matching traceAI)."""
 
-    LLM = "llm"
-    RETRIEVER = "retriever"
-    EMBEDDING = "embedding"
-    RERANKER = "reranker"
-    TOOL = "tool"
-    CHAIN = "chain"
-    AGENT = "agent"
-    GUARDRAIL = "guardrail"
-    EVALUATION = "evaluation"
+    LLM = "LLM"
+    CHAIN = "CHAIN"
+    TOOL = "TOOL"
+    AGENT = "AGENT"
+    GUARDRAIL = "GUARDRAIL"
+    EVALUATOR = "EVALUATOR"
+    RETRIEVER = "RETRIEVER"
+    EMBEDDING = "EMBEDDING"
+    RERANKER = "RERANKER"
+    CONVERSATION = "CONVERSATION"
+    VECTOR_DB = "VECTOR_DB"
+    UNKNOWN = "UNKNOWN"
 
 
 class ProcessorType(str, Enum):
@@ -115,11 +118,11 @@ class SpanAttributes:
     session_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to OTEL attribute dictionary."""
+        """Convert to OTEL attribute dictionary using gen_ai.* namespace."""
         attrs = {}
 
         if self.system:
-            attrs["gen_ai.system"] = self.system
+            attrs["gen_ai.provider.name"] = self.system
         if self.operation_name:
             attrs["gen_ai.operation.name"] = self.operation_name
         if self.request_model:
@@ -142,21 +145,22 @@ class SpanAttributes:
             attrs["gen_ai.request.top_p"] = self.top_p
 
         if self.prompt:
-            attrs["gen_ai.prompt.0.content"] = self.prompt
+            attrs["gen_ai.input.messages"] = self.prompt
         if self.completion:
-            attrs["gen_ai.completion.0.content"] = self.completion
+            attrs["gen_ai.output.messages"] = self.completion
 
         if self.cost_input_usd is not None:
-            attrs["llm.cost.input_usd"] = self.cost_input_usd
+            attrs["gen_ai.cost.input"] = self.cost_input_usd
         if self.cost_output_usd is not None:
-            attrs["llm.cost.output_usd"] = self.cost_output_usd
+            attrs["gen_ai.cost.output"] = self.cost_output_usd
         if self.cost_total_usd is not None:
-            attrs["llm.cost.total_usd"] = self.cost_total_usd
+            attrs["gen_ai.cost.total"] = self.cost_total_usd
 
         for metric, score in self.eval_scores.items():
-            attrs[f"eval.{metric}"] = score
+            attrs["gen_ai.evaluation.name"] = metric
+            attrs["gen_ai.evaluation.score.value"] = score
         for metric, reason in self.eval_reasons.items():
-            attrs[f"eval.{metric}.reason"] = reason
+            attrs["gen_ai.evaluation.explanation"] = reason
 
         if self.user_id:
             attrs["user.id"] = self.user_id

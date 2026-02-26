@@ -16,6 +16,7 @@ from .base import BaseSpanProcessor, OTEL_AVAILABLE
 from ..conventions import (
     GenAIAttributes,
     EvaluationAttributes,
+    create_evaluation_attributes,
 )
 from ..types import EvaluationResult
 
@@ -128,16 +129,16 @@ class EvaluationSpanProcessor(BaseSpanProcessor):
 
     def _is_llm_span(self, attrs: Dict[str, Any]) -> bool:
         """Check if this is an LLM span worth evaluating."""
-        # Has GenAI system attribute
-        if GenAIAttributes.SYSTEM in attrs:
+        # Has GenAI provider attribute
+        if GenAIAttributes.PROVIDER_NAME in attrs:
             return True
 
         # Has model attribute
         if GenAIAttributes.REQUEST_MODEL in attrs:
             return True
 
-        # Has completion content
-        if GenAIAttributes.completion_content(0) in attrs:
+        # Has output messages
+        if GenAIAttributes.OUTPUT_MESSAGES in attrs:
             return True
 
         # Check for common patterns
@@ -202,7 +203,7 @@ class EvaluationSpanProcessor(BaseSpanProcessor):
     def _extract_prompt(self, attrs: Dict[str, Any]) -> Optional[str]:
         """Extract prompt from span attributes."""
         for key in [
-            GenAIAttributes.prompt_content(0),
+            GenAIAttributes.INPUT_MESSAGES,
             "llm.prompt",
             "prompt",
             "input",
@@ -214,7 +215,7 @@ class EvaluationSpanProcessor(BaseSpanProcessor):
     def _extract_completion(self, attrs: Dict[str, Any]) -> Optional[str]:
         """Extract completion from span attributes."""
         for key in [
-            GenAIAttributes.completion_content(0),
+            GenAIAttributes.OUTPUT_MESSAGES,
             "llm.completion",
             "completion",
             "output",
@@ -408,6 +409,8 @@ class EvaluationSpanProcessor(BaseSpanProcessor):
         """
         Convert evaluation results to span attributes.
 
+        Uses gen_ai.evaluation.* namespace.
+
         Args:
             results: List of evaluation results
 
@@ -417,11 +420,14 @@ class EvaluationSpanProcessor(BaseSpanProcessor):
         attrs: Dict[str, Any] = {}
 
         for result in results:
-            attrs[EvaluationAttributes.score(result.metric)] = result.score
-            if result.reason:
-                attrs[EvaluationAttributes.reason(result.metric)] = result.reason
-            if result.latency_ms is not None:
-                attrs[EvaluationAttributes.latency(result.metric)] = result.latency_ms
+            # Dual-write via helper
+            result_attrs = create_evaluation_attributes(
+                metric=result.metric,
+                score=result.score,
+                reason=result.reason,
+                latency_ms=result.latency_ms,
+            )
+            attrs.update(result_attrs)
 
         return attrs
 

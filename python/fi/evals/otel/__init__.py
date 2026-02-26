@@ -96,6 +96,7 @@ from .types import (
 # Semantic conventions
 from .conventions import (
     GenAIAttributes,
+    CostAttributes,
     LLMCostAttributes,
     EvaluationAttributes,
     RAGAttributes,
@@ -201,6 +202,7 @@ __all__ = [
 
     # Semantic conventions
     "GenAIAttributes",
+    "CostAttributes",
     "LLMCostAttributes",
     "EvaluationAttributes",
     "RAGAttributes",

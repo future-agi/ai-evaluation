@@ -4,11 +4,13 @@ OpenTelemetry Semantic Conventions for GenAI.
 Follows the OpenTelemetry GenAI semantic conventions specification:
 https://opentelemetry.io/docs/specs/semconv/gen-ai/
 
-These conventions ensure consistent attribute naming across all
-LLM observability platforms - export anywhere, view anywhere.
+Aligned with traceAI SDK attribute namespace (gen_ai.*) so that
+fi.evals spans render correctly alongside traceAI instrumentation
+spans on the FutureAGI dashboard.
 """
 
 from typing import Dict, Any, Optional
+import warnings
 
 
 class GenAIAttributes:
@@ -21,7 +23,11 @@ class GenAIAttributes:
     """
 
     # System identification
-    SYSTEM = "gen_ai.system"  # e.g., "openai", "anthropic", "cohere"
+    SYSTEM = "gen_ai.system"  # Deprecated: use PROVIDER_NAME
+    PROVIDER_NAME = "gen_ai.provider.name"  # e.g., "openai", "anthropic"
+
+    # Span kind (traceAI convention)
+    SPAN_KIND = "gen_ai.span.kind"  # "LLM", "CHAIN", "GUARDRAIL", etc.
 
     # Operation
     OPERATION_NAME = "gen_ai.operation.name"  # e.g., "chat", "completion", "embedding"
@@ -38,6 +44,8 @@ class GenAIAttributes:
     REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences"
     REQUEST_FREQUENCY_PENALTY = "gen_ai.request.frequency_penalty"
     REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty"
+    REQUEST_SEED = "gen_ai.request.seed"
+    REQUEST_PARAMETERS = "gen_ai.request.parameters"  # Full invocation params JSON
 
     # Token usage
     USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
@@ -45,10 +53,19 @@ class GenAIAttributes:
     USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
 
     # Response metadata
-    RESPONSE_FINISH_REASON = "gen_ai.response.finish_reason"  # "stop", "length", "tool_calls"
+    RESPONSE_FINISH_REASON = "gen_ai.response.finish_reason"  # singular (compat)
+    RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"  # plural, list
     RESPONSE_ID = "gen_ai.response.id"
 
-    # Content (indexed for multi-turn)
+    # Messages (JSON arrays — replaces indexed prompt/completion)
+    INPUT_MESSAGES = "gen_ai.input.messages"  # JSON array of messages
+    OUTPUT_MESSAGES = "gen_ai.output.messages"  # JSON array of messages
+    SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+
+    # Conversation
+    CONVERSATION_ID = "gen_ai.conversation.id"
+
+    # Content (indexed for multi-turn) — DEPRECATED, prefer INPUT/OUTPUT_MESSAGES
     PROMPT_TEMPLATE = "gen_ai.prompt.{index}.content"
     PROMPT_ROLE_TEMPLATE = "gen_ai.prompt.{index}.role"
     COMPLETION_TEMPLATE = "gen_ai.completion.{index}.content"
@@ -56,26 +73,44 @@ class GenAIAttributes:
 
     @classmethod
     def prompt_content(cls, index: int = 0) -> str:
+        """Deprecated: use INPUT_MESSAGES instead."""
         return cls.PROMPT_TEMPLATE.format(index=index)
 
     @classmethod
     def prompt_role(cls, index: int = 0) -> str:
+        """Deprecated: use INPUT_MESSAGES instead."""
         return cls.PROMPT_ROLE_TEMPLATE.format(index=index)
 
     @classmethod
     def completion_content(cls, index: int = 0) -> str:
+        """Deprecated: use OUTPUT_MESSAGES instead."""
         return cls.COMPLETION_TEMPLATE.format(index=index)
 
     @classmethod
     def completion_role(cls, index: int = 0) -> str:
+        """Deprecated: use OUTPUT_MESSAGES instead."""
         return cls.COMPLETION_ROLE_TEMPLATE.format(index=index)
 
 
+class CostAttributes:
+    """
+    Cost tracking attributes (gen_ai.cost.* namespace).
+
+    Aligned with traceAI conventions.
+    """
+
+    TOTAL = "gen_ai.cost.total"
+    INPUT = "gen_ai.cost.input"
+    OUTPUT = "gen_ai.cost.output"
+    CACHE_WRITE = "gen_ai.cost.cache_write"
+
+
+# Backward-compat alias
 class LLMCostAttributes:
     """
-    Custom attributes for LLM cost tracking.
+    Deprecated: use CostAttributes instead.
 
-    Not part of OTEL standard but widely used in LLM observability.
+    Legacy llm.cost.* namespace kept for backward compatibility reads.
     """
 
     INPUT_COST_USD = "llm.cost.input_usd"
@@ -87,17 +122,25 @@ class LLMCostAttributes:
 
 class EvaluationAttributes:
     """
-    Custom attributes for evaluation scores.
+    Evaluation score attributes.
 
-    Pattern: eval.{metric_name} for the score
-    Pattern: eval.{metric_name}.reason for the explanation
+    New namespace: gen_ai.evaluation.*
+    Legacy namespace: eval.{metric} (kept for dual-write transition)
     """
 
+    # --- New gen_ai.evaluation.* namespace ---
+    NAME = "gen_ai.evaluation.name"
+    SCORE_VALUE = "gen_ai.evaluation.score.value"
+    SCORE_LABEL = "gen_ai.evaluation.score.label"
+    EXPLANATION = "gen_ai.evaluation.explanation"
+    TARGET_SPAN_ID = "gen_ai.evaluation.target_span_id"
+
+    # --- Legacy eval.{metric} namespace (dual-write) ---
     SCORE_TEMPLATE = "eval.{metric}"
     REASON_TEMPLATE = "eval.{metric}.reason"
     LATENCY_TEMPLATE = "eval.{metric}.latency_ms"
 
-    # Metadata
+    # Metadata (legacy)
     EVALUATED_AT = "eval.evaluated_at"
     EVALUATOR_VERSION = "eval.evaluator_version"
     SAMPLE_RATE = "eval.sample_rate"
@@ -105,15 +148,50 @@ class EvaluationAttributes:
 
     @classmethod
     def score(cls, metric: str) -> str:
+        """Legacy: eval.{metric} score key."""
         return cls.SCORE_TEMPLATE.format(metric=metric)
 
     @classmethod
     def reason(cls, metric: str) -> str:
+        """Legacy: eval.{metric}.reason key."""
         return cls.REASON_TEMPLATE.format(metric=metric)
 
     @classmethod
     def latency(cls, metric: str) -> str:
+        """Legacy: eval.{metric}.latency_ms key."""
         return cls.LATENCY_TEMPLATE.format(metric=metric)
+
+
+class GuardrailAttributes:
+    """
+    Guardrail attributes.
+
+    New namespace: gen_ai.guardrail.*
+    Dashboard-facing attrs (guardrail.*) kept for frontend compat.
+    """
+
+    # --- New gen_ai.guardrail.* namespace ---
+    GEN_AI_NAME = "gen_ai.guardrail.name"
+    GEN_AI_TYPE = "gen_ai.guardrail.type"
+    GEN_AI_RESULT = "gen_ai.guardrail.result"  # "allow" / "block" / "warn"
+    GEN_AI_SCORE = "gen_ai.guardrail.score"
+    GEN_AI_CATEGORIES = "gen_ai.guardrail.categories"
+    GEN_AI_MODIFIED_OUTPUT = "gen_ai.guardrail.modified_output"
+
+    # --- Dashboard-facing legacy attrs ---
+    PASSED = "guardrail.passed"
+    BLOCKED = "guardrail.blocked"
+    CATEGORIES = "guardrail.categories"
+    SCORE = "guardrail.score"
+    BACKEND = "guardrail.backend"
+    LATENCY_MS = "guardrail.latency_ms"
+    STATUS = "guardrail.status"
+    RULES = "guardrail.rules"
+    FAILED_RULE = "guardrail.failed_rule"
+    COMPLETED_RULES = "guardrail.completed_rules"
+    REASONS = "guardrail.reasons"
+
+
 
 
 class RAGAttributes:
@@ -142,19 +220,6 @@ class RAGAttributes:
     @classmethod
     def document_id(cls, index: int) -> str:
         return cls.DOCUMENT_ID_TEMPLATE.format(index=index)
-
-
-class GuardrailAttributes:
-    """
-    Custom attributes for guardrail/safety operations.
-    """
-
-    PASSED = "guardrail.passed"
-    BLOCKED = "guardrail.blocked"
-    CATEGORIES = "guardrail.categories"
-    SCORE = "guardrail.score"
-    BACKEND = "guardrail.backend"
-    LATENCY_MS = "guardrail.latency_ms"
 
 
 class SpanNames:
@@ -188,7 +253,7 @@ class SpanNames:
     EVAL_METRIC = "eval.metric"
 
 
-# Provider system names (for gen_ai.system attribute)
+# Provider system names (for gen_ai.system / gen_ai.provider.name attribute)
 SYSTEM_OPENAI = "openai"
 SYSTEM_ANTHROPIC = "anthropic"
 SYSTEM_COHERE = "cohere"
@@ -228,7 +293,7 @@ def normalize_system_name(provider: str) -> str:
         provider: Provider name (various formats)
 
     Returns:
-        Normalized system name for gen_ai.system attribute
+        Normalized system name for gen_ai.provider.name attribute
     """
     provider_lower = provider.lower().strip()
 
@@ -295,8 +360,10 @@ def create_llm_span_attributes(
     Returns:
         Dictionary of OTEL-compliant attributes
     """
+    normalized = normalize_system_name(system)
     attrs: Dict[str, Any] = {
-        GenAIAttributes.SYSTEM: normalize_system_name(system),
+        GenAIAttributes.SPAN_KIND: "LLM",
+        GenAIAttributes.PROVIDER_NAME: normalized,
         GenAIAttributes.OPERATION_NAME: operation,
         GenAIAttributes.REQUEST_MODEL: model,
     }
@@ -329,6 +396,8 @@ def create_evaluation_attributes(
     """
     Create attributes for an evaluation result.
 
+    Uses gen_ai.evaluation.* namespace.
+
     Args:
         metric: Evaluation metric name
         score: Score value (0.0 to 1.0)
@@ -338,12 +407,13 @@ def create_evaluation_attributes(
     Returns:
         Dictionary of evaluation attributes
     """
-    attrs = {
-        EvaluationAttributes.score(metric): score,
+    attrs: Dict[str, Any] = {
+        EvaluationAttributes.NAME: metric,
+        EvaluationAttributes.SCORE_VALUE: score,
     }
 
     if reason:
-        attrs[EvaluationAttributes.reason(metric)] = reason
+        attrs[EvaluationAttributes.EXPLANATION] = reason
     if latency_ms is not None:
         attrs[EvaluationAttributes.latency(metric)] = latency_ms
 
@@ -353,6 +423,7 @@ def create_evaluation_attributes(
 __all__ = [
     # Attribute classes
     "GenAIAttributes",
+    "CostAttributes",
     "LLMCostAttributes",
     "EvaluationAttributes",
     "RAGAttributes",

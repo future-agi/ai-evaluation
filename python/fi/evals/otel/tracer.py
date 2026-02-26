@@ -109,6 +109,9 @@ def setup_tracing(
         **config.resource.attributes,
     }
 
+    # Always set trace source
+    resource_attrs["fi.trace.source"] = "traceai"
+
     # Auto-inject FutureAGI project attributes when using FUTUREAGI exporter
     has_fi_exporter = any(
         e.type == ExporterType.FUTUREAGI for e in config.exporters
@@ -428,12 +431,13 @@ def trace_llm_call(
 
     # Build initial attributes
     span_attrs = {
+        GenAIAttributes.SPAN_KIND: "LLM",
         GenAIAttributes.OPERATION_NAME: OPERATION_CHAT,
     }
     if model:
         span_attrs[GenAIAttributes.REQUEST_MODEL] = model
     if system:
-        span_attrs[GenAIAttributes.SYSTEM] = system
+        span_attrs[GenAIAttributes.PROVIDER_NAME] = system
     span_attrs.update(attributes)
 
     with tracer.start_as_current_span(name, attributes=span_attrs) as span:

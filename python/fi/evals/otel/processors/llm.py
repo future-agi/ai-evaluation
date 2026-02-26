@@ -178,10 +178,13 @@ class LLMSpanProcessor(BaseSpanProcessor):
         """
         enriched: Dict[str, Any] = {}
 
+        # Set span kind
+        enriched[GenAIAttributes.SPAN_KIND] = "LLM"
+
         # Extract system/provider
         system = self._extract_system(attrs)
         if system:
-            enriched[GenAIAttributes.SYSTEM] = system
+            enriched[GenAIAttributes.PROVIDER_NAME] = system
 
         # Extract operation type
         operation = self._extract_operation(attrs)
@@ -222,12 +225,12 @@ class LLMSpanProcessor(BaseSpanProcessor):
         if self._capture_prompts:
             prompt = self._extract_prompt(attrs)
             if prompt:
-                enriched[GenAIAttributes.prompt_content(0)] = prompt
+                enriched[GenAIAttributes.INPUT_MESSAGES] = prompt
 
         if self._capture_completions:
             completion = self._extract_completion(attrs)
             if completion:
-                enriched[GenAIAttributes.completion_content(0)] = completion
+                enriched[GenAIAttributes.OUTPUT_MESSAGES] = completion
 
         return enriched
 
