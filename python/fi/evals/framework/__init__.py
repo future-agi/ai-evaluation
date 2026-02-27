@@ -40,7 +40,7 @@ Quick Start:
 
 Factory Functions:
     # Convenience functions for common configurations
-    from fi.evals.framework import blocking_evaluator, async_evaluator, evaluate
+    from fi.evals.framework import blocking_evaluator, async_evaluator
 
     # Blocking
     evaluator = blocking_evaluator(MyEval())
@@ -50,9 +50,6 @@ Factory Functions:
     evaluator = async_evaluator(MyEval(), max_workers=4)
     result = evaluator.run(inputs)
     batch = result.wait()
-
-    # One-off evaluation
-    result = evaluate(inputs, MyEval(), mode=ExecutionMode.BLOCKING)
 
 Example with OpenTelemetry:
     from fi.evals.framework import async_evaluator, register_current_span
@@ -162,6 +159,13 @@ from .resilience import (
     wrap_backend,
 )
 
+# Built-in evals + builder
+from .evals import (
+    custom_eval,
+    simple_eval,
+    EvalBuilder,
+)
+
 # Unified API
 from .evaluator import (
     FrameworkEvaluator,
@@ -169,9 +173,11 @@ from .evaluator import (
     blocking_evaluator,
     async_evaluator,
     distributed_evaluator,
-    evaluate,
     resilient_evaluator,
 )
+
+# Backwards-compatible alias used by tests and examples
+Evaluator = FrameworkEvaluator
 
 __all__ = [
     # Version
@@ -247,12 +253,15 @@ __all__ = [
     "DegradationConfig",
     "HealthCheckConfig",
     "wrap_backend",
+    # Built-in evals + builder
+    "custom_eval",
+    "simple_eval",
+    "EvalBuilder",
     # Unified API
     "FrameworkEvaluator",
     "EvaluatorResult",
     "blocking_evaluator",
     "async_evaluator",
     "distributed_evaluator",
-    "evaluate",
     "resilient_evaluator",
 ]

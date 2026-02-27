@@ -66,13 +66,6 @@ You must respond in valid JSON format with the following structure:
 - ActionSafetyEval: Detects unsafe agent actions
 - ReasoningQualityEval: Evaluates reasoning quality
 
-### Multimodal Evaluations
-- ImageTextConsistencyEval: Checks image-text alignment
-- CaptionQualityEval: Evaluates caption quality
-- VisualQAEval: Evaluates visual Q&A responses
-- ImageSafetyEval: Checks image safety
-- CrossModalConsistencyEval: Cross-modal consistency
-
 ## Available Scanners
 
 ### Security Scanners

@@ -3,24 +3,21 @@ Built-in evaluations using the evaluation framework.
 
 This module provides ready-to-use evaluations for common use cases:
 - Semantic evaluations (coherence)
-- Multi-modal evaluations (image-text consistency, VQA)
 - Agentic evaluations (action safety, reasoning quality)
 - Builder utilities (custom eval creation)
 
-All evaluations implement BaseEvaluation and work with the Evaluator class.
+All evaluations implement BaseEvaluation and work with the FrameworkEvaluator class.
 
 Example:
-    from fi.evals.framework import Evaluator, ExecutionMode
+    from fi.evals.framework import FrameworkEvaluator, ExecutionMode
     from fi.evals.framework.evals import (
         CoherenceEval,
-        ImageTextConsistencyEval,
         ActionSafetyEval,
     )
 
-    evaluator = Evaluator(
+    evaluator = FrameworkEvaluator(
         evaluations=[
             CoherenceEval(),
-            ImageTextConsistencyEval(),
             ActionSafetyEval(),
         ],
         mode=ExecutionMode.NON_BLOCKING,
@@ -30,15 +27,6 @@ Example:
 from .semantic import (
     CoherenceEval,
     SemanticEvalResult,
-)
-
-from .multimodal import (
-    ImageTextConsistencyEval,
-    CaptionQualityEval,
-    VisualQAEval,
-    ImageSafetyEval,
-    CrossModalConsistencyEval,
-    MultiModalEvalResult,
 )
 
 from .agentic import (
@@ -63,13 +51,6 @@ __all__ = [
     # Semantic
     "CoherenceEval",
     "SemanticEvalResult",
-    # Multi-modal
-    "ImageTextConsistencyEval",
-    "CaptionQualityEval",
-    "VisualQAEval",
-    "ImageSafetyEval",
-    "CrossModalConsistencyEval",
-    "MultiModalEvalResult",
     # Agentic
     "ActionSafetyEval",
     "ReasoningQualityEval",

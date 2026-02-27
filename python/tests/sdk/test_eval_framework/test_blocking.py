@@ -5,7 +5,7 @@ import time
 from typing import Dict, Any, Optional
 from unittest.mock import MagicMock, patch
 from fi.evals.framework.evaluators.blocking import BlockingEvaluator, blocking_evaluate
-from fi.evals.framework.types import EvalResult, EvalStatus, BatchEvalResult
+from fi.evals.framework.types import FrameworkEvalResult as EvalResult, EvalStatus, BatchEvalResult
 
 
 # Test evaluation implementations

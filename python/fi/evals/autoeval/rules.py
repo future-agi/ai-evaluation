@@ -562,20 +562,6 @@ class RuleBasedAnalyzer:
                 )
             )
 
-        # Add feature-based requirements
-        if "image_processing" in features:
-            requirements.append(
-                AppRequirement(
-                    category="multimodal",
-                    importance="recommended",
-                    reason="Image processing needs multimodal evaluation",
-                    suggested_evals=[
-                        "ImageTextConsistencyEval",
-                        "ImageSafetyEval",
-                    ],
-                )
-            )
-
         return requirements
 
     def _generate_explanation(

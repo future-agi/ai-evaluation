@@ -8,14 +8,14 @@ import pytest
 from unittest.mock import MagicMock
 
 from fi.evals.framework.evaluator import (
-    Evaluator,
+    FrameworkEvaluator as Evaluator,
     EvaluatorResult,
     resilient_evaluator,
     _execute_single_evaluation,
 )
 from fi.evals.framework.types import (
     ExecutionMode,
-    EvalResult,
+    FrameworkEvalResult as EvalResult,
     EvalStatus,
     BatchEvalResult,
 )

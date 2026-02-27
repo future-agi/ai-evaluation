@@ -13,7 +13,7 @@ from fi.evals.framework.evaluators.non_blocking import (
     BatchEvalFuture,
     EvalResultAggregator,
 )
-from fi.evals.framework.types import EvalResult, EvalStatus, BatchEvalResult
+from fi.evals.framework.types import FrameworkEvalResult as EvalResult, EvalStatus, BatchEvalResult
 from fi.evals.framework.context import EvalContext
 from fi.evals.framework.registry import SpanRegistry
 

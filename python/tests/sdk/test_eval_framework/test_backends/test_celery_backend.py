@@ -20,8 +20,8 @@ class TestCeleryConfig:
             assert config.result_backend == "redis://localhost:6379/1"
             assert config.task_queue == "eval_tasks"
             assert config.task_priority == 0
-            assert config.task_serializer == "pickle"
-            assert config.result_serializer == "pickle"
+            assert config.task_serializer == "cloudpickle"
+            assert config.result_serializer == "cloudpickle"
             assert config.task_acks_late is True
             assert config.task_reject_on_worker_lost is True
             assert config.task_track_started is True

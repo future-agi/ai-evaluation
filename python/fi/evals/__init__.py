@@ -26,6 +26,28 @@ except (ImportError, ModuleNotFoundError):
     protect = None
 
 # ---------------------------------------------------------------------------
+# Framework (evaluation orchestration + distributed backends)
+# ---------------------------------------------------------------------------
+try:
+    from .framework import (
+        FrameworkEvaluator,
+        ExecutionMode,
+        blocking_evaluator,
+        async_evaluator,
+        distributed_evaluator,
+        resilient_evaluator,
+        register_current_span,
+        BaseEvaluation,
+        register_evaluation,
+        custom_eval,
+        simple_eval,
+        EvalBuilder,
+    )
+    _framework_available = True
+except (ImportError, ModuleNotFoundError):
+    _framework_available = False
+
+# ---------------------------------------------------------------------------
 # Streaming
 # ---------------------------------------------------------------------------
 from .streaming import (  # noqa: F401
@@ -56,6 +78,22 @@ new_api_names = ["evaluate", "EvalResult", "BatchResult", "Turing"]
 # Existing clients
 client_names = ["Evaluator", "Protect", "protect", "list_evaluations"]
 
+# Framework exports
+framework_names = [
+    "FrameworkEvaluator",
+    "ExecutionMode",
+    "blocking_evaluator",
+    "async_evaluator",
+    "distributed_evaluator",
+    "resilient_evaluator",
+    "register_current_span",
+    "BaseEvaluation",
+    "register_evaluation",
+    "custom_eval",
+    "simple_eval",
+    "EvalBuilder",
+] if _framework_available else []
+
 # Streaming exports
 streaming_names = [
     "StreamingEvaluator",
@@ -67,4 +105,4 @@ streaming_names = [
     "StreamingState",
 ]
 
-__all__ = sorted(new_api_names + evaluation_template_names + client_names + streaming_names)
+__all__ = sorted(new_api_names + evaluation_template_names + client_names + framework_names + streaming_names)

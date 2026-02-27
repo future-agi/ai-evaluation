@@ -4,21 +4,16 @@ These tests simulate actual production use cases including:
 - Customer support chatbot evaluation
 - AI agent trajectory evaluation
 - Content moderation pipeline
-- Multi-modal content evaluation
 - E-commerce product description evaluation
 - Medical/healthcare response evaluation
 - Code review assistant evaluation
 """
 
 import pytest
-from fi.evals.framework import Evaluator, ExecutionMode, async_evaluator
+from fi.evals.framework import FrameworkEvaluator as Evaluator, ExecutionMode, async_evaluator
 from fi.evals.framework.evals import (
     # Semantic
     CoherenceEval,
-    # Multi-modal
-    ImageTextConsistencyEval,
-    CaptionQualityEval,
-    VisualQAEval,
     # Agentic
     ActionSafetyEval,
     ReasoningQualityEval,
@@ -264,61 +259,6 @@ class TestContentModeration:
         # Too long
         result = evaluator.run({"content": "A" * 600})
         assert result.results[0].value.passed is False
-
-
-class TestMultiModalContent:
-    """Tests simulating multi-modal content evaluation."""
-
-    def setup_method(self):
-        EvalRegistry.clear()
-
-    def teardown_method(self):
-        EvalRegistry.clear()
-
-    def test_accurate_image_caption(self):
-        """Test accurate image caption."""
-        evaluator = Evaluator(
-            evaluations=[
-                ImageTextConsistencyEval(threshold=0.5),
-                CaptionQualityEval(threshold=0.6),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "image_description": "A golden retriever dog playing fetch in a sunny park with green grass and trees",
-            "text": "A happy golden retriever enjoys playing fetch in the park on a sunny day.",
-            "caption": "A golden retriever plays fetch in a beautiful sunny park surrounded by nature.",
-        })
-
-        assert result.success_rate >= 0.5
-
-    def test_visual_qa(self):
-        """Test visual question answering evaluation."""
-        evaluator = Evaluator(
-            evaluations=[
-                VisualQAEval(threshold=0.5),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        # Color question
-        result = evaluator.run({
-            "image_description": "A red sports car parked on a city street",
-            "question": "What color is the car?",
-            "answer": "The car is red.",
-        })
-        assert result.results[0].value.passed is True
-
-        # Counting question
-        result = evaluator.run({
-            "image_description": "Three people sitting at a table in a cafe",
-            "question": "How many people are in the image?",
-            "answer": "There are three people.",
-        })
-        assert result.results[0].value.passed is True
 
 
 class TestEcommerceProductDescription:

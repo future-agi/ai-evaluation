@@ -5,14 +5,13 @@ import time
 from unittest.mock import MagicMock
 
 from fi.evals.framework.evaluator import (
-    Evaluator,
+    FrameworkEvaluator as Evaluator,
     EvaluatorResult,
     blocking_evaluator,
     async_evaluator,
     distributed_evaluator,
-    evaluate,
 )
-from fi.evals.framework.types import ExecutionMode, EvalResult, EvalStatus, BatchEvalResult
+from fi.evals.framework.types import ExecutionMode, FrameworkEvalResult as EvalResult, EvalStatus, BatchEvalResult
 from fi.evals.framework.context import EvalContext
 from fi.evals.framework.protocols import EvalRegistry
 from fi.evals.framework.registry import SpanRegistry
@@ -375,51 +374,6 @@ class TestFactoryFunctions:
         assert evaluator._backend is backend
 
         evaluator.shutdown()
-
-
-class TestEvaluateFunction:
-    """Tests for evaluate() convenience function."""
-
-    def setup_method(self):
-        SpanRegistry.reset_instance()
-
-    def teardown_method(self):
-        SpanRegistry.reset_instance()
-
-    def test_evaluate_blocking(self):
-        """Test evaluate() in blocking mode."""
-        result = evaluate(
-            {"response": "test"},
-            MockEvaluation(result={"score": 0.95}),
-            auto_enrich_span=False,
-        )
-
-        assert result.is_future is False
-        assert result.results[0].value == {"score": 0.95}
-
-    def test_evaluate_multiple(self):
-        """Test evaluate() with multiple evaluations."""
-        result = evaluate(
-            {"response": "test"},
-            MockEvaluation(result={"a": 1}),
-            MockEvaluation(result={"b": 2}),
-            auto_enrich_span=False,
-        )
-
-        assert len(result.results) == 2
-
-    def test_evaluate_non_blocking(self):
-        """Test evaluate() in non-blocking mode."""
-        result = evaluate(
-            {"response": "test"},
-            MockEvaluation(result={"score": 0.95}),
-            mode=ExecutionMode.NON_BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        assert result.is_future is True
-        batch = result.wait()
-        assert batch.results[0].value == {"score": 0.95}
 
 
 class TestInputValidation:

@@ -125,11 +125,11 @@ class TestRuleBasedAnalyzer:
         analysis = analyzer.analyze(
             "A RAG system for document retrieval and question answering."
         )
-        # Should have faithfulness-related evaluations
+        # Should have quality-related evaluations
         all_evals = [
             e for r in analysis.requirements for e in r.suggested_evals
         ]
-        assert any("Factual" in e or "Entailment" in e for e in all_evals)
+        assert any("Coherence" in e for e in all_evals)
 
     def test_generate_requirements_for_agents(self, analyzer):
         """Should generate appropriate requirements for agent workflows."""
@@ -139,7 +139,7 @@ class TestRuleBasedAnalyzer:
         all_evals = [
             e for r in analysis.requirements for e in r.suggested_evals
         ]
-        assert any("ToolUse" in e or "Goal" in e for e in all_evals)
+        assert any("ActionSafety" in e or "Reasoning" in e for e in all_evals)
 
     def test_generate_pii_scanner_for_sensitive_domains(self, analyzer):
         """Should add PII scanner for sensitive domains."""

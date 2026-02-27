@@ -18,17 +18,6 @@ EVAL_MAPPINGS: Dict[str, str] = {
     "ActionSafetyEval": "ActionSafetyEval",
     "reasoning_quality": "ReasoningQualityEval",
     "ReasoningQualityEval": "ReasoningQualityEval",
-    # Multimodal evaluations
-    "image_text_consistency": "ImageTextConsistencyEval",
-    "ImageTextConsistencyEval": "ImageTextConsistencyEval",
-    "caption_quality": "CaptionQualityEval",
-    "CaptionQualityEval": "CaptionQualityEval",
-    "visual_qa": "VisualQAEval",
-    "VisualQAEval": "VisualQAEval",
-    "image_safety": "ImageSafetyEval",
-    "ImageSafetyEval": "ImageSafetyEval",
-    "cross_modal_consistency": "CrossModalConsistencyEval",
-    "CrossModalConsistencyEval": "CrossModalConsistencyEval",
 }
 
 # Mapping from requirement scanner names to actual scanner names

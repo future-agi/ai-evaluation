@@ -586,58 +586,6 @@ def _execute_single_evaluation(
         )
 
 
-# Convenience function for one-off evaluation
-
-
-def evaluate(
-    inputs: Dict[str, Any],
-    *evaluations: BaseEvaluation,
-    mode: ExecutionMode = ExecutionMode.BLOCKING,
-    auto_enrich_span: bool = True,
-) -> EvaluatorResult:
-    """
-    Run evaluations in a single call.
-
-    Convenience function for simple use cases.
-
-    Args:
-        inputs: Input data for evaluations
-        *evaluations: Evaluations to run
-        mode: Execution mode
-        auto_enrich_span: Whether to enrich OTEL spans
-
-    Returns:
-        EvaluatorResult with results or future
-
-    Example:
-        # Blocking
-        result = evaluate({"response": "..."}, ToxicityEval())
-        print(f"Score: {result.results[0].value}")
-
-        # Non-blocking
-        result = evaluate(
-            {"response": "..."},
-            ToxicityEval(),
-            mode=ExecutionMode.NON_BLOCKING,
-        )
-        batch = result.wait()
-    """
-    evaluator = FrameworkEvaluator(
-        evaluations=list(evaluations),
-        mode=mode,
-        auto_enrich_span=auto_enrich_span,
-    )
-
-    try:
-        return evaluator.run(inputs)
-    finally:
-        if mode != ExecutionMode.BLOCKING:
-            # Don't shutdown non-blocking - let the future handle it
-            pass
-        else:
-            evaluator.shutdown()
-
-
 def resilient_evaluator(
     *evaluations: BaseEvaluation,
     backend: Optional[Backend] = None,

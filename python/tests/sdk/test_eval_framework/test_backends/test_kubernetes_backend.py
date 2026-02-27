@@ -1086,7 +1086,9 @@ class TestKubernetesBackendReadJobResult:
             backend._core_api.list_namespaced_pod.return_value.items = [mock_pod]
 
             log_output = 'some debug output\n{"status": "success", "result": 42}\n'
-            backend._core_api.read_namespaced_pod_log.return_value = log_output
+            mock_resp = MagicMock()
+            mock_resp.data = log_output.encode("utf-8")
+            backend._core_api.read_namespaced_pod_log.return_value = mock_resp
 
             result = backend._read_job_result("eval-abc")
             assert result == 42
@@ -1105,7 +1107,9 @@ class TestKubernetesBackendReadJobResult:
             backend._core_api.list_namespaced_pod.return_value.items = [mock_pod]
 
             log_output = '{"status": "error", "error": "ZeroDivisionError"}\n'
-            backend._core_api.read_namespaced_pod_log.return_value = log_output
+            mock_resp = MagicMock()
+            mock_resp.data = log_output.encode("utf-8")
+            backend._core_api.read_namespaced_pod_log.return_value = mock_resp
 
             with pytest.raises(RuntimeError, match="ZeroDivisionError"):
                 backend._read_job_result("eval-abc")
@@ -1135,7 +1139,9 @@ class TestKubernetesBackendReadJobResult:
             mock_pod = MagicMock()
             mock_pod.metadata.name = "eval-abc-pod"
             backend._core_api.list_namespaced_pod.return_value.items = [mock_pod]
-            backend._core_api.read_namespaced_pod_log.return_value = ""
+            mock_resp = MagicMock()
+            mock_resp.data = b""
+            backend._core_api.read_namespaced_pod_log.return_value = mock_resp
 
             with pytest.raises(RuntimeError, match="Empty container logs"):
                 backend._read_job_result("eval-abc")
@@ -1152,7 +1158,9 @@ class TestKubernetesBackendReadJobResult:
             mock_pod = MagicMock()
             mock_pod.metadata.name = "eval-abc-pod"
             backend._core_api.list_namespaced_pod.return_value.items = [mock_pod]
-            backend._core_api.read_namespaced_pod_log.return_value = "just plain text\nno json here\n"
+            mock_resp = MagicMock()
+            mock_resp.data = b"just plain text\nno json here\n"
+            backend._core_api.read_namespaced_pod_log.return_value = mock_resp
 
             with pytest.raises(RuntimeError, match="No JSON result found"):
                 backend._read_job_result("eval-abc")

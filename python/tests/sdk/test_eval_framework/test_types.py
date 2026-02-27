@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fi.evals.framework.types import (
     ExecutionMode,
     EvalStatus,
-    EvalResult,
+    FrameworkEvalResult as EvalResult,
     BatchEvalResult,
 )
 

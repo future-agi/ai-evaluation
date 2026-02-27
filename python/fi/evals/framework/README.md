@@ -5,11 +5,11 @@ A scalable evaluation infrastructure for AI systems with support for blocking, n
 ## Quick Start
 
 ```python
-from fi.evals.framework import Evaluator, ExecutionMode
+from fi.evals import FrameworkEvaluator, ExecutionMode
 from fi.evals.framework.evals import CoherenceEval, ActionSafetyEval
 
 # Create an evaluator with multiple evaluations
-evaluator = Evaluator(
+evaluator = FrameworkEvaluator(
     evaluations=[
         CoherenceEval(),
         ActionSafetyEval(),
@@ -42,13 +42,6 @@ for r in result.results:
 
 ### Semantic Evaluations
 - `CoherenceEval` - Check text coherence
-
-### Multi-Modal Evaluations
-- `ImageTextConsistencyEval` - Image-text alignment
-- `CaptionQualityEval` - Caption quality assessment
-- `VisualQAEval` - Visual Q&A evaluation
-- `ImageSafetyEval` - Image safety checks
-- `CrossModalConsistencyEval` - Cross-modal consistency
 
 ### Agentic Evaluations
 - `ActionSafetyEval` - Safety scanning
