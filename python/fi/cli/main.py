@@ -60,7 +60,7 @@ def main_callback(
         try:
             v = get_version("ai-evaluation")
         except Exception:
-            v = "0.2.1"
+            v = "1.0.0"
         console.print(f"ai-evaluation version {v}")
         raise typer.Exit()
 
