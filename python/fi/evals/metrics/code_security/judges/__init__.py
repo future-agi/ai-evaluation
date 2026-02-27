@@ -35,7 +35,7 @@ Usage:
     result = judge.judge(code, "python")
 
     # LLM-only (accurate, semantic understanding)
-    judge = LLMJudge(model="gpt-4")
+    judge = LLMJudge(model="gemini/gemini-2.5-flash")
     result = judge.judge(code, "python")
 
     # Dual judge (best of both)

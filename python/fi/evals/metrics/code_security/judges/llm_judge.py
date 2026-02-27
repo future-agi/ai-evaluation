@@ -61,23 +61,13 @@ class LLMJudge(BaseJudge):
     """
     LLM-based security judge for semantic vulnerability detection.
 
-    Uses language models to understand code semantics and detect
+    Uses any LLM (via LiteLLM) to understand code semantics and detect
     vulnerabilities that pattern-based approaches might miss.
 
-    Features:
-    - Deep semantic understanding
-    - Context-aware analysis
-    - Detailed reasoning
-    - Suggested fixes
-    - Custom prompt support
-
     Usage:
-        # With OpenAI
-        judge = LLMJudge(model="gpt-4")
+        # Any model LiteLLM supports
+        judge = LLMJudge(model="gemini/gemini-2.5-flash")
         result = judge.judge(code, "python")
-
-        # With custom evaluator
-        judge = LLMJudge(evaluator=my_evaluator)
 
         # With context
         result = judge.judge(
@@ -91,55 +81,31 @@ class LLMJudge(BaseJudge):
 
     def __init__(
         self,
-        model: str = "gpt-4",
-        evaluator: Optional[Any] = None,
+        model: str = "gemini/gemini-2.5-flash",
         prompt_template: Optional[str] = None,
         severity_threshold: Severity = Severity.HIGH,
         min_confidence: float = 0.7,
-        timeout: float = 30.0,
         temperature: float = 0.1,
     ):
         """
         Initialize the LLM judge.
 
         Args:
-            model: Model name/ID for the LLM
-            evaluator: Optional custom evaluator instance
+            model: Any model string LiteLLM supports (e.g. "gemini/gemini-2.5-flash",
+                   "gpt-4o", "anthropic/claude-sonnet-4-6")
             prompt_template: Custom prompt template (use {code}, {language}, {context_section})
             severity_threshold: Minimum severity to flag as insecure
             min_confidence: Minimum confidence to include findings
-            timeout: Request timeout in seconds
             temperature: LLM temperature (lower = more deterministic)
         """
         super().__init__(severity_threshold, min_confidence)
 
         self.model = model
-        self.evaluator = evaluator
         self.prompt_template = prompt_template or DEFAULT_SECURITY_PROMPT
-        self.timeout = timeout
         self.temperature = temperature
 
-        # Lazy-loaded client
-        self._client = None
-
-    def _get_client(self):
-        """Get or create the LLM client."""
-        if self._client is not None:
-            return self._client
-
-        if self.evaluator is not None:
-            return self.evaluator
-
-        # Try to import and create OpenAI client
-        try:
-            from openai import OpenAI
-            self._client = OpenAI()
-            return self._client
-        except ImportError:
-            raise ImportError(
-                "OpenAI package not installed. "
-                "Install with: pip install openai"
-            )
+        # Lazy-loaded provider
+        self._provider = None
 
     def judge(
         self,
@@ -198,43 +164,25 @@ class LLMJudge(BaseJudge):
         return result
 
     def _call_llm(self, prompt: str) -> str:
-        """Call the LLM and return the response text."""
-        client = self._get_client()
+        """Call the LLM via LiteLLM and return the response text."""
+        if self._provider is None:
+            from fi.evals.llm import LiteLLMProvider
+            self._provider = LiteLLMProvider()
 
-        # Handle different client types
-        if hasattr(client, "chat") and hasattr(client.chat, "completions"):
-            # OpenAI-style client
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a security expert. Analyze code for vulnerabilities and respond in JSON format only.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=self.temperature,
-                timeout=self.timeout,
-            )
-            return response.choices[0].message.content
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a security expert. Analyze code for vulnerabilities and respond in JSON format only.",
+            },
+            {"role": "user", "content": prompt},
+        ]
 
-        elif hasattr(client, "generate"):
-            # Generic generate method
-            return client.generate(prompt)
-
-        elif hasattr(client, "complete"):
-            # Completion method
-            return client.complete(prompt)
-
-        elif callable(client):
-            # Callable evaluator
-            return client(prompt)
-
-        else:
-            raise ValueError(
-                f"Unsupported client type: {type(client)}. "
-                "Must have chat.completions.create, generate, complete, or be callable."
-            )
+        return self._provider.get_completion(
+            model=self.model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=self.temperature,
+        )
 
     def _parse_response(
         self,
@@ -306,22 +254,6 @@ class LLMJudge(BaseJudge):
             "INFO": Severity.INFO,
         }
         return severity_map.get(severity_str.upper(), Severity.MEDIUM)
-
-    @classmethod
-    def with_gpt4(cls, **kwargs) -> "LLMJudge":
-        """Factory for GPT-4 judge."""
-        return cls(model="gpt-4", **kwargs)
-
-    @classmethod
-    def with_gpt35(cls, **kwargs) -> "LLMJudge":
-        """Factory for GPT-3.5 judge (faster, cheaper)."""
-        return cls(model="gpt-3.5-turbo", **kwargs)
-
-    @classmethod
-    def with_claude(cls, **kwargs) -> "LLMJudge":
-        """Factory for Claude judge."""
-        return cls(model="claude-3-sonnet-20240229", **kwargs)
-
 
 class MockLLMJudge(LLMJudge):
     """

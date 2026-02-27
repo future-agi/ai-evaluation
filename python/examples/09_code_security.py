@@ -29,10 +29,9 @@ from fi.evals.metrics.code_security import (
     JointSecurityMetrics,
     # Judges
     PatternJudge,
+    LLMJudge,
     DualJudge,
-    MockLLMJudge,
-    JudgeFinding,
-    CodeLocation,
+    ConsensusMode,
 )
 
 
@@ -230,49 +229,50 @@ print(f"  New vulns introduced: {repair_result.introduced_new_vulnerabilities}")
 
 heading("Part 4: Dual-Judge System (Pattern + LLM)")
 
-# Pattern judge (fast, deterministic)
-pattern_judge = PatternJudge()
-
-# Mock LLM judge (simulates what an LLM would find)
-mock_llm = MockLLMJudge(
-    mock_findings=[
-        JudgeFinding(
-            cwe_id="CWE-89",
-            vulnerability_type="sql_injection",
-            description="SQL injection via string interpolation in get_users()",
-            severity=Severity.CRITICAL,
-            confidence=0.95,
-            location=CodeLocation(line=2),
-            judge_type="llm",
-            reasoning="The f-string directly embeds user input into SQL query",
-        ),
-    ],
-    mock_is_secure=False,
-)
-
-# Dual judge combines both
-dual = DualJudge(pattern_judge=pattern_judge, llm_judge=mock_llm)
-
 test_code = """\
 def get_users(name):
     query = f"SELECT * FROM users WHERE name = '{name}'"
     return db.execute(query)
 """
 
-# Pattern judge alone
+# Pattern judge alone (fast, deterministic)
+pattern_judge = PatternJudge()
 p_result = pattern_judge.judge(test_code, "python")
 print(f"  Pattern Judge: score={p_result.security_score:.2f}, {len(p_result.findings)} findings, {p_result.execution_time_ms:.1f}ms")
-
-# Mock LLM judge alone
-l_result = mock_llm.judge(test_code, "python")
-print(f"  LLM Judge:     score={l_result.security_score:.2f}, {len(l_result.findings)} findings")
-
-# Dual judge (consensus)
-d_result = dual.judge(test_code, "python")
-print(f"  Dual Judge:    score={d_result.security_score:.2f}, {len(d_result.findings)} findings, consensus={d_result.consensus_mode}")
-for f in d_result.findings:
+for f in p_result.findings:
     sf = f.to_security_finding()
     print(f"    {sf.cwe_id} [{sf.severity.value}] category={sf.category.value}: {sf.description[:55]}")
+
+# LLM judge (semantic, via LiteLLM — needs GOOGLE_API_KEY or similar)
+google_key = os.environ.get("GOOGLE_API_KEY")
+if google_key:
+    print(f"\n  LLM Judge: gemini/gemini-2.5-flash via LiteLLM")
+    print("  " + "-" * 50)
+    llm_judge = LLMJudge(model="gemini/gemini-2.5-flash")
+    l_result = llm_judge.judge(test_code, "python")
+    print(f"  LLM Judge:  score={l_result.security_score:.2f}, {len(l_result.findings)} findings, {l_result.execution_time_ms:.0f}ms")
+    for f in l_result.findings:
+        sf = f.to_security_finding()
+        print(f"    {sf.cwe_id} [{sf.severity.value}] category={sf.category.value}: {sf.description[:55]}")
+        if f.suggested_fix:
+            print(f"      fix: {f.suggested_fix[:65]}")
+
+    # Dual judge (pattern + LLM consensus)
+    print(f"\n  Dual Judge: Pattern + LLM with WEIGHTED consensus")
+    print("  " + "-" * 50)
+    dual = DualJudge(
+        pattern_judge=pattern_judge,
+        llm_judge=llm_judge,
+        consensus_mode=ConsensusMode.WEIGHTED,
+    )
+    d_result = dual.judge(test_code, "python")
+    print(f"  Dual Judge: score={d_result.security_score:.2f}, {len(d_result.findings)} findings, {d_result.execution_time_ms:.0f}ms")
+    for f in d_result.findings:
+        sf = f.to_security_finding()
+        print(f"    {sf.cwe_id} [{sf.severity.value}] {sf.description[:60]}")
+else:
+    print("\n  [SKIPPED] LLM Judge — set GOOGLE_API_KEY for Gemini")
+    print("  Pattern-only mode works without any API keys.")
 
 
 # =========================================================================
