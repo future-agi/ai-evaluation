@@ -55,6 +55,7 @@ from .types import (
     Severity,
     SecurityFinding,
     FunctionalTestCase,
+    SEVERITY_WEIGHTS,
 )
 from .detectors import scan_code
 
@@ -232,9 +233,9 @@ class JointSecurityMetrics:
             is_functional = func_result.passed
             func_score = func_result.pass_rate
         else:
-            # No functional tests, assume functional
+            # No functional tests — can't measure correctness, return sec-only
             is_functional = True
-            func_score = 1.0
+            func_score = 1.0  # Not tested; func-sec@k degrades to sec@k
 
         # Joint score
         func_sec_score = 1.0 if (is_functional and is_secure) else 0.0
@@ -340,16 +341,8 @@ class JointSecurityMetrics:
         if not findings:
             return 1.0
 
-        severity_weights = {
-            Severity.CRITICAL: 1.0,
-            Severity.HIGH: 0.7,
-            Severity.MEDIUM: 0.4,
-            Severity.LOW: 0.2,
-            Severity.INFO: 0.1,
-        }
-
         total_penalty = sum(
-            severity_weights.get(f.severity, 0.1) * f.confidence
+            SEVERITY_WEIGHTS.get(f.severity, 0.1) * f.confidence
             for f in findings
         )
 
@@ -385,13 +378,14 @@ class JointSecurityMetrics:
             # Static check only - assume functional if code looks complete
             return self._static_functional_check(code, test_cases)
 
-        # TODO: Implement sandboxed code execution
-        # This would require Docker or subprocess isolation
-        return FunctionalTestResult(
-            passed=True,
-            total_tests=len(test_cases),
-            passed_tests=len(test_cases),
+        # Sandboxed execution not yet implemented
+        import warnings
+        warnings.warn(
+            "execute_code=True requires sandboxed execution (not yet implemented). "
+            "Falling back to static functional check.",
+            stacklevel=2,
         )
+        return self._static_functional_check(code, test_cases)
 
     def _static_functional_check(
         self,

@@ -15,6 +15,8 @@ from ..types import (
     VulnerabilityCategory,
     SecurityFinding,
     CodeLocation,
+    CWE_CATEGORIES,
+    SEVERITY_WEIGHTS,
 )
 
 
@@ -72,7 +74,7 @@ class JudgeFinding(BaseModel):
         return SecurityFinding(
             cwe_id=self.cwe_id,
             vulnerability_type=self.vulnerability_type,
-            category=VulnerabilityCategory.INPUT_VALIDATION,  # Default
+            category=CWE_CATEGORIES.get(self.cwe_id, VulnerabilityCategory.INPUT_VALIDATION),
             severity=self.severity,
             confidence=self.confidence,
             description=self.description,
@@ -217,16 +219,8 @@ class BaseJudge(ABC):
         if not findings:
             return 1.0
 
-        severity_weights = {
-            Severity.CRITICAL: 1.0,
-            Severity.HIGH: 0.7,
-            Severity.MEDIUM: 0.4,
-            Severity.LOW: 0.2,
-            Severity.INFO: 0.1,
-        }
-
         total_penalty = sum(
-            severity_weights.get(f.severity, 0.1) * f.confidence
+            SEVERITY_WEIGHTS.get(f.severity, 0.1) * f.confidence
             for f in findings
             if f.confidence >= self.min_confidence
         )

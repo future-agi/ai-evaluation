@@ -12,6 +12,7 @@ from ..types import (
     Severity,
     SecurityFinding,
     EvaluationMode,
+    SEVERITY_WEIGHTS,
 )
 
 
@@ -252,19 +253,10 @@ class BaseModeEvaluator(ABC):
         if not findings:
             return 1.0
 
-        # Weight by severity
-        severity_weights = {
-            Severity.CRITICAL: 1.0,
-            Severity.HIGH: 0.7,
-            Severity.MEDIUM: 0.4,
-            Severity.LOW: 0.2,
-            Severity.INFO: 0.1,
-        }
-
         total_penalty = 0.0
         for finding in findings:
             if finding.confidence >= self.min_confidence:
-                penalty = severity_weights.get(finding.severity, 0.1) * finding.confidence
+                penalty = SEVERITY_WEIGHTS.get(finding.severity, 0.1) * finding.confidence
                 total_penalty += penalty
 
         # Cap at 1.0 penalty, then invert

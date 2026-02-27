@@ -357,7 +357,7 @@ class MockLLMJudge(LLMJudge):
                 "severity": f.severity.value,
                 "confidence": f.confidence,
                 "description": f.description,
-                "line_start": f.location.line_start if f.location else None,
+                "line_start": f.location.line if f.location else None,
                 "suggested_fix": f.suggested_fix,
                 "reasoning": f.reasoning,
             })

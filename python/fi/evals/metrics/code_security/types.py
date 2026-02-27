@@ -281,6 +281,18 @@ class CodeSecurityOutput(BaseModel):
         default_factory=list,
         description="List of vulnerability findings"
     )
+    total_findings: int = Field(
+        default=0,
+        description="Total number of findings"
+    )
+    critical_count: int = Field(
+        default=0,
+        description="Number of critical-severity findings"
+    )
+    high_count: int = Field(
+        default=0,
+        description="Number of high-severity findings"
+    )
 
     # Breakdowns
     severity_counts: Dict[str, int] = Field(
