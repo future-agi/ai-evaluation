@@ -452,7 +452,12 @@ class KubernetesBackend(Backend):
             log_kwargs["tail_lines"] = self.config.log_tail_lines
 
         try:
-            logs = self._core_api.read_namespaced_pod_log(**log_kwargs)
+            # _preload_content=False prevents the K8s client from
+            # auto-deserializing JSON log lines into Python objects
+            resp = self._core_api.read_namespaced_pod_log(
+                **log_kwargs, _preload_content=False
+            )
+            logs = resp.data.decode("utf-8")
         except ApiException as e:
             raise RuntimeError(f"Failed to read logs for pod {pod_name}: {e}")
 
