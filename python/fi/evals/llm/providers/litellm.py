@@ -41,7 +41,7 @@ class LiteLLMProvider(LLMProvider):
     def get_completion(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         response_format: Optional[Type[BaseModel] | Dict[str, str]] = None,
         **kwargs: Any,
     ):
