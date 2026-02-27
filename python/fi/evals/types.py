@@ -1,7 +1,10 @@
+import warnings
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, RootModel, create_model
+
+warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an attribute in parent "BaseModel"')
 
 
 class OutputType(Enum):

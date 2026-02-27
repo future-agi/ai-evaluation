@@ -1,0 +1,47 @@
+# Ray backend infrastructure for fi-evals.
+#
+# Usage:
+#   cd python/docker/ray && docker compose up -d
+#
+# This starts:
+#   - Ray head node (dashboard on port 8265, client on port 10001)
+#   - Ray worker node
+#
+# Then in your Python code:
+#   from fi.evals.framework.backends import RayBackend, RayConfig
+#   backend = RayBackend(RayConfig(address="ray://localhost:10001"))
+#
+# NOTE: Ray requires matching Ray version AND Python minor version between
+# client and cluster. Update the image tag below to match your local
+# Ray + Python versions (e.g. 2.54.0-py313 for Ray 2.54.0 + Python 3.13).
+
+services:
+  ray-head:
+    image: rayproject/ray:2.54.0-py313
+    ports:
+      - "8265:8265"   # Dashboard
+      - "10001:10001" # Client
+    command: >
+      ray start --head
+      --dashboard-host=0.0.0.0
+      --port=6379
+      --ray-client-server-port=10001
+      --block
+    healthcheck:
+      test: ["CMD", "ray", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    shm_size: "2g"
+
+  ray-worker:
+    image: rayproject/ray:2.54.0-py313
+    depends_on:
+      ray-head:
+        condition: service_healthy
+    command: >
+      ray start
+      --address=ray-head:6379
+      --block
+    shm_size: "2g"

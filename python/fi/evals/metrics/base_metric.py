@@ -28,6 +28,9 @@ class BaseMetric(Generic[BaseMetricInputType], ABC):
     required to implement the logic for a single computation.
     """
 
+    supports_llm_judge: bool = False
+    judge_description: str = ""
+
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         self.config = config or {}
 

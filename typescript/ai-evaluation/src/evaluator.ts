@@ -13,7 +13,15 @@ import {
 import { AxiosResponse } from 'axios';
 
 import { EvalTemplate } from './templates';
-import { BatchRunResult, EvalResult, EvalResultMetric } from './types';
+import {
+    BatchRunResult,
+    EvalResult,
+    EvalResultMetric,
+    EvaluatorConfig,
+    EvaluateOptions,
+    PipelineEvalData,
+    PipelineResult
+} from './types';
 
 
 /**
@@ -43,11 +51,17 @@ export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
                             }
                         }
 
+                        // Aligned with Python SDK structure
                         evalResults.push({
-                            data: evaluation?.data,
-                            failure: evaluation?.failure,
+                            name: evaluation?.name ?? "",
+                            output: evaluation?.output ?? null,
                             reason: evaluation?.reason ?? "",
                             runtime: evaluation?.runtime ?? 0,
+                            output_type: evaluation?.outputType ?? "",
+                            eval_id: evaluation?.evalId ?? "",
+                            // Legacy fields for backward compatibility
+                            data: evaluation?.data,
+                            failure: evaluation?.failure,
                             metadata: newMetadata,
                             metrics: Array.isArray(evaluation?.metrics)
                                 ? evaluation.metrics.map((m: any): EvalResultMetric => ({
@@ -106,47 +120,63 @@ export class EvalInfoResponseHandler extends ResponseHandler<Record<string, any>
 
 /**
  * Client for evaluating LLM test cases
+ * Aligned with Python SDK API
  */
 export class Evaluator extends APIKeyAuth {
     private readonly maxWorkers: number;
     private evalInfoCache = new Map<string, Record<string, any>>();
 
-    constructor(
-        options: {
-            fiApiKey?: string;
-            fiSecretKey?: string;
-            fiBaseUrl?: string;
-            timeout?: number;
-            maxQueue?: number;
-            maxWorkers?: number;
-        } = {}
-    ) {
+    // Platform credentials (Langfuse)
+    private readonly langfuseSecretKey?: string;
+    private readonly langfusePublicKey?: string;
+    private readonly langfuseHost?: string;
+
+    constructor(options: EvaluatorConfig = {}) {
         const fiApiKey = process.env.FI_API_KEY || options.fiApiKey;
         const fiSecretKey = process.env.FI_SECRET_KEY || options.fiSecretKey;
         const fiBaseUrl = process.env.FI_BASE_URL || options.fiBaseUrl;
 
         super({ ...options, fiApiKey, fiSecretKey, fiBaseUrl });
         this.maxWorkers = options.maxWorkers || 8;
+
+        // Platform credentials
+        this.langfuseSecretKey = options.langfuseSecretKey || process.env.LANGFUSE_SECRET_KEY;
+        this.langfusePublicKey = options.langfusePublicKey || process.env.LANGFUSE_PUBLIC_KEY;
+        this.langfuseHost = options.langfuseHost || process.env.LANGFUSE_HOST;
     }
 
     public async evaluate(
         evalTemplates: string | EvalTemplate | (string | EvalTemplate)[],
         inputs: Record<string, string | string[]>,
-        options: {
-            timeout?: number;
-            modelName: string; // mandatory
-            customEvalName?: string;
-            traceEval?: boolean;
-        }
+        options: EvaluateOptions = {}
     ): Promise<BatchRunResult> {
 
-        const { timeout, modelName, customEvalName } = options;
+        const {
+            timeout,
+            modelName,
+            customEvalName,
+            traceEval: initialTraceEval = false,
+            platform,
+            isAsync = false,
+            errorLocalizer = false
+        } = options;
 
-        if (!modelName || modelName.trim() === "") {
-            throw new TypeError("'modelName' is a required option and must be a non-empty string.");
+        // Handle platform configuration (e.g., Langfuse)
+        if (platform) {
+            if (typeof evalTemplates === 'string' && typeof inputs === 'object' && customEvalName) {
+                return this._configureEvaluations(
+                    evalTemplates,
+                    inputs,
+                    platform,
+                    customEvalName,
+                    modelName
+                );
+            } else {
+                throw new Error("Invalid arguments for platform configuration");
+            }
         }
 
-        let traceEval = options.traceEval || false;
+        let traceEval = initialTraceEval;
         let spanId: string | undefined = undefined;
 
         const extractName = (t: string | EvalTemplate): string | undefined => {
@@ -258,6 +288,8 @@ export class Evaluator extends APIKeyAuth {
             span_id: spanId,
             custom_eval_name: customEvalName,
             trace_eval: traceEval,
+            is_async: isAsync,
+            error_localizer: errorLocalizer,
         };
 
         // Convert timeout (seconds) to milliseconds for axios. Use a higher default (200s) if not provided.
@@ -311,6 +343,150 @@ export class Evaluator extends APIKeyAuth {
         const response = await this.request(config, EvalInfoResponseHandler) as Record<string, any>[];
         return response;
     }
+
+    /**
+     * Get the result of an evaluation by its ID
+     * @param evalId - The evaluation ID
+     * @returns The evaluation result
+     */
+    public async getEvalResult(evalId: string): Promise<Record<string, any>> {
+        const config: RequestConfig = {
+            method: HttpMethod.GET,
+            url: `${this.baseUrl}/${Routes.get_eval_result}`,
+            params: { eval_id: evalId },
+            timeout: this.defaultTimeout * 1000,
+        };
+        const response = await this.request(config);
+        return (response as any).data;
+    }
+
+    /**
+     * Evaluate a pipeline
+     * @param projectName - The project name
+     * @param version - The version string
+     * @param evalData - The evaluation data
+     * @returns The evaluation response
+     */
+    public async evaluatePipeline(
+        projectName: string,
+        version: string,
+        evalData: PipelineEvalData[]
+    ): Promise<Record<string, any>> {
+        const apiPayload = {
+            project_name: projectName,
+            version: version,
+            eval_data: evalData
+        };
+
+        const config: RequestConfig = {
+            method: HttpMethod.POST,
+            url: `${this.baseUrl}/${Routes.evaluate_pipeline}`,
+            json: apiPayload,
+            timeout: this.defaultTimeout * 1000,
+        };
+
+        const response = await this.request(config);
+        return (response as any).data;
+    }
+
+    /**
+     * Get pipeline evaluation results
+     * @param projectName - The project name
+     * @param versions - List of versions to get results for
+     * @returns The pipeline results
+     */
+    public async getPipelineResults(
+        projectName: string,
+        versions: string[]
+    ): Promise<Record<string, any>> {
+        if (!Array.isArray(versions) || !versions.every(v => typeof v === 'string')) {
+            throw new TypeError("versions must be an array of strings");
+        }
+
+        const config: RequestConfig = {
+            method: HttpMethod.GET,
+            url: `${this.baseUrl}/${Routes.evaluate_pipeline}`,
+            params: {
+                project_name: projectName,
+                versions: versions.join(',')
+            },
+            timeout: this.defaultTimeout * 1000,
+        };
+
+        const response = await this.request(config);
+        return (response as any).data;
+    }
+
+    /**
+     * Configure evaluations on a specified platform (e.g., Langfuse)
+     * @private
+     */
+    private async _configureEvaluations(
+        evalTemplates: string,
+        inputs: Record<string, any>,
+        platform: string,
+        customEvalName: string,
+        modelName?: string
+    ): Promise<BatchRunResult> {
+        const kwargs: Record<string, any> = {};
+
+        // Add platform credentials
+        if (platform === "langfuse") {
+            kwargs.langfuse_secret_key = this.langfuseSecretKey;
+            kwargs.langfuse_public_key = this.langfusePublicKey;
+            kwargs.langfuse_host = this.langfuseHost;
+        }
+
+        // Try to get span context from OpenTelemetry
+        try {
+            const otel = await import('@opentelemetry/api');
+            const currentSpan = otel.trace.getSpan(otel.context.active());
+
+            if (currentSpan && currentSpan.isRecording()) {
+                const spanContext = currentSpan.spanContext();
+                if (otel.isSpanContextValid(spanContext)) {
+                    kwargs.span_id = spanContext.spanId;
+                    kwargs.trace_id = spanContext.traceId;
+                }
+            }
+        } catch {
+            // OpenTelemetry not available
+        }
+
+        if (!kwargs.span_id || !kwargs.trace_id) {
+            console.warn(
+                "span_id and/or trace_id not found. " +
+                "Please run this function within a span context."
+            );
+            return { eval_results: [] } as BatchRunResult;
+        }
+
+        const apiPayload = {
+            eval_config: {
+                eval_templates: evalTemplates,
+                inputs: inputs,
+                model_name: modelName
+            },
+            custom_eval_name: customEvalName,
+            platform: platform,
+            ...kwargs
+        };
+
+        const config: RequestConfig = {
+            method: HttpMethod.POST,
+            url: `${this.baseUrl}/${Routes.configure_evaluations}`,
+            json: apiPayload,
+            timeout: this.defaultTimeout * 1000,
+        };
+
+        try {
+            const response = await this.request(config);
+            return (response as any).data;
+        } catch (error) {
+            console.warn(`Error configuring evaluations: ${error}`);
+            return { eval_results: [] } as BatchRunResult;
+        }
+    }
 }
 
 /**
@@ -323,31 +499,67 @@ export class Evaluator extends APIKeyAuth {
 export const evaluate = (
     evalTemplates: string | EvalTemplate | (string | EvalTemplate)[],
     inputs: Record<string, string | string[]>,
-    options: {
-        fiApiKey?: string,
-        fiSecretKey?: string,
-        fiBaseUrl?: string,
-        timeout?: number;
-        modelName: string;
-        customEvalName?: string;
-        traceEval?: boolean;
-    }
+    options: EvaluatorConfig & EvaluateOptions = {}
 ): Promise<BatchRunResult> => {
-    const { fiApiKey, fiSecretKey, fiBaseUrl, ...restOptions } = options;
-    return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).evaluate(evalTemplates, inputs, restOptions);
+    const { fiApiKey, fiSecretKey, fiBaseUrl, ...evalOptions } = options;
+    return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).evaluate(evalTemplates, inputs, evalOptions);
 };
 
 /**
  * Convenience function to fetch information about all available evaluation templates.
  * @returns A list of evaluation template information dictionaries.
  */
-export const list_evaluations = (options: {
-    fiApiKey?: string,
-    fiSecretKey?: string,
-    fiBaseUrl?: string,
-} = {}): Promise<Record<string, any>[]> => {
+export const list_evaluations = (options: EvaluatorConfig = {}): Promise<Record<string, any>[]> => {
     const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
     return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).list_evaluations();
+};
+
+/**
+ * Convenience function to get an evaluation result by ID.
+ * @param evalId - The evaluation ID.
+ * @param options - Optional Evaluator configuration.
+ * @returns The evaluation result.
+ */
+export const get_eval_result = (
+    evalId: string,
+    options: EvaluatorConfig = {}
+): Promise<Record<string, any>> => {
+    const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
+    return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).getEvalResult(evalId);
+};
+
+/**
+ * Convenience function to evaluate a pipeline.
+ * @param projectName - The project name.
+ * @param version - The version string.
+ * @param evalData - The evaluation data.
+ * @param options - Optional Evaluator configuration.
+ * @returns The evaluation response.
+ */
+export const evaluate_pipeline = (
+    projectName: string,
+    version: string,
+    evalData: PipelineEvalData[],
+    options: EvaluatorConfig = {}
+): Promise<Record<string, any>> => {
+    const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
+    return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).evaluatePipeline(projectName, version, evalData);
+};
+
+/**
+ * Convenience function to get pipeline evaluation results.
+ * @param projectName - The project name.
+ * @param versions - List of versions.
+ * @param options - Optional Evaluator configuration.
+ * @returns The pipeline results.
+ */
+export const get_pipeline_results = (
+    projectName: string,
+    versions: string[],
+    options: EvaluatorConfig = {}
+): Promise<Record<string, any>> => {
+    const { fiApiKey, fiSecretKey, fiBaseUrl } = options;
+    return new Evaluator({ fiApiKey, fiSecretKey, fiBaseUrl }).getPipelineResults(projectName, versions);
 };
 
 

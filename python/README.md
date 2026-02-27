@@ -176,3 +176,187 @@ Future AGI provides a wide range of evaluation templates to choose from. You can
 - Click on the **Create Evaluation** button.
 
 ---
+
+## Local Execution
+
+The SDK supports running heuristic metrics locally without API calls, enabling offline evaluation and faster feedback loops during development.
+
+### Execution Modes
+
+- **LOCAL**: Run all evaluations locally using heuristic metrics only (no API calls)
+- **CLOUD**: Run all evaluations via the cloud API (default behavior)
+- **HYBRID**: Automatically route each evaluation to local or cloud based on metric type
+
+### Available Local Metrics
+
+The following metrics can run locally without API access:
+
+| Category | Metrics |
+|----------|---------|
+| **String** | `regex`, `contains`, `contains_all`, `contains_any`, `contains_none`, `one_line`, `equals`, `starts_with`, `ends_with`, `length_less_than`, `length_greater_than`, `length_between` |
+| **JSON** | `contains_json`, `is_json`, `json_schema` |
+| **Similarity** | `bleu_score`, `rouge_score`, `recall_score`, `levenshtein_similarity`, `numeric_similarity`, `embedding_similarity`, `semantic_list_contains` |
+
+### Using the Local Evaluator
+
+```python
+from fi.evals.local import LocalEvaluator, ExecutionMode
+
+# Create a local evaluator
+evaluator = LocalEvaluator()
+
+# Run a metric locally
+result = evaluator.evaluate(
+    metric_name="contains",
+    inputs=[{"response": "Hello world"}],
+    config={"keyword": "world"}
+)
+
+print(result.results.eval_results[0].output)  # 1.0
+
+# Check if a metric can run locally
+evaluator.can_run_locally("contains")      # True
+evaluator.can_run_locally("groundedness")  # False (requires LLM)
+```
+
+### Using Hybrid Mode
+
+Hybrid mode automatically routes metrics to local or cloud execution based on their capabilities:
+
+```python
+from fi.evals.local import HybridEvaluator, ExecutionMode
+
+hybrid = HybridEvaluator()
+
+# Partition evaluations by execution mode
+evaluations = [
+    {"metric_name": "contains", "inputs": [{"response": "test"}]},       # → LOCAL
+    {"metric_name": "is_json", "inputs": [{"response": "{}"}]},          # → LOCAL
+    {"metric_name": "groundedness", "inputs": [{"response": "test"}]},   # → CLOUD
+]
+
+partitions = hybrid.partition_evaluations(evaluations)
+# partitions[ExecutionMode.LOCAL] contains local-capable metrics
+# partitions[ExecutionMode.CLOUD] contains LLM-based metrics
+
+# Run local partition without API calls
+local_results = hybrid.evaluate_local_partition(partitions[ExecutionMode.LOCAL])
+```
+
+### Batch Evaluation
+
+Run multiple metrics in a single call:
+
+```python
+result = evaluator.evaluate_batch([
+    {
+        "metric_name": "contains",
+        "inputs": [{"response": "Hello world"}],
+        "config": {"keyword": "world"},
+    },
+    {
+        "metric_name": "is_json",
+        "inputs": [{"response": '{"key": "value"}'}],
+    },
+    {
+        "metric_name": "length_between",
+        "inputs": [{"response": "medium length text"}],
+        "config": {"min_length": 5, "max_length": 50},
+    },
+])
+```
+
+### Local LLM Support
+
+For air-gapped environments or faster iteration, you can run LLM-based evaluations locally using Ollama:
+
+```python
+from fi.evals.local import OllamaLLM, HybridEvaluator
+
+# Initialize local LLM (requires Ollama running: `ollama serve`)
+llm = OllamaLLM()  # Uses llama3.2 by default
+
+# Check if Ollama is available
+if llm.is_available():
+    # Use LLM as judge
+    result = llm.judge(
+        query="What is the capital of France?",
+        response="The capital of France is Paris.",
+        criteria="Evaluate if the response correctly answers the question."
+    )
+    print(f"Score: {result['score']}, Passed: {result['passed']}")
+
+# Use with HybridEvaluator for automatic routing
+hybrid = HybridEvaluator(local_llm=llm, prefer_local=True)
+
+# LLM-based metrics will now run locally
+result = hybrid.evaluate(
+    template="groundedness",
+    inputs=[{"query": "What is AI?", "response": "AI is artificial intelligence."}]
+)
+```
+
+**CLI Usage:**
+
+```bash
+# Run with local LLM
+fi run --mode local --local-llm ollama/llama3.2
+
+# Run in hybrid mode (auto-route local/cloud)
+fi run --mode hybrid --local-llm ollama/mistral
+
+# Run completely offline (no cloud API calls)
+fi run --offline --local-llm ollama/llama3.2
+```
+
+**Supported Local LLM Backends:**
+- `ollama/llama3.2` - Llama 3.2 (default)
+- `ollama/mistral` - Mistral
+- `ollama/phi3` - Phi-3
+- Any model available in your local Ollama installation
+
+---
+
+## Development & Testing
+
+### Running Unit Tests
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run unit tests
+pytest tests/unit/ -v
+```
+
+### Running Integration Tests
+
+Integration tests verify the SDK against a running backend. See the [SDK Testing Guide](../core-backend/docs/SDK_TESTING.md) in the `core-backend` repository for detailed instructions.
+
+**Quick Start:**
+
+```bash
+# From core-backend directory
+cd /path/to/core-backend
+
+# One-time setup
+bin/sdk-test setup
+
+# Terminal 1: Start backend
+bin/sdk-test backend
+
+# Terminal 2: Run tests
+bin/sdk-test test
+```
+
+**Manual test run:**
+
+```bash
+export FI_API_KEY="test_api_key_12345"
+export FI_SECRET_KEY="test_secret_key_67890"
+export FI_BASE_URL="http://localhost:8001"
+
+pytest tests/integration/ -v -m integration --run-model-serving
+```
+
+---
