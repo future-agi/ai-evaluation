@@ -261,7 +261,11 @@ class AutoEvalPipeline:
             if e.enabled and not self._is_core_metric(e.name)
         ]
 
-    def _run_core_metrics(self, inputs: Dict[str, Any]) -> List[Any]:
+    def _run_core_metrics(
+        self,
+        inputs: Dict[str, Any],
+        feedback_store: Optional[Any] = None,
+    ) -> List[Any]:
         """Run core metrics via evaluate() API and return EvalResults."""
         from fi.evals import evaluate as core_evaluate
 
@@ -276,6 +280,7 @@ class AutoEvalPipeline:
                     eval_config.name,
                     model=eval_config.model,
                     augment=eval_config.augment,
+                    feedback_store=feedback_store,
                     **inputs,
                 )
                 results.append(result)
@@ -359,6 +364,7 @@ class AutoEvalPipeline:
         self,
         inputs: Dict[str, Any],
         scan_content: Optional[str] = None,
+        feedback_store: Optional[Any] = None,
     ) -> AutoEvalResult:
         """
         Run the full evaluation pipeline.
@@ -406,7 +412,7 @@ class AutoEvalPipeline:
         # Run evaluations if not blocked
         if not blocked_by_scanner:
             # Core metrics via evaluate() API
-            metric_results = self._run_core_metrics(inputs)
+            metric_results = self._run_core_metrics(inputs, feedback_store=feedback_store)
 
             # Framework class evals via Evaluator
             if self._evaluator:

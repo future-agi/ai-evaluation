@@ -51,6 +51,7 @@ def evaluate(
     model: Optional[str] = None,
     augment: Optional[bool] = None,
     config: Optional[Dict[str, Any]] = None,
+    feedback_store: Optional[Any] = None,
     # Turing credentials (optional overrides)
     fi_api_key: Optional[str] = None,
     fi_secret_key: Optional[str] = None,
@@ -74,6 +75,10 @@ def evaluate(
                  refinement. Requires model= and a metric that supports
                  LLM augmentation (supports_llm_judge = True).
         config: Optional metric/judge config dict.
+        feedback_store: Optional FeedbackStore for retrieving few-shot
+                       examples from developer feedback. When provided with
+                       augment=True, similar past feedback is injected into
+                       the LLM judge prompt.
         fi_api_key: Override FI_API_KEY for Turing engine.
         fi_secret_key: Override FI_SECRET_KEY for Turing engine.
         fi_base_url: Override FI_BASE_URL for Turing engine.
@@ -93,6 +98,7 @@ def evaluate(
                 model=model,
                 augment=augment,
                 config=config,
+                feedback_store=feedback_store,
                 fi_api_key=fi_api_key,
                 fi_secret_key=fi_secret_key,
                 fi_base_url=fi_base_url,
@@ -142,6 +148,7 @@ def evaluate(
             inputs=inputs,
             model=model,
             resolved_engine=resolved_engine,
+            feedback_store=feedback_store,
         )
 
     return result
@@ -221,6 +228,7 @@ def _augment_with_llm(
     inputs: Dict[str, Any],
     model: Optional[str],
     resolved_engine: str,
+    feedback_store: Optional[Any] = None,
 ) -> EvalResult:
     """Augment a local heuristic result with LLM judgment.
 
@@ -262,10 +270,27 @@ def _augment_with_llm(
     from .judge_prompt import build_judge_prompt
     judge_prompt = build_judge_prompt(effective_name, description, inputs, result)
 
+    # Retrieve feedback-based few-shot examples if available
+    llm_config = None
+    try:
+        from ..feedback.hooks import retrieve_feedback_config
+        llm_config = retrieve_feedback_config(
+            metric_name=effective_name,
+            inputs=inputs,
+            store=feedback_store,
+        )
+    except ImportError:
+        pass  # feedback module not installed / not configured
+
     llm_eng = LLMEngine()
     try:
-        augmented = llm_eng.run(effective_name, inputs, model=model, prompt=judge_prompt)
+        augmented = llm_eng.run(
+            effective_name, inputs,
+            model=model, prompt=judge_prompt, config=llm_config,
+        )
         augmented.metadata["engine"] = "local+llm"
+        if llm_config and llm_config.get("few_shot_examples"):
+            augmented.metadata["feedback_examples_used"] = len(llm_config["few_shot_examples"])
         return augmented
     except Exception as exc:
         warnings.warn(
