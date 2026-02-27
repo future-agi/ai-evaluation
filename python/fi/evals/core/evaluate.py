@@ -52,6 +52,7 @@ def evaluate(
     augment: Optional[bool] = None,
     config: Optional[Dict[str, Any]] = None,
     feedback_store: Optional[Any] = None,
+    generate_prompt: bool = False,
     # Turing credentials (optional overrides)
     fi_api_key: Optional[str] = None,
     fi_secret_key: Optional[str] = None,
@@ -79,6 +80,9 @@ def evaluate(
                        examples from developer feedback. When provided with
                        augment=True, similar past feedback is injected into
                        the LLM judge prompt.
+        generate_prompt: When True, treat `prompt` as a short description
+                        and auto-generate detailed grading criteria via LLM.
+                        Requires model= and prompt=.
         fi_api_key: Override FI_API_KEY for Turing engine.
         fi_secret_key: Override FI_SECRET_KEY for Turing engine.
         fi_base_url: Override FI_BASE_URL for Turing engine.
@@ -99,6 +103,7 @@ def evaluate(
                 augment=augment,
                 config=config,
                 feedback_store=feedback_store,
+                generate_prompt=generate_prompt,
                 fi_api_key=fi_api_key,
                 fi_secret_key=fi_secret_key,
                 fi_base_url=fi_base_url,
@@ -108,6 +113,16 @@ def evaluate(
         return BatchResult(results=results)
 
     # --- Single eval ---------------------------------------------------
+    # Auto-generate grading criteria from a short description
+    if generate_prompt and prompt:
+        if not model:
+            raise ValueError(
+                "generate_prompt=True requires a model= parameter "
+                "(e.g. model='gemini/gemini-2.5-flash')."
+            )
+        from .prompt_generator import generate_grading_criteria
+        prompt = generate_grading_criteria(prompt, model, inputs)
+
     # Custom prompt with no eval_name
     effective_name = eval_name or "custom_prompt"
 

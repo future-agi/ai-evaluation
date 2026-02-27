@@ -41,7 +41,7 @@ class BaseLLMJudgeMetric(BaseMetric[LLMJudgeInputType], ABC):
     @abstractmethod
     def _create_prompt_messages(
         self, inputs: LLMJudgeInputType
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """Creates the full prompt message list for the API call."""
         raise NotImplementedError
 
