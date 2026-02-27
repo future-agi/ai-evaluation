@@ -88,7 +88,7 @@ class TestEvalRecommender:
                     category="quality",
                     importance="required",
                     reason="Test",
-                    suggested_evals=["coherence", "factual_consistency"],
+                    suggested_evals=["coherence", "action_safety"],
                 ),
             ],
             detected_features=[],
@@ -98,7 +98,7 @@ class TestEvalRecommender:
         evals, scanners = recommender.recommend(analysis)
         eval_names = [e.name for e in evals]
         assert "CoherenceEval" in eval_names
-        assert "FactualConsistencyEval" in eval_names
+        assert "ActionSafetyEval" in eval_names
 
     def test_recommend_maps_scanner_names(self, recommender):
         """Should map requirement scanner names to class names."""
@@ -251,8 +251,8 @@ class TestEvalRecommender:
         assert "PIIScanner" in scanner_names
         assert "SecretsScanner" in scanner_names
 
-    def test_recommend_adds_factual_eval_for_financial(self, recommender):
-        """Should add factual consistency eval for financial domain."""
+    def test_recommend_adds_scanners_for_financial(self, recommender):
+        """Should add PII and secrets scanners for financial domain."""
         analysis = AppAnalysis(
             category=AppCategory.CUSTOMER_SUPPORT,
             risk_level=RiskLevel.HIGH,
@@ -262,9 +262,10 @@ class TestEvalRecommender:
             confidence=0.7,
             explanation="Test",
         )
-        evals, _ = recommender.recommend(analysis)
-        eval_names = [e.name for e in evals]
-        assert "FactualConsistencyEval" in eval_names
+        _, scanners = recommender.recommend(analysis)
+        scanner_names = [s.name for s in scanners]
+        assert "PIIScanner" in scanner_names
+        assert "SecretsScanner" in scanner_names
 
     def test_recommend_strict_for_children(self, recommender):
         """Should add strict safety for children's content."""

@@ -170,11 +170,11 @@ class TestAutoEvalPipelineIntegration:
         pipeline = AutoEvalPipeline.from_template("rag_system")
 
         # Customize
-        pipeline.set_threshold("FactualConsistencyEval", 0.9)
+        pipeline.set_threshold("CoherenceEval", 0.9)
         pipeline.add(ScannerConfig(name="PIIScanner", action="redact"))
 
         # Verify config
-        assert pipeline.config.get_eval("FactualConsistencyEval").threshold == 0.9
+        assert pipeline.config.get_eval("CoherenceEval").threshold == 0.9
         assert pipeline.config.get_scanner("PIIScanner") is not None
 
     def test_full_workflow_from_description(self):

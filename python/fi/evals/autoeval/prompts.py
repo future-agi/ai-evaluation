@@ -61,15 +61,8 @@ You must respond in valid JSON format with the following structure:
 
 ### Semantic Evaluations
 - CoherenceEval: Checks response coherence and logical flow
-- SemanticSimilarityEval: Measures similarity between response and reference
-- EntailmentEval: Verifies response is entailed by context
-- ContradictionEval: Detects contradictions with context
-- FactualConsistencyEval: Validates factual accuracy against context
 
 ### Agentic Evaluations
-- ToolUseCorrectnessEval: Validates correct tool/function usage
-- TrajectoryEfficiencyEval: Measures agent action efficiency
-- GoalCompletionEval: Checks if agent achieved its goal
 - ActionSafetyEval: Detects unsafe agent actions
 - ReasoningQualityEval: Evaluates reasoning quality
 

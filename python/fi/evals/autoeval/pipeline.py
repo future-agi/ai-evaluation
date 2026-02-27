@@ -448,7 +448,7 @@ class AutoEvalPipeline:
             Self for chaining
 
         Example:
-            pipeline.set_threshold("FactualConsistencyEval", 0.9)
+            pipeline.set_threshold("CoherenceEval", 0.9)
         """
         for e in self.config.evaluations:
             if e.name == name:

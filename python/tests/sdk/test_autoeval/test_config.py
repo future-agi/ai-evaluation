@@ -137,7 +137,7 @@ class TestAutoEvalConfig:
             risk_level="high",
             domain_sensitivity="healthcare",
             evaluations=[
-                EvalConfig(name="FactualConsistencyEval", threshold=0.9),
+                EvalConfig(name="CoherenceEval", threshold=0.9),
             ],
             scanners=[
                 ScannerConfig(name="PIIScanner", action="redact"),

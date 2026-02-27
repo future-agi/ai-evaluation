@@ -13,21 +13,7 @@ EVAL_MAPPINGS: Dict[str, str] = {
     # Semantic evaluations
     "coherence": "CoherenceEval",
     "CoherenceEval": "CoherenceEval",
-    "semantic_similarity": "SemanticSimilarityEval",
-    "SemanticSimilarityEval": "SemanticSimilarityEval",
-    "entailment": "EntailmentEval",
-    "EntailmentEval": "EntailmentEval",
-    "contradiction": "ContradictionEval",
-    "ContradictionEval": "ContradictionEval",
-    "factual_consistency": "FactualConsistencyEval",
-    "FactualConsistencyEval": "FactualConsistencyEval",
     # Agentic evaluations
-    "tool_use_correctness": "ToolUseCorrectnessEval",
-    "ToolUseCorrectnessEval": "ToolUseCorrectnessEval",
-    "trajectory_efficiency": "TrajectoryEfficiencyEval",
-    "TrajectoryEfficiencyEval": "TrajectoryEfficiencyEval",
-    "goal_completion": "GoalCompletionEval",
-    "GoalCompletionEval": "GoalCompletionEval",
     "action_safety": "ActionSafetyEval",
     "ActionSafetyEval": "ActionSafetyEval",
     "reasoning_quality": "ReasoningQualityEval",
@@ -219,17 +205,6 @@ class EvalRecommender:
                         name="ToxicityScanner",
                         threshold=base_threshold + 0.1,
                         action="block",
-                    )
-                )
-
-        # Financial needs extra validation
-        if analysis.domain_sensitivity == DomainSensitivity.FINANCIAL:
-            if "FactualConsistencyEval" not in added_evals:
-                evals.append(
-                    EvalConfig(
-                        name="FactualConsistencyEval",
-                        threshold=base_threshold + 0.1,
-                        weight=1.5,
                     )
                 )
 

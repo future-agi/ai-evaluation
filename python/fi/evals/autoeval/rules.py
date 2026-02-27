@@ -295,7 +295,7 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="quality",
             importance="required",
             reason="Customer support needs clear, coherent responses",
-            suggested_evals=["CoherenceEval", "SemanticSimilarityEval"],
+            suggested_evals=["CoherenceEval"],
         ),
         AppRequirement(
             category="safety",
@@ -315,13 +315,13 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="faithfulness",
             importance="required",
             reason="RAG systems must provide grounded, faithful responses",
-            suggested_evals=["FactualConsistencyEval", "EntailmentEval"],
+            suggested_evals=["CoherenceEval"],
         ),
         AppRequirement(
             category="quality",
             importance="required",
             reason="Responses should be coherent and relevant",
-            suggested_evals=["CoherenceEval", "SemanticSimilarityEval"],
+            suggested_evals=["CoherenceEval"],
         ),
         AppRequirement(
             category="safety",
@@ -357,11 +357,7 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="tool_use",
             importance="required",
             reason="Agent workflows need tool use validation",
-            suggested_evals=[
-                "ToolUseCorrectnessEval",
-                "TrajectoryEfficiencyEval",
-                "GoalCompletionEval",
-            ],
+            suggested_evals=["ActionSafetyEval"],
         ),
         AppRequirement(
             category="safety",

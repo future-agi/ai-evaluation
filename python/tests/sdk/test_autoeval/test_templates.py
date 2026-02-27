@@ -47,12 +47,11 @@ class TestTemplates:
         assert "ToxicityScanner" in scanner_names
 
     def test_rag_system_template(self):
-        """RAG system template should have faithfulness evals."""
+        """RAG system template should have quality evals."""
         config = TEMPLATES["rag_system"]
         eval_names = [e.name for e in config.evaluations]
 
-        assert "FactualConsistencyEval" in eval_names
-        assert "EntailmentEval" in eval_names
+        assert "CoherenceEval" in eval_names
 
     def test_code_assistant_template(self):
         """Code assistant template should have security scanners."""
@@ -73,13 +72,12 @@ class TestTemplates:
         assert len(config.scanners) > 0
 
     def test_agent_workflow_template(self):
-        """Agent workflow template should have tool use evals."""
+        """Agent workflow template should have safety evals."""
         config = TEMPLATES["agent_workflow"]
         eval_names = [e.name for e in config.evaluations]
 
-        assert "ToolUseCorrectnessEval" in eval_names
-        assert "GoalCompletionEval" in eval_names
         assert "ActionSafetyEval" in eval_names
+        assert "ReasoningQualityEval" in eval_names
 
 
 class TestGetTemplate:
@@ -191,8 +189,8 @@ class TestFinancialTemplate:
         assert config.risk_level == "high"
         assert config.domain_sensitivity == "financial"
 
-    def test_financial_has_factual_consistency(self):
-        """Financial should have factual consistency eval."""
+    def test_financial_has_coherence(self):
+        """Financial should have coherence eval."""
         config = TEMPLATES["financial"]
         eval_names = [e.name for e in config.evaluations]
-        assert "FactualConsistencyEval" in eval_names
+        assert "CoherenceEval" in eval_names

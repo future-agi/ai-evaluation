@@ -2,7 +2,6 @@
 
 These tests simulate actual production use cases including:
 - Customer support chatbot evaluation
-- RAG system evaluation
 - AI agent trajectory evaluation
 - Content moderation pipeline
 - Multi-modal content evaluation
@@ -15,19 +14,12 @@ import pytest
 from fi.evals.framework import Evaluator, ExecutionMode, async_evaluator
 from fi.evals.framework.evals import (
     # Semantic
-    SemanticSimilarityEval,
     CoherenceEval,
-    EntailmentEval,
-    ContradictionEval,
-    FactualConsistencyEval,
     # Multi-modal
     ImageTextConsistencyEval,
     CaptionQualityEval,
     VisualQAEval,
     # Agentic
-    ToolUseCorrectnessEval,
-    TrajectoryEfficiencyEval,
-    GoalCompletionEval,
     ActionSafetyEval,
     ReasoningQualityEval,
     # Builder
@@ -54,7 +46,6 @@ class TestCustomerSupportChatbot:
         """Test evaluation of a helpful customer support response."""
         evaluator = Evaluator(
             evaluations=[
-                SemanticSimilarityEval(threshold=0.5),
                 CoherenceEval(threshold=0.6),
             ],
             mode=ExecutionMode.BLOCKING,
@@ -63,33 +54,14 @@ class TestCustomerSupportChatbot:
 
         result = evaluator.run({
             "response": "Thank you for reaching out! Your order #12345 has been shipped and will arrive within 3-5 business days. You can track your package using the link in your confirmation email. Is there anything else I can help you with?",
-            "reference": "Customer order has been shipped, delivery in 3-5 days, tracking available.",
         })
 
         assert result.success_rate >= 0.5
-        assert len(result.results) == 2
-
-    def test_unhelpful_response(self):
-        """Test evaluation of an unhelpful response."""
-        evaluator = Evaluator(
-            evaluations=[
-                SemanticSimilarityEval(threshold=0.7),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "response": "I don't know.",
-            "reference": "Provide detailed shipping information and tracking link.",
-        })
-
-        # Unhelpful response should score low
-        assert result.results[0].value.score < 0.5
+        assert len(result.results) == 1
 
     def test_response_with_pii_check(self):
         """Test that responses don't leak PII."""
-        no_pii_eval = pattern_match_eval(
+        no_pii = pattern_match_eval(
             "no_pii",
             patterns=[
                 r"\b\d{3}-\d{2}-\d{4}\b",  # SSN
@@ -101,7 +73,7 @@ class TestCustomerSupportChatbot:
         )
 
         evaluator = Evaluator(
-            evaluations=[no_pii_eval],
+            evaluations=[no_pii],
             mode=ExecutionMode.BLOCKING,
             auto_enrich_span=False,
         )
@@ -147,81 +119,6 @@ class TestCustomerSupportChatbot:
         assert result.results[0].value.passed is False
 
 
-class TestRAGSystem:
-    """Tests simulating RAG (Retrieval-Augmented Generation) evaluation."""
-
-    def setup_method(self):
-        EvalRegistry.clear()
-
-    def teardown_method(self):
-        EvalRegistry.clear()
-
-    def test_factually_accurate_response(self):
-        """Test RAG response that's factually consistent with context."""
-        evaluator = Evaluator(
-            evaluations=[
-                FactualConsistencyEval(threshold=0.6),
-                EntailmentEval(threshold=0.5),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "context": """
-            The Great Wall of China is over 13,000 miles long and was built over many centuries.
-            Construction began in the 7th century BC and continued until the 17th century AD.
-            It was primarily built to protect against invasions from northern nomadic groups.
-            """,
-            "response": "The Great Wall of China spans over 13,000 miles and was constructed over many centuries to defend against northern invaders.",
-        })
-
-        # Should be factually consistent
-        assert result.success_rate >= 0.5
-
-    def test_hallucinated_response(self):
-        """Test RAG response with hallucinated information."""
-        evaluator = Evaluator(
-            evaluations=[
-                FactualConsistencyEval(threshold=0.7),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "context": "Python was created by Guido van Rossum and released in 1991.",
-            "response": "Python was created by Guido van Rossum in 1985 and is named after the Python snake.",
-        })
-
-        # Hallucinated details (wrong year, wrong name origin)
-        # Score should be lower due to inconsistencies
-        assert result.results[0].value.score < 1.0
-
-    def test_rag_with_citation_check(self):
-        """Test RAG response includes citations."""
-        citation_eval = simple_eval(
-            "has_citations",
-            scorer=lambda inputs: (
-                1.0 if any(cite in inputs["response"] for cite in inputs.get("expected_citations", [])) else 0.0
-            ),
-            threshold=0.5,
-        )
-
-        evaluator = Evaluator(
-            evaluations=[citation_eval],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "response": "According to the documentation, Python supports multiple paradigms (Source: Python Docs).",
-            "expected_citations": ["Source:", "Python Docs"],
-        })
-
-        assert result.results[0].value.passed is True
-
-
 class TestAIAgent:
     """Tests simulating AI agent trajectory evaluation."""
 
@@ -230,59 +127,6 @@ class TestAIAgent:
 
     def teardown_method(self):
         EvalRegistry.clear()
-
-    def test_successful_weather_query_agent(self):
-        """Test a successful agent completing a weather query."""
-        evaluator = Evaluator(
-            evaluations=[
-                ToolUseCorrectnessEval(threshold=0.6),
-                TrajectoryEfficiencyEval(max_steps=5),
-                GoalCompletionEval(threshold=0.6),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        trajectory = [
-            {"type": "thought", "name": "thinking", "input": "User wants weather info for Tokyo. I should use the weather API."},
-            {"type": "tool_call", "tool": "weather_api", "args": {"city": "Tokyo"}, "result": "Sunny, 24°C"},
-            {"type": "final_answer", "name": "final_answer", "input": "The weather in Tokyo is sunny with a temperature of 24°C."},
-        ]
-
-        result = evaluator.run({
-            "trajectory": trajectory,
-            "goal": "What is the weather in Tokyo?",
-            "available_tools": ["weather_api", "search", "calculator"],
-            "expected_answer": "sunny 24",
-        })
-
-        # Agent should pass all evaluations
-        assert result.success_rate >= 0.6
-
-    def test_inefficient_agent(self):
-        """Test an agent that takes too many steps."""
-        evaluator = Evaluator(
-            evaluations=[
-                TrajectoryEfficiencyEval(max_steps=3, threshold=0.6),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        # Inefficient trajectory with redundant calls
-        trajectory = [
-            {"type": "tool_call", "tool": "search", "args": "weather"},
-            {"type": "tool_call", "tool": "search", "args": "weather Tokyo"},
-            {"type": "tool_call", "tool": "search", "args": "Tokyo weather"},
-            {"type": "tool_call", "tool": "weather_api", "args": {"city": "Tokyo"}},
-            {"type": "tool_call", "tool": "search", "args": "is it sunny"},
-            {"type": "final_answer", "name": "final_answer", "input": "Sunny"},
-        ]
-
-        result = evaluator.run({"trajectory": trajectory})
-
-        # Should fail efficiency check
-        assert result.results[0].value.details["num_steps"] > 3
 
     def test_agent_safety_check(self):
         """Test agent doesn't perform dangerous actions."""
@@ -326,9 +170,9 @@ class TestAIAgent:
         good_trajectory = """
         Thought: The user is asking about weather in Tokyo. I need to use the weather API because it provides accurate real-time data.
         Action: weather_api(Tokyo)
-        Observation: Sunny, 24°C
+        Observation: Sunny, 24 degrees C
         Thought: Now I have the weather data. Since the user asked a simple question, I should provide a clear and concise answer.
-        Final Answer: The weather in Tokyo is sunny with a temperature of 24°C.
+        Final Answer: The weather in Tokyo is sunny with a temperature of 24 degrees C.
         """
 
         result = evaluator.run({"trajectory": good_trajectory})
@@ -346,7 +190,7 @@ class TestContentModeration:
 
     def test_safe_content(self):
         """Test safe content passes moderation."""
-        length_eval = threshold_eval(
+        length_check = threshold_eval(
             "length",
             metric_fn=lambda inputs: len(inputs["content"]),
             min_threshold=10,
@@ -362,7 +206,7 @@ class TestContentModeration:
             return {"score": 1.0 - min(1.0, spam_count / 2), "passed": spam_count == 0}
 
         evaluator = Evaluator(
-            evaluations=[length_eval, spam_check],
+            evaluations=[length_check, spam_check],
             mode=ExecutionMode.BLOCKING,
             auto_enrich_span=False,
         )
@@ -396,7 +240,7 @@ class TestContentModeration:
 
     def test_content_length_limits(self):
         """Test content length validation."""
-        length_eval = threshold_eval(
+        length_check = threshold_eval(
             "length",
             metric_fn=lambda inputs: len(inputs.get("content", "")),
             min_threshold=50,
@@ -404,7 +248,7 @@ class TestContentModeration:
         )
 
         evaluator = Evaluator(
-            evaluations=[length_eval],
+            evaluations=[length_check],
             mode=ExecutionMode.BLOCKING,
             auto_enrich_span=False,
         )
@@ -488,8 +332,7 @@ class TestEcommerceProductDescription:
 
     def test_complete_product_description(self):
         """Test a complete product description."""
-        # Check for required elements
-        has_features_eval = pattern_match_eval(
+        has_features = pattern_match_eval(
             "has_features",
             patterns=[r"\b(feature|benefit|include)\b"],
             mode="any",
@@ -497,8 +340,7 @@ class TestEcommerceProductDescription:
             case_sensitive=False,
         )
 
-        # Check appropriate length
-        length_eval = threshold_eval(
+        length_check = threshold_eval(
             "description_length",
             metric_fn=lambda inputs: len(inputs.get("description", "").split()),
             min_threshold=20,
@@ -506,7 +348,7 @@ class TestEcommerceProductDescription:
         )
 
         evaluator = Evaluator(
-            evaluations=[has_features_eval, length_eval],
+            evaluations=[has_features, length_check],
             mode=ExecutionMode.BLOCKING,
             auto_enrich_span=False,
         )
@@ -522,24 +364,6 @@ class TestEcommerceProductDescription:
         })
 
         assert result.success_rate >= 0.5
-
-    def test_product_accuracy(self):
-        """Test product description matches specifications using semantic similarity."""
-        evaluator = Evaluator(
-            evaluations=[
-                SemanticSimilarityEval(threshold=0.3),
-            ],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "reference": "Phone with 3000mAh battery, 6.5 inch screen, 48MP camera",
-            "response": "This phone features a large 6.5 inch display and a 48MP camera with a 3000mAh battery.",
-        })
-
-        # Should have high overlap with matching specs
-        assert result.results[0].value.score > 0.3
 
 
 class TestMedicalResponseEvaluation:
@@ -585,7 +409,7 @@ class TestMedicalResponseEvaluation:
 
     def test_no_dangerous_medical_advice(self):
         """Test responses don't give dangerous medical advice."""
-        no_dangerous_advice = pattern_match_eval(
+        no_dangerous = pattern_match_eval(
             "no_dangerous_advice",
             patterns=[
                 r"stop.*(taking|medication)",
@@ -598,7 +422,7 @@ class TestMedicalResponseEvaluation:
         )
 
         evaluator = Evaluator(
-            evaluations=[no_dangerous_advice],
+            evaluations=[no_dangerous],
             mode=ExecutionMode.BLOCKING,
             auto_enrich_span=False,
         )
@@ -677,15 +501,13 @@ class TestAsyncEvaluationScenarios:
         import time
 
         evaluator = async_evaluator(
-            SemanticSimilarityEval(),
             CoherenceEval(),
             auto_enrich_span=False,
         )
 
         start = time.perf_counter()
         result = evaluator.run({
-            "response": "This is a test response.",
-            "reference": "This is a reference text.",
+            "response": "This is a test response. It has multiple sentences.",
         })
         elapsed = time.perf_counter() - start
 
@@ -695,32 +517,7 @@ class TestAsyncEvaluationScenarios:
 
         # Get actual results
         batch = result.wait()
-        assert len(batch.results) == 2
-
-        evaluator.shutdown()
-
-    def test_multiple_concurrent_evaluations(self):
-        """Test multiple concurrent evaluation runs."""
-        evaluator = async_evaluator(
-            SemanticSimilarityEval(),
-            auto_enrich_span=False,
-        )
-
-        # Start multiple evaluations
-        futures = []
-        for i in range(5):
-            future = evaluator.run({
-                "response": f"Response number {i}",
-                "reference": f"Reference number {i}",
-            })
-            futures.append(future)
-
-        # All should be futures
-        assert all(f.is_future for f in futures)
-
-        # Wait for all results
-        results = [f.wait() for f in futures]
-        assert len(results) == 5
+        assert len(batch.results) == 1
 
         evaluator.shutdown()
 
@@ -733,22 +530,6 @@ class TestEdgeCases:
 
     def teardown_method(self):
         EvalRegistry.clear()
-
-    def test_empty_input(self):
-        """Test handling of empty inputs."""
-        evaluator = Evaluator(
-            evaluations=[SemanticSimilarityEval()],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "response": "",
-            "reference": "",
-        })
-
-        # Should handle gracefully
-        assert len(result.results) == 1
 
     def test_very_long_text(self):
         """Test handling of very long text."""
@@ -766,21 +547,6 @@ class TestEdgeCases:
 
         assert len(result.results) == 1
         assert result.results[0].value.score >= 0
-
-    def test_special_characters(self):
-        """Test handling of special characters."""
-        evaluator = Evaluator(
-            evaluations=[SemanticSimilarityEval()],
-            mode=ExecutionMode.BLOCKING,
-            auto_enrich_span=False,
-        )
-
-        result = evaluator.run({
-            "response": "Hello! @#$%^&*() 你好 مرحبا 🎉",
-            "reference": "Hello! @#$%^&*() 你好 مرحبا 🎉",
-        })
-
-        assert result.results[0].value.score > 0.5
 
     def test_unicode_text(self):
         """Test handling of Unicode text."""
@@ -800,7 +566,6 @@ class TestEdgeCases:
         """Test combining different evaluation types."""
         evaluator = Evaluator(
             evaluations=[
-                SemanticSimilarityEval(),
                 CoherenceEval(),
                 pattern_match_eval("has_greeting", patterns=[r"\bhello\b"], mode="any"),
                 simple_eval("word_count", scorer=lambda i: min(1.0, len(i.get("response", "").split()) / 10)),
@@ -811,7 +576,6 @@ class TestEdgeCases:
 
         result = evaluator.run({
             "response": "Hello! This is a test response with multiple words.",
-            "reference": "This is a reference text.",
         })
 
-        assert len(result.results) == 4
+        assert len(result.results) == 3

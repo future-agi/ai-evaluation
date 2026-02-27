@@ -46,10 +46,10 @@ class TestHealthcareScenarios:
         assert pii_scanner is not None
         assert pii_scanner.action == "redact"
 
-        # Should have factual consistency eval with high threshold
-        factual_eval = pipeline.config.get_eval("FactualConsistencyEval")
-        assert factual_eval is not None
-        assert factual_eval.threshold >= 0.9
+        # Should have coherence eval with high threshold
+        coherence = pipeline.config.get_eval("CoherenceEval")
+        assert coherence is not None
+        assert coherence.threshold >= 0.8
 
     def test_healthcare_medical_terminology(self):
         """Should detect healthcare from medical terminology."""
@@ -80,16 +80,12 @@ class TestFinancialScenarios:
         assert pipeline.analysis.domain_sensitivity == DomainSensitivity.FINANCIAL
         assert pipeline.analysis.risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}
 
-    def test_financial_template_has_accuracy_evals(self):
-        """Financial template should emphasize accuracy."""
+    def test_financial_template_has_quality_evals(self):
+        """Financial template should have quality evals."""
         pipeline = AutoEvalPipeline.from_template("financial")
 
         eval_names = [e.name for e in pipeline.config.evaluations]
-        assert "FactualConsistencyEval" in eval_names
-
-        # Factual consistency should have high weight for financial accuracy
-        factual_eval = pipeline.config.get_eval("FactualConsistencyEval")
-        assert factual_eval.weight >= 1.5
+        assert "CoherenceEval" in eval_names
 
     def test_financial_terminology_detection(self):
         """Should detect financial from various financial terms."""
@@ -149,13 +145,12 @@ class TestRAGSystemScenarios:
         assert pipeline.analysis.category == AppCategory.RAG_SYSTEM
         assert "rag" in pipeline.analysis.detected_features
 
-    def test_rag_template_has_faithfulness_evals(self):
-        """RAG template should include faithfulness evaluations."""
+    def test_rag_template_has_quality_evals(self):
+        """RAG template should include quality evaluations."""
         pipeline = AutoEvalPipeline.from_template("rag_system")
 
         eval_names = [e.name for e in pipeline.config.evaluations]
-        assert "FactualConsistencyEval" in eval_names
-        assert "EntailmentEval" in eval_names
+        assert "CoherenceEval" in eval_names
 
     def test_rag_with_different_descriptions(self):
         """Should detect RAG from various descriptions."""
@@ -195,11 +190,11 @@ class TestAgentWorkflowScenarios:
 
         eval_names = [e.name for e in pipeline.config.evaluations]
         assert "ActionSafetyEval" in eval_names
-        assert "ToolUseCorrectnessEval" in eval_names
+        assert "ReasoningQualityEval" in eval_names
 
         # Action safety should have high weight
-        safety_eval = pipeline.config.get_eval("ActionSafetyEval")
-        assert safety_eval.weight >= 1.5
+        safety = pipeline.config.get_eval("ActionSafetyEval")
+        assert safety.weight >= 1.5
 
     def test_agent_high_risk_by_default(self):
         """Agent workflows should be high risk by default."""
@@ -302,14 +297,14 @@ class TestPipelineCustomization:
         pipeline = AutoEvalPipeline.from_template("rag_system")
 
         # Common pattern: increase accuracy for production
-        pipeline.set_threshold("FactualConsistencyEval", 0.9)
+        pipeline.set_threshold("CoherenceEval", 0.9)
 
         # Add PII protection
         pipeline.add(ScannerConfig("PIIScanner", action="redact"))
 
         # Verify customizations
-        factual = pipeline.config.get_eval("FactualConsistencyEval")
-        assert factual.threshold == 0.9
+        coherence = pipeline.config.get_eval("CoherenceEval")
+        assert coherence.threshold == 0.9
 
         pii = pipeline.config.get_scanner("PIIScanner")
         assert pii is not None
@@ -324,9 +319,6 @@ class TestPipelineCustomization:
         pipeline.remove("PIIScanner")
         pipeline.add(ScannerConfig("PIIScanner", action="redact", threshold=0.95))
 
-        # Add new evaluation
-        pipeline.add(EvalConfig("FactualConsistencyEval", threshold=0.9, weight=2.0))
-
         # Use set_threshold to modify existing scanner
         pipeline.set_threshold("ToxicityScanner", 0.95)
 
@@ -335,11 +327,6 @@ class TestPipelineCustomization:
         assert pii is not None
         assert pii.threshold == 0.95
         assert pii.action == "redact"
-
-        # Verify new evaluation was added
-        factual = pipeline.config.get_eval("FactualConsistencyEval")
-        assert factual.threshold == 0.9
-        assert factual.weight == 2.0
 
         # Verify threshold was updated
         toxicity = pipeline.config.get_scanner("ToxicityScanner")
@@ -409,7 +396,7 @@ class TestExportImportRoundtrip:
         """Exported YAML should preserve all customizations."""
         # Create and customize
         pipeline = AutoEvalPipeline.from_template("rag_system")
-        pipeline.set_threshold("FactualConsistencyEval", 0.95)
+        pipeline.set_threshold("CoherenceEval", 0.95)
         pipeline.add(ScannerConfig("PIIScanner", action="redact"))
 
         # Export
@@ -420,7 +407,7 @@ class TestExportImportRoundtrip:
         loaded = AutoEvalPipeline.from_yaml(str(yaml_path))
 
         # Verify
-        assert loaded.config.get_eval("FactualConsistencyEval").threshold == 0.95
+        assert loaded.config.get_eval("CoherenceEval").threshold == 0.95
         assert loaded.config.get_scanner("PIIScanner").action == "redact"
 
     def test_json_roundtrip_for_api_configs(self, tmp_path):

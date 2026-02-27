@@ -2,47 +2,33 @@
 Built-in evaluations using the evaluation framework.
 
 This module provides ready-to-use evaluations for common use cases:
-- Semantic evaluations (similarity, coherence, entailment)
+- Semantic evaluations (coherence)
 - Multi-modal evaluations (image-text consistency, VQA)
-- Safety evaluations (toxicity, bias, PII detection)
-- Quality evaluations (relevance, completeness, accuracy)
+- Agentic evaluations (action safety, reasoning quality)
+- Builder utilities (custom eval creation)
 
 All evaluations implement BaseEvaluation and work with the Evaluator class.
 
 Example:
     from fi.evals.framework import Evaluator, ExecutionMode
     from fi.evals.framework.evals import (
-        SemanticSimilarityEval,
         CoherenceEval,
-        FactualConsistencyEval,
         ImageTextConsistencyEval,
+        ActionSafetyEval,
     )
 
     evaluator = Evaluator(
         evaluations=[
-            SemanticSimilarityEval(),
             CoherenceEval(),
-            FactualConsistencyEval(),
             ImageTextConsistencyEval(),
+            ActionSafetyEval(),
         ],
         mode=ExecutionMode.NON_BLOCKING,
     )
-
-    result = evaluator.run({
-        "response": "The capital of France is Paris.",
-        "reference": "Paris is the capital city of France.",
-        "context": "France is a country in Western Europe.",
-        "image_description": "A map of France",
-        "text": "This shows the country of France",
-    })
 """
 
 from .semantic import (
-    SemanticSimilarityEval,
     CoherenceEval,
-    EntailmentEval,
-    ContradictionEval,
-    FactualConsistencyEval,
     SemanticEvalResult,
 )
 
@@ -56,9 +42,6 @@ from .multimodal import (
 )
 
 from .agentic import (
-    ToolUseCorrectnessEval,
-    TrajectoryEfficiencyEval,
-    GoalCompletionEval,
     ActionSafetyEval,
     ReasoningQualityEval,
     AgenticEvalResult,
@@ -78,11 +61,7 @@ from .builder import (
 
 __all__ = [
     # Semantic
-    "SemanticSimilarityEval",
     "CoherenceEval",
-    "EntailmentEval",
-    "ContradictionEval",
-    "FactualConsistencyEval",
     "SemanticEvalResult",
     # Multi-modal
     "ImageTextConsistencyEval",
@@ -92,9 +71,6 @@ __all__ = [
     "CrossModalConsistencyEval",
     "MultiModalEvalResult",
     # Agentic
-    "ToolUseCorrectnessEval",
-    "TrajectoryEfficiencyEval",
-    "GoalCompletionEval",
     "ActionSafetyEval",
     "ReasoningQualityEval",
     "AgenticEvalResult",

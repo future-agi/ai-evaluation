@@ -21,11 +21,6 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
                 threshold=0.7,
                 weight=1.0,
             ),
-            EvalConfig(
-                name="SemanticSimilarityEval",
-                threshold=0.7,
-                weight=1.0,
-            ),
         ],
         scanners=[
             ScannerConfig(
@@ -54,22 +49,7 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
         domain_sensitivity="general",
         evaluations=[
             EvalConfig(
-                name="FactualConsistencyEval",
-                threshold=0.75,
-                weight=1.5,
-            ),
-            EvalConfig(
-                name="EntailmentEval",
-                threshold=0.7,
-                weight=1.2,
-            ),
-            EvalConfig(
                 name="CoherenceEval",
-                threshold=0.7,
-                weight=1.0,
-            ),
-            EvalConfig(
-                name="SemanticSimilarityEval",
                 threshold=0.7,
                 weight=1.0,
             ),
@@ -154,21 +134,6 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
         domain_sensitivity="general",
         evaluations=[
             EvalConfig(
-                name="ToolUseCorrectnessEval",
-                threshold=0.8,
-                weight=1.5,
-            ),
-            EvalConfig(
-                name="TrajectoryEfficiencyEval",
-                threshold=0.7,
-                weight=1.0,
-            ),
-            EvalConfig(
-                name="GoalCompletionEval",
-                threshold=0.8,
-                weight=1.5,
-            ),
-            EvalConfig(
                 name="ActionSafetyEval",
                 threshold=0.85,
                 weight=2.0,
@@ -204,19 +169,9 @@ TEMPLATES["healthcare"] = AutoEvalConfig(
     domain_sensitivity="healthcare",
     evaluations=[
         EvalConfig(
-            name="FactualConsistencyEval",
-            threshold=0.9,
-            weight=2.0,
-        ),
-        EvalConfig(
             name="CoherenceEval",
             threshold=0.8,
             weight=1.0,
-        ),
-        EvalConfig(
-            name="EntailmentEval",
-            threshold=0.85,
-            weight=1.5,
         ),
     ],
     scanners=[
@@ -253,19 +208,9 @@ TEMPLATES["financial"] = AutoEvalConfig(
     domain_sensitivity="financial",
     evaluations=[
         EvalConfig(
-            name="FactualConsistencyEval",
-            threshold=0.9,
-            weight=2.0,
-        ),
-        EvalConfig(
             name="CoherenceEval",
             threshold=0.8,
             weight=1.0,
-        ),
-        EvalConfig(
-            name="ContradictionEval",
-            threshold=0.85,
-            weight=1.5,
         ),
     ],
     scanners=[
