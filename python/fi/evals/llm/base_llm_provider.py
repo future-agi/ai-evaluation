@@ -16,7 +16,7 @@ class LLMProvider(ABC):
     def get_completion(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         response_format: Optional[Type[BaseModel] | Dict[str, str]] = None,
         **kwargs: Any,
     ) -> str:
@@ -25,7 +25,8 @@ class LLMProvider(ABC):
 
         Args:
             model (str): The name or identifier of the model to use.
-            messages (List[Dict[str, str]]): The chat messages, following the OpenAI format.
+            messages (List[Dict[str, Any]]): The chat messages, following the OpenAI format.
+                Content can be a string or a list of content parts for multimodal inputs.
             **kwargs: Provider-specific arguments like temperature, max_tokens, etc.
 
         Returns:

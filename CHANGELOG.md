@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.0] - 2026-02-27
+
+### Python
+
+#### Added
+- **`evaluate()` unified API** — single entrypoint for local, cloud, and LLM-as-Judge evaluations with automatic engine routing
+- **Multimodal LLM Judge** — pass `image_url`, `audio_url`, `input_image_url`, `output_image_url` for vision/audio evaluation with Gemini, GPT-4o, etc.
+- **Auto-generate grading criteria** — `generate_prompt=True` converts a short description into a detailed rubric via LLM
+- **LLM augmentation** — `augment=True` runs local heuristic first, then LLM refines the score (faithfulness, hallucination_score, task_completion, etc.)
+- **Feedback loop system** — submit corrections, retrieve as few-shot examples via ChromaDB, calibrate pass/fail thresholds
+- **72+ local metrics** — string checks, JSON validation, similarity, NLI-based hallucination detection, RAG evaluation, function calling, agent trajectory, structured output, security guardrails
+- **OpenTelemetry integration** — `enable_auto_enrichment()` emits `gen_ai.evaluation.*` spans for Jaeger/Datadog/Grafana
+- **Streaming evaluation** — token-by-token monitoring with configurable early stopping
+- **9 cookbooks** — local metrics, LLM judge, RAG evaluation, guardrails, streaming, autoeval, OTEL tracing, feedback loop, multimodal judge
+
+#### Changed
+- **Poetry to uv** — migrated build system for 10x faster dependency resolution
+- Widened LLM provider type signatures from `Dict[str, str]` to `Dict[str, Any]` for multimodal content parts
+
+#### Fixed
+- 6 code security scanner bugs (Phase 2)
+- Guardrails ensemble scoring and scanner edge cases
+- NLI consolidation and empty-input handling in RAG metrics
+- K8s backend JSON log parsing
+- Temporal Docker healthcheck and DB config
+- Celery serialization for closures
+
 ## [0.2.2] - 2025-10-27
 
 - Introducing LLM As A Judge
@@ -68,7 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/future-agi/ai-evaluation/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/future-agi/ai-evaluation/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/future-agi/ai-evaluation/compare/v0.1.0...v0.2.1
 [0.1.0]: https://github.com/future-agi/ai-evaluation/releases/tag/v0.1.0

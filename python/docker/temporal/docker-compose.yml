@@ -1,0 +1,75 @@
+# Temporal backend infrastructure for fi-evals.
+#
+# Usage:
+#   cd python/docker/temporal && docker compose up -d
+#
+# This starts:
+#   - PostgreSQL (Temporal persistence)
+#   - Temporal server on port 7233
+#   - Temporal UI on port 8233 (http://localhost:8233)
+#   - Temporal worker that processes eval workflows
+#
+# Then in your Python code:
+#   from fi.evals.framework.backends import TemporalBackend, TemporalConfig
+#   backend = TemporalBackend(TemporalConfig(host="localhost:7233"))
+
+services:
+  postgresql:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - temporal-pg-data:/var/lib/postgresql/data
+
+  temporal-server:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgresql
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal-server:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    ports:
+      - "8233:8080"
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal-server:7233
+
+  temporal-worker:
+    build:
+      context: ../..
+      dockerfile: docker/temporal/Dockerfile
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_HOST=temporal-server:7233
+      - TEMPORAL_NAMESPACE=default
+      - TEMPORAL_TASK_QUEUE=eval-tasks
+    restart: unless-stopped
+
+volumes:
+  temporal-pg-data:

@@ -1,0 +1,32 @@
+# ChromaDB service for fi-evals feedback loop.
+#
+# Usage:
+#   cd python/docker/feedback && docker compose up -d
+#
+# This starts:
+#   - ChromaDB server on port 8000
+#   - Persistent volume for feedback data
+#
+# Then in your Python code:
+#   from fi.evals.feedback import ChromaFeedbackStore
+#   store = ChromaFeedbackStore(host="localhost", port=8000)
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - chroma-data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  chroma-data:

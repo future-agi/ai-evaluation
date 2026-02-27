@@ -1,0 +1,33 @@
+# Eval runner image for the Kubernetes backend.
+#
+# This image is used by KubernetesBackend to execute serialized evaluation
+# tasks inside Kubernetes Jobs. It contains cloudpickle for deserialization
+# and a minimal Python runtime.
+#
+# Build:
+#   docker build -f Dockerfile.eval-runner -t fi-eval-runner:latest .
+#
+# Usage:
+#   from fi.evals.framework.backends import KubernetesBackend, KubernetesConfig
+#
+#   backend = KubernetesBackend(KubernetesConfig(
+#       image="fi-eval-runner:latest",
+#   ))
+
+FROM python:3.11-slim
+
+LABEL maintainer="Future AGI" \
+      description="Eval runner for fi-evals Kubernetes backend"
+
+# Install only the runtime dependency needed for task deserialization.
+# cloudpickle is the industry-standard serializer used by Kubeflow, Ray, etc.
+# It is only used here in trusted evaluation environments — never for untrusted input.
+RUN pip install --no-cache-dir cloudpickle>=3.0
+
+# Drop to non-root user for safety
+RUN useradd --create-home evalrunner
+USER evalrunner
+WORKDIR /home/evalrunner
+
+# The actual task code is injected via the EVAL_PAYLOAD env var at runtime.
+# The KubernetesBackend sets the container command to execute the runner script.

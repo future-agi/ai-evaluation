@@ -9,7 +9,7 @@ Thanks for your interest in contributing! 🎉
 git clone https://github.com/YOUR_USERNAME/ai-evaluation.git
 
 # Python
-cd python && poetry install && poetry run pytest
+cd python && uv sync --dev && uv run pytest
 
 # TypeScript  
 cd typescript/ai-evaluation && pnpm install && pnpm test
