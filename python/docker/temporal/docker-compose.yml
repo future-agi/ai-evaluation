@@ -36,13 +36,13 @@ services:
       postgresql:
         condition: service_healthy
     environment:
-      - DB=postgresql
+      - DB=postgres12
       - DB_PORT=5432
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=postgresql
     healthcheck:
-      test: ["CMD", "tctl", "--address", "temporal-server:7233", "cluster", "health"]
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal-server:7233"]
       interval: 10s
       timeout: 5s
       retries: 12
