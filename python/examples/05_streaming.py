@@ -18,7 +18,7 @@ SCENARIO:
     - Reports exactly WHERE the stream went bad
 
 Usage:
-    cd python && poetry run python -m examples.05_streaming
+    cd python && uv run python -m examples.05_streaming
 """
 
 import time

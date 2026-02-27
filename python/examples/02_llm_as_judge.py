@@ -18,7 +18,7 @@ SCENARIO:
 
 Usage:
     export GOOGLE_API_KEY=...
-    cd python && poetry run python -m examples.02_llm_as_judge
+    cd python && uv run python -m examples.02_llm_as_judge
 """
 
 import os

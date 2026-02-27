@@ -24,7 +24,7 @@ pip install ai-evaluation
 
 **Requirements:**
 - Python 3.10+
-- pip or poetry
+- pip or uv
 
 ---
 

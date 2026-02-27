@@ -16,7 +16,7 @@ SCENARIO:
     5. Customize and iterate on the auto-generated config
 
 Usage:
-    cd python && poetry run python -m examples.06_autoeval
+    cd python && uv run python -m examples.06_autoeval
 """
 
 import json

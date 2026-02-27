@@ -15,7 +15,7 @@ SCENARIO:
     - Export to Jaeger, Datadog, Grafana, or your custom backend
 
 Usage:
-    cd python && poetry run python -m examples.07_otel_tracing
+    cd python && uv run python -m examples.07_otel_tracing
 """
 
 import time

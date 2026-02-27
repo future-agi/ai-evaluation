@@ -19,7 +19,7 @@ SCENARIO:
     so you know exactly what to fix.
 
 Usage:
-    cd python && poetry run python -m examples.03_rag_evaluation
+    cd python && uv run python -m examples.03_rag_evaluation
 
     For LLM-augmented accuracy (optional):
     export GOOGLE_API_KEY=...

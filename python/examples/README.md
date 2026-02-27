@@ -19,11 +19,11 @@ Each cookbook solves a **real problem** you'll face when building AI application
 cd python
 
 # Run any cookbook (no API keys needed for 01, 03-07)
-poetry run python -m examples.01_local_metrics
+uv run python -m examples.01_local_metrics
 
 # For cookbooks that need an LLM (02, 08)
 export GOOGLE_API_KEY=your-key
-poetry run python -m examples.02_llm_as_judge
+uv run python -m examples.02_llm_as_judge
 ```
 
 ## What You'll Learn

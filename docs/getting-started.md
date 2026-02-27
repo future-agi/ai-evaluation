@@ -19,7 +19,7 @@
 
 ### Python
 - Python 3.10 or higher
-- pip or poetry package manager
+- pip or uv package manager
 
 ### TypeScript/JavaScript
 - Node.js 18.0.0 or higher
@@ -41,10 +41,10 @@ Get your keys from the [Future AGI Platform](https://app.futureagi.com) under **
 pip install ai-evaluation
 ```
 
-Or with poetry:
+Or with uv:
 
 ```bash
-poetry add ai-evaluation
+uv add ai-evaluation
 ```
 
 ### TypeScript/JavaScript

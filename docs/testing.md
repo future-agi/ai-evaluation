@@ -8,7 +8,7 @@
 
 - Python 3.10+
 - Node.js 18+ (for TypeScript tests)
-- uv, poetry, or pip for Python package management
+- uv or pip for Python package management
 
 ---
 
@@ -42,25 +42,6 @@ uv run pytest --cov=fi
 
 # Run tests matching a pattern
 uv run pytest -k "test_eval"
-```
-
-### Using Poetry
-
-```bash
-cd python
-
-# Install dependencies
-poetry install
-
-# Run all tests
-poetry run pytest
-
-# Run specific tests
-poetry run pytest tests/sdk/ -v
-poetry run pytest tests/cli/ -v
-
-# Run with coverage
-poetry run pytest --cov=fi
 ```
 
 ### Using pip

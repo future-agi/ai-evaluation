@@ -12,7 +12,7 @@ Demonstrates the full feedback loop with a REAL LLM judge:
 
 Usage:
     export GOOGLE_API_KEY=...
-    cd python && poetry run python -m examples.feedback_loop_demo
+    cd python && uv run python -m examples.feedback_loop_demo
 """
 
 import json

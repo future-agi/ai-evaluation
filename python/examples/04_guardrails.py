@@ -15,7 +15,7 @@ SCENARIO:
     ZERO API calls, so it can sit in the hot path of every request.
 
 Usage:
-    cd python && poetry run python -m examples.04_guardrails
+    cd python && uv run python -m examples.04_guardrails
 """
 
 from fi.evals.guardrails.scanners import (

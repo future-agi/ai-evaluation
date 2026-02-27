@@ -60,10 +60,12 @@ pip install ai-evaluation
 
 ```bash
 pip install ai-evaluation[nli]        # DeBERTa NLI model for faithfulness/hallucination
+pip install ai-evaluation[embeddings] # sentence-transformers for embedding similarity
 pip install ai-evaluation[feedback]   # ChromaDB for feedback loop
 pip install ai-evaluation[celery]     # Celery distributed backend
 pip install ai-evaluation[ray]        # Ray distributed backend
 pip install ai-evaluation[temporal]   # Temporal distributed backend
+pip install ai-evaluation[all]        # Everything
 ```
 
 **Requirements:** Python 3.10+
@@ -357,8 +359,8 @@ Real-world use cases with runnable code in [`python/examples/`](python/examples/
 
 ```bash
 cd python
-poetry run python -m examples.01_local_metrics  # no API keys needed
-poetry run python -m examples.04_guardrails      # no API keys needed
+uv run python -m examples.01_local_metrics  # no API keys needed
+uv run python -m examples.04_guardrails      # no API keys needed
 ```
 
 ---

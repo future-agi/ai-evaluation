@@ -13,7 +13,7 @@ SCENARIO:
     fi-evals — no API keys, no network calls, sub-second latency.
 
 Usage:
-    cd python && poetry run python -m examples.01_local_metrics
+    cd python && uv run python -m examples.01_local_metrics
 """
 
 import json
