@@ -17,7 +17,7 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
         domain_sensitivity="general",
         evaluations=[
             EvalConfig(
-                name="CoherenceEval",
+                name="answer_relevancy",
                 threshold=0.7,
                 weight=1.0,
             ),
@@ -49,7 +49,17 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
         domain_sensitivity="general",
         evaluations=[
             EvalConfig(
-                name="CoherenceEval",
+                name="faithfulness",
+                threshold=0.7,
+                weight=1.5,
+            ),
+            EvalConfig(
+                name="groundedness",
+                threshold=0.7,
+                weight=1.5,
+            ),
+            EvalConfig(
+                name="answer_relevancy",
                 threshold=0.7,
                 weight=1.0,
             ),
@@ -71,7 +81,7 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
         domain_sensitivity="general",
         evaluations=[
             EvalConfig(
-                name="CoherenceEval",
+                name="answer_relevancy",
                 threshold=0.7,
                 weight=1.0,
             ),
@@ -134,12 +144,12 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
         domain_sensitivity="general",
         evaluations=[
             EvalConfig(
-                name="ActionSafetyEval",
+                name="action_safety",
                 threshold=0.85,
                 weight=2.0,
             ),
             EvalConfig(
-                name="ReasoningQualityEval",
+                name="reasoning_quality",
                 threshold=0.7,
                 weight=1.0,
             ),
@@ -164,12 +174,17 @@ TEMPLATES: Dict[str, AutoEvalConfig] = {
 TEMPLATES["healthcare"] = AutoEvalConfig(
     name="healthcare",
     description="Evaluation pipeline for healthcare applications (HIPAA-compliant)",
-    app_category="customer_support",
+    app_category="question_answering",
     risk_level="high",
     domain_sensitivity="healthcare",
     evaluations=[
         EvalConfig(
-            name="CoherenceEval",
+            name="faithfulness",
+            threshold=0.85,
+            weight=2.0,
+        ),
+        EvalConfig(
+            name="answer_relevancy",
             threshold=0.8,
             weight=1.0,
         ),
@@ -208,7 +223,12 @@ TEMPLATES["financial"] = AutoEvalConfig(
     domain_sensitivity="financial",
     evaluations=[
         EvalConfig(
-            name="CoherenceEval",
+            name="factual_consistency",
+            threshold=0.85,
+            weight=2.0,
+        ),
+        EvalConfig(
+            name="answer_relevancy",
             threshold=0.8,
             weight=1.0,
         ),

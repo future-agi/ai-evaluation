@@ -295,7 +295,7 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="quality",
             importance="required",
             reason="Customer support needs clear, coherent responses",
-            suggested_evals=["CoherenceEval"],
+            suggested_evals=["answer_relevancy"],
         ),
         AppRequirement(
             category="safety",
@@ -315,13 +315,13 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="faithfulness",
             importance="required",
             reason="RAG systems must provide grounded, faithful responses",
-            suggested_evals=["CoherenceEval"],
+            suggested_evals=["faithfulness", "groundedness"],
         ),
         AppRequirement(
             category="quality",
             importance="required",
             reason="Responses should be coherent and relevant",
-            suggested_evals=["CoherenceEval"],
+            suggested_evals=["answer_relevancy"],
         ),
         AppRequirement(
             category="safety",
@@ -335,7 +335,7 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="quality",
             importance="required",
             reason="Code responses should be coherent",
-            suggested_evals=["CoherenceEval"],
+            suggested_evals=["answer_relevancy"],
         ),
         AppRequirement(
             category="code_safety",
@@ -357,20 +357,20 @@ CATEGORY_REQUIREMENTS: Dict[AppCategory, List[AppRequirement]] = {
             category="tool_use",
             importance="required",
             reason="Agent workflows need tool use validation",
-            suggested_evals=["ActionSafetyEval"],
+            suggested_evals=["action_safety"],
         ),
         AppRequirement(
             category="safety",
             importance="required",
             reason="Agent actions must be safe",
-            suggested_evals=["ActionSafetyEval"],
+            suggested_evals=["action_safety"],
             suggested_scanners=["jailbreak", "code_injection"],
         ),
         AppRequirement(
             category="reasoning",
             importance="recommended",
             reason="Agent reasoning should be high quality",
-            suggested_evals=["ReasoningQualityEval"],
+            suggested_evals=["reasoning_quality"],
         ),
     ],
 }
@@ -381,7 +381,7 @@ DEFAULT_REQUIREMENTS: List[AppRequirement] = [
         category="quality",
         importance="recommended",
         reason="All LLM applications benefit from basic quality evaluation",
-        suggested_evals=["CoherenceEval"],
+        suggested_evals=["answer_relevancy"],
     ),
 ]
 

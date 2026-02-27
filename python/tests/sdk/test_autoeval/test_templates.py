@@ -42,7 +42,7 @@ class TestTemplates:
         eval_names = [e.name for e in config.evaluations]
         scanner_names = [s.name for s in config.scanners]
 
-        assert "CoherenceEval" in eval_names
+        assert "answer_relevancy" in eval_names
         assert "JailbreakScanner" in scanner_names
         assert "ToxicityScanner" in scanner_names
 
@@ -51,7 +51,7 @@ class TestTemplates:
         config = TEMPLATES["rag_system"]
         eval_names = [e.name for e in config.evaluations]
 
-        assert "CoherenceEval" in eval_names
+        assert "answer_relevancy" in eval_names
 
     def test_code_assistant_template(self):
         """Code assistant template should have security scanners."""
@@ -76,8 +76,8 @@ class TestTemplates:
         config = TEMPLATES["agent_workflow"]
         eval_names = [e.name for e in config.evaluations]
 
-        assert "ActionSafetyEval" in eval_names
-        assert "ReasoningQualityEval" in eval_names
+        assert "action_safety" in eval_names
+        assert "reasoning_quality" in eval_names
 
 
 class TestGetTemplate:
@@ -193,4 +193,4 @@ class TestFinancialTemplate:
         """Financial should have coherence eval."""
         config = TEMPLATES["financial"]
         eval_names = [e.name for e in config.evaluations]
-        assert "CoherenceEval" in eval_names
+        assert "answer_relevancy" in eval_names

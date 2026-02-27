@@ -262,7 +262,7 @@ class TestAppAnalyzerRequirementsParsing:
                     "category": "faithfulness",
                     "importance": "required",
                     "reason": "Medical accuracy is critical",
-                    "suggested_evals": ["CoherenceEval"],
+                    "suggested_evals": ["answer_relevancy"],
                     "suggested_scanners": ["PIIScanner"],
                 },
             ],
@@ -277,7 +277,7 @@ class TestAppAnalyzerRequirementsParsing:
         req = analysis.requirements[0]
         assert req.category == "faithfulness"
         assert req.importance == "required"
-        assert "CoherenceEval" in req.suggested_evals
+        assert "answer_relevancy" in req.suggested_evals
         assert "PIIScanner" in req.suggested_scanners
 
     def test_parse_multiple_requirements(self):
@@ -292,13 +292,13 @@ class TestAppAnalyzerRequirementsParsing:
                     "category": "tool_use",
                     "importance": "required",
                     "reason": "Agent needs correct tool use",
-                    "suggested_evals": ["ActionSafetyEval"],
+                    "suggested_evals": ["action_safety"],
                 },
                 {
                     "category": "safety",
                     "importance": "required",
                     "reason": "Agent actions must be safe",
-                    "suggested_evals": ["ActionSafetyEval"],
+                    "suggested_evals": ["action_safety"],
                     "suggested_scanners": ["JailbreakScanner"],
                 },
             ],

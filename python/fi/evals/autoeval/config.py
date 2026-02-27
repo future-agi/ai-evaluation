@@ -14,6 +14,8 @@ class EvalConfig:
     threshold: float = 0.7
     weight: float = 1.0
     params: Dict[str, Any] = field(default_factory=dict)
+    model: Optional[str] = None  # LLM model for augmented metrics
+    augment: bool = False  # Enable local→LLM augmentation
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -25,6 +27,10 @@ class EvalConfig:
         }
         if self.params:
             result["params"] = self.params
+        if self.model:
+            result["model"] = self.model
+        if self.augment:
+            result["augment"] = self.augment
         return result
 
     @classmethod
@@ -36,6 +42,8 @@ class EvalConfig:
             threshold=data.get("threshold", 0.7),
             weight=data.get("weight", 1.0),
             params=data.get("params", {}),
+            model=data.get("model"),
+            augment=data.get("augment", False),
         )
 
     def copy(self) -> "EvalConfig":
@@ -46,6 +54,8 @@ class EvalConfig:
             threshold=self.threshold,
             weight=self.weight,
             params=deepcopy(self.params),
+            model=self.model,
+            augment=self.augment,
         )
 
 

@@ -14,13 +14,13 @@ class TestEvalConfig:
     def test_create_eval_config(self):
         """Should create eval config with all fields."""
         config = EvalConfig(
-            name="CoherenceEval",
+            name="answer_relevancy",
             enabled=True,
             threshold=0.8,
             weight=1.5,
             params={"strict": True},
         )
-        assert config.name == "CoherenceEval"
+        assert config.name == "answer_relevancy"
         assert config.enabled is True
         assert config.threshold == 0.8
         assert config.weight == 1.5
@@ -137,7 +137,7 @@ class TestAutoEvalConfig:
             risk_level="high",
             domain_sensitivity="healthcare",
             evaluations=[
-                EvalConfig(name="CoherenceEval", threshold=0.9),
+                EvalConfig(name="answer_relevancy", threshold=0.9),
             ],
             scanners=[
                 ScannerConfig(name="PIIScanner", action="redact"),

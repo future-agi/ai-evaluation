@@ -13,7 +13,7 @@ class TestAutoEvalPipelineCreation:
         """Should create pipeline from config."""
         config = AutoEvalConfig(
             name="test_pipeline",
-            evaluations=[EvalConfig(name="CoherenceEval")],
+            evaluations=[EvalConfig(name="answer_relevancy")],
             scanners=[ScannerConfig(name="JailbreakScanner")],
         )
         pipeline = AutoEvalPipeline.from_config(config)
@@ -170,11 +170,11 @@ class TestAutoEvalPipelineIntegration:
         pipeline = AutoEvalPipeline.from_template("rag_system")
 
         # Customize
-        pipeline.set_threshold("CoherenceEval", 0.9)
+        pipeline.set_threshold("answer_relevancy", 0.9)
         pipeline.add(ScannerConfig(name="PIIScanner", action="redact"))
 
         # Verify config
-        assert pipeline.config.get_eval("CoherenceEval").threshold == 0.9
+        assert pipeline.config.get_eval("answer_relevancy").threshold == 0.9
         assert pipeline.config.get_scanner("PIIScanner") is not None
 
     def test_full_workflow_from_description(self):

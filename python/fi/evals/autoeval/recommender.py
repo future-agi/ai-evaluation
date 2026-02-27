@@ -8,16 +8,27 @@ from .types import AppAnalysis, RiskLevel, DomainSensitivity
 from .config import EvalConfig, ScannerConfig
 
 
-# Mapping from requirement eval names to actual class names
+# Mapping from requirement eval names to core metric names
 EVAL_MAPPINGS: Dict[str, str] = {
-    # Semantic evaluations
-    "coherence": "CoherenceEval",
-    "CoherenceEval": "CoherenceEval",
-    # Agentic evaluations
-    "action_safety": "ActionSafetyEval",
-    "ActionSafetyEval": "ActionSafetyEval",
-    "reasoning_quality": "ReasoningQualityEval",
-    "ReasoningQualityEval": "ReasoningQualityEval",
+    # Quality / Relevancy
+    "coherence": "answer_relevancy",
+    "CoherenceEval": "answer_relevancy",
+    "answer_relevancy": "answer_relevancy",
+    # RAG / Faithfulness
+    "faithfulness": "faithfulness",
+    "groundedness": "groundedness",
+    "rag_faithfulness": "rag_faithfulness",
+    "context_utilization": "context_utilization",
+    # Hallucination
+    "hallucination": "hallucination_score",
+    "factual_consistency": "factual_consistency",
+    # Agent
+    "action_safety": "action_safety",
+    "ActionSafetyEval": "action_safety",
+    "reasoning_quality": "reasoning_quality",
+    "ReasoningQualityEval": "reasoning_quality",
+    "trajectory_score": "trajectory_score",
+    "task_completion": "task_completion",
 }
 
 # Mapping from requirement scanner names to actual scanner names

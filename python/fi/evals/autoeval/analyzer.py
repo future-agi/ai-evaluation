@@ -138,10 +138,13 @@ class AppAnalyzer:
                 )
             else:
                 raise ValueError(f"Unknown LLM provider type: {type(self.llm_provider)}")
-        except TypeError:
-            # Try simpler call signature
-            if hasattr(self.llm_provider, "complete"):
-                response = self.llm_provider.complete(prompt)
+        except TypeError as e:
+            # Only retry with simpler args if it's a signature mismatch
+            if "unexpected keyword argument" in str(e) or "positional argument" in str(e):
+                if hasattr(self.llm_provider, "complete"):
+                    response = self.llm_provider.complete(prompt)
+                else:
+                    raise
             else:
                 raise
 

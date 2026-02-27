@@ -50,6 +50,15 @@ from fi.evals.guardrails.scanners.invisible_chars import InvisibleCharScanner
 from fi.evals.guardrails.scanners.language import LanguageScanner
 from fi.evals.guardrails.scanners.topics import TopicRestrictionScanner
 from fi.evals.guardrails.scanners.regex import RegexScanner, RegexPattern, COMMON_PATTERNS
+from fi.evals.guardrails.scanners.eval_delegate import (
+    EvalDelegateScanner,
+    PIIScanner,
+    ToxicityScanner,
+    BiasScanner,
+    SafetyScanner,
+    ContentModerationScanner,
+    PromptInjectionScanner,
+)
 
 
 def create_default_pipeline(
@@ -107,4 +116,12 @@ __all__ = [
     # Regex helpers
     "RegexPattern",
     "COMMON_PATTERNS",
+    # Eval-delegate scanners
+    "EvalDelegateScanner",
+    "PIIScanner",
+    "ToxicityScanner",
+    "BiasScanner",
+    "SafetyScanner",
+    "ContentModerationScanner",
+    "PromptInjectionScanner",
 ]

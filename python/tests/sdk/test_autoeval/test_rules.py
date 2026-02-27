@@ -129,7 +129,7 @@ class TestRuleBasedAnalyzer:
         all_evals = [
             e for r in analysis.requirements for e in r.suggested_evals
         ]
-        assert any("Coherence" in e for e in all_evals)
+        assert any(e in ("answer_relevancy", "faithfulness", "groundedness") for e in all_evals)
 
     def test_generate_requirements_for_agents(self, analyzer):
         """Should generate appropriate requirements for agent workflows."""
@@ -139,7 +139,7 @@ class TestRuleBasedAnalyzer:
         all_evals = [
             e for r in analysis.requirements for e in r.suggested_evals
         ]
-        assert any("ActionSafety" in e or "Reasoning" in e for e in all_evals)
+        assert any(e in ("action_safety", "reasoning_quality") for e in all_evals)
 
     def test_generate_pii_scanner_for_sensitive_domains(self, analyzer):
         """Should add PII scanner for sensitive domains."""

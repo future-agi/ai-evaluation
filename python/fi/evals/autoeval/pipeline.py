@@ -239,19 +239,60 @@ class AutoEvalPipeline:
         config = load_config(path)
         return cls(config)
 
+    def _is_core_metric(self, name: str) -> bool:
+        """Check if a name corresponds to a core metric in the local registry."""
+        try:
+            from fi.evals.local.registry import get_registry
+            return get_registry().is_registered(name)
+        except ImportError:
+            return False
+
+    def _get_metric_configs(self) -> List[EvalConfig]:
+        """Get eval configs that are core metrics (routed through evaluate())."""
+        return [
+            e for e in self.config.evaluations
+            if e.enabled and self._is_core_metric(e.name)
+        ]
+
+    def _get_class_configs(self) -> List[EvalConfig]:
+        """Get eval configs that are framework classes (routed through Evaluator)."""
+        return [
+            e for e in self.config.evaluations
+            if e.enabled and not self._is_core_metric(e.name)
+        ]
+
+    def _run_core_metrics(self, inputs: Dict[str, Any]) -> List[Any]:
+        """Run core metrics via evaluate() API and return EvalResults."""
+        from fi.evals import evaluate as core_evaluate
+
+        metric_configs = self._get_metric_configs()
+        if not metric_configs:
+            return []
+
+        results = []
+        for eval_config in metric_configs:
+            try:
+                result = core_evaluate(
+                    eval_config.name,
+                    model=eval_config.model,
+                    augment=eval_config.augment,
+                    **inputs,
+                )
+                results.append(result)
+            except Exception as e:
+                logger.warning(f"Core metric '{eval_config.name}' failed: {e}")
+        return results
+
     def _build_evaluator(self) -> None:
-        """Build the evaluator with configured evaluations."""
+        """Build the evaluator with framework-class evaluations only."""
         if self._evaluator is not None:
             return
 
         from fi.evals.framework import Evaluator, ExecutionMode
 
-        # Instantiate evaluation classes
+        # Only build for non-metric (framework class) evals
         self._eval_instances = []
-        for eval_config in self.config.evaluations:
-            if not eval_config.enabled:
-                continue
-
+        for eval_config in self._get_class_configs():
             eval_class = _get_eval_class(eval_config.name)
             if eval_class is None:
                 logger.warning(f"Evaluation class not found: {eval_config.name}")
@@ -299,10 +340,10 @@ class AutoEvalPipeline:
                 # Set threshold and action if the scanner supports them
                 if hasattr(instance, "threshold"):
                     instance.threshold = scanner_config.threshold
-                if hasattr(instance, "default_action"):
+                if hasattr(instance, "action"):
                     from fi.evals.guardrails.scanners.base import ScannerAction
 
-                    instance.default_action = ScannerAction(scanner_config.action)
+                    instance.action = ScannerAction(scanner_config.action)
                 self._scanner_instances.append(instance)
             except Exception as e:
                 logger.warning(f"Failed to instantiate {scanner_config.name}: {e}")
@@ -352,6 +393,7 @@ class AutoEvalPipeline:
 
         scan_result = None
         eval_result = None
+        metric_results = []
         blocked_by_scanner = False
 
         # Run scanners first (fast)
@@ -362,15 +404,37 @@ class AutoEvalPipeline:
             blocked_by_scanner = not scan_result.passed
 
         # Run evaluations if not blocked
-        if self._evaluator and not blocked_by_scanner:
-            eval_result = self._evaluator.run(inputs)
+        if not blocked_by_scanner:
+            # Core metrics via evaluate() API
+            metric_results = self._run_core_metrics(inputs)
+
+            # Framework class evals via Evaluator
+            if self._evaluator:
+                eval_result = self._evaluator.run(inputs)
 
         # Determine overall pass/fail
         passed = True
         if scan_result and not scan_result.passed:
             passed = False
+
+        # Check core metric results against thresholds
+        if metric_results:
+            metric_configs = {e.name: e for e in self._get_metric_configs()}
+            failed_count = 0
+            total_count = len(metric_results)
+            for r in metric_results:
+                config = metric_configs.get(getattr(r, "eval_name", ""))
+                threshold = config.threshold if config else 0.5
+                score = getattr(r, "score", None)
+                if score is not None and score < threshold:
+                    failed_count += 1
+            if total_count > 0:
+                success_rate = (total_count - failed_count) / total_count
+                if success_rate < self.config.global_pass_rate:
+                    passed = False
+
         if eval_result:
-            # Check if evaluations meet threshold
+            # Check if framework evaluations meet threshold
             batch = eval_result.wait() if eval_result.is_future else eval_result.batch
             if batch and batch.success_rate < self.config.global_pass_rate:
                 passed = False
@@ -381,6 +445,7 @@ class AutoEvalPipeline:
             passed=passed,
             scan_result=scan_result,
             eval_result=eval_result,
+            metric_results=metric_results,
             blocked_by_scanner=blocked_by_scanner,
             total_latency_ms=total_latency,
         )

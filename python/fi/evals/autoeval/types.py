@@ -141,6 +141,7 @@ class AutoEvalResult:
     passed: bool
     scan_result: Optional[Any] = None  # PipelineResult from scanners
     eval_result: Optional[Any] = None  # EvaluatorResult from evaluator
+    metric_results: List[Any] = field(default_factory=list)  # Core EvalResults
     blocked_by_scanner: bool = False
     total_latency_ms: float = 0.0
 
@@ -160,6 +161,15 @@ class AutoEvalResult:
                 if hasattr(self.scan_result, "blocked_by")
                 else []
             )
+
+        if self.metric_results:
+            summary["metric_results"] = {
+                getattr(r, "eval_name", "unknown"): {
+                    "score": getattr(r, "score", None),
+                    "passed": getattr(r, "passed", None),
+                }
+                for r in self.metric_results
+            }
 
         if self.eval_result:
             batch = (
@@ -194,6 +204,16 @@ class AutoEvalResult:
             if hasattr(self.scan_result, "flagged_by") and self.scan_result.flagged_by:
                 lines.append(f"  Flagged by: {', '.join(self.scan_result.flagged_by)}")
 
+        if self.metric_results:
+            lines.append(f"\nMetric Results ({len(self.metric_results)}):")
+            for r in self.metric_results:
+                status = "PASSED" if getattr(r, "passed", False) else "FAILED"
+                score = getattr(r, "score", "N/A")
+                name = getattr(r, "eval_name", "unknown")
+                if isinstance(score, float):
+                    score = f"{score:.2f}"
+                lines.append(f"  {name}: {status} (score: {score})")
+
         if self.eval_result:
             batch = (
                 self.eval_result.wait()
@@ -201,7 +221,7 @@ class AutoEvalResult:
                 else getattr(self.eval_result, "batch", None)
             )
             if batch:
-                lines.append(f"\nEvaluation Result: {batch.success_rate:.0%} passed")
+                lines.append(f"\nFramework Evaluation Result: {batch.success_rate:.0%} passed")
                 for r in batch.results:
                     status = "PASSED" if getattr(r.value, "passed", False) else "FAILED"
                     score = getattr(r.value, "score", "N/A")

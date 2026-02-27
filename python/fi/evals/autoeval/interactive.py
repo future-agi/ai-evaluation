@@ -56,14 +56,9 @@ class InteractiveConfigurator:
     # Confidence threshold for requiring clarification
     CONFIDENCE_THRESHOLD = 0.7
 
-    def __init__(self, llm_provider: Optional[Any] = None):
-        """
-        Initialize the configurator.
-
-        Args:
-            llm_provider: Optional LLM provider for generating custom questions
-        """
-        self.llm_provider = llm_provider
+    def __init__(self):
+        """Initialize the configurator."""
+        pass
 
     def needs_clarification(self, analysis: AppAnalysis) -> bool:
         """
@@ -286,24 +281,3 @@ class InteractiveConfigurator:
             explanation=f"Adjusted after user clarification: {analysis.explanation}",
         )
 
-    def get_questions_for_llm(self, analysis: AppAnalysis) -> str:
-        """
-        Get questions formatted for LLM-based clarification.
-
-        Returns a prompt that can be used to generate custom questions.
-
-        Args:
-            analysis: The app analysis
-
-        Returns:
-            Formatted prompt string
-        """
-        from .prompts import CLARIFICATION_QUESTIONS_PROMPT
-
-        return CLARIFICATION_QUESTIONS_PROMPT.format(
-            description=analysis.explanation,
-            category=analysis.category.value,
-            risk_level=analysis.risk_level.value,
-            domain_sensitivity=analysis.domain_sensitivity.value,
-            confidence=analysis.confidence,
-        )

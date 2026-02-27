@@ -26,8 +26,8 @@ class TestEvalMappings:
     def test_common_evals_mapped(self):
         """Should map common evaluation names."""
         assert "coherence" in EVAL_MAPPINGS
-        assert "CoherenceEval" in EVAL_MAPPINGS
-        assert EVAL_MAPPINGS["coherence"] == "CoherenceEval"
+        assert "answer_relevancy" in EVAL_MAPPINGS
+        assert EVAL_MAPPINGS["coherence"] == "answer_relevancy"
 
     def test_scanner_mappings_exist(self):
         """Should have scanner mappings defined."""
@@ -97,8 +97,8 @@ class TestEvalRecommender:
         )
         evals, scanners = recommender.recommend(analysis)
         eval_names = [e.name for e in evals]
-        assert "CoherenceEval" in eval_names
-        assert "ActionSafetyEval" in eval_names
+        assert "answer_relevancy" in eval_names
+        assert "action_safety" in eval_names
 
     def test_recommend_maps_scanner_names(self, recommender):
         """Should map requirement scanner names to class names."""
@@ -218,7 +218,7 @@ class TestEvalRecommender:
         )
         evals, _ = recommender.recommend(analysis)
         eval_names = [e.name for e in evals]
-        assert eval_names.count("CoherenceEval") == 1
+        assert eval_names.count("answer_relevancy") == 1
 
     def test_recommend_adds_pii_scanner_for_healthcare(self, recommender):
         """Should add PII scanner for healthcare domain."""
@@ -307,7 +307,7 @@ class TestEvalRecommender:
         evals = recommender.get_available_evals()
         assert isinstance(evals, list)
         assert len(evals) > 0
-        assert "CoherenceEval" in evals
+        assert "answer_relevancy" in evals
 
     def test_get_available_scanners(self, recommender):
         """Should return list of available scanner names."""

@@ -72,13 +72,13 @@ class TestAppRequirement:
             category="safety",
             importance="required",
             reason="Test reason",
-            suggested_evals=["CoherenceEval"],
+            suggested_evals=["answer_relevancy"],
             suggested_scanners=["JailbreakScanner"],
         )
         assert req.category == "safety"
         assert req.importance == "required"
         assert req.reason == "Test reason"
-        assert "CoherenceEval" in req.suggested_evals
+        assert "answer_relevancy" in req.suggested_evals
         assert "JailbreakScanner" in req.suggested_scanners
 
     def test_requirement_to_dict(self):

@@ -47,7 +47,7 @@ class TestHealthcareScenarios:
         assert pii_scanner.action == "redact"
 
         # Should have coherence eval with high threshold
-        coherence = pipeline.config.get_eval("CoherenceEval")
+        coherence = pipeline.config.get_eval("answer_relevancy")
         assert coherence is not None
         assert coherence.threshold >= 0.8
 
@@ -85,7 +85,7 @@ class TestFinancialScenarios:
         pipeline = AutoEvalPipeline.from_template("financial")
 
         eval_names = [e.name for e in pipeline.config.evaluations]
-        assert "CoherenceEval" in eval_names
+        assert "answer_relevancy" in eval_names
 
     def test_financial_terminology_detection(self):
         """Should detect financial from various financial terms."""
@@ -150,7 +150,7 @@ class TestRAGSystemScenarios:
         pipeline = AutoEvalPipeline.from_template("rag_system")
 
         eval_names = [e.name for e in pipeline.config.evaluations]
-        assert "CoherenceEval" in eval_names
+        assert "answer_relevancy" in eval_names
 
     def test_rag_with_different_descriptions(self):
         """Should detect RAG from various descriptions."""
@@ -189,11 +189,11 @@ class TestAgentWorkflowScenarios:
         pipeline = AutoEvalPipeline.from_template("agent_workflow")
 
         eval_names = [e.name for e in pipeline.config.evaluations]
-        assert "ActionSafetyEval" in eval_names
-        assert "ReasoningQualityEval" in eval_names
+        assert "action_safety" in eval_names
+        assert "reasoning_quality" in eval_names
 
         # Action safety should have high weight
-        safety = pipeline.config.get_eval("ActionSafetyEval")
+        safety = pipeline.config.get_eval("action_safety")
         assert safety.weight >= 1.5
 
     def test_agent_high_risk_by_default(self):
@@ -282,7 +282,7 @@ class TestCustomerSupportScenarios:
         scanner_names = [s.name for s in pipeline.config.scanners]
 
         # Should have quality evaluations
-        assert "CoherenceEval" in eval_names
+        assert "answer_relevancy" in eval_names
 
         # Should have basic safety scanners
         assert "JailbreakScanner" in scanner_names
@@ -297,13 +297,13 @@ class TestPipelineCustomization:
         pipeline = AutoEvalPipeline.from_template("rag_system")
 
         # Common pattern: increase accuracy for production
-        pipeline.set_threshold("CoherenceEval", 0.9)
+        pipeline.set_threshold("answer_relevancy", 0.9)
 
         # Add PII protection
         pipeline.add(ScannerConfig("PIIScanner", action="redact"))
 
         # Verify customizations
-        coherence = pipeline.config.get_eval("CoherenceEval")
+        coherence = pipeline.config.get_eval("answer_relevancy")
         assert coherence.threshold == 0.9
 
         pii = pipeline.config.get_scanner("PIIScanner")
@@ -396,7 +396,7 @@ class TestExportImportRoundtrip:
         """Exported YAML should preserve all customizations."""
         # Create and customize
         pipeline = AutoEvalPipeline.from_template("rag_system")
-        pipeline.set_threshold("CoherenceEval", 0.95)
+        pipeline.set_threshold("answer_relevancy", 0.95)
         pipeline.add(ScannerConfig("PIIScanner", action="redact"))
 
         # Export
@@ -407,7 +407,7 @@ class TestExportImportRoundtrip:
         loaded = AutoEvalPipeline.from_yaml(str(yaml_path))
 
         # Verify
-        assert loaded.config.get_eval("CoherenceEval").threshold == 0.95
+        assert loaded.config.get_eval("answer_relevancy").threshold == 0.95
         assert loaded.config.get_scanner("PIIScanner").action == "redact"
 
     def test_json_roundtrip_for_api_configs(self, tmp_path):
