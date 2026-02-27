@@ -2,22 +2,25 @@
 """
 Feedback Loop — End-to-End Demo
 
-Demonstrates the full feedback loop:
-1. Run a metric locally (faithfulness heuristic)
-2. Developer disagrees with the result
-3. Submit feedback → stored in ChromaDB with semantic embeddings
-4. Run the metric again on similar input → feedback retrieved as few-shot
-5. Calibrate thresholds from accumulated feedback
-6. Show stats
+Demonstrates the full feedback loop with a REAL LLM judge:
+1. Run faithfulness metric locally → heuristic gives wrong score
+2. Developer submits feedback corrections → stored in ChromaDB
+3. Run the SAME metric again with feedback_store → ChromaDB retrieves
+   similar past corrections as few-shot examples → injected into
+   LLM judge prompt → Gemini produces a calibrated result
+4. Compare: without feedback vs with feedback
 
 Usage:
-    cd python && poetry run python examples/feedback_loop_demo.py
+    export GOOGLE_API_KEY=...
+    cd python && poetry run python -m examples.feedback_loop_demo
 """
 
 import json
+import os
 import shutil
 import tempfile
 
+from fi.evals import evaluate
 from fi.evals.core.result import EvalResult
 from fi.evals.feedback import (
     FeedbackCollector,
@@ -34,201 +37,226 @@ def divider(title: str):
     print(f"{'=' * 60}\n")
 
 
-def demo_inmemory():
-    """Quick demo with InMemoryFeedbackStore (no ChromaDB needed)."""
-    divider("DEMO 1: InMemory Feedback Store")
+def demo_real_llm_judge():
+    """The real deal: LLM judge with feedback-driven few-shot examples."""
+    divider("REAL E2E: LLM Judge + Feedback Loop")
 
-    store = InMemoryFeedbackStore()
+    model = "gemini/gemini-2.5-flash"
+    print(f"Using model: {model}")
+
+    # --- Step 1: Run faithfulness WITHOUT feedback ---
+    divider("STEP 1: Run faithfulness WITHOUT feedback")
+
+    test_output = "The patient should take ibuprofen twice daily for pain relief"
+    test_context = "Prescribe ibuprofen 2x per day for pain management"
+
+    print(f"Output:  {test_output}")
+    print(f"Context: {test_context}")
+    print("(These are semantically equivalent — score should be HIGH)")
+
+    result_no_feedback = evaluate(
+        "faithfulness",
+        output=test_output,
+        context=test_context,
+        model=model,
+        augment=True,
+    )
+    print(f"\nResult WITHOUT feedback:")
+    print(f"  Score:  {result_no_feedback.score}")
+    print(f"  Reason: {result_no_feedback.reason[:200]}")
+    print(f"  Engine: {result_no_feedback.metadata.get('engine', 'unknown')}")
+
+    # --- Step 2: Build a feedback store with corrections ---
+    divider("STEP 2: Submit feedback corrections to ChromaDB")
+
+    tmpdir = tempfile.mkdtemp(prefix="fi_feedback_e2e_")
+    store = ChromaFeedbackStore(persist_directory=tmpdir)
     collector = FeedbackCollector(store)
 
-    # Simulate eval results that a developer disagrees with
-    bad_results = [
-        (
-            EvalResult(eval_name="faithfulness", score=0.2, reason="Output contradicts context"),
-            {"output": "The patient should take 500mg of ibuprofen", "context": "Prescribe 500mg ibuprofen for pain"},
-            0.9, "Output IS faithful - it correctly states the prescription",
-        ),
-        (
-            EvalResult(eval_name="faithfulness", score=0.3, reason="Low semantic overlap"),
-            {"output": "Apply the cream twice daily", "context": "Use topical cream 2x per day"},
-            0.95, "Semantically equivalent - 'twice daily' == '2x per day'",
-        ),
-        (
-            EvalResult(eval_name="faithfulness", score=0.8, reason="High faithfulness"),
-            {"output": "Take this medication forever", "context": "Take for 7 days only"},
-            0.1, "Hallucinated 'forever' - context says 7 days only",
-        ),
+    # Submit corrections: teach the judge that paraphrases are faithful
+    corrections = [
+        {
+            "output": "Apply the cream twice daily",
+            "context": "Use topical cream 2x per day",
+            "original_score": 0.3,
+            "correct_score": 0.95,
+            "reason": "Semantically equivalent — 'twice daily' == '2x per day'",
+        },
+        {
+            "output": "Take 500mg of ibuprofen for pain",
+            "context": "Prescribe 500mg ibuprofen for pain management",
+            "original_score": 0.4,
+            "correct_score": 0.9,
+            "reason": "Faithful — correctly states the prescription",
+        },
+        {
+            "output": "Take this medication forever",
+            "context": "Take for 7 days only",
+            "original_score": 0.7,
+            "correct_score": 0.1,
+            "reason": "UNFAITHFUL — hallucinated 'forever', context says 7 days",
+        },
+        {
+            "output": "Avoid all physical activity",
+            "context": "Light exercise is recommended during recovery",
+            "original_score": 0.5,
+            "correct_score": 0.05,
+            "reason": "UNFAITHFUL — directly contradicts context recommendation",
+        },
+        {
+            "output": "The dosage is 200mg per day",
+            "context": "Recommended daily dose: 200 milligrams",
+            "original_score": 0.35,
+            "correct_score": 0.95,
+            "reason": "Faithful — exact same dosage, just different wording",
+        },
     ]
 
-    print("Submitting 3 feedback entries...")
-    for result, inputs, correct_score, reason in bad_results:
-        entry = collector.submit(
-            result,
-            inputs=inputs,
-            correct_score=correct_score,
-            correct_reason=reason,
+    print(f"Submitting {len(corrections)} feedback corrections...")
+    for c in corrections:
+        fake_result = EvalResult(
+            eval_name="faithfulness",
+            score=c["original_score"],
+            reason=f"Heuristic score: {c['original_score']}",
         )
-        print(f"  {result.score:.1f} -> {correct_score:.1f} | {reason[:60]}")
+        entry = collector.submit(
+            fake_result,
+            inputs={"output": c["output"], "context": c["context"]},
+            correct_score=c["correct_score"],
+            correct_reason=c["reason"],
+        )
+        print(f"  {c['original_score']:.1f} -> {c['correct_score']:.2f} | {c['reason'][:55]}")
 
-    # Also confirm some correct results
-    good_result = EvalResult(eval_name="faithfulness", score=0.85, reason="Faithful output")
-    collector.confirm(
-        good_result,
-        inputs={"output": "Take 200mg aspirin", "context": "Prescribe 200mg aspirin"},
-    )
-    print("  Confirmed 1 correct result")
+    print(f"\nChromaDB entries: {store.count('faithfulness')}")
 
-    # Retrieve few-shot examples for a new input
-    divider("RETRIEVAL: Few-shot examples for new input")
-    retriever = collector.get_retriever(max_examples=2)
+    # --- Step 3: Show what gets retrieved ---
+    divider("STEP 3: Semantic retrieval for the test input")
+
+    retriever = FeedbackRetriever(store=store, max_examples=3)
     examples = retriever.retrieve_few_shot_examples(
         "faithfulness",
-        {"output": "Use the medication three times daily", "context": "Apply 3x per day"},
+        {"output": test_output, "context": test_context},
     )
-    print(f"Retrieved {len(examples)} few-shot examples:")
+    print(f"Retrieved {len(examples)} similar feedback entries:")
     for i, ex in enumerate(examples):
-        output = json.loads(ex["output"])
-        print(f"  Example {i+1}: score={output['score']}, reason={output['reason'][:60]}")
+        parsed = json.loads(ex["output"])
+        print(f"  {i+1}. score={parsed['score']:.2f} | {parsed['reason'][:60]}")
 
-    # Show stats
-    divider("STATS")
-    stats = collector.stats("faithfulness")
-    print(f"Total entries: {stats.total_entries}")
-    print(f"Agreement rate: {stats.agreement_rate:.0%}")
-    print(f"Avg score delta: {stats.avg_score_delta:+.2f}")
-    print(f"Score distribution: {stats.score_distribution}")
+    # --- Step 4: Run faithfulness WITH feedback ---
+    divider("STEP 4: Run faithfulness WITH feedback (few-shot injected)")
 
-    # Calibrate (need >= 5 entries with corrections)
-    # Add 2 more to reach 5
-    collector.submit(
-        EvalResult(eval_name="faithfulness", score=0.5, reason="Medium"),
-        inputs={"output": "Take as needed", "context": "Take when experiencing pain"},
-        correct_score=0.7,
-        correct_reason="Reasonable paraphrase",
+    print(f"Output:  {test_output}")
+    print(f"Context: {test_context}")
+
+    result_with_feedback = evaluate(
+        "faithfulness",
+        output=test_output,
+        context=test_context,
+        model=model,
+        augment=True,
+        feedback_store=store,
     )
-    collector.submit(
-        EvalResult(eval_name="faithfulness", score=0.6, reason="Moderate"),
-        inputs={"output": "Avoid alcohol", "context": "Do not consume alcohol with this medication"},
-        correct_score=0.85,
-        correct_reason="Correct advice, just shortened",
-    )
+    print(f"\nResult WITH feedback:")
+    print(f"  Score:  {result_with_feedback.score}")
+    print(f"  Reason: {result_with_feedback.reason[:200]}")
+    print(f"  Engine: {result_with_feedback.metadata.get('engine', 'unknown')}")
+    examples_used = result_with_feedback.metadata.get("feedback_examples_used", 0)
+    print(f"  Feedback examples injected: {examples_used}")
 
+    # --- Step 5: Compare ---
+    divider("COMPARISON")
+
+    print(f"WITHOUT feedback: score={result_no_feedback.score}")
+    print(f"WITH feedback:    score={result_with_feedback.score}")
+    print(f"Feedback examples used: {examples_used}")
+
+    if examples_used > 0:
+        print("\nThe LLM judge received few-shot examples from your past")
+        print("corrections, teaching it how to handle paraphrases in")
+        print("medical contexts. This is the feedback loop in action.")
+    else:
+        print("\nNote: No feedback examples were injected. This can happen")
+        print("if the retriever found no sufficiently similar entries.")
+
+    # --- Step 6: Test a clearly unfaithful case ---
+    divider("BONUS: Test an unfaithful case WITH feedback")
+
+    bad_output = "Stop all medications immediately"
+    bad_context = "Continue current medication regimen as prescribed"
+
+    print(f"Output:  {bad_output}")
+    print(f"Context: {bad_context}")
+    print("(These CONTRADICT each other — score should be LOW)")
+
+    result_bad = evaluate(
+        "faithfulness",
+        output=bad_output,
+        context=bad_context,
+        model=model,
+        augment=True,
+        feedback_store=store,
+    )
+    print(f"\nResult:")
+    print(f"  Score:  {result_bad.score}")
+    print(f"  Reason: {result_bad.reason[:200]}")
+    bad_examples = result_bad.metadata.get("feedback_examples_used", 0)
+    print(f"  Feedback examples injected: {bad_examples}")
+
+    # Cleanup
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # --- Step 7: Calibration ---
     divider("CALIBRATION")
-    profile = collector.calibrate("faithfulness")
+    # Use InMemory store for calibration demo (ChromaDB was cleaned up)
+    mem_store = InMemoryFeedbackStore()
+    cal_collector = FeedbackCollector(mem_store)
+    for c in corrections:
+        fake_result = EvalResult(
+            eval_name="faithfulness",
+            score=c["original_score"],
+            reason="",
+        )
+        cal_collector.submit(
+            fake_result,
+            inputs={"output": c["output"], "context": c["context"]},
+            correct_score=c["correct_score"],
+            correct_reason=c["reason"],
+        )
+
+    profile = cal_collector.calibrate("faithfulness")
     print(f"Optimal threshold: {profile.optimal_threshold}")
-    print(f"Accuracy at threshold: {profile.accuracy_at_threshold:.0%}")
+    print(f"Accuracy: {profile.accuracy_at_threshold:.0%}")
     print(f"Sample size: {profile.sample_size}")
-    print(f"Score mean: {profile.score_mean:.3f}")
-    print(f"Score std: {profile.score_std:.3f}")
-    print(f"Confusion matrix: TP={profile.true_positives} FP={profile.false_positives} "
+    print(f"TP={profile.true_positives} FP={profile.false_positives} "
           f"TN={profile.true_negatives} FN={profile.false_negatives}")
 
 
-def demo_chromadb():
-    """Full demo with ChromaDB (local persistent mode)."""
-    divider("DEMO 2: ChromaDB Feedback Store (Local Persistent)")
-
-    # Use a temp directory so we don't pollute ~/.fi
-    tmpdir = tempfile.mkdtemp(prefix="fi_feedback_demo_")
-    print(f"ChromaDB path: {tmpdir}")
-
-    try:
-        store = ChromaFeedbackStore(persist_directory=tmpdir)
-        collector = FeedbackCollector(store)
-
-        # Submit diverse feedback for RAG faithfulness
-        scenarios = [
-            # (original_score, correct_score, output, context, reason)
-            (0.2, 0.9, "Paris is the capital of France", "France's capital city is Paris", "Semantically equivalent"),
-            (0.3, 0.85, "The API returns JSON data", "REST endpoint responds with JSON format", "Same meaning, different words"),
-            (0.7, 0.1, "Python is the fastest language", "Python is known for readability not speed", "Contradicts context"),
-            (0.1, 0.8, "Use TLS 1.3 for encryption", "Encrypt connections with TLS version 1.3", "Faithful technical advice"),
-            (0.4, 0.7, "The model has 7B parameters", "LLM contains 7 billion parameters", "Same fact, abbreviated"),
-            (0.9, 0.2, "Always use root access", "Use least-privilege access principle", "Dangerous contradiction"),
-        ]
-
-        print(f"Submitting {len(scenarios)} feedback entries...")
-        for orig, correct, output, context, reason in scenarios:
-            result = EvalResult(eval_name="faithfulness", score=orig, reason=f"Score: {orig}")
-            collector.submit(
-                result,
-                inputs={"output": output, "context": context},
-                correct_score=correct,
-                correct_reason=reason,
-            )
-            print(f"  {orig:.1f} -> {correct:.1f} | {reason}")
-
-        # Verify ChromaDB persistence
-        count = store.count("faithfulness")
-        print(f"\nChromaDB count: {count} entries stored")
-
-        # Semantic retrieval — find similar feedback
-        divider("SEMANTIC RETRIEVAL")
-        retriever = FeedbackRetriever(store=store, max_examples=3)
-
-        # Query about similar technical content
-        query_inputs = {
-            "output": "Enable HTTPS for all connections",
-            "context": "All web traffic must use HTTPS encryption",
-        }
-        examples = retriever.retrieve_few_shot_examples("faithfulness", query_inputs)
-        print(f"Query: '{query_inputs['output']}'")
-        print(f"Retrieved {len(examples)} semantically similar examples:")
-        for i, ex in enumerate(examples):
-            output = json.loads(ex["output"])
-            print(f"  {i+1}. score={output['score']:.1f} | {output['reason'][:70]}")
-
-        # Config injection (what the LLM judge would receive)
-        divider("CONFIG INJECTION (what LLM judge sees)")
-        config = retriever.inject_into_config("faithfulness", query_inputs)
-        if "few_shot_examples" in config:
-            print(f"Injected {len(config['few_shot_examples'])} few-shot examples into judge config")
-            print("First example preview:")
-            first = config["few_shot_examples"][0]
-            print(f"  inputs: {json.dumps(first['inputs'])[:100]}...")
-            print(f"  output: {first['output']}")
-        else:
-            print("No examples injected (store might be empty)")
-
-        # Calibrate
-        divider("CALIBRATION (ChromaDB-backed)")
-        profile = collector.calibrate("faithfulness")
-        print(f"Optimal threshold: {profile.optimal_threshold}")
-        print(f"Accuracy: {profile.accuracy_at_threshold:.0%}")
-        print(f"Sample size: {profile.sample_size}")
-
-        # Global configuration
-        divider("GLOBAL FEEDBACK CONFIGURATION")
-        configure_feedback(store, max_examples=3)
-        print("Feedback configured globally.")
-        print("All augmented metric runs will now auto-retrieve feedback.")
-
-    finally:
-        # Cleanup temp directory
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        print(f"\nCleaned up: {tmpdir}")
-
-
 if __name__ == "__main__":
+    # Load env
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, val = line.partition("=")
+                    val = val.strip().strip('"')
+                    os.environ.setdefault(key.strip(), val)
+
+    if not os.environ.get("GOOGLE_API_KEY"):
+        print("ERROR: GOOGLE_API_KEY not set. Export it or add to .env")
+        exit(1)
+
     print("=" * 60)
-    print("  FI-EVALS FEEDBACK LOOP — END-TO-END DEMO")
+    print("  FI-EVALS FEEDBACK LOOP — REAL LLM JUDGE E2E")
     print("=" * 60)
 
-    demo_inmemory()
-    print("\n" + "~" * 60 + "\n")
+    demo_real_llm_judge()
 
-    try:
-        demo_chromadb()
-    except ImportError as e:
-        print(f"\nSkipping ChromaDB demo: {e}")
-        print("Install with: pip install ai-evaluation[feedback]")
-
-    divider("DEMO COMPLETE")
-    print("The feedback loop is fully functional!")
-    print("Key features demonstrated:")
-    print("  - Submit feedback on eval results")
-    print("  - Semantic retrieval of similar past feedback")
-    print("  - Few-shot injection into LLM judge config")
-    print("  - Statistical threshold calibration")
-    print("  - ChromaDB persistent storage")
-    print("  - Global feedback configuration")
+    divider("DONE")
+    print("The feedback loop works end-to-end:")
+    print("  1. Feedback stored in ChromaDB with semantic embeddings")
+    print("  2. Similar past corrections retrieved via vector search")
+    print("  3. Injected as few-shot examples into LLM judge prompt")
+    print("  4. Gemini produces calibrated scores informed by your feedback")
+    print("  5. Thresholds optimized statistically from feedback data")
