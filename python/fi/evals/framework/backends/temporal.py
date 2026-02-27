@@ -193,23 +193,16 @@ class TemporalBackend(Backend):
         args: tuple,
         kwargs: dict,
     ) -> Any:
-        """Start a Temporal workflow."""
+        """Start a Temporal workflow with cloudpickle-serialized payload."""
         from temporalio.client import WorkflowHandle
 
-        # For evaluation tasks, we use a generic workflow that executes
-        # the provided function. In production, you'd define specific workflows.
-        # Here we serialize the function and args for the workflow.
+        from .temporal_worker import serialize_task
 
-        workflow_input = {
-            "function_module": fn.__module__ if hasattr(fn, "__module__") else None,
-            "function_name": fn.__name__ if hasattr(fn, "__name__") else None,
-            "args": args,
-            "kwargs": kwargs,
-        }
+        payload_b64 = serialize_task(fn, args, kwargs)
 
         handle: WorkflowHandle = await client.start_workflow(
             "EvalTaskWorkflow",
-            workflow_input,
+            payload_b64,
             id=workflow_id,
             task_queue=self.config.task_queue,
             execution_timeout=timedelta(seconds=self.config.execution_timeout_seconds),
@@ -263,9 +256,12 @@ class TemporalBackend(Backend):
     async def _get_workflow_result(
         self, client: Any, workflow_id: str, timeout: float
     ) -> Any:
-        """Get workflow result with timeout."""
+        """Get workflow result with timeout, deserializing cloudpickle payload."""
+        from .temporal_worker import deserialize_result
+
         handle = client.get_workflow_handle(workflow_id)
-        return await asyncio.wait_for(handle.result(), timeout=timeout)
+        result_b64 = await asyncio.wait_for(handle.result(), timeout=timeout)
+        return deserialize_result(result_b64)
 
     def get_status(self, handle: TaskHandle) -> TaskStatus:
         """
@@ -352,69 +348,3 @@ class TemporalBackend(Backend):
 
         self._client = None
         logger.info("Temporal backend shut down")
-
-
-# Example workflow definition for reference
-# This would typically be in a separate worker module
-
-EVAL_WORKFLOW_DEFINITION = '''
-"""
-Example Temporal workflow for evaluation tasks.
-
-This workflow executes a single evaluation function as an activity.
-Deploy this with a Temporal worker to process evaluation tasks.
-
-Usage:
-    from temporalio.worker import Worker
-    from temporalio.client import Client
-
-    async def main():
-        client = await Client.connect("localhost:7233")
-        worker = Worker(
-            client,
-            task_queue="eval-tasks",
-            workflows=[EvalTaskWorkflow],
-            activities=[execute_eval_task],
-        )
-        await worker.run()
-
-    asyncio.run(main())
-"""
-
-from temporalio import workflow, activity
-from temporalio.common import RetryPolicy
-from datetime import timedelta
-import importlib
-
-@activity.defn
-async def execute_eval_task(input_data: dict) -> Any:
-    """Execute the evaluation function."""
-    module_name = input_data.get("function_module")
-    func_name = input_data.get("function_name")
-    args = input_data.get("args", ())
-    kwargs = input_data.get("kwargs", {})
-
-    if module_name and func_name:
-        module = importlib.import_module(module_name)
-        func = getattr(module, func_name)
-        return func(*args, **kwargs)
-
-    raise ValueError("Function not specified")
-
-@workflow.defn
-class EvalTaskWorkflow:
-    """Workflow that executes a single evaluation task."""
-
-    @workflow.run
-    async def run(self, input_data: dict) -> Any:
-        return await workflow.execute_activity(
-            execute_eval_task,
-            input_data,
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(seconds=1),
-                backoff_coefficient=2.0,
-            ),
-        )
-'''

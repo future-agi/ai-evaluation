@@ -1,0 +1,39 @@
+# Celery backend infrastructure for fi-evals.
+#
+# Usage:
+#   cd python/docker/celery && docker compose up -d
+#
+# This starts:
+#   - Redis (broker + result backend) on port 6379
+#   - Celery worker that processes eval tasks
+#
+# Then in your Python code:
+#   from fi.evals.framework.backends import CeleryBackend, CeleryConfig
+#   backend = CeleryBackend(CeleryConfig(
+#       broker_url="redis://localhost:6379/0",
+#       result_backend="redis://localhost:6379/1",
+#   ))
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  celery-worker:
+    build:
+      context: ../..
+      dockerfile: docker/celery/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_TASK_QUEUE=eval_tasks
+    restart: unless-stopped

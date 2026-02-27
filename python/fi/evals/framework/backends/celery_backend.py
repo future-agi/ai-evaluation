@@ -40,8 +40,8 @@ class CeleryConfig(BackendConfig):
     result_backend: str = "redis://localhost:6379/1"
     task_queue: str = "eval_tasks"
     task_priority: int = 0
-    task_serializer: str = "pickle"
-    result_serializer: str = "pickle"
+    task_serializer: str = "cloudpickle"
+    result_serializer: str = "cloudpickle"
     task_acks_late: bool = True
     task_reject_on_worker_lost: bool = True
     task_track_started: bool = True
@@ -95,17 +95,13 @@ class CeleryBackend(Backend):
         self._setup_celery()
 
     def _setup_celery(self) -> None:
-        """Set up Celery application and task."""
-        from celery import Celery
+        """Set up Celery application and task from shared worker module."""
+        from .celery_worker import app, eval_task
 
-        self._app = Celery(
-            "eval_tasks",
-            broker=self.config.broker_url,
-            backend=self.config.result_backend,
-        )
-
-        # Configure Celery
-        self._app.conf.update(
+        # Override broker/backend if config differs from env defaults
+        app.conf.update(
+            broker_url=self.config.broker_url,
+            result_backend=self.config.result_backend,
             task_serializer=self.config.task_serializer,
             result_serializer=self.config.result_serializer,
             task_acks_late=self.config.task_acks_late,
@@ -115,12 +111,7 @@ class CeleryBackend(Backend):
             task_default_queue=self.config.task_queue,
         )
 
-        # Create the generic task
-        @self._app.task(bind=True, name="eval_task")
-        def eval_task(self, fn, args, kwargs):
-            """Generic task that executes the provided function."""
-            return fn(*args, **kwargs)
-
+        self._app = app
         self._task = eval_task
 
     def submit(
