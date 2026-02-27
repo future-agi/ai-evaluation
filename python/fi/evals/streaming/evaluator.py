@@ -276,7 +276,7 @@ class StreamingEvaluator:
                     self.config.on_stop_callback(stop_reason, cumulative_text)
 
             # Check stop on first failure
-            if self.config.stop_on_first_failure and not chunk_result.all_passed:
+            elif self.config.stop_on_first_failure and not chunk_result.all_passed:
                 chunk_result.should_stop = True
                 chunk_result.stop_reason = EarlyStopReason.THRESHOLD
                 self._state = StreamingState.STOPPED
@@ -317,10 +317,12 @@ class StreamingEvaluator:
         # Map limit reason to stop reason
         if reason == "max_tokens":
             stop_reason = EarlyStopReason.MAX_TOKENS
+        elif reason == "max_chars":
+            stop_reason = EarlyStopReason.MAX_CHARS
         elif reason == "timeout":
             stop_reason = EarlyStopReason.TIMEOUT
         else:
-            stop_reason = EarlyStopReason.MAX_TOKENS
+            stop_reason = EarlyStopReason.ERROR
 
         chunk_result.should_stop = True
         chunk_result.stop_reason = stop_reason
@@ -378,20 +380,27 @@ class StreamingEvaluator:
         if not self._chunk_results:
             return {}
 
+        # Build weight lookup from eval specs
+        weights: Dict[str, float] = {e.name: e.weight for e in self._evals}
+
         final_scores: Dict[str, float] = {}
-        score_sums: Dict[str, float] = {}
-        score_counts: Dict[str, int] = {}
+        weighted_sums: Dict[str, float] = {}
+        weight_totals: Dict[str, float] = {}
 
         for chunk_result in self._chunk_results:
             for name, score in chunk_result.scores.items():
-                if name not in score_sums:
-                    score_sums[name] = 0.0
-                    score_counts[name] = 0
-                score_sums[name] += score
-                score_counts[name] += 1
+                w = weights.get(name, 1.0)
+                if name not in weighted_sums:
+                    weighted_sums[name] = 0.0
+                    weight_totals[name] = 0.0
+                weighted_sums[name] += score * w
+                weight_totals[name] += w
 
-        for name in score_sums:
-            final_scores[name] = score_sums[name] / score_counts[name]
+        for name in weighted_sums:
+            if weight_totals[name] > 0:
+                final_scores[name] = weighted_sums[name] / weight_totals[name]
+            else:
+                final_scores[name] = 0.0
 
         return final_scores
 

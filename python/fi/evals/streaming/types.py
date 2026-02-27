@@ -18,6 +18,7 @@ class EarlyStopReason(Enum):
     PII = "pii"  # PII detected
     JAILBREAK = "jailbreak"  # Jailbreak attempt detected
     MAX_TOKENS = "max_tokens"  # Maximum token limit reached
+    MAX_CHARS = "max_chars"  # Maximum character limit reached
     THRESHOLD = "threshold"  # Score dropped below threshold
     CUSTOM = "custom"  # Custom stop condition triggered
     TIMEOUT = "timeout"  # Evaluation timeout
