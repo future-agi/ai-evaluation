@@ -140,7 +140,7 @@ class TokenBucketRateLimiter:
                 with self._lock:
                     self.stats.rejected_requests += 1
                 self._emit_rate_limited()
-                raise RateLimitExceededError(self.name, max_wait - elapsed)
+                raise RateLimitExceededError(self.name, max(0.0, max_wait - elapsed))
 
             with self._lock:
                 self._refill()

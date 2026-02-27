@@ -366,24 +366,24 @@ def propagate_context(func):
     """
     Decorator to propagate context to a function running in another thread.
 
-    Captures the current context and activates it when the function runs.
+    Captures the current context at call time (when the wrapper is invoked)
+    and activates it in the background thread.
 
     Example:
         @propagate_context
         def background_task(x, y):
-            # This runs in the original trace context
+            # This runs in the caller's trace context
             return x + y
 
-        # Context is captured here
+        # Context is captured when submit() calls the wrapper
         executor.submit(background_task, 1, 2)
     """
     import functools
 
-    # Capture context at decoration time
-    carrier = ContextCarrier.capture()
-
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        # Capture context at call time, not decoration time
+        carrier = ContextCarrier.capture()
         with carrier.activate():
             return func(*args, **kwargs)
 

@@ -484,6 +484,7 @@ def non_blocking_evaluate(
     Convenience function for non-blocking evaluation.
 
     Runs evaluations in background and returns immediately.
+    The internal executor is automatically shut down when all futures complete.
 
     Args:
         inputs: Input data for evaluations
@@ -509,7 +510,21 @@ def non_blocking_evaluate(
         max_workers=max_workers,
         auto_enrich_span=auto_enrich_span,
     )
-    return evaluator.evaluate(inputs, callback=callback)
+    batch_future = evaluator.evaluate(inputs, callback=callback)
+
+    # Auto-shutdown executor when all futures complete
+    pending = [f.future for f in batch_future.futures]
+    remaining = {id(f) for f in pending}
+
+    def _on_done(f):
+        remaining.discard(id(f))
+        if not remaining:
+            evaluator.shutdown(wait=False)
+
+    for f in pending:
+        f.add_done_callback(_on_done)
+
+    return batch_future
 
 
 class EvalResultAggregator:

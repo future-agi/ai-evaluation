@@ -630,28 +630,58 @@ class HybridEvaluator:
                     )
             return result
 
-        # Use cloud evaluator
+        # Route through fi.evals.evaluate() with Turing engine
         try:
+            from fi.evals import evaluate as core_evaluate
+
             for eval_spec in evaluations:
                 metric_name = eval_spec.get("metric_name", "")
-                inputs = eval_spec.get("inputs", [])
+                inputs_list = eval_spec.get("inputs", [])
 
-                # Cloud evaluator expects specific format
-                # This is a placeholder - actual integration depends on Evaluator API
-                logger.info(f"Would run {metric_name} via cloud with {len(inputs)} inputs")
-
-                # For now, mark as skipped until cloud integration is complete
-                result.skipped.add(metric_name)
-                for _ in inputs:
-                    result.results.eval_results.append(
-                        EvalResult(
-                            name=metric_name,
-                            output=None,
-                            reason="Cloud evaluation - implementation pending",
-                            runtime=0,
+                for input_data in inputs_list:
+                    start_time = time.time()
+                    try:
+                        eval_result = core_evaluate(
+                            metric_name,
+                            engine="turing",
+                            output=input_data.get("response", input_data.get("output", "")),
+                            input=input_data.get("input", input_data.get("query", "")),
+                            context=input_data.get("context", input_data.get("contexts", "")),
                         )
-                    )
 
+                        runtime = int((time.time() - start_time) * 1000)
+                        result.results.eval_results.append(
+                            EvalResult(
+                                name=metric_name,
+                                output=eval_result.score if hasattr(eval_result, "score") else eval_result.output,
+                                reason=getattr(eval_result, "reason", ""),
+                                runtime=runtime,
+                                metrics=[{
+                                    "name": metric_name,
+                                    "value": eval_result.score if hasattr(eval_result, "score") else 0.0,
+                                }],
+                            )
+                        )
+                        result.executed_locally.add(metric_name)
+
+                    except Exception as e:
+                        runtime = int((time.time() - start_time) * 1000)
+                        result.errors[metric_name] = str(e)
+                        result.results.eval_results.append(
+                            EvalResult(
+                                name=metric_name,
+                                output=None,
+                                reason=f"Cloud evaluation error: {e}",
+                                runtime=runtime,
+                            )
+                        )
+
+        except ImportError:
+            logger.error("fi.evals.evaluate not available for cloud routing")
+            for eval_spec in evaluations:
+                metric_name = eval_spec.get("metric_name", "")
+                result.skipped.add(metric_name)
+                result.errors[metric_name] = "fi.evals.evaluate not available"
         except Exception as e:
             logger.error(f"Cloud evaluation failed: {e}")
             for eval_spec in evaluations:

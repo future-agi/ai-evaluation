@@ -404,11 +404,11 @@ class TestCreateEvaluation:
             instance.evaluate({})
 
     def test_create_evaluation_validate_inputs(self):
-        """Test that validate_inputs returns None by default."""
+        """Test that validate_inputs returns empty list by default."""
         MyEval = create_evaluation(
             name="validate_test",
             evaluate_fn=lambda inputs: {},
         )
 
         instance = MyEval()
-        assert instance.validate_inputs({}) is None
+        assert instance.validate_inputs({}) == []

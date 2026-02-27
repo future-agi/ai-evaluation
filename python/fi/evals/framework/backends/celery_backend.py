@@ -355,12 +355,26 @@ class CeleryBackend(Backend):
         """
         Shutdown the Celery backend.
 
+        Revokes only our tracked tasks, not the entire Celery queue.
+
         Args:
             wait: Whether to wait for pending tasks
         """
         if self._app is not None:
-            self._app.control.purge()  # Clear pending tasks
-            logger.info("Celery backend shut down")
+            with self._lock:
+                task_ids = list(self._async_results.keys())
+
+            for task_id in task_ids:
+                try:
+                    self._app.control.revoke(task_id, terminate=not wait)
+                except Exception:
+                    pass
+
+            with self._lock:
+                self._handles.clear()
+                self._async_results.clear()
+
+            logger.info(f"Celery backend shut down, revoked {len(task_ids)} tasks")
 
     def get_queue_length(self) -> int:
         """

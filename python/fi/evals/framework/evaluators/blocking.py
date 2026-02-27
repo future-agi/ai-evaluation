@@ -258,14 +258,18 @@ class BlockingEvaluator:
             inputs: Inputs to validate
 
         Returns:
-            Error message if invalid, None if valid
+            Error message string if invalid, None if valid
         """
-        # Check if evaluation has validate_inputs method
         if hasattr(evaluation, 'validate_inputs'):
             try:
-                return evaluation.validate_inputs(inputs)
+                errors = evaluation.validate_inputs(inputs)
+                if errors:
+                    if isinstance(errors, list):
+                        return "; ".join(str(e) for e in errors)
+                    return str(errors)
             except Exception as e:
                 return f"Validation method raised exception: {e}"
+        return None
 
         return None
 

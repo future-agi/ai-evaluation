@@ -58,7 +58,7 @@ class SpanRegistry:
                 if cls._instance is None:
                     instance = super().__new__(cls)
                     instance._spans: Dict[Tuple[str, str], SpanEntry] = {}
-                    instance._registry_lock = threading.Lock()
+                    instance._registry_lock = threading.RLock()
                     instance._cleanup_interval = timedelta(minutes=5)
                     instance._max_age = timedelta(minutes=30)
                     instance._last_cleanup = datetime.now(timezone.utc)

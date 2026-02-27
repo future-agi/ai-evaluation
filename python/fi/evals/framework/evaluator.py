@@ -543,15 +543,16 @@ def _execute_single_evaluation(
     # Validate inputs if enabled
     if validate and hasattr(evaluation, "validate_inputs"):
         try:
-            validation_error = evaluation.validate_inputs(inputs)
-            if validation_error:
+            errors = evaluation.validate_inputs(inputs)
+            if errors:
+                error_msg = "; ".join(str(e) for e in errors) if isinstance(errors, list) else str(errors)
                 return EvalResult(
                     value=None,
                     eval_name=eval_name,
                     eval_version=eval_version,
                     latency_ms=0.0,
                     status=EvalStatus.FAILED,
-                    error=f"Validation error: {validation_error}",
+                    error=f"Validation error: {error_msg}",
                 )
         except Exception as e:
             return EvalResult(

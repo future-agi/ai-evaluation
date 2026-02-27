@@ -22,7 +22,6 @@ from typing import (
     Callable,
 )
 from abc import abstractmethod
-import asyncio
 
 T = TypeVar("T")
 
@@ -87,23 +86,6 @@ class BaseEvaluation(Protocol[T]):
         """
         ...
 
-    async def evaluate_async(self, inputs: Dict[str, Any]) -> T:
-        """
-        Async evaluation - defaults to sync wrapped.
-
-        Override this method for true async implementations that can
-        benefit from non-blocking I/O (e.g., API calls, database queries).
-
-        Args:
-            inputs: Dict containing evaluation inputs
-
-        Returns:
-            Typed result object
-        """
-        # Default implementation runs sync version in executor
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.evaluate, inputs)
-
     @abstractmethod
     def get_span_attributes(self, result: T) -> Dict[str, Any]:
         """
@@ -133,7 +115,7 @@ class BaseEvaluation(Protocol[T]):
         """
         ...
 
-    def validate_inputs(self, inputs: Dict[str, Any]) -> Optional[str]:
+    def validate_inputs(self, inputs: Dict[str, Any]) -> List[str]:
         """
         Validate inputs before evaluation.
 
@@ -143,18 +125,7 @@ class BaseEvaluation(Protocol[T]):
             inputs: Dict containing evaluation inputs
 
         Returns:
-            None if valid, error message string if invalid
-        """
-        return None
-
-    def get_required_inputs(self) -> List[str]:
-        """
-        Get list of required input keys.
-
-        Override to declare required inputs for documentation and validation.
-
-        Returns:
-            List of required input key names
+            Empty list if valid, list of error message strings if invalid
         """
         return []
 
@@ -405,8 +376,8 @@ def create_evaluation(
                 return {}
             return span_attributes_fn(result)
 
-        def validate_inputs(self, inputs: Dict[str, Any]) -> Optional[str]:
-            return None
+        def validate_inputs(self, inputs: Dict[str, Any]) -> List[str]:
+            return []
 
     DynamicEvaluation.name = name
     DynamicEvaluation.version = version

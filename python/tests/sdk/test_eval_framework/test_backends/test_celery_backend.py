@@ -392,8 +392,8 @@ class TestCeleryBackendCancel:
 class TestCeleryBackendShutdown:
     """Tests for CeleryBackend.shutdown method."""
 
-    def test_shutdown_purges_tasks(self):
-        """Test that shutdown purges the task queue."""
+    def test_shutdown_revokes_tracked_tasks(self):
+        """Test that shutdown revokes only tracked tasks, not all queues."""
         with patch.dict("sys.modules", {"celery": MagicMock(), "celery.result": MagicMock()}):
             from fi.evals.framework.backends._utils import CELERY
             CELERY._checked = True
@@ -406,9 +406,17 @@ class TestCeleryBackendShutdown:
             with patch("celery.Celery", return_value=mock_app):
                 backend = CeleryBackend(CeleryConfig())
 
+            # Add some tracked tasks
+            backend._async_results["task-1"] = MagicMock()
+            backend._async_results["task-2"] = MagicMock()
+
             backend.shutdown()
 
-            mock_app.control.purge.assert_called_once()
+            # Should revoke individual tasks, NOT purge all queues
+            assert mock_app.control.revoke.call_count == 2
+            mock_app.control.purge.assert_not_called()
+            assert len(backend._handles) == 0
+            assert len(backend._async_results) == 0
 
 
 class TestCeleryBackendStats:
