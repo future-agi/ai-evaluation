@@ -158,7 +158,8 @@ export class Evaluator extends APIKeyAuth {
             traceEval: initialTraceEval = false,
             platform,
             isAsync = false,
-            errorLocalizer = false
+            errorLocalizer = false,
+            evalConfig
         } = options;
 
         // Handle platform configuration (e.g., Langfuse)
@@ -281,7 +282,7 @@ export class Evaluator extends APIKeyAuth {
             }
         }
 
-        const finalApiPayload = {
+        const finalApiPayload: Record<string, any> = {
             eval_name: evalName,
             inputs: transformedApiInputs,
             model: modelName,
@@ -291,6 +292,10 @@ export class Evaluator extends APIKeyAuth {
             is_async: isAsync,
             error_localizer: errorLocalizer,
         };
+
+        if (evalConfig) {
+            finalApiPayload.config = { params: evalConfig };
+        }
 
         // Convert timeout (seconds) to milliseconds for axios. Use a higher default (200s) if not provided.
         const timeoutMs = timeout !== undefined ? timeout * 1000 : this.defaultTimeout * 1000;
