@@ -89,17 +89,16 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@future-agi/sdk": "^0.1.1",
+    "@traceai/fi-core": "^0.1.16",
     "axios": "^1.6.0",
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
     "ora": "^8.0.0",
     "winston": "^3.11.0",
     "yaml": "^2.3.0",
-    "zod": "^3.22.0",
-    "@future-agi/sdk": ">=0.1.0",
-    "@traceai/fi-core": ">=0.1.15"
+    "zod": "^3.22.0"
   },
-  "peerDependencies": {},
   "publishConfig": {
     "access": "public"
   }
