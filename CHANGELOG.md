@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.1] - 2026-03-09
+
+### Python
+
+#### Added
+- **`eval_config` parameter** — pass eval-specific configuration to `evaluator.evaluate()`, e.g. `eval_config={"k": 3}` for retrieval metrics (recall_at_k, precision_at_k, ndcg_at_k). Config is forwarded to the backend as `config.params` in the API payload.
+
 ## [1.0.0] - 2026-02-27
 
 ### Python
@@ -95,7 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/future-agi/ai-evaluation/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/future-agi/ai-evaluation/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/future-agi/ai-evaluation/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/future-agi/ai-evaluation/compare/v0.1.0...v0.2.1
