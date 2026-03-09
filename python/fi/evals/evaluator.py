@@ -149,6 +149,7 @@ class Evaluator(APIKeyAuth):
         platform: Optional[str] = None,
         is_async: Optional[bool] = False,
         error_localizer: Optional[bool] = False,
+        eval_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> BatchRunResult:
         """
@@ -263,6 +264,9 @@ class Evaluator(APIKeyAuth):
             "is_async": is_async,
             "error_localizer": error_localizer,
         }
+
+        if eval_config:
+            final_api_payload["config"] = {"params": eval_config}
 
         
         all_results = []
