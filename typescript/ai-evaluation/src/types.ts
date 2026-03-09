@@ -323,6 +323,8 @@ interface EvaluateOptions {
   isAsync?: boolean;
   /** Enable error localization to identify specific failure points */
   errorLocalizer?: boolean;
+  /** Eval-specific configuration, e.g. { k: 3 } for retrieval metrics (recall_at_k, precision_at_k, ndcg_at_k) */
+  evalConfig?: Record<string, any>;
 }
 
 /**
