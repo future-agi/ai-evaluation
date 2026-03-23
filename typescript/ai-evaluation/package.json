@@ -1,6 +1,6 @@
 {
   "name": "@future-agi/ai-evaluation",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "We help GenAI teams maintain high-accuracy for their Models in production.",
   "type": "module",
   "main": "./dist/src/index.js",

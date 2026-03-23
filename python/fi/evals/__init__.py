@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an 
 # Unified evaluate() API (new)
 # ---------------------------------------------------------------------------
 from .core import evaluate, EvalResult, BatchResult, Turing  # noqa: F401
+from .types import ExplanationDetail  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Cloud Evaluator + Protect (existing)

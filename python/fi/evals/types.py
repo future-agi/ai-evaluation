@@ -7,6 +7,32 @@ from pydantic import BaseModel, Field, RootModel, create_model
 warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an attribute in parent "BaseModel"')
 
 
+class ExplanationDetail(Enum):
+    """Controls the depth of reasoning in eval explanations."""
+    QUICK = "quick"          # One-line verdict
+    DETAILED = "detailed"    # Intro + 2-3 bullet points (default)
+    THOROUGH = "thorough"    # Full reasoning chain with recommendations
+
+    @classmethod
+    def default(cls) -> str:
+        return cls.DETAILED.value
+
+    @classmethod
+    def is_valid(cls, value) -> bool:
+        if isinstance(value, cls):
+            return True
+        return value in {tier.value for tier in cls}
+
+    @classmethod
+    def resolve(cls, value) -> str:
+        """Resolve to a valid tier string, defaulting to detailed."""
+        if isinstance(value, cls):
+            return value.value
+        if isinstance(value, str) and cls.is_valid(value):
+            return value
+        return cls.default()
+
+
 class OutputType(Enum):
     SCORE = "score"
     BOOLEAN = "boolean"

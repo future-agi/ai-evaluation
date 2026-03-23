@@ -159,7 +159,8 @@ export class Evaluator extends APIKeyAuth {
             platform,
             isAsync = false,
             errorLocalizer = false,
-            evalConfig
+            evalConfig,
+            explanationDetail
         } = options;
 
         // Handle platform configuration (e.g., Langfuse)
@@ -292,6 +293,10 @@ export class Evaluator extends APIKeyAuth {
             is_async: isAsync,
             error_localizer: errorLocalizer,
         };
+
+        if (explanationDetail) {
+            finalApiPayload.explanation_detail = explanationDetail;
+        }
 
         if (evalConfig) {
             finalApiPayload.config = { params: evalConfig };

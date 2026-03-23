@@ -88,6 +88,7 @@ class Engine(ABC):
         model: Optional[str] = None,
         prompt: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        explanation_detail: Optional[str] = None,
     ) -> EvalResult:
         ...
 
@@ -112,6 +113,7 @@ class LocalEngine(Engine):
         model: Optional[str] = None,
         prompt: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        explanation_detail: Optional[str] = None,
     ) -> EvalResult:
         _ = model, prompt  # unused — local metrics don't need these
         from ..local.registry import get_registry
@@ -252,6 +254,7 @@ class TuringEngine(Engine):
         model: Optional[str] = None,
         prompt: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        explanation_detail: Optional[str] = None,
     ) -> EvalResult:
         _ = config  # unused — template config comes from the template class
         if prompt:
@@ -293,6 +296,7 @@ class TuringEngine(Engine):
                 eval_templates=template_cls(),
                 inputs=inputs,
                 model_name=model,
+                explanation_detail=explanation_detail,
             )
             return _extract_result(eval_name, batch, (time.perf_counter() - start) * 1000)
         except Exception as exc:
@@ -336,6 +340,7 @@ class LLMEngine(Engine):
         model: Optional[str] = None,
         prompt: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        explanation_detail: Optional[str] = None,
     ) -> EvalResult:
         if not prompt:
             return EvalResult(

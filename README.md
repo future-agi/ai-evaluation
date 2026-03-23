@@ -27,6 +27,7 @@ Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com
 - **Feedback Loop** — store corrections in ChromaDB, retrieve as few-shot examples for the judge
 - **OpenTelemetry** — attach quality scores to traces, export to Jaeger/Datadog/Grafana
 - **Distributed Backends** — run assessments at scale with Celery, Ray, Temporal, or Kubernetes
+- **Explanation Tiers** — choose `quick`, `detailed`, or `thorough` explanation depth per eval
 
 ---
 

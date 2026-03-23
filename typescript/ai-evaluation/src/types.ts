@@ -308,6 +308,16 @@ interface EvaluatorConfig {
  * };
  * ```
  */
+/**
+ * Explanation detail levels for eval results.
+ *
+ * Controls how much detail the LLM includes in its scoring explanation:
+ * - `quick`:    Single sentence verdict (max 20 words).
+ * - `detailed`: Intro sentence + 2-3 bullet points with evidence (default).
+ * - `thorough`: Full reasoning chain with evidence, steps, edge cases, and recommendations.
+ */
+type ExplanationDetail = 'quick' | 'detailed' | 'thorough';
+
 interface EvaluateOptions {
   /** Request timeout in seconds (overrides Evaluator config) */
   timeout?: number;
@@ -325,6 +335,8 @@ interface EvaluateOptions {
   errorLocalizer?: boolean;
   /** Eval-specific configuration, e.g. { k: 3 } for retrieval metrics (recall_at_k, precision_at_k, ndcg_at_k) */
   evalConfig?: Record<string, any>;
+  /** Explanation detail level: 'quick' (one-line), 'detailed' (default, bullets), 'thorough' (full reasoning chain) */
+  explanationDetail?: ExplanationDetail;
 }
 
 /**
@@ -455,6 +467,7 @@ export {
     OutputType,
     ExecutionMode,
     EvaluatorConfig,
+    ExplanationDetail,
     EvaluateOptions,
     PipelineEvalData,
     PipelineResult,

@@ -38,6 +38,8 @@ Usage:
 import warnings
 from typing import Any, Dict, List, Optional, Union
 
+from ..types import ExplanationDetail
+
 from .registry import resolve_engine as _resolve_engine, is_turing_model
 from .result import BatchResult, EvalResult
 from .engines import LocalEngine, TuringEngine, LLMEngine, Engine
@@ -53,6 +55,7 @@ def evaluate(
     config: Optional[Dict[str, Any]] = None,
     feedback_store: Optional[Any] = None,
     generate_prompt: bool = False,
+    explanation_detail: Optional[Union[str, "ExplanationDetail"]] = None,
     # Turing credentials (optional overrides)
     fi_api_key: Optional[str] = None,
     fi_secret_key: Optional[str] = None,
@@ -104,6 +107,7 @@ def evaluate(
                 config=config,
                 feedback_store=feedback_store,
                 generate_prompt=generate_prompt,
+                explanation_detail=explanation_detail,
                 fi_api_key=fi_api_key,
                 fi_secret_key=fi_secret_key,
                 fi_base_url=fi_base_url,
@@ -149,10 +153,14 @@ def evaluate(
     )
 
     # Run with OTEL span if tracing is enabled
+    # Resolve explanation_detail to a valid string via enum
+    resolved_tier = ExplanationDetail.resolve(explanation_detail) if explanation_detail else None
+
     result = _run_with_tracing(
         eng, effective_name, inputs,
         model=model, prompt=prompt, config=config,
         engine_type=resolved_engine,
+        explanation_detail=resolved_tier,
     )
 
     # LLM augmentation: only when explicitly requested via augment=True
@@ -205,6 +213,7 @@ def _run_with_tracing(
     prompt: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
     engine_type: str = "",
+    explanation_detail: Optional[str] = None,
 ) -> EvalResult:
     """Run an engine with optional OTEL tracing."""
     try:
@@ -217,7 +226,7 @@ def _run_with_tracing(
             raise ImportError  # fall through to untraced path
 
         with create_evaluation_span(eval_name) as span:
-            result = eng.run(eval_name, inputs, model=model, prompt=prompt, config=config)
+            result = eng.run(eval_name, inputs, model=model, prompt=prompt, config=config, explanation_detail=explanation_detail)
             # Enrich the span with the result
             if hasattr(span, "set_attribute"):
                 span.set_attribute("gen_ai.span.kind", "EVALUATOR")
@@ -233,7 +242,7 @@ def _run_with_tracing(
     except ImportError:
         pass
 
-    return eng.run(eval_name, inputs, model=model, prompt=prompt, config=config)
+    return eng.run(eval_name, inputs, model=model, prompt=prompt, config=config, explanation_detail=explanation_detail)
 
 
 def _augment_with_llm(

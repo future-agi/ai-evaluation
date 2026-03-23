@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.1.0] - 2026-03-23
+
+### Python
+
+#### Added
+- **`explanation_detail` parameter** — control the depth of eval explanations with three tiers: `quick` (one-line verdict), `detailed` (default, intro + 2-3 bullet points), and `thorough` (full reasoning chain with evidence, steps, edge cases, and recommendations). Available on both `evaluate()` and `Evaluator.evaluate()`. Default is `detailed` (no change to existing behavior).
+- **`ExplanationDetail` enum** — exported from `fi.evals` for type-safe tier selection: `ExplanationDetail.QUICK`, `ExplanationDetail.DETAILED`, `ExplanationDetail.THOROUGH`.
+
+### TypeScript
+
+#### Added
+- **`explanationDetail` option** — pass `explanationDetail: 'quick' | 'detailed' | 'thorough'` in `EvaluateOptions` to control explanation depth. Default is `detailed`.
+- **`ExplanationDetail` type** — exported from `@future-agi/ai-evaluation` for type-safe usage.
+
+---
+
 ## [1.0.1] - 2026-03-09
 
 ### Python
@@ -102,7 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/future-agi/ai-evaluation/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/future-agi/ai-evaluation/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/future-agi/ai-evaluation/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/future-agi/ai-evaluation/compare/v0.2.1...v0.2.2
