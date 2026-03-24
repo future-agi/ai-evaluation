@@ -236,7 +236,7 @@ class Evaluator(APIKeyAuth):
                             logging.warning("Failed to trace the evaluation. Custom eval configuration with the same name already exists for this project")
                     else:
                         trace_eval = False
-                        logging.debug(
+                        logging.warning(
                             "Could not determine project_name from OpenTelemetry context. "
                             "Skipping check for existing custom eval configuration."
                         )
