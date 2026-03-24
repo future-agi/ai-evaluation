@@ -267,6 +267,9 @@ class Evaluator(APIKeyAuth):
         }
 
         if explanation_detail:
+            # Convert enum to string value if needed (e.g. ExplanationDetail.THOROUGH -> "thorough")
+            if hasattr(explanation_detail, "value"):
+                explanation_detail = explanation_detail.value
             final_api_payload["explanation_detail"] = explanation_detail
 
         if eval_config:
