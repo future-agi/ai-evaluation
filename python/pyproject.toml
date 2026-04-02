@@ -1,6 +1,6 @@
 [project]
 name = "ai-evaluation"
-version = "1.0.1"
+version = "1.0.2"
 description = "We help GenAI teams maintain high-accuracy for their Models in production."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
