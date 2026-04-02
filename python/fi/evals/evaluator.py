@@ -17,7 +17,6 @@ from fi.utils.routes import Routes
 
 try:
     from opentelemetry import trace
-    from fi_instrumentation.otel import check_custom_eval_config_exists
     from opentelemetry import trace as otel_trace_api
 except ImportError:
     pass
@@ -205,7 +204,6 @@ class Evaluator(APIKeyAuth):
             else:
                 try:
                     from opentelemetry import trace
-                    from fi_instrumentation.otel import check_custom_eval_config_exists
 
                     current_span = trace.get_current_span()
                     if current_span and current_span.is_recording():
@@ -216,29 +214,12 @@ class Evaluator(APIKeyAuth):
                             if hasattr(tracer_provider, "resource"):
                                 attributes = tracer_provider.resource.attributes
                                 project_name = attributes.get("project_name")
-                    
-                    if project_name:
-                        eval_tags = [
-                            {
-                                "custom_eval_name": custom_eval_name,
-                                "eval_name": eval_name,
-                                "mapping": {},
-                                "config": {},
-                            }
-                        ]
-                        custom_eval_exists = check_custom_eval_config_exists(
-                            project_name=project_name,
-                            eval_tags=eval_tags,
-                        )
 
-                        if custom_eval_exists:
-                            trace_eval = False
-                            logging.warning("Failed to trace the evaluation. Custom eval configuration with the same name already exists for this project")
-                    else:
+                    if not project_name:
                         trace_eval = False
                         logging.warning(
                             "Could not determine project_name from OpenTelemetry context. "
-                            "Skipping check for existing custom eval configuration."
+                            "Skipping trace_eval for this evaluation."
                         )
 
                 except ImportError:

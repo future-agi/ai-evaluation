@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.0.2] - 2026-04-02
+
+### Python
+
+#### Fixed
+- **Inline evals failing with "Custom eval configuration already exists"** — removed client-side `check_custom_eval_config_exists` call from `evaluator.evaluate()`. This check was incorrectly blocking `trace_eval` when a config with the same `custom_eval_name` already existed in the project (e.g. from a previous run), causing all inline eval results to silently not attach to spans. The backend handles config creation/deduplication on its own; the client-side check is only needed in `register()` for eval_tags.
+
 ## [1.0.1] - 2026-03-09
 
 ### Python
@@ -102,7 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/future-agi/ai-evaluation/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/future-agi/ai-evaluation/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/future-agi/ai-evaluation/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/future-agi/ai-evaluation/compare/v0.2.2...v1.0.0
 [0.2.2]: https://github.com/future-agi/ai-evaluation/compare/v0.2.1...v0.2.2
