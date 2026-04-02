@@ -1,6 +1,7 @@
 import re
 import copy
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse
@@ -53,10 +54,17 @@ class Protect:
 
         # Map metric names to their corresponding template classes
         self.metric_map = {
-            "content_moderation": Toxicity,
+            "toxicity": Toxicity,
             "bias_detection": BiasDetection,
-            "security": PromptInjection,
+            "prompt_injection": PromptInjection,
             "data_privacy_compliance": DataPrivacyCompliance,
+            # Deprecated aliases (still supported)
+            "content_moderation": Toxicity,
+            "security": PromptInjection,
+        }
+        self._deprecated_metrics = {
+            "content_moderation": "toxicity",
+            "security": "prompt_injection",
         }
 
     def _sanitize_reason(self, text: Optional[str]) -> Optional[str]:
@@ -523,12 +531,21 @@ class Protect:
             # Validate metric name first, as other validations might depend on it
             if rule["metric"] not in valid_metrics:
                 raise InvalidValueType(
-                    value_name=f"metric in Rule at index {i}", 
-                    value=rule["metric"], 
+                    value_name=f"metric in Rule at index {i}",
+                    value=rule["metric"],
                     correct_type=f"one of {list(valid_metrics)}"
                 )
 
-         
+            # Warn about deprecated metric names
+            if rule["metric"] in self._deprecated_metrics:
+                new_name = self._deprecated_metrics[rule["metric"]]
+                warnings.warn(
+                    f'Protect metric "{rule["metric"]}" is deprecated and will be '
+                    f'removed in a future release. Please use "{new_name}" instead.',
+                    FutureWarning,
+                    stacklevel=2,
+                )
+
             is_tone_metric = rule["metric"] == "Tone"
 
             if is_tone_metric:
