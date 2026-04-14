@@ -117,8 +117,8 @@ interface EvalResultMetric {
  * ```
  */
 interface EvalResult {
-  /** Name of the evaluation metric */
-  name: string;
+  /** Name of the evaluation metric (optional for backwards compat with v1 responses) */
+  name?: string;
   /** Evaluation output (typically a score 0-1, boolean, or structured data) */
   output?: any;
   /** Human-readable explanation of the evaluation result */
@@ -447,6 +447,10 @@ interface JudgeResult {
   /** Raw LLM response before parsing (for debugging) */
   raw_response?: string;
 }
+
+// Re-export EvalTemplate from templates.ts so existing tests importing it
+// from this module continue to resolve.
+export type { EvalTemplate } from './templates';
 
 export {
     ConfigParam,

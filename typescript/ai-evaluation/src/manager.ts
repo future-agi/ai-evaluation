@@ -49,7 +49,15 @@ export class JsonResultHandler extends ResponseHandler<any, any> {
 }
 
 export type EvalType = 'llm' | 'code' | 'agent';
-export type OutputType = 'pass_fail' | 'percentage' | 'deterministic';
+/**
+ * Output shape of an eval template as used by the create/update API.
+ * Distinct from `types.OutputType` (which describes the result *value*
+ * shape — score/boolean/json/text).
+ */
+export type EvalTemplateOutputType =
+    | 'pass_fail'
+    | 'percentage'
+    | 'deterministic';
 export type AggregationFunction =
     | 'weighted_avg'
     | 'avg'
@@ -78,7 +86,7 @@ export interface CreateTemplateOptions {
     instructions?: string;
     evalType?: EvalType;
     model?: string;
-    outputType?: OutputType;
+    outputType?: EvalTemplateOutputType;
     passThreshold?: number;
     choiceScores?: Record<string, number>;
     description?: string;
