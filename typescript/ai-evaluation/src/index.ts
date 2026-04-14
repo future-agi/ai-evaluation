@@ -1,4 +1,6 @@
 export * from './evaluator';
+export * from './execution';
+export * from './manager';
 export * from './templates';
 export * from './types';
 export * from './protect';

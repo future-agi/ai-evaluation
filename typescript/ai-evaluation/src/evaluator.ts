@@ -12,6 +12,7 @@ import {
 } from '@future-agi/sdk';
 import { AxiosResponse } from 'axios';
 
+import { Execution, normalizeStatus } from './execution';
 import { EvalTemplate } from './templates';
 import {
     BatchRunResult,
@@ -29,49 +30,71 @@ import {
  */
 export class EvalResponseHandler extends ResponseHandler<BatchRunResult, any> {
     public static _parseSuccess(response: AxiosResponse): BatchRunResult {
+        // Revamped backend (post 2026-04-12) returns pure snake_case:
+        //   { result: [{ evaluations: [{ name, reason, runtime, output,
+        //     output_type, eval_id, model?, error_localizer_enabled?,
+        //     error_localizer? }] }] }
+        // Async / single-row paths sometimes return the eval wrapped in
+        // { eval_status, result: <eval> } — handle both.
         const data = response.data || {};
         const evalResults: (EvalResult | null)[] = [];
 
-        if (Array.isArray(data.result)) {
-            for (const result of data.result) {
-                if (result && Array.isArray(result.evaluations)) {
-                    for (const evaluation of result.evaluations) {
-                        const newMetadata: Record<string, any> = {};
-                        if (evaluation?.metadata) {
-                            let metadata: any = evaluation.metadata;
-                            if (typeof metadata === "string") {
-                                try {
-                                    metadata = JSON.parse(metadata);
-                                } catch { /* ignore parse errors */ }
-                            }
-                            if (metadata && typeof metadata === "object") {
-                                newMetadata["usage"] = metadata.usage ?? {};
-                                newMetadata["cost"] = metadata.cost ?? {};
-                                newMetadata["explanation"] = metadata.explanation ?? {};
-                            }
-                        }
+        const topResult = data.result;
+        const outerList = Array.isArray(topResult)
+            ? topResult
+            : topResult && typeof topResult === "object"
+                ? [topResult]
+                : [];
 
-                        // Aligned with Python SDK structure
-                        evalResults.push({
-                            name: evaluation?.name ?? "",
-                            output: evaluation?.output ?? null,
-                            reason: evaluation?.reason ?? "",
-                            runtime: evaluation?.runtime ?? 0,
-                            output_type: evaluation?.outputType ?? "",
-                            eval_id: evaluation?.evalId ?? "",
-                            // Legacy fields for backward compatibility
-                            data: evaluation?.data,
-                            failure: evaluation?.failure,
-                            metadata: newMetadata,
-                            metrics: Array.isArray(evaluation?.metrics)
-                                ? evaluation.metrics.map((m: any): EvalResultMetric => ({
-                                      id: m.id,
-                                      value: m.value,
-                                  }))
-                                : [],
-                        });
+        for (const item of outerList) {
+            const evaluations = Array.isArray(item?.evaluations)
+                ? item.evaluations
+                : item && typeof item === "object"
+                    ? [item]
+                    : [];
+
+            for (const evaluation of evaluations) {
+                if (!evaluation || typeof evaluation !== "object") continue;
+
+                // Legacy metadata passthrough (usage / cost / explanation)
+                // — still returned by some v1 paths and consumed by
+                // protect.ts.
+                let legacyMetadata: Record<string, any> | undefined;
+                if (evaluation.metadata) {
+                    let metadata: any = evaluation.metadata;
+                    if (typeof metadata === "string") {
+                        try { metadata = JSON.parse(metadata); } catch { /* ignore */ }
+                    }
+                    if (metadata && typeof metadata === "object") {
+                        legacyMetadata = {
+                            usage: metadata.usage ?? {},
+                            cost: metadata.cost ?? {},
+                            explanation: metadata.explanation ?? {},
+                        };
                     }
                 }
+
+                evalResults.push({
+                    name: evaluation.name ?? "",
+                    output: evaluation.output ?? evaluation.value,
+                    reason: evaluation.reason ?? "",
+                    runtime: evaluation.runtime ?? 0,
+                    output_type: evaluation.output_type,
+                    eval_id: evaluation.eval_id,
+                    model: evaluation.model,
+                    error_localizer_enabled: evaluation.error_localizer_enabled,
+                    error_localizer: evaluation.error_localizer ?? null,
+                    // Legacy v1 fields (optional, used by Protect)
+                    data: evaluation.data,
+                    failure: evaluation.failure,
+                    metadata: legacyMetadata,
+                    metrics: Array.isArray(evaluation.metrics)
+                        ? evaluation.metrics.map((m: any): EvalResultMetric => ({
+                              id: m.id,
+                              value: m.value,
+                          }))
+                        : undefined,
+                });
             }
         }
 
@@ -350,9 +373,9 @@ export class Evaluator extends APIKeyAuth {
     }
 
     /**
-     * Get the result of an evaluation by its ID
-     * @param evalId - The evaluation ID
-     * @returns The evaluation result
+     * Get the raw evaluation status payload by ID (unparsed).
+     * For a higher-level handle that understands the status envelope and
+     * can be awaited, use `getExecution` instead.
      */
     public async getEvalResult(evalId: string): Promise<Record<string, any>> {
         const config: RequestConfig = {
@@ -367,10 +390,6 @@ export class Evaluator extends APIKeyAuth {
 
     /**
      * Evaluate a pipeline
-     * @param projectName - The project name
-     * @param version - The version string
-     * @param evalData - The evaluation data
-     * @returns The evaluation response
      */
     public async evaluatePipeline(
         projectName: string,
@@ -396,9 +415,6 @@ export class Evaluator extends APIKeyAuth {
 
     /**
      * Get pipeline evaluation results
-     * @param projectName - The project name
-     * @param versions - List of versions to get results for
-     * @returns The pipeline results
      */
     public async getPipelineResults(
         projectName: string,
@@ -435,14 +451,12 @@ export class Evaluator extends APIKeyAuth {
     ): Promise<BatchRunResult> {
         const kwargs: Record<string, any> = {};
 
-        // Add platform credentials
         if (platform === "langfuse") {
             kwargs.langfuse_secret_key = this.langfuseSecretKey;
             kwargs.langfuse_public_key = this.langfusePublicKey;
             kwargs.langfuse_host = this.langfuseHost;
         }
 
-        // Try to get span context from OpenTelemetry
         try {
             const otel = await import('@opentelemetry/api');
             const currentSpan = otel.trace.getSpan(otel.context.active());
@@ -491,6 +505,157 @@ export class Evaluator extends APIKeyAuth {
             console.warn(`Error configuring evaluations: ${error}`);
             return { eval_results: [] } as BatchRunResult;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Async submission / execution handles
+    // ------------------------------------------------------------------
+
+    /**
+     * Submit an eval for async execution. Returns an `Execution` handle
+     * immediately; call `handle.wait()` or `Evaluator.getExecution(id)`
+     * to poll until completion.
+     *
+     * Internally forces `is_async=true` so the backend records the
+     * evaluation and starts a worker without holding the HTTP connection.
+     */
+    public async submit(
+        evalTemplates: string | EvalTemplate | (string | EvalTemplate)[],
+        inputs: Record<string, string | string[]>,
+        options: {
+            timeout?: number;
+            modelName?: string;
+            customEvalName?: string;
+            traceEval?: boolean;
+            errorLocalizer?: boolean;
+        } = {}
+    ): Promise<Execution> {
+        const extractName = (t: string | EvalTemplate): string | undefined => {
+            if (typeof t === 'string') return t;
+            if (typeof t === 'object' && t.eval_name) return t.eval_name;
+            return undefined;
+        };
+
+        const firstTemplate = Array.isArray(evalTemplates)
+            ? evalTemplates[0]
+            : evalTemplates;
+        const evalName = extractName(firstTemplate);
+        if (!evalName) {
+            throw new TypeError(
+                "Unsupported evalTemplates argument. Expect template class/obj or name string."
+            );
+        }
+
+        const transformedInputs: Record<string, string[]> = {};
+        for (const [key, value] of Object.entries(inputs)) {
+            transformedInputs[key] = Array.isArray(value) ? value : [value];
+        }
+
+        const payload = {
+            eval_name: evalName,
+            inputs: transformedInputs,
+            model: options.modelName,
+            span_id: undefined,
+            custom_eval_name: options.customEvalName,
+            trace_eval: options.traceEval ?? false,
+            is_async: true,
+            error_localizer: options.errorLocalizer ?? false,
+        };
+
+        const timeoutMs =
+            options.timeout !== undefined
+                ? options.timeout * 1000
+                : (this.defaultTimeout ?? 30) * 1000;
+
+        const raw = (await this.request({
+            method: HttpMethod.POST,
+            url: `${this.baseUrl}/${Routes.evaluatev2}`,
+            json: payload,
+            timeout: timeoutMs,
+        })) as any;
+        const body = raw?.data ?? raw;
+
+        if (body?.status === false) {
+            throw new Error(
+                `Async submit rejected by backend: ${JSON.stringify(body.result)}`
+            );
+        }
+        const results = body?.result;
+        if (!Array.isArray(results) || results.length === 0) {
+            throw new Error(
+                `Async submit did not return a result list (response: ${JSON.stringify(body)})`
+            );
+        }
+        const evaluations = results[0]?.evaluations ?? [];
+        const firstEval = evaluations[0] ?? {};
+        const executionId: string | undefined = firstEval.eval_id;
+        if (!executionId) {
+            throw new Error(
+                `Async submit did not return an eval_id (response: ${JSON.stringify(body)})`
+            );
+        }
+
+        const handle = new Execution({
+            id: String(executionId),
+            kind: 'eval',
+            status: 'pending',
+        });
+        handle._setRefresher(() => this._refreshEvalExecution(String(executionId)));
+        return handle;
+    }
+
+    /**
+     * Fetch the latest state of an async single-eval execution by id.
+     * Returns an `Execution` with a refresher attached — call
+     * `handle.wait()` to block until completion.
+     */
+    public async getExecution(executionId: string): Promise<Execution> {
+        const handle = await this._refreshEvalExecution(executionId);
+        handle._setRefresher(() => this._refreshEvalExecution(executionId));
+        return handle;
+    }
+
+    private async _refreshEvalExecution(executionId: string): Promise<Execution> {
+        const raw = (await this.request({
+            method: HttpMethod.GET,
+            url: `${this.baseUrl}/${Routes.get_eval_result}`,
+            params: { eval_id: executionId },
+            timeout: (this.defaultTimeout ?? 30) * 1000,
+        })) as any;
+        const body = raw?.data ?? raw;
+        // Envelope: { status, result: { eval_status, result: <dict|str>, error_message? } }
+        const payload = body?.result ?? {};
+        const status = normalizeStatus(payload.eval_status);
+        const rawResult = payload.result;
+        let parsedResult: EvalResult | null = null;
+        let errorLocalizer: Record<string, any> | null = null;
+        let errorMessage: string | null = payload.error_message ?? null;
+
+        if (rawResult && typeof rawResult === 'object') {
+            parsedResult = {
+                name: rawResult.name ?? '',
+                output: rawResult.output ?? rawResult.value,
+                reason: rawResult.reason ?? '',
+                runtime: rawResult.runtime ?? 0,
+                output_type: rawResult.output_type,
+                eval_id: rawResult.eval_id ?? executionId,
+                model: rawResult.model,
+                error_localizer_enabled: rawResult.error_localizer_enabled,
+                error_localizer: rawResult.error_localizer ?? null,
+            };
+            errorLocalizer = rawResult.error_localizer ?? null;
+            errorMessage = rawResult.error_message ?? errorMessage;
+        }
+        // else rawResult is a human-readable string like "Evaluation is being processed."
+
+        return new Execution({
+            id: executionId,
+            kind: 'eval',
+            status,
+            result: parsedResult,
+            errorMessage,
+            errorLocalizer,
+        });
     }
 }
 

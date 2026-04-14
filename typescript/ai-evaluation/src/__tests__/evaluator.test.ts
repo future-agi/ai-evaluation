@@ -39,11 +39,12 @@ describe('Evaluator', () => {
         const mockInputs = { query: ["test query"], response: ["test response"] };
         const mockBatchResult: BatchRunResult = {
             eval_results: [{
-                data: {},
-                failure: false,
+                name: 'factual_accuracy',
+                output: 'pass',
+                output_type: 'Pass/Fail',
+                eval_id: 'test-eval-id',
                 reason: "",
                 runtime: 100,
-                metrics: [{ id: 'metric1', value: 1 }]
             }]
         };
 
@@ -64,7 +65,9 @@ describe('Evaluator', () => {
                     trace_eval: false,
                     custom_eval_name: undefined,
                     model: 'test-model',
-                    span_id: undefined
+                    span_id: undefined,
+                    is_async: false,
+                    error_localizer: false
                 },
                 timeout: NaN
             });
@@ -150,11 +153,12 @@ describe('Evaluator', () => {
 
         const dummyBatchResult: BatchRunResult = {
             eval_results: [{
-                data: {},
-                failure: false,
+                name: 'dummy',
+                output: 'pass',
+                output_type: 'Pass/Fail',
+                eval_id: 'dummy-id',
                 reason: "",
                 runtime: 0,
-                metrics: []
             }]
         };
 
