@@ -116,6 +116,9 @@ _manager: Optional[EvalTemplateManager] = None
 _template_id: Optional[str] = None
 _second_template_id: Optional[str] = None
 _composite_id: Optional[str] = None
+_gt_template_id: Optional[str] = None
+_gt_dataset_id: Optional[str] = None
+_system_template_id: Optional[str] = None
 
 
 def evaluator() -> Evaluator:
@@ -378,9 +381,208 @@ def t_submit_composite_wait():
 
     handle.wait(timeout=180, poll_interval=2)
     assert_eq(handle.status, "completed", "terminal status")
-    assert_true(isinstance(handle.result, dict), "result is dict")
+    assert_true(handle.result is not None, "result populated")
     assert_eq(handle.result.get("composite_id"), _composite_id, "composite_id matches")
     assert_eq(handle.result.get("total_children"), 2, "total_children=2")
+
+
+@test("EvalTemplateManager.upload_ground_truth + list + status + data + role_mapping")
+def t_ground_truth_upload_and_list():
+    global _gt_template_id, _gt_dataset_id
+    mgr = manager()
+
+    # Fresh template to host the GT dataset.
+    tpl = mgr.create_template(
+        name=_random_name("sdk-gt-host"),
+        eval_type="llm",
+        instructions="Does the {{output}} answer {{question}} correctly?",
+        output_type="pass_fail",
+    )
+    _gt_template_id = tpl["id"]
+
+    # Dataset starts empty.
+    initial = mgr.list_ground_truth(_gt_template_id)
+    assert_eq(initial["total"], 0, "fresh template has no GT datasets")
+
+    # Upload a tiny JSON dataset.
+    gt = mgr.upload_ground_truth(
+        _gt_template_id,
+        name="sdk-smoke-gt",
+        description="sdk integration probe",
+        file_name="probe.json",
+        columns=["question", "answer", "score"],
+        data=[
+            {"question": "Is thanks polite?", "answer": "Yes", "score": "1"},
+            {"question": "Is shouting polite?", "answer": "No", "score": "0"},
+        ],
+        role_mapping={
+            "input": "question",
+            "expected_output": "answer",
+            "score": "score",
+        },
+    )
+    assert_true(gt["id"] not in (None, ""), "GT upload returned id")
+    assert_eq(gt["row_count"], 2, "GT row_count")
+    assert_eq(gt["embedding_status"], "pending", "initial embedding_status")
+    _gt_dataset_id = gt["id"]
+
+    listed = mgr.list_ground_truth(_gt_template_id)
+    assert_eq(listed["total"], 1, "GT list reflects upload")
+    assert_eq(listed["items"][0]["id"], _gt_dataset_id, "GT list item id")
+
+    status = mgr.get_ground_truth_status(_gt_dataset_id)
+    assert_eq(status["total_rows"], 2, "status total_rows")
+    assert_true(
+        status["embedding_status"] in ("pending", "processing", "completed"),
+        f"status value (got {status['embedding_status']!r})",
+    )
+
+    data = mgr.get_ground_truth_data(_gt_dataset_id, page=1, page_size=10)
+    assert_eq(data["total_rows"], 2, "data total_rows")
+    assert_eq(len(data["rows"]), 2, "data rows length")
+    assert_eq(data["columns"], ["question", "answer", "score"], "data columns")
+
+    # Variable mapping PUT → echoes back the mapping.
+    vm = mgr.set_ground_truth_variable_mapping(
+        _gt_dataset_id, {"output": "answer", "input": "question"}
+    )
+    assert_eq(
+        vm["variable_mapping"],
+        {"output": "answer", "input": "question"},
+        "variable_mapping echo",
+    )
+
+    # Role mapping PUT (re-apply with different role shape).
+    rm = mgr.set_ground_truth_role_mapping(
+        _gt_dataset_id,
+        {"input": "question", "expected_output": "answer"},
+    )
+    assert_eq(rm["id"], _gt_dataset_id, "role_mapping id")
+
+
+@test("EvalTemplateManager ground-truth config get/set")
+def t_ground_truth_config():
+    assert_true(_gt_template_id is not None, "GT host template created")
+    assert_true(_gt_dataset_id is not None, "GT dataset created")
+    mgr = manager()
+
+    default_cfg = mgr.get_ground_truth_config(_gt_template_id)  # type: ignore[arg-type]
+    assert_true("ground_truth" in default_cfg, "default cfg has ground_truth key")
+    assert_eq(
+        default_cfg["ground_truth"]["enabled"], False, "default enabled=False"
+    )
+
+    updated = mgr.set_ground_truth_config(
+        _gt_template_id,  # type: ignore[arg-type]
+        enabled=True,
+        ground_truth_id=_gt_dataset_id,
+        mode="auto",
+        max_examples=2,
+        similarity_threshold=0.5,
+        injection_format="structured",
+    )
+    cfg = updated["ground_truth"]
+    assert_eq(cfg["enabled"], True, "enabled=True")
+    assert_eq(cfg["ground_truth_id"], _gt_dataset_id, "gt id")
+    assert_eq(cfg["max_examples"], 2, "max_examples")
+
+    reread = mgr.get_ground_truth_config(_gt_template_id)  # type: ignore[arg-type]
+    assert_eq(
+        reread["ground_truth"]["ground_truth_id"],
+        _gt_dataset_id,
+        "config persists on template",
+    )
+
+
+@test("EvalTemplateManager.get_template_charts + get_template_usage + list_template_feedback")
+def t_usage_feedback_charts():
+    global _system_template_id
+    mgr = manager()
+
+    # Pick a system eval that's known to exist — `tone`.
+    listed = mgr.list_templates(
+        page=0, page_size=25, owner_filter="system", search="tone"
+    )
+    items = [i for i in listed["items"] if i.get("name") == "tone"]
+    assert_true(bool(items), "system 'tone' template is visible")
+    _system_template_id = items[0]["id"]
+
+    charts = mgr.get_template_charts([_system_template_id])  # type: ignore[arg-type]
+    assert_true("charts" in charts, "charts response has 'charts' key")
+    assert_true(
+        _system_template_id in charts["charts"],
+        "charts includes requested template id",
+    )
+
+    usage = mgr.get_template_usage(
+        _system_template_id,  # type: ignore[arg-type]
+        period="30d",
+        page=0,
+        page_size=5,
+    )
+    assert_true("stats" in usage, "usage payload has stats")
+    assert_true(isinstance(usage.get("chart"), list), "usage payload has chart list")
+
+    feedback = mgr.list_template_feedback(
+        _system_template_id,  # type: ignore[arg-type]
+        page=0,
+        page_size=5,
+    )
+    assert_true("items" in feedback, "feedback payload has items")
+    assert_eq(
+        feedback["template_id"], _system_template_id, "feedback template_id"
+    )
+
+
+@test("EvalTemplateManager.duplicate_template clones a user template")
+def t_duplicate_template():
+    mgr = manager()
+    src = mgr.create_template(
+        name=_random_name("sdk-dup-src"),
+        eval_type="llm",
+        instructions="Is the {{output}} polite?",
+        output_type="pass_fail",
+    )
+    src_id = src["id"]
+
+    dup_name = _random_name("sdk-dup-copy")
+    dup = mgr.duplicate_template(src_id, dup_name)
+    assert_true(
+        "eval_template_id" in dup,
+        "duplicate response has eval_template_id",
+    )
+    dup_id = dup["eval_template_id"]
+    assert_true(dup_id != src_id, "duplicate has new id")
+
+    detail = mgr.get_template(dup_id)
+    assert_eq(detail["name"], dup_name, "duplicate name matches")
+    assert_eq(detail["eval_type"], "llm", "duplicate eval_type copied")
+
+    mgr.delete_template(src_id)
+    mgr.delete_template(dup_id)
+
+
+@test("EvalTemplateManager.run_playground executes a system eval by template id")
+def t_run_playground():
+    mgr = manager()
+    listed = mgr.list_templates(
+        page=0, page_size=25, owner_filter="system", search="is_json"
+    )
+    items = [i for i in listed["items"] if i.get("name") == "is_json"]
+    assert_true(bool(items), "system 'is_json' template visible")
+    tid = items[0]["id"]
+
+    result = mgr.run_playground(
+        tid, mapping={"text": '{"ok": true, "n": 1}'}
+    )
+    assert_true(result is not None, "playground returned result")
+    assert_eq(result.get("output"), "Passed", "playground output Passed")
+    assert_eq(
+        result.get("output_type"), "Pass/Fail", "playground output_type"
+    )
+    assert_true(
+        bool(result.get("log_id")), "playground response has log_id"
+    )
 
 
 @test("Cleanup: delete created templates")
@@ -392,6 +594,15 @@ def t_cleanup():
         ids.append(_second_template_id)
     if _composite_id:
         ids.append(_composite_id)
+
+    # Ground truth dataset is cleaned up first, then its host template.
+    if _gt_dataset_id:
+        try:
+            manager().delete_ground_truth(_gt_dataset_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"    warning: failed to delete GT {_gt_dataset_id}: {exc}")
+    if _gt_template_id:
+        ids.append(_gt_template_id)
 
     for tid in ids:
         try:
@@ -422,6 +633,11 @@ def main() -> int:
         t_get_execution_by_id,
         t_submit_with_error_localizer,
         t_submit_composite_wait,
+        t_ground_truth_upload_and_list,
+        t_ground_truth_config,
+        t_usage_feedback_charts,
+        t_duplicate_template,
+        t_run_playground,
         t_cleanup,
     ]
     for fn in tests:

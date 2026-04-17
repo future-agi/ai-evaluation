@@ -9,6 +9,34 @@ import {
 import { AxiosResponse } from 'axios';
 
 import { Execution } from './execution';
+import {
+    BulkDeleteResponse,
+    CompositeCreateResponse,
+    CompositeDetailResponse,
+    CompositeExecutionResponse,
+    GroundTruthConfigResponse,
+    GroundTruthDataResponse,
+    GroundTruthDeleteResponse,
+    GroundTruthListResponse,
+    GroundTruthRoleMappingResponse,
+    GroundTruthSearchResponse,
+    GroundTruthStatusResponse,
+    GroundTruthUploadResponse,
+    GroundTruthVariableMappingResponse,
+    PlaygroundRunResponse,
+    TemplateChartsResponse,
+    TemplateCreateResponse,
+    TemplateDetailResponse,
+    TemplateDuplicateResponse,
+    TemplateFeedbackListResponse,
+    TemplateListResponse,
+    TemplateUpdateResponse,
+    TemplateUsageResponse,
+    VersionCreateResponse,
+    VersionListResponse,
+    VersionRestoreResponse,
+    VersionSetDefaultResponse,
+} from './manager-types';
 
 // Lightweight UUIDv4 generator so the package doesn't pull in a new dep.
 function uuidv4(): string {
@@ -172,7 +200,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     // Templates
     // ------------------------------------------------------------------
 
-    public async listTemplates(opts: ListTemplatesOptions = {}): Promise<any> {
+    public async listTemplates(opts: ListTemplatesOptions = {}): Promise<TemplateListResponse> {
         const body: Record<string, any> = {
             page: opts.page ?? 0,
             page_size: opts.pageSize ?? 25,
@@ -185,14 +213,14 @@ export class EvalTemplateManager extends APIKeyAuth {
         return this.call(HttpMethod.POST, this.url(Routes.eval_template_list), body);
     }
 
-    public async getTemplate(templateId: string): Promise<any> {
+    public async getTemplate(templateId: string): Promise<TemplateDetailResponse> {
         return this.call(
             HttpMethod.GET,
             this.url(Routes.eval_template_detail, { template_id: templateId })
         );
     }
 
-    public async createTemplate(opts: CreateTemplateOptions): Promise<any> {
+    public async createTemplate(opts: CreateTemplateOptions): Promise<TemplateCreateResponse> {
         const body: Record<string, any> = {
             name: opts.name,
             is_draft: opts.isDraft ?? false,
@@ -229,7 +257,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     public async updateTemplate(
         templateId: string,
         fields: Record<string, any>
-    ): Promise<any> {
+    ): Promise<TemplateUpdateResponse> {
         const body: Record<string, any> = {};
         for (const [k, v] of Object.entries(fields)) {
             if (v !== undefined) body[k] = v;
@@ -249,7 +277,7 @@ export class EvalTemplateManager extends APIKeyAuth {
         );
     }
 
-    public async bulkDeleteTemplates(templateIds: string[]): Promise<any> {
+    public async bulkDeleteTemplates(templateIds: string[]): Promise<BulkDeleteResponse> {
         return this.call(
             HttpMethod.POST,
             this.url(Routes.eval_template_bulk_delete),
@@ -261,7 +289,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     // Versions
     // ------------------------------------------------------------------
 
-    public async listVersions(templateId: string): Promise<any> {
+    public async listVersions(templateId: string): Promise<VersionListResponse> {
         return this.call(
             HttpMethod.GET,
             this.url(Routes.eval_template_version_list, {
@@ -277,7 +305,7 @@ export class EvalTemplateManager extends APIKeyAuth {
             model?: string;
             configSnapshot?: Record<string, any>;
         } = {}
-    ): Promise<any> {
+    ): Promise<VersionCreateResponse> {
         const body: Record<string, any> = {};
         if (opts.criteria !== undefined) body.criteria = opts.criteria;
         if (opts.model !== undefined) body.model = opts.model;
@@ -295,7 +323,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     public async setDefaultVersion(
         templateId: string,
         versionId: string
-    ): Promise<any> {
+    ): Promise<VersionSetDefaultResponse> {
         return this.call(
             HttpMethod.PUT,
             this.url(Routes.eval_template_version_set_default, {
@@ -308,7 +336,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     public async restoreVersion(
         templateId: string,
         versionId: string
-    ): Promise<any> {
+    ): Promise<VersionRestoreResponse> {
         return this.call(
             HttpMethod.POST,
             this.url(Routes.eval_template_version_restore, {
@@ -322,7 +350,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     // Composite evals
     // ------------------------------------------------------------------
 
-    public async createComposite(opts: CreateCompositeOptions): Promise<any> {
+    public async createComposite(opts: CreateCompositeOptions): Promise<CompositeCreateResponse> {
         const body: Record<string, any> = {
             name: opts.name,
             child_template_ids: opts.childTemplateIds,
@@ -341,7 +369,7 @@ export class EvalTemplateManager extends APIKeyAuth {
         );
     }
 
-    public async getComposite(templateId: string): Promise<any> {
+    public async getComposite(templateId: string): Promise<CompositeDetailResponse> {
         return this.call(
             HttpMethod.GET,
             this.url(Routes.composite_eval_detail, { template_id: templateId })
@@ -351,7 +379,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     public async updateComposite(
         templateId: string,
         fields: Record<string, any>
-    ): Promise<any> {
+    ): Promise<CompositeDetailResponse> {
         const body: Record<string, any> = {};
         for (const [k, v] of Object.entries(fields)) {
             if (v !== undefined) body[k] = v;
@@ -411,7 +439,7 @@ export class EvalTemplateManager extends APIKeyAuth {
     public async executeComposite(
         templateId: string,
         opts: ExecuteCompositeOptions
-    ): Promise<any> {
+    ): Promise<CompositeExecutionResponse> {
         const body: Record<string, any> = {
             mapping: opts.mapping,
             config: opts.config ?? {},
@@ -427,6 +455,297 @@ export class EvalTemplateManager extends APIKeyAuth {
         return this.call(
             HttpMethod.POST,
             this.url(Routes.composite_eval_execute, { template_id: templateId }),
+            body
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Ground Truth (Phase 9)
+    // ------------------------------------------------------------------
+
+    public async listGroundTruth(templateId: string): Promise<GroundTruthListResponse> {
+        return this.call(
+            HttpMethod.GET,
+            this.url(Routes.ground_truth_list, { template_id: templateId })
+        );
+    }
+
+    public async uploadGroundTruth(
+        templateId: string,
+        opts: {
+            name: string;
+            columns: string[];
+            data: Array<Record<string, any>>;
+            description?: string;
+            fileName?: string;
+            variableMapping?: Record<string, string>;
+            roleMapping?: Record<string, string>;
+        }
+    ): Promise<GroundTruthUploadResponse> {
+        const body: Record<string, any> = {
+            name: opts.name,
+            description: opts.description ?? '',
+            file_name: opts.fileName ?? '',
+            columns: opts.columns,
+            data: opts.data,
+        };
+        if (opts.variableMapping !== undefined)
+            body.variable_mapping = opts.variableMapping;
+        if (opts.roleMapping !== undefined) body.role_mapping = opts.roleMapping;
+
+        return this.call(
+            HttpMethod.POST,
+            this.url(Routes.ground_truth_upload, { template_id: templateId }),
+            body
+        );
+    }
+
+    public async getGroundTruthConfig(templateId: string): Promise<GroundTruthConfigResponse> {
+        return this.call(
+            HttpMethod.GET,
+            this.url(Routes.ground_truth_config, { template_id: templateId })
+        );
+    }
+
+    public async setGroundTruthConfig(
+        templateId: string,
+        opts: {
+            enabled?: boolean;
+            groundTruthId?: string | null;
+            mode?: 'auto' | 'manual' | 'disabled';
+            maxExamples?: number;
+            similarityThreshold?: number;
+            injectionFormat?: 'structured' | 'conversational' | 'xml';
+        } = {}
+    ): Promise<GroundTruthConfigResponse> {
+        const body = {
+            enabled: opts.enabled ?? true,
+            ground_truth_id: opts.groundTruthId ?? null,
+            mode: opts.mode ?? 'auto',
+            max_examples: opts.maxExamples ?? 3,
+            similarity_threshold: opts.similarityThreshold ?? 0.7,
+            injection_format: opts.injectionFormat ?? 'structured',
+        };
+        return this.call(
+            HttpMethod.PUT,
+            this.url(Routes.ground_truth_config, { template_id: templateId }),
+            body
+        );
+    }
+
+    public async setGroundTruthVariableMapping(
+        groundTruthId: string,
+        variableMapping: Record<string, string>
+    ): Promise<GroundTruthVariableMappingResponse> {
+        return this.call(
+            HttpMethod.PUT,
+            this.url(Routes.ground_truth_mapping, {
+                ground_truth_id: groundTruthId,
+            }),
+            { variable_mapping: variableMapping }
+        );
+    }
+
+    public async setGroundTruthRoleMapping(
+        groundTruthId: string,
+        roleMapping: Record<string, string>
+    ): Promise<GroundTruthRoleMappingResponse> {
+        return this.call(
+            HttpMethod.PUT,
+            this.url(Routes.ground_truth_role_mapping, {
+                ground_truth_id: groundTruthId,
+            }),
+            { role_mapping: roleMapping }
+        );
+    }
+
+    public async getGroundTruthData(
+        groundTruthId: string,
+        opts: { page?: number; pageSize?: number } = {}
+    ): Promise<GroundTruthDataResponse> {
+        const config: RequestConfig = {
+            method: HttpMethod.GET,
+            url: this.url(Routes.ground_truth_data, {
+                ground_truth_id: groundTruthId,
+            }),
+            params: {
+                page: opts.page ?? 1,
+                page_size: opts.pageSize ?? 50,
+            },
+            timeout: (this.defaultTimeout ?? 30) * 1000,
+        };
+        return (await this.request(config, JsonResultHandler)) as any;
+    }
+
+    public async getGroundTruthStatus(groundTruthId: string): Promise<GroundTruthStatusResponse> {
+        return this.call(
+            HttpMethod.GET,
+            this.url(Routes.ground_truth_status, {
+                ground_truth_id: groundTruthId,
+            })
+        );
+    }
+
+    public async triggerGroundTruthEmbeddings(
+        groundTruthId: string
+    ): Promise<any> {
+        return this.call(
+            HttpMethod.POST,
+            this.url(Routes.ground_truth_embed, {
+                ground_truth_id: groundTruthId,
+            })
+        );
+    }
+
+    public async searchGroundTruth(
+        groundTruthId: string,
+        opts: { query: string; maxResults?: number }
+    ): Promise<GroundTruthSearchResponse> {
+        return this.call(
+            HttpMethod.POST,
+            this.url(Routes.ground_truth_search, {
+                ground_truth_id: groundTruthId,
+            }),
+            { query: opts.query, max_results: opts.maxResults ?? 3 }
+        );
+    }
+
+    public async deleteGroundTruth(groundTruthId: string): Promise<GroundTruthDeleteResponse> {
+        return this.call(
+            HttpMethod.DELETE,
+            this.url(Routes.ground_truth_delete, {
+                ground_truth_id: groundTruthId,
+            })
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Usage, Feedback, and 30-day charts (Phase 10)
+    // ------------------------------------------------------------------
+
+    public async getTemplateUsage(
+        templateId: string,
+        opts: {
+            page?: number;
+            pageSize?: number;
+            period?: '30m' | '6h' | '1d' | '7d' | '30d' | '90d';
+            version?: string;
+        } = {}
+    ): Promise<TemplateUsageResponse> {
+        const params: Record<string, any> = {
+            page: opts.page ?? 0,
+            page_size: opts.pageSize ?? 25,
+            period: opts.period ?? '30d',
+        };
+        if (opts.version !== undefined) params.version = opts.version;
+        const config: RequestConfig = {
+            method: HttpMethod.GET,
+            url: this.url(Routes.eval_template_usage, {
+                template_id: templateId,
+            }),
+            params,
+            timeout: (this.defaultTimeout ?? 30) * 1000,
+        };
+        return (await this.request(config, JsonResultHandler)) as any;
+    }
+
+    public async listTemplateFeedback(
+        templateId: string,
+        opts: { page?: number; pageSize?: number } = {}
+    ): Promise<TemplateFeedbackListResponse> {
+        const config: RequestConfig = {
+            method: HttpMethod.GET,
+            url: this.url(Routes.eval_template_feedback_list, {
+                template_id: templateId,
+            }),
+            params: {
+                page: opts.page ?? 0,
+                page_size: opts.pageSize ?? 25,
+            },
+            timeout: (this.defaultTimeout ?? 30) * 1000,
+        };
+        return (await this.request(config, JsonResultHandler)) as any;
+    }
+
+    public async getTemplateCharts(templateIds: string[]): Promise<TemplateChartsResponse> {
+        return this.call(
+            HttpMethod.POST,
+            this.url(Routes.eval_template_list_charts),
+            { template_ids: templateIds }
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Duplicate + playground
+    // ------------------------------------------------------------------
+
+    /**
+     * Clone an existing user-owned eval template under a new name.
+     */
+    public async duplicateTemplate(
+        templateId: string,
+        name: string
+    ): Promise<TemplateDuplicateResponse> {
+        return this.call(
+            HttpMethod.POST,
+            this.url(Routes.eval_template_duplicate),
+            { eval_template_id: templateId, name }
+        );
+    }
+
+    /**
+     * Run a saved eval template via the playground endpoint. Identifies
+     * by template_id (not name) and supports auto-context injection
+     * from row / span / trace / session / call — either as resolved
+     * dicts or as ids the server looks up.
+     */
+    public async runPlayground(
+        templateId: string,
+        opts: {
+            mapping: Record<string, any>;
+            model?: string;
+            config?: Record<string, any>;
+            inputDataTypes?: Record<string, string>;
+            errorLocalizer?: boolean;
+            kbId?: string;
+            rowContext?: Record<string, any>;
+            spanContext?: Record<string, any>;
+            traceContext?: Record<string, any>;
+            sessionContext?: Record<string, any>;
+            callContext?: Record<string, any>;
+            spanId?: string;
+            traceId?: string;
+            sessionId?: string;
+            callId?: string;
+        }
+    ): Promise<PlaygroundRunResponse> {
+        const body: Record<string, any> = {
+            template_id: templateId,
+            mapping: opts.mapping,
+            error_localizer: opts.errorLocalizer ?? false,
+        };
+        if (opts.model !== undefined) body.model = opts.model;
+        if (opts.config !== undefined) body.config = opts.config;
+        if (opts.inputDataTypes !== undefined)
+            body.input_data_types = opts.inputDataTypes;
+        if (opts.kbId !== undefined) body.kb_id = opts.kbId;
+        if (opts.rowContext !== undefined) body.row_context = opts.rowContext;
+        if (opts.spanContext !== undefined)
+            body.span_context = opts.spanContext;
+        if (opts.traceContext !== undefined)
+            body.trace_context = opts.traceContext;
+        if (opts.sessionContext !== undefined)
+            body.session_context = opts.sessionContext;
+        if (opts.callContext !== undefined)
+            body.call_context = opts.callContext;
+        if (opts.spanId !== undefined) body.span_id = opts.spanId;
+        if (opts.traceId !== undefined) body.trace_id = opts.traceId;
+        if (opts.sessionId !== undefined) body.session_id = opts.sessionId;
+        if (opts.callId !== undefined) body.call_id = opts.callId;
+
+        return this.call(
+            HttpMethod.POST,
+            this.url(Routes.eval_playground),
             body
         );
     }

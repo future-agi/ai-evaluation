@@ -295,7 +295,184 @@ async function main(): Promise<void> {
         assertEq(res.total_children, 2, 'total_children=2');
     });
 
+    let gtTemplateId: string | undefined;
+    let gtDatasetId: string | undefined;
+    let systemTemplateId: string | undefined;
+
+    await test('Ground Truth: upload + list + status + data + mappings', async () => {
+        const tpl = await manager.createTemplate({
+            name: randomName('sdk-ts-gt-host'),
+            instructions:
+                'Does the {{output}} answer {{question}} correctly?',
+            outputType: 'pass_fail',
+        });
+        gtTemplateId = tpl.id;
+
+        const initial = await manager.listGroundTruth(gtTemplateId!);
+        assertEq(initial.total, 0, 'fresh template has no GT');
+
+        const gt = await manager.uploadGroundTruth(gtTemplateId!, {
+            name: 'ts-smoke-gt',
+            description: 'sdk ts integration probe',
+            fileName: 'probe.json',
+            columns: ['question', 'answer', 'score'],
+            data: [
+                { question: 'Is thanks polite?', answer: 'Yes', score: '1' },
+                { question: 'Is shouting polite?', answer: 'No', score: '0' },
+            ],
+            roleMapping: {
+                input: 'question',
+                expected_output: 'answer',
+                score: 'score',
+            },
+        });
+        assertTrue(!!gt.id, 'GT upload returned id');
+        assertEq(gt.row_count, 2, 'GT row_count');
+        gtDatasetId = gt.id;
+
+        const listed = await manager.listGroundTruth(gtTemplateId!);
+        assertEq(listed.total, 1, 'GT list reflects upload');
+        assertEq(listed.items[0].id, gtDatasetId, 'GT list item id');
+
+        const status = await manager.getGroundTruthStatus(gtDatasetId!);
+        assertEq(status.total_rows, 2, 'status total_rows');
+
+        const data = await manager.getGroundTruthData(gtDatasetId!, {
+            page: 1,
+            pageSize: 10,
+        });
+        assertEq(data.total_rows, 2, 'data total_rows');
+        assertEq(data.rows.length, 2, 'data rows length');
+
+        const vm = await manager.setGroundTruthVariableMapping(gtDatasetId!, {
+            output: 'answer',
+            input: 'question',
+        });
+        assertEq(vm.id, gtDatasetId, 'variable_mapping id echo');
+
+        const rm = await manager.setGroundTruthRoleMapping(gtDatasetId!, {
+            input: 'question',
+            expected_output: 'answer',
+        });
+        assertEq(rm.id, gtDatasetId, 'role_mapping id echo');
+    });
+
+    await test('Ground Truth: config get/set round-trip', async () => {
+        assertTrue(!!gtTemplateId, 'GT host template exists');
+        assertTrue(!!gtDatasetId, 'GT dataset exists');
+
+        const def = await manager.getGroundTruthConfig(gtTemplateId!);
+        assertTrue('ground_truth' in def, 'default cfg present');
+        assertEq(def.ground_truth.enabled, false, 'default disabled');
+
+        const updated = await manager.setGroundTruthConfig(gtTemplateId!, {
+            enabled: true,
+            groundTruthId: gtDatasetId!,
+            mode: 'auto',
+            maxExamples: 2,
+            similarityThreshold: 0.5,
+            injectionFormat: 'structured',
+        });
+        assertEq(updated.ground_truth.enabled, true, 'enabled=true');
+        assertEq(
+            updated.ground_truth.ground_truth_id,
+            gtDatasetId,
+            'gt id set'
+        );
+        assertEq(updated.ground_truth.max_examples, 2, 'max_examples');
+
+        const reread = await manager.getGroundTruthConfig(gtTemplateId!);
+        assertEq(
+            reread.ground_truth.ground_truth_id,
+            gtDatasetId,
+            'config persists'
+        );
+    });
+
+    await test('Usage + feedback + charts for a system template', async () => {
+        const listed = await manager.listTemplates({
+            ownerFilter: 'system',
+            search: 'tone',
+            pageSize: 25,
+        });
+        const match = listed.items.find((i: any) => i.name === 'tone');
+        assertTrue(!!match, `system 'tone' template visible`);
+        systemTemplateId = match!.id;
+
+        const charts = await manager.getTemplateCharts([systemTemplateId!]);
+        assertTrue('charts' in charts, 'charts envelope');
+        assertTrue(
+            systemTemplateId! in charts.charts,
+            'charts include requested id'
+        );
+
+        const usage = await manager.getTemplateUsage(systemTemplateId!, {
+            period: '30d',
+            pageSize: 5,
+        });
+        assertTrue(!!usage.stats, 'usage has stats');
+        assertTrue(Array.isArray(usage.chart), 'usage has chart list');
+
+        const feedback = await manager.listTemplateFeedback(systemTemplateId!, {
+            pageSize: 5,
+        });
+        assertEq(feedback.template_id, systemTemplateId, 'feedback template_id');
+        assertTrue(Array.isArray(feedback.items), 'feedback items list');
+    });
+
+    await test('EvalTemplateManager.duplicateTemplate clones a user template', async () => {
+        const src = await manager.createTemplate({
+            name: randomName('sdk-ts-dup-src'),
+            instructions: 'Is the {{output}} polite?',
+            outputType: 'pass_fail',
+        });
+        const dupName = randomName('sdk-ts-dup-copy');
+        const dup = await manager.duplicateTemplate(src.id, dupName);
+        assertTrue('eval_template_id' in dup, 'duplicate response has id');
+        const dupId = dup.eval_template_id;
+        assertTrue(dupId !== src.id, 'duplicate id differs');
+
+        const detail = await manager.getTemplate(dupId);
+        assertEq(detail.name, dupName, 'duplicate name');
+        assertEq(detail.eval_type, 'llm', 'duplicate eval_type');
+
+        await manager.deleteTemplate(src.id);
+        await manager.deleteTemplate(dupId);
+    });
+
+    await test('EvalTemplateManager.runPlayground executes system template by id', async () => {
+        const listed = await manager.listTemplates({
+            ownerFilter: 'system',
+            search: 'is_json',
+            pageSize: 25,
+        });
+        const match = listed.items.find((i: any) => i.name === 'is_json');
+        assertTrue(!!match, `system 'is_json' template visible`);
+
+        const result = await manager.runPlayground(match!.id, {
+            mapping: { text: '{"ok": true, "n": 1}' },
+        });
+        assertTrue(!!result && typeof result === 'object', 'result dict');
+        assertEq(result.output, 'Passed', 'playground output');
+        assertEq(result.output_type, 'Pass/Fail', 'playground output_type');
+        assertTrue(!!result.log_id, 'playground log_id');
+    });
+
     await test('Cleanup created templates', async () => {
+        // Delete GT dataset first, then its host template.
+        if (gtDatasetId) {
+            try {
+                await manager.deleteGroundTruth(gtDatasetId);
+            } catch (err: any) {
+                console.log(
+                    `    warning: failed to delete GT ${gtDatasetId}: ${err?.message}`
+                );
+            }
+        }
+        if (gtTemplateId) {
+            toCleanup.push(gtTemplateId);
+        }
+
         for (const id of toCleanup) {
             try {
                 await manager.deleteTemplate(id);

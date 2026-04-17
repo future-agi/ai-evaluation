@@ -18,6 +18,34 @@ from requests import Response
 from fi.api.auth import APIKeyAuth, ResponseHandler
 from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.execution import Execution
+from fi.evals.manager_types import (
+    BulkDeleteResponse,
+    CompositeCreateResponse,
+    CompositeDetailResponse,
+    CompositeExecutionResponse,
+    GroundTruthConfigResponse,
+    GroundTruthDataResponse,
+    GroundTruthDeleteResponse,
+    GroundTruthListResponse,
+    GroundTruthRoleMappingResponse,
+    GroundTruthSearchResponse,
+    GroundTruthStatusResponse,
+    GroundTruthUploadResponse,
+    GroundTruthVariableMappingResponse,
+    PlaygroundRunResponse,
+    TemplateChartsResponse,
+    TemplateCreateResponse,
+    TemplateDetailResponse,
+    TemplateDuplicateResponse,
+    TemplateFeedbackListResponse,
+    TemplateListResponse,
+    TemplateUpdateResponse,
+    TemplateUsageResponse,
+    VersionCreateResponse,
+    VersionListResponse,
+    VersionRestoreResponse,
+    VersionSetDefaultResponse,
+)
 from fi.utils.errors import InvalidAuthError
 from fi.utils.routes import Routes
 
@@ -65,8 +93,17 @@ class EvalTemplateManager(APIKeyAuth):
             output_type="pass_fail",
             pass_threshold=0.7,
         )
-        mgr.delete_template(t["id"])
+        print(t.id)           # attribute access (autocomplete ✓)
+        print(t["id"])         # dict access (backwards compat ✓)
+        mgr.delete_template(t.id)
     """
+
+    def _typed_request(self, config: RequestConfig, response_type: Any = None) -> Any:
+        """Make a request and parse the response into a typed model."""
+        raw = self.request(config=config, response_handler=_JsonResponseHandler)
+        if response_type is None or isinstance(raw, str):
+            return raw
+        return response_type.model_validate(raw)
 
     # ------------------------------------------------------------------
     # Templates
@@ -82,7 +119,7 @@ class EvalTemplateManager(APIKeyAuth):
         filters: Optional[Dict[str, Any]] = None,
         sort_by: Literal["name", "updated_at", "created_at"] = "updated_at",
         sort_order: Literal["asc", "desc"] = "desc",
-    ) -> Dict[str, Any]:
+    ) -> TemplateListResponse:
         """List eval templates with pagination, search, and filters.
 
         Returns a dict with ``items``, ``total``, ``page``, ``page_size``.
@@ -99,7 +136,7 @@ class EvalTemplateManager(APIKeyAuth):
         if filters is not None:
             payload["filters"] = filters
 
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST,
                 url=f"{self._base_url}/{Routes.eval_template_list.value}",
@@ -108,19 +145,21 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return TemplateListResponse.model_validate(raw)
 
-    def get_template(self, template_id: str) -> Dict[str, Any]:
+    def get_template(self, template_id: str) -> TemplateDetailResponse:
         """Fetch a single eval template by UUID."""
         url = (
             f"{self._base_url}/"
             + Routes.eval_template_detail.value.format(template_id=template_id)
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.GET, url=url, timeout=self._default_timeout
             ),
             response_handler=_JsonResponseHandler,
         )
+        return TemplateDetailResponse.model_validate(raw)
 
     def create_template(
         self,
@@ -145,7 +184,7 @@ class EvalTemplateManager(APIKeyAuth):
         data_injection: Optional[Dict[str, Any]] = None,
         summary: Optional[Dict[str, Any]] = None,
         is_draft: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> TemplateCreateResponse:
         """
         Create a single eval template.
 
@@ -188,7 +227,7 @@ class EvalTemplateManager(APIKeyAuth):
         if summary is not None:
             payload["summary"] = summary
 
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST,
                 url=f"{self._base_url}/{Routes.eval_template_create_v2.value}",
@@ -197,10 +236,11 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return TemplateCreateResponse.model_validate(raw)
 
     def update_template(
         self, template_id: str, **fields: Any
-    ) -> Dict[str, Any]:
+    ) -> TemplateUpdateResponse:
         """
         Update mutable fields on an eval template (PUT).
 
@@ -215,7 +255,7 @@ class EvalTemplateManager(APIKeyAuth):
             f"{self._base_url}/"
             + Routes.eval_template_update_v2.value.format(template_id=template_id)
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.PUT,
                 url=url,
@@ -224,6 +264,7 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return TemplateUpdateResponse.model_validate(raw)
 
     def delete_template(self, template_id: str) -> Dict[str, Any]:
         """Soft-delete an eval template."""
@@ -237,9 +278,9 @@ class EvalTemplateManager(APIKeyAuth):
             response_handler=_JsonResponseHandler,
         )
 
-    def bulk_delete_templates(self, template_ids: List[str]) -> Dict[str, Any]:
+    def bulk_delete_templates(self, template_ids: List[str]) -> BulkDeleteResponse:
         """Soft-delete multiple eval templates in one call."""
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST,
                 url=f"{self._base_url}/{Routes.eval_template_bulk_delete.value}",
@@ -248,22 +289,24 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return BulkDeleteResponse.model_validate(raw)
 
     # ------------------------------------------------------------------
     # Versions
     # ------------------------------------------------------------------
 
-    def list_versions(self, template_id: str) -> Dict[str, Any]:
+    def list_versions(self, template_id: str) -> VersionListResponse:
         url = (
             f"{self._base_url}/"
             + Routes.eval_template_version_list.value.format(template_id=template_id)
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.GET, url=url, timeout=self._default_timeout
             ),
             response_handler=_JsonResponseHandler,
         )
+        return VersionListResponse.model_validate(raw)
 
     def create_version(
         self,
@@ -272,7 +315,7 @@ class EvalTemplateManager(APIKeyAuth):
         criteria: Optional[str] = None,
         model: Optional[str] = None,
         config_snapshot: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> VersionCreateResponse:
         """
         Snapshot the current template state as a new version. Each param is
         optional — any value left ``None`` is copied from the live template.
@@ -289,7 +332,7 @@ class EvalTemplateManager(APIKeyAuth):
         if config_snapshot is not None:
             payload["config_snapshot"] = config_snapshot
 
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST,
                 url=url,
@@ -298,26 +341,28 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return VersionCreateResponse.model_validate(raw)
 
     def set_default_version(
         self, template_id: str, version_id: str
-    ) -> Dict[str, Any]:
+    ) -> VersionSetDefaultResponse:
         url = (
             f"{self._base_url}/"
             + Routes.eval_template_version_set_default.value.format(
                 template_id=template_id, version_id=version_id
             )
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.PUT, url=url, timeout=self._default_timeout
             ),
             response_handler=_JsonResponseHandler,
         )
+        return VersionSetDefaultResponse.model_validate(raw)
 
     def restore_version(
         self, template_id: str, version_id: str
-    ) -> Dict[str, Any]:
+    ) -> VersionRestoreResponse:
         """
         Create a new version on top of the template whose contents match
         the target version. The old version is left untouched.
@@ -328,12 +373,13 @@ class EvalTemplateManager(APIKeyAuth):
                 template_id=template_id, version_id=version_id
             )
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST, url=url, timeout=self._default_timeout
             ),
             response_handler=_JsonResponseHandler,
         )
+        return VersionRestoreResponse.model_validate(raw)
 
     # ------------------------------------------------------------------
     # Composite evals
@@ -354,7 +400,7 @@ class EvalTemplateManager(APIKeyAuth):
         composite_child_axis: Literal[
             "", "pass_fail", "percentage", "choices", "code"
         ] = "",
-    ) -> Dict[str, Any]:
+    ) -> CompositeCreateResponse:
         """
         Create a composite eval from existing eval templates. ``child_weights``
         maps template_id → weight (default 1.0). Setting
@@ -374,7 +420,7 @@ class EvalTemplateManager(APIKeyAuth):
         if child_weights is not None:
             payload["child_weights"] = child_weights
 
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST,
                 url=f"{self._base_url}/{Routes.composite_eval_create.value}",
@@ -383,30 +429,32 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return CompositeCreateResponse.model_validate(raw)
 
-    def get_composite(self, template_id: str) -> Dict[str, Any]:
+    def get_composite(self, template_id: str) -> CompositeDetailResponse:
         url = (
             f"{self._base_url}/"
             + Routes.composite_eval_detail.value.format(template_id=template_id)
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.GET, url=url, timeout=self._default_timeout
             ),
             response_handler=_JsonResponseHandler,
         )
+        return CompositeDetailResponse.model_validate(raw)
 
     def update_composite(
         self,
         template_id: str,
         **fields: Any,
-    ) -> Dict[str, Any]:
+    ) -> CompositeDetailResponse:
         """PATCH the composite. Same field names as ``create_composite``."""
         url = (
             f"{self._base_url}/"
             + Routes.composite_eval_detail.value.format(template_id=template_id)
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.PATCH,
                 url=url,
@@ -415,6 +463,7 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return CompositeDetailResponse.model_validate(raw)
 
     def submit_composite(
         self,
@@ -494,7 +543,7 @@ class EvalTemplateManager(APIKeyAuth):
         span_context: Optional[Dict[str, Any]] = None,
         trace_context: Optional[Dict[str, Any]] = None,
         session_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> CompositeExecutionResponse:
         """
         Run every child eval in the composite with a single input mapping
         and return per-child results plus the aggregated score.
@@ -518,7 +567,7 @@ class EvalTemplateManager(APIKeyAuth):
             f"{self._base_url}/"
             + Routes.composite_eval_execute.value.format(template_id=template_id)
         )
-        return self.request(
+        raw = self.request(
             config=RequestConfig(
                 method=HttpMethod.POST,
                 url=url,
@@ -527,3 +576,443 @@ class EvalTemplateManager(APIKeyAuth):
             ),
             response_handler=_JsonResponseHandler,
         )
+        return CompositeExecutionResponse.model_validate(raw)
+
+    # ------------------------------------------------------------------
+    # Ground Truth (Phase 9)
+    # ------------------------------------------------------------------
+
+    def list_ground_truth(self, template_id: str) -> GroundTruthListResponse:
+        """List ground-truth datasets attached to an eval template."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_list.value.format(template_id=template_id)
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET, url=url, timeout=self._default_timeout
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthListResponse.model_validate(raw)
+
+    def upload_ground_truth(
+        self,
+        template_id: str,
+        *,
+        name: str,
+        columns: List[str],
+        data: List[Dict[str, Any]],
+        description: str = "",
+        file_name: str = "",
+        variable_mapping: Optional[Dict[str, str]] = None,
+        role_mapping: Optional[Dict[str, str]] = None,
+    ) -> GroundTruthUploadResponse:
+        """
+        Upload a ground-truth dataset as a JSON body (``columns`` +
+        ``data`` rows). For file-upload mode (CSV/XLSX) use the HTTP API
+        directly — the SDK does not wrap multipart uploads yet.
+        """
+        payload: Dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "file_name": file_name,
+            "columns": list(columns),
+            "data": list(data),
+        }
+        if variable_mapping is not None:
+            payload["variable_mapping"] = variable_mapping
+        if role_mapping is not None:
+            payload["role_mapping"] = role_mapping
+
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_upload.value.format(template_id=template_id)
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=url,
+                json=payload,
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthUploadResponse.model_validate(raw)
+
+    def get_ground_truth_config(self, template_id: str) -> GroundTruthConfigResponse:
+        """Fetch the ground-truth config block from an eval template."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_config.value.format(template_id=template_id)
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET, url=url, timeout=self._default_timeout
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthConfigResponse.model_validate(raw)
+
+    def set_ground_truth_config(
+        self,
+        template_id: str,
+        *,
+        enabled: bool = True,
+        ground_truth_id: Optional[str] = None,
+        mode: Literal["auto", "manual", "disabled"] = "auto",
+        max_examples: int = 3,
+        similarity_threshold: float = 0.7,
+        injection_format: Literal[
+            "structured", "conversational", "xml"
+        ] = "structured",
+    ) -> GroundTruthConfigResponse:
+        """
+        Update the ground-truth configuration on an eval template
+        (few-shot retrieval settings used at eval time).
+        """
+        payload = {
+            "enabled": enabled,
+            "ground_truth_id": ground_truth_id,
+            "mode": mode,
+            "max_examples": max_examples,
+            "similarity_threshold": similarity_threshold,
+            "injection_format": injection_format,
+        }
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_config.value.format(template_id=template_id)
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.PUT,
+                url=url,
+                json=payload,
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthConfigResponse.model_validate(raw)
+
+    def set_ground_truth_variable_mapping(
+        self, ground_truth_id: str, variable_mapping: Dict[str, str]
+    ) -> GroundTruthVariableMappingResponse:
+        """Map eval variables → ground-truth column names."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_mapping.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.PUT,
+                url=url,
+                json={"variable_mapping": variable_mapping},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthVariableMappingResponse.model_validate(raw)
+
+    def set_ground_truth_role_mapping(
+        self, ground_truth_id: str, role_mapping: Dict[str, str]
+    ) -> GroundTruthRoleMappingResponse:
+        """
+        Map semantic roles (``input``, ``expected_output``, ``score``,
+        ``reasoning``) → ground-truth column names.
+        """
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_role_mapping.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.PUT,
+                url=url,
+                json={"role_mapping": role_mapping},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthRoleMappingResponse.model_validate(raw)
+
+    def get_ground_truth_data(
+        self,
+        ground_truth_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> GroundTruthDataResponse:
+        """Paginated ground-truth rows (1-based page)."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_data.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET,
+                url=url,
+                params={"page": page, "page_size": page_size},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthDataResponse.model_validate(raw)
+
+    def get_ground_truth_status(self, ground_truth_id: str) -> GroundTruthStatusResponse:
+        """Embedding generation status / progress for a ground-truth dataset."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_status.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET, url=url, timeout=self._default_timeout
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthStatusResponse.model_validate(raw)
+
+    def trigger_ground_truth_embeddings(
+        self, ground_truth_id: str
+    ) -> Dict[str, Any]:
+        """Kick off async embedding generation for a ground-truth dataset."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_embed.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        return self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST, url=url, timeout=self._default_timeout
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+
+    def search_ground_truth(
+        self,
+        ground_truth_id: str,
+        *,
+        query: str,
+        max_results: int = 3,
+    ) -> GroundTruthSearchResponse:
+        """
+        Retrieve the most similar ground-truth rows to ``query``. Requires
+        embeddings to be ``completed`` — call
+        :py:meth:`trigger_ground_truth_embeddings` first and poll
+        :py:meth:`get_ground_truth_status`.
+        """
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_search.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=url,
+                json={"query": query, "max_results": max_results},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthSearchResponse.model_validate(raw)
+
+    def delete_ground_truth(self, ground_truth_id: str) -> GroundTruthDeleteResponse:
+        """Soft-delete a ground-truth dataset."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.ground_truth_delete.value.format(
+                ground_truth_id=ground_truth_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.DELETE,
+                url=url,
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return GroundTruthDeleteResponse.model_validate(raw)
+
+    # ------------------------------------------------------------------
+    # Usage stats, feedback, and 30-day charts (Phase 10)
+    # ------------------------------------------------------------------
+
+    def get_template_usage(
+        self,
+        template_id: str,
+        *,
+        page: int = 0,
+        page_size: int = 25,
+        period: Literal["30m", "6h", "1d", "7d", "30d", "90d"] = "30d",
+        version: Optional[str] = None,
+    ) -> TemplateUsageResponse:
+        """Paginated usage stats + run logs for an eval template."""
+        params: Dict[str, Any] = {
+            "page": page,
+            "page_size": page_size,
+            "period": period,
+        }
+        if version is not None:
+            params["version"] = version
+        url = (
+            f"{self._base_url}/"
+            + Routes.eval_template_usage.value.format(template_id=template_id)
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET,
+                url=url,
+                params=params,
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return TemplateUsageResponse.model_validate(raw)
+
+    def list_template_feedback(
+        self,
+        template_id: str,
+        *,
+        page: int = 0,
+        page_size: int = 25,
+    ) -> TemplateFeedbackListResponse:
+        """Paginated user feedback on an eval template's runs."""
+        url = (
+            f"{self._base_url}/"
+            + Routes.eval_template_feedback_list.value.format(
+                template_id=template_id
+            )
+        )
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET,
+                url=url,
+                params={"page": page, "page_size": page_size},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return TemplateFeedbackListResponse.model_validate(raw)
+
+    def get_template_charts(
+        self, template_ids: List[str]
+    ) -> TemplateChartsResponse:
+        """
+        30-day sparkline data (run counts + error rates) for the given
+        templates — the same payload that powers the eval-list table.
+        """
+        url = f"{self._base_url}/{Routes.eval_template_list_charts.value}"
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=url,
+                json={"template_ids": list(template_ids)},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return TemplateChartsResponse.model_validate(raw)
+
+    # ------------------------------------------------------------------
+    # Duplicate + playground
+    # ------------------------------------------------------------------
+
+    def duplicate_template(
+        self, template_id: str, name: str
+    ) -> TemplateDuplicateResponse:
+        """
+        Clone an existing user-owned eval template under a new ``name``.
+        Returns ``{message, eval_template_id}``.
+        """
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=f"{self._base_url}/{Routes.eval_template_duplicate.value}",
+                json={"eval_template_id": template_id, "name": name},
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return TemplateDuplicateResponse.model_validate(raw)
+
+    def run_playground(
+        self,
+        template_id: str,
+        *,
+        mapping: Dict[str, Any],
+        model: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        input_data_types: Optional[Dict[str, str]] = None,
+        error_localizer: bool = False,
+        kb_id: Optional[str] = None,
+        # Auto-context: pass either a resolved dict, or let the server
+        # resolve via the matching id.
+        row_context: Optional[Dict[str, Any]] = None,
+        span_context: Optional[Dict[str, Any]] = None,
+        trace_context: Optional[Dict[str, Any]] = None,
+        session_context: Optional[Dict[str, Any]] = None,
+        call_context: Optional[Dict[str, Any]] = None,
+        span_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        call_id: Optional[str] = None,
+    ) -> PlaygroundRunResponse:
+        """
+        Run a saved eval template via the playground endpoint.
+
+        Unlike :py:meth:`fi.evals.Evaluator.evaluate` — which identifies
+        the eval by name — this identifies by ``template_id`` and
+        exercises the full runtime config path, including auto-context
+        injection (row / span / trace / session / call). Useful for
+        test-drive workflows that want to run a specific template
+        version against a specific trace or dataset row.
+        """
+        payload: Dict[str, Any] = {
+            "template_id": template_id,
+            "mapping": mapping,
+            "error_localizer": error_localizer,
+        }
+        if model is not None:
+            payload["model"] = model
+        if config is not None:
+            payload["config"] = config
+        if input_data_types is not None:
+            payload["input_data_types"] = input_data_types
+        if kb_id is not None:
+            payload["kb_id"] = kb_id
+        for key, value in (
+            ("row_context", row_context),
+            ("span_context", span_context),
+            ("trace_context", trace_context),
+            ("session_context", session_context),
+            ("call_context", call_context),
+            ("span_id", span_id),
+            ("trace_id", trace_id),
+            ("session_id", session_id),
+            ("call_id", call_id),
+        ):
+            if value is not None:
+                payload[key] = value
+
+        raw = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=f"{self._base_url}/{Routes.eval_playground.value}",
+                json=payload,
+                timeout=self._default_timeout,
+            ),
+            response_handler=_JsonResponseHandler,
+        )
+        return PlaygroundRunResponse.model_validate(raw)
