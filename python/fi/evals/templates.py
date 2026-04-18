@@ -10,9 +10,10 @@ To call an eval by name without importing a class, just pass the string::
 
     evaluate("customer_agent_query_handling", conversation=[...], model="turing_flash")
 
-Classes marked DEPRECATED correspond to templates removed in the api
-revamp. They are kept importable for backward compatibility but the api
-will reject calls with a "template not found" error.
+Renamed templates have a module-level alias from the old name to the new
+class (e.g. ``NoOpenAIReference = NoLLMReference``) so existing user code
+keeps working seamlessly. Templates that were removed outright are gone —
+an ``ImportError`` is a clearer signal than a silent runtime 400.
 """
 from typing import Any, Dict, List, Optional
 
@@ -97,13 +98,6 @@ class PromptInjection(EvalTemplate):
     eval_id = "18"
 
 
-class SafeForWorkText(EvalTemplate):
-    """DEPRECATED — removed in the api revamp. Kept for BC."""
-
-    eval_name = "safe_for_work_text"
-    eval_id = "20"
-
-
 class DataPrivacyCompliance(EvalTemplate):
     eval_name = "data_privacy_compliance"
     eval_id = "22"
@@ -124,17 +118,17 @@ class NoAgeBias(EvalTemplate):
     eval_id = "79"
 
 
-class NoOpenAIReference(EvalTemplate):
-    """DEPRECATED — renamed to ``no_llm_reference`` on the api."""
-
-    eval_name = "no_openai_reference"
-    eval_id = "80"
-
-
 class NoLLMReference(EvalTemplate):
-    """Replacement for ``NoOpenAIReference``."""
+    """Checks that the output doesn't reference the underlying LLM (e.g. 'I am GPT…').
+
+    Replaced the old ``NoOpenAIReference`` template in the api revamp.
+    """
 
     eval_name = "no_llm_reference"
+
+
+# Alias: old class name → current eval. Import-level backward compatibility.
+NoOpenAIReference = NoLLMReference
 
 
 class NoApologies(EvalTemplate):
@@ -201,17 +195,17 @@ class FactualAccuracy(EvalTemplate):
     eval_id = "66"
 
 
-class DetectHallucinationMissingInfo(EvalTemplate):
-    """DEPRECATED — renamed to ``detect_hallucination`` on the api."""
-
-    eval_name = "detect_hallucination_missing_info"
-    eval_id = "89"
-
-
 class DetectHallucination(EvalTemplate):
-    """Replacement for ``DetectHallucinationMissingInfo``."""
+    """Detects hallucinated or unsupported claims in the output.
+
+    Replaced the old ``DetectHallucinationMissingInfo`` template in the revamp.
+    """
 
     eval_name = "detect_hallucination"
+
+
+# Alias: old class name → current eval.
+DetectHallucinationMissingInfo = DetectHallucination
 
 
 class IsFactuallyConsistent(EvalTemplate):
@@ -226,13 +220,6 @@ class IsFactuallyConsistent(EvalTemplate):
 class Tone(EvalTemplate):
     eval_name = "tone"
     eval_id = "16"
-
-
-class NotGibberishText(EvalTemplate):
-    """DEPRECATED — removed in the api revamp."""
-
-    eval_name = "not_gibberish_text"
-    eval_id = "19"
 
 
 class PromptAdherence(EvalTemplate):
@@ -292,27 +279,6 @@ class ContainsValidLink(EvalTemplate):
 class IsEmail(EvalTemplate):
     eval_name = "is_email"
     eval_id = "40"
-
-
-class NoValidLinks(EvalTemplate):
-    """DEPRECATED — removed in the api revamp."""
-
-    eval_name = "no_valid_links"
-    eval_id = "42"
-
-
-class IsCode(EvalTemplate):
-    """DEPRECATED — removed in the api revamp."""
-
-    eval_name = "is_code"
-    eval_id = "85"
-
-
-class IsCSV(EvalTemplate):
-    """DEPRECATED — removed in the api revamp."""
-
-    eval_name = "is_csv"
-    eval_id = "86"
 
 
 class ContainsCode(EvalTemplate):
@@ -375,16 +341,13 @@ class GroundTruthMatch(EvalTemplate):
 # Function calling
 # ---------------------------------------------------------------------------
 
-class LLMFunctionCalling(EvalTemplate):
-    """DEPRECATED — use ``EvaluateFunctionCalling`` (``evaluate_function_calling``)."""
-
-    eval_name = "llm_function_calling"
-    eval_id = "72"
-
-
 class EvaluateFunctionCalling(EvalTemplate):
     eval_name = "evaluate_function_calling"
     eval_id = "98"
+
+
+# Alias: old class name → current eval.
+LLMFunctionCalling = EvaluateFunctionCalling
 
 
 # ---------------------------------------------------------------------------
@@ -427,17 +390,17 @@ class OCREvaluation(EvalTemplate):
     eval_name = "ocr_evaluation"
 
 
-class AudioTranscriptionEvaluator(EvalTemplate):
-    """DEPRECATED — use ``ASRAccuracy`` (``ASR/STT_accuracy``)."""
-
-    eval_name = "audio_transcription"
-    eval_id = "73"
-
-
 class ASRAccuracy(EvalTemplate):
-    """Replacement for ``AudioTranscriptionEvaluator``."""
+    """Speech-to-text accuracy eval.
+
+    Replaced the old ``AudioTranscriptionEvaluator`` in the revamp.
+    """
 
     eval_name = "ASR/STT_accuracy"
+
+
+# Alias: old class name → current eval.
+AudioTranscriptionEvaluator = ASRAccuracy
 
 
 class TTSAccuracy(EvalTemplate):

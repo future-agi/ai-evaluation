@@ -698,8 +698,8 @@ class Evaluator(APIKeyAuth):
         return response.json()
 
 
-evaluate = lambda eval_templates, inputs, timeout=None: Evaluator().evaluate(eval_templates, inputs, timeout)
-
+# Top-level convenience for the common "list everything" case.
+# The main ``evaluate()`` entrypoint is imported from ``fi.evals.core``.
 list_evaluations = lambda: Evaluator().list_evaluations()
 
 

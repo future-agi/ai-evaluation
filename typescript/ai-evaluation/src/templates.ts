@@ -8,8 +8,10 @@
 // string directly:
 //   evaluator.evaluate("customer_agent_query_handling", { conversation: [...] })
 //
-// Entries marked DEPRECATED were removed in the api revamp — kept here
-// for backward compatibility with older consumer code.
+// Renamed templates get a module-level alias from the old key to the new
+// entry (see bottom of file) so existing user code keeps working. Truly
+// removed templates are gone — callers get a clean "undefined" signal
+// instead of a silent runtime 400 from the api.
 
 interface EvalTemplate {
   eval_id: string;
@@ -23,7 +25,6 @@ interface EvalTemplate {
   criteria?: string;
   choices?: string[];
   multi_choice?: boolean;
-  deprecated?: boolean;
 }
 
 const Templates: Record<string, EvalTemplate> = {
@@ -79,18 +80,6 @@ const Templates: Record<string, EvalTemplate> = {
     eval_name: "prompt_injection",
     eval_id: "18"
   },
-  /** DEPRECATED — removed in the api revamp. */
-  NotGibberishText: {
-    eval_name: "not_gibberish_text",
-    eval_id: "19",
-    deprecated: true,
-  },
-  /** DEPRECATED — removed in the api revamp. */
-  SafeForWorkText: {
-    eval_name: "safe_for_work_text",
-    eval_id: "20",
-    deprecated: true,
-  },
   PromptAdherence: {
     eval_name: "prompt_adherence",
     eval_id: "65"
@@ -114,12 +103,6 @@ const Templates: Record<string, EvalTemplate> = {
   IsEmail: {
     eval_name: "is_email",
     eval_id: "40"
-  },
-  /** DEPRECATED — removed in the api revamp. */
-  NoValidLinks: {
-    eval_name: "no_valid_links",
-    eval_id: "42",
-    deprecated: true,
   },
   Groundedness: {
     eval_name: "groundedness",
@@ -149,18 +132,6 @@ const Templates: Record<string, EvalTemplate> = {
     eval_name: "bias_detection",
     eval_id: "69"
   },
-  /** DEPRECATED — use EvaluateFunctionCalling. */
-  LLMFunctionCalling: {
-    eval_name: "llm_function_calling",
-    eval_id: "72",
-    deprecated: true,
-  },
-  /** DEPRECATED — use ASRAccuracy. */
-  AudioTranscriptionEvaluator: {
-    eval_name: "audio_transcription",
-    eval_id: "73",
-    deprecated: true,
-  },
   AudioQualityEvaluator: {
     eval_name: "audio_quality",
     eval_id: "75"
@@ -176,12 +147,6 @@ const Templates: Record<string, EvalTemplate> = {
   NoAgeBias: {
     eval_name: "no_age_bias",
     eval_id: "79"
-  },
-  /** DEPRECATED — use NoLLMReference. */
-  NoOpenAIReference: {
-    eval_name: "no_openai_reference",
-    eval_id: "80",
-    deprecated: true,
   },
   NoApologies: {
     eval_name: "no_apologies",
@@ -199,18 +164,6 @@ const Templates: Record<string, EvalTemplate> = {
     eval_name: "is_helpful",
     eval_id: "84"
   },
-  /** DEPRECATED — removed in the api revamp. */
-  IsCode: {
-    eval_name: "is_code",
-    eval_id: "85",
-    deprecated: true,
-  },
-  /** DEPRECATED — removed in the api revamp. */
-  IsCSV: {
-    eval_name: "is_csv",
-    eval_id: "86",
-    deprecated: true,
-  },
   FuzzyMatch: {
     eval_name: "fuzzy_match",
     eval_id: "87"
@@ -218,12 +171,6 @@ const Templates: Record<string, EvalTemplate> = {
   AnswerRefusal: {
     eval_name: "answer_refusal",
     eval_id: "88"
-  },
-  /** DEPRECATED — use DetectHallucination. */
-  DetectHallucinationMissingInfo: {
-    eval_name: "detect_hallucination_missing_info",
-    eval_id: "89",
-    deprecated: true,
   },
   NoHarmfulTherapeuticGuidance: {
     eval_name: "no_harmful_therapeutic_guidance",
@@ -301,6 +248,13 @@ const Templates: Record<string, EvalTemplate> = {
   CustomerAgentQueryHandling: { eval_name: "customer_agent_query_handling", eval_id: "" },
   CustomerAgentTerminationHandling: { eval_name: "customer_agent_termination_handling", eval_id: "" },
 };
+
+// -------------------- Back-compat aliases for renamed templates --------------------
+// Old name → current entry so existing user code keeps working.
+Templates.NoOpenAIReference = Templates.NoLLMReference;
+Templates.DetectHallucinationMissingInfo = Templates.DetectHallucination;
+Templates.LLMFunctionCalling = Templates.EvaluateFunctionCalling;
+Templates.AudioTranscriptionEvaluator = Templates.ASRAccuracy;
 
 
 export {
