@@ -5,7 +5,6 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-import pandas as pd
 from requests import Response
 
 from fi.api.auth import APIKeyAuth, ResponseHandler
@@ -245,6 +244,24 @@ class Evaluator(APIKeyAuth):
                 "Expect eval template class/obj or name str."
             )
 
+        # Dynamic registry: filter user-supplied inputs to only the keys the
+        # backend currently accepts for this eval. The api rejects supersets
+        # (e.g. {output,input,context} for a template that only wants
+        # {output}), so this can't be a pass-through. If the registry fetch
+        # fails or the name is unknown, leave inputs untouched.
+        if kwargs.get("skip_input_mapping") is not True and isinstance(inputs, dict):
+            try:
+                from fi.evals.core.cloud_registry import map_inputs_to_backend
+                inputs = map_inputs_to_backend(
+                    eval_name,
+                    inputs,
+                    base_url=self._base_url,
+                    api_key=self._fi_api_key,
+                    secret_key=self._fi_secret_key,
+                )
+            except Exception as exc:
+                logging.debug("Dynamic input mapping skipped: %s", exc)
+
         final_api_payload = {
             "eval_name": eval_name,
             "inputs": inputs,
@@ -284,11 +301,26 @@ class Evaluator(APIKeyAuth):
                     input_case = future_to_input[future]
                     logging.error(f"Evaluation timed out for input: {input_case}")
                     failed_inputs.append(input_case)
-                
+                    all_results.append(
+                        EvalResult(
+                            name=eval_name,
+                            output=None,
+                            reason=f"Evaluation timed out after {timeout or self._default_timeout}s",
+                            runtime=0,
+                        )
+                    )
                 except Exception as exc:
                     input_case = future_to_input[future]
                     logging.error(f"Evaluation failed for input {input_case}: {str(exc)}")
                     failed_inputs.append(input_case)
+                    all_results.append(
+                        EvalResult(
+                            name=eval_name,
+                            output=None,
+                            reason=str(exc),
+                            runtime=0,
+                        )
+                    )
 
         if failed_inputs:
             logging.warning(f"Failed to evaluate {len(failed_inputs)} inputs out of {len(inputs)} total inputs")
@@ -572,66 +604,15 @@ class Evaluator(APIKeyAuth):
 
     def _validate_inputs(
         self,
-        inputs: List[Dict[str, Any]],
+        inputs: Dict[str, Any],
         eval_objects: List[EvalTemplate],
-    ):
+    ) -> bool:
+        """Backward-compatible stub. Client-side input validation now
+        happens dynamically via :mod:`fi.evals.core.cloud_registry`
+        against the api's ``required_keys``. Any mismatch surfaces as a
+        backend 400 with a clear error message.
         """
-        Validate the inputs against the evaluation templates
-
-        Args:
-            inputs: List of test cases to validate
-            eval_objects: List of evaluation templates to validate against
-
-        Returns:
-            bool: True if validation passes
-
-        Raises:
-            Exception: If validation fails or templates don't share common tags
-        """
-
-        # First validate that all eval objects share at least one common tag
-        if len(eval_objects) > 1:
-            # Get sets of tags for each eval object
-            tag_sets = [set(obj.eval_tags) for obj in eval_objects]
-
-            # Find intersection of all tag sets
-            common_tags = set.intersection(*tag_sets)
-
-            if not common_tags:
-                template_names = [obj.name for obj in eval_objects]
-                raise Exception(
-                    f"Evaluation templates {template_names} must share at least one common tag. "
-                    f"Current tags for each template: {[list(tags) for tags in tag_sets]}"
-                )
-
-        # Then validate each eval object's required inputs
-        for eval_object in eval_objects:
-            eval_object.validate_input(inputs)
-
         return True
-
-    def _get_eval_configs(
-        self, eval_templates: Union[str, List[str]]
-    ) -> List[EvalTemplate]:
-        if isinstance(eval_templates, str):
-            eval_templates = [eval_templates]
-
-        for template in eval_templates:
-            eval_info = self._get_eval_info(template)
-            template.eval_id = eval_info["eval_id"]
-            template.name = eval_info["name"]
-            template.description = eval_info["description"]
-            template.eval_tags = eval_info["eval_tags"]
-            template.required_keys = eval_info["config"]["required_keys"]
-            template.output = eval_info["config"]["output"]
-            template.eval_type_id = eval_info["config"]["eval_type_id"]
-            template.config_schema = (
-                eval_info["config"]["config"] if "config" in eval_info["config"] else {}
-            )
-            template.criteria = eval_info["criteria"]
-            template.choices = eval_info["choices"]
-            template.multi_choice = eval_info["multi_choice"]
-        return eval_templates
 
     @lru_cache(maxsize=100)
     def _get_eval_info(self, eval_name: str) -> Dict[str, Any]:

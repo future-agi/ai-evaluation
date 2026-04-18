@@ -265,33 +265,31 @@ class TuringEngine(Engine):
                 ),
             )
 
-        template_cls = self._resolve_template_class(eval_name)
-        if template_cls is None:
-            return EvalResult(
-                eval_name=eval_name,
-                status="failed",
-                error=f"Cloud template '{eval_name}' not found",
-            )
+        # Dynamic registry drives input filtering — backend is source of truth
+        # for required_keys. Falls back to pass-through when eval isn't known
+        # (registry miss, offline, etc.) so the backend can return its own
+        # validation error.
+        from .cloud_registry import map_inputs_to_backend
 
-        # Filter inputs to only keys the template's backend accepts,
-        # and remap output↔input when the template expects one but not the other.
-        accepted = set(template_cls.Input.model_fields.keys()) if hasattr(template_cls, 'Input') else None
-        if accepted is not None:
-            mapped = {}
-            for k, v in inputs.items():
-                if k in accepted:
-                    mapped[k] = v
-                elif k == "output" and "input" in accepted and "output" not in accepted:
-                    mapped["input"] = v
-                elif k == "input" and "output" in accepted and "input" not in accepted:
-                    mapped["output"] = v
-            inputs = mapped
+        evaluator = self._get_evaluator()
+        mapped_inputs = map_inputs_to_backend(
+            eval_name,
+            inputs,
+            base_url=evaluator._base_url,
+            api_key=getattr(evaluator, "_fi_api_key", None) or self._api_key,
+            secret_key=getattr(evaluator, "_fi_secret_key", None) or self._secret_key,
+        )
+
+        # Template class is optional — if the SDK hasn't shipped a class
+        # for a new backend eval, just send the name as a string.
+        template_cls = self._resolve_template_class(eval_name)
+        eval_arg: Any = template_cls() if template_cls is not None else eval_name
 
         start = time.perf_counter()
         try:
-            batch = self._get_evaluator().evaluate(
-                eval_templates=template_cls(),
-                inputs=inputs,
+            batch = evaluator.evaluate(
+                eval_templates=eval_arg,
+                inputs=mapped_inputs,
                 model_name=model,
             )
             return _extract_result(eval_name, batch, (time.perf_counter() - start) * 1000)
