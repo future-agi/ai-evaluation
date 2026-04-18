@@ -602,18 +602,6 @@ class Evaluator(APIKeyAuth):
             return
 
 
-    def _validate_inputs(
-        self,
-        inputs: Dict[str, Any],
-        eval_objects: List[EvalTemplate],
-    ) -> bool:
-        """Backward-compatible stub. Client-side input validation now
-        happens dynamically via :mod:`fi.evals.core.cloud_registry`
-        against the api's ``required_keys``. Any mismatch surfaces as a
-        backend 400 with a clear error message.
-        """
-        return True
-
     @lru_cache(maxsize=100)
     def _get_eval_info(self, eval_name: str) -> Dict[str, Any]:
         url = (

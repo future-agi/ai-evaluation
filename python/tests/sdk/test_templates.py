@@ -16,15 +16,12 @@ from fi.evals.templates import (
     Tone,
     Sexist,
     PromptInjection,
-    NotGibberishText,
-    SafeForWorkText,
     PromptAdherence,
     DataPrivacyCompliance,
     IsJson,
     OneLine,
     ContainsValidLink,
     IsEmail,
-    NoValidLinks,
     Groundedness,
     Ranking,
     SummaryQuality,
@@ -43,8 +40,6 @@ from fi.evals.templates import (
     IsPolite,
     IsConcise,
     IsHelpful,
-    IsCode,
-    IsCSV,
     FuzzyMatch,
     AnswerRefusal,
     DetectHallucinationMissingInfo,
@@ -134,18 +129,6 @@ class TestSafetyTemplates:
         template = PromptInjection()
         assert template.eval_name == "prompt_injection"
         assert template.eval_id == "18"
-
-    def test_not_gibberish_text(self):
-        """Test NotGibberishText template."""
-        template = NotGibberishText()
-        assert template.eval_name == "not_gibberish_text"
-        assert template.eval_id == "19"
-
-    def test_safe_for_work_text(self):
-        """Test SafeForWorkText template."""
-        template = SafeForWorkText()
-        assert template.eval_name == "safe_for_work_text"
-        assert template.eval_id == "20"
 
     def test_data_privacy_compliance(self):
         """Test DataPrivacyCompliance template."""
@@ -300,24 +283,6 @@ class TestFormatTemplates:
         template = IsEmail()
         assert template.eval_name == "is_email"
         assert template.eval_id == "40"
-
-    def test_no_valid_links(self):
-        """Test NoValidLinks template."""
-        template = NoValidLinks()
-        assert template.eval_name == "no_valid_links"
-        assert template.eval_id == "42"
-
-    def test_is_code(self):
-        """Test IsCode template."""
-        template = IsCode()
-        assert template.eval_name == "is_code"
-        assert template.eval_id == "85"
-
-    def test_is_csv(self):
-        """Test IsCSV template."""
-        template = IsCSV()
-        assert template.eval_name == "is_csv"
-        assert template.eval_id == "86"
 
 
 class TestQualityTemplates:
@@ -522,15 +487,12 @@ class TestAllTemplatesExist:
             Tone,
             Sexist,
             PromptInjection,
-            NotGibberishText,
-            SafeForWorkText,
             PromptAdherence,
             DataPrivacyCompliance,
             IsJson,
             OneLine,
             ContainsValidLink,
             IsEmail,
-            NoValidLinks,
             Groundedness,
             Ranking,
             SummaryQuality,
@@ -549,8 +511,6 @@ class TestAllTemplatesExist:
             IsPolite,
             IsConcise,
             IsHelpful,
-            IsCode,
-            IsCSV,
             FuzzyMatch,
             AnswerRefusal,
             DetectHallucinationMissingInfo,
