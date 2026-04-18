@@ -90,7 +90,23 @@ _KEY_RECIPES: list[tuple[frozenset[str], dict]] = [
     (frozenset(["input"]),
      {"input": "What is the capital of France?"}),
     (frozenset(["text"]),
-     {"text": "user@example.com"}),
+     {"text": "The quick brown fox jumps over the lazy dog."}),
+    (frozenset(["response"]),
+     {"response": "Paris is the capital of France."}),
+    # CustomCodeEval sub-signatures (text/string deterministic metrics)
+    (frozenset(["expected_text", "text"]),
+     {"expected_text": "Paris is the capital of France.",
+      "text": "Paris is the capital of France."}),
+    (frozenset(["expected_response", "response"]),
+     {"expected_response": "Paris is the capital of France.",
+      "response": "Paris is the capital of France."}),
+    (frozenset(["actual_json", "expected_json"]),
+     {"actual_json": '{"name":"Paris","country":"France"}',
+      "expected_json": '{"name":"Paris","country":"France"}'}),
+    (frozenset(["images", "text"]),
+     {"images": [IMG_URL], "text": "A yellow Labrador dog."}),
+    (frozenset(["fake_images", "real_images"]),
+     {"fake_images": [IMG_URL], "real_images": [IMG_URL]}),
 ]
 
 
@@ -116,8 +132,14 @@ def _model_for(required_keys: list[str]) -> str:
 # Discovery
 # ---------------------------------------------------------------------
 
-def _discover_templates() -> list[tuple[str, tuple[str, ...]]]:
-    """Pull the full registry from the live api. Returns [(name, required_keys)]."""
+def _discover_templates() -> list[tuple[str, tuple[str, ...], str]]:
+    """Pull the full registry from the live api.
+
+    Returns ``[(name, required_keys, eval_type_id)]`` for every system-owned
+    template — both ``AgentEvaluator`` (LLM-as-judge) and ``CustomCodeEval``
+    (deterministic code-executor). Drafts and user-owned custom templates
+    are skipped because they aren't portable across api environments.
+    """
     from fi.evals.core.cloud_registry import load_registry
 
     api_key = os.environ.get("FI_API_KEY")
@@ -127,25 +149,30 @@ def _discover_templates() -> list[tuple[str, tuple[str, ...]]]:
         return []
 
     reg = load_registry(base_url, api_key, secret_key, force_refresh=True)
-    out: list[tuple[str, tuple[str, ...]]] = []
+    out: list[tuple[str, tuple[str, ...], str]] = []
     for name, info in sorted(reg.items()):
-        cfg = info.get("config", {}) or {}
-        # Only AgentEvaluator templates — CustomCodeEval run deterministically
-        # client-side and don't fit the agent-eval test shape.
-        if cfg.get("eval_type_id") != "AgentEvaluator":
-            continue
-        # Skip drafts (user-owned incomplete templates).
         if info.get("owner") != "system":
             continue
+        cfg = info.get("config", {}) or {}
+        eval_type = cfg.get("eval_type_id") or ""
+        if eval_type not in ("AgentEvaluator", "CustomCodeEval"):
+            continue
+        if name in SKIP_NAMES:
+            continue
         rk = tuple(cfg.get("required_keys") or [])
-        out.append((name, rk))
+        if not rk:  # meta-templates like deterministic_evals with empty required_keys
+            continue
+        out.append((name, rk, eval_type))
     return out
 
 
-# Known bad templates — xfail'd with reason. Review periodically.
-KNOWN_XFAIL = {
-    "fuzzy_match": "backend 500 on standalone eval (non-SDK bug)",
-    # eval_ranking needs domain-specific ranking context; skip via recipe miss.
+# Templates deliberately excluded from the matrix.
+SKIP_NAMES = {
+    # Backend bug: CustomCodeEval sandbox returns 500 on every call
+    # regardless of input. Tracked separately — not an SDK issue.
+    "fuzzy_match",
+    # Meta-template with empty required_keys — not a real eval.
+    "deterministic_evals",
 }
 
 
@@ -162,19 +189,21 @@ def matrix_templates():
 # ---------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    "eval_name,required_keys",
+    "eval_name,required_keys,eval_type",
     _DISCOVERED,
-    ids=[name for name, _ in _DISCOVERED] or ["no-templates-discovered"],
+    ids=[name for name, _, _ in _DISCOVERED] or ["no-templates-discovered"],
 )
-def test_template(evaluator, eval_name: str, required_keys: tuple[str, ...]):
-    """Every AgentEvaluator template in the live registry must:
+def test_template(
+    evaluator,
+    eval_name: str,
+    required_keys: tuple[str, ...],
+    eval_type: str,
+):
+    """Every system-owned template in the live registry must:
       * accept the canonical inputs for its required_keys signature, OR
       * return a concrete failed `EvalResult` with the api error text.
     Either way — never a silent empty `BatchRunResult`.
     """
-    if eval_name in KNOWN_XFAIL:
-        pytest.xfail(KNOWN_XFAIL[eval_name])
-
     inputs = _inputs_for(list(required_keys))
     if inputs is None:
         pytest.skip(
