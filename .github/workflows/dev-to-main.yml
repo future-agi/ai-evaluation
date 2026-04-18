@@ -1,0 +1,99 @@
+name: dev→main gate
+
+# Runs only on pull requests that target `main` (typically from `dev` or
+# hotfix branches). Skipped on all other PRs — cuts CI spend by >90%.
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: dev-to-main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------
+  # Tier 1 — contract tests. <30s. No LLM calls.
+  # --------------------------------------------------------------
+  contract:
+    name: Contract tests (drift + parsing + mapping)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --dev
+
+      - name: Run contract tests
+        working-directory: python
+        env:
+          FI_API_KEY: ${{ secrets.FI_DEV_API_KEY }}
+          FI_SECRET_KEY: ${{ secrets.FI_DEV_SECRET_KEY }}
+          FI_BASE_URL: https://dev.api.futureagi.com
+        run: uv run pytest tests/contract/ -v --tb=short
+
+  # --------------------------------------------------------------
+  # Tier 4 — release scenarios. Hits the live api. Gates the merge.
+  # --------------------------------------------------------------
+  release:
+    name: Release scenarios (live api)
+    runs-on: ubuntu-latest
+    needs: contract
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --dev
+
+      - name: Run release scenarios
+        working-directory: python
+        env:
+          FI_API_KEY: ${{ secrets.FI_DEV_API_KEY }}
+          FI_SECRET_KEY: ${{ secrets.FI_DEV_SECRET_KEY }}
+          FI_BASE_URL: https://dev.api.futureagi.com
+        run: uv run pytest tests/release/ -v --tb=short --maxfail=3
+
+  # --------------------------------------------------------------
+  # Result aggregation — branch protection rule checks this name.
+  # --------------------------------------------------------------
+  gate:
+    name: dev→main gate passed
+    runs-on: ubuntu-latest
+    needs: [contract, release]
+    if: always()
+    steps:
+      - name: Verify both jobs succeeded
+        env:
+          CONTRACT_RESULT: ${{ needs.contract.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          if [ "$CONTRACT_RESULT" != "success" ]; then
+            echo "::error::contract tests failed"
+            exit 1
+          fi
+          if [ "$RELEASE_RESULT" != "success" ]; then
+            echo "::error::release scenario tests failed"
+            exit 1
+          fi
+          echo "All gate jobs passed."
