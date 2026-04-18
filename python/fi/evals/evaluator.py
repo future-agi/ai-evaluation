@@ -8,6 +8,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from requests import Response
 
 from fi.api.auth import APIKeyAuth, ResponseHandler
+
+
+def _coerce_to_api_input(value: Any) -> Any:
+    """The api accepts strings, list[str], or list[list[str]]. Serialize
+    anything richer (dict, list[dict], list[mixed]) to JSON so users can
+    pass native Python objects for conversation/messages/structured inputs.
+    """
+    if isinstance(value, dict):
+        return json.dumps(value)
+    if isinstance(value, list):
+        if all(isinstance(v, str) for v in value):
+            return value
+        if all(isinstance(v, list) and all(isinstance(x, str) for x in v) for v in value):
+            return value
+        return json.dumps(value)
+    return value
 from fi.api.types import HttpMethod, RequestConfig
 from fi.evals.execution import Execution, _normalize_status
 from fi.evals.templates import EvalTemplate
@@ -261,6 +277,12 @@ class Evaluator(APIKeyAuth):
                 )
             except Exception as exc:
                 logging.debug("Dynamic input mapping skipped: %s", exc)
+
+        # The api validator accepts only strings, list[str], or list[list[str]].
+        # JSON-serialize dict / list-of-dicts values (e.g. conversation messages)
+        # so users can pass native Python objects without manually stringifying.
+        if isinstance(inputs, dict):
+            inputs = {k: _coerce_to_api_input(v) for k, v in inputs.items()}
 
         final_api_payload = {
             "eval_name": eval_name,

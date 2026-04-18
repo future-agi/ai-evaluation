@@ -11,6 +11,19 @@ import {
     AUTH_ENVVAR_NAME,
 } from './core';
 import { mapInputsToBackend } from './core/cloudRegistry';
+
+
+function coerceToApiInput(value: unknown): unknown {
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string") return [value];
+    if (Array.isArray(value)) {
+        if (value.every(v => typeof v === "string")) return value;
+        if (value.every(v => Array.isArray(v) && v.every(x => typeof x === "string"))) return value;
+        return JSON.stringify(value);
+    }
+    if (typeof value === "object") return JSON.stringify(value);
+    return value;
+}
 import { AxiosResponse } from 'axios';
 
 import { Execution, normalizeStatus } from './execution';
@@ -305,21 +318,13 @@ export class Evaluator extends APIKeyAuth {
             console.debug("Dynamic input mapping skipped:", err);
         }
 
+        // The api accepts strings, list[str], or list[list[str]]. Serialize
+        // dict / list-of-dicts / list-of-mixed values (e.g. conversation
+        // messages) to JSON so users can pass native objects without
+        // manually stringifying.
         const transformedApiInputs: Record<string, any> = {};
         for (const [key, value] of Object.entries(mappedInputs)) {
-            if (Array.isArray(value)) {
-                if (value.every(v => typeof v === "string")) {
-                    transformedApiInputs[key] = value;
-                } else {
-                    // Non-string arrays (e.g. conversation messages) pass through as-is.
-                    transformedApiInputs[key] = value;
-                }
-            } else if (typeof value === "string") {
-                transformedApiInputs[key] = [value];
-            } else {
-                // Objects (e.g. single message dict) pass through as-is.
-                transformedApiInputs[key] = value;
-            }
+            transformedApiInputs[key] = coerceToApiInput(value);
         }
 
         const finalApiPayload: Record<string, any> = {
