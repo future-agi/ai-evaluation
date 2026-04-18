@@ -14,10 +14,10 @@ concurrency:
 
 jobs:
   # --------------------------------------------------------------
-  # Tier 1 — contract tests. <30s. No LLM calls.
+  # Python contract tests — drift + parsing + mapping. <30s.
   # --------------------------------------------------------------
-  contract:
-    name: Contract tests (drift + parsing + mapping)
+  contract-python:
+    name: Python contract tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -44,12 +44,46 @@ jobs:
         run: uv run pytest tests/contract/ -v --tb=short
 
   # --------------------------------------------------------------
+  # TypeScript contract tests — same drift + mapping protections.
+  # --------------------------------------------------------------
+  contract-typescript:
+    name: TypeScript contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: typescript/ai-evaluation/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: typescript/ai-evaluation
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: typescript/ai-evaluation
+        run: pnpm typecheck
+
+      - name: Run contract tests
+        working-directory: typescript/ai-evaluation
+        run: pnpm jest src/__tests__/contract --no-coverage
+
+  # --------------------------------------------------------------
   # Tier 4 — release scenarios. Hits the live api. Gates the merge.
   # --------------------------------------------------------------
   release:
     name: Release scenarios (live api)
     runs-on: ubuntu-latest
-    needs: contract
+    needs: [contract-python, contract-typescript]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -80,16 +114,21 @@ jobs:
   gate:
     name: dev→main gate passed
     runs-on: ubuntu-latest
-    needs: [contract, release]
+    needs: [contract-python, contract-typescript, release]
     if: always()
     steps:
-      - name: Verify both jobs succeeded
+      - name: Verify all jobs succeeded
         env:
-          CONTRACT_RESULT: ${{ needs.contract.result }}
+          CONTRACT_PY: ${{ needs.contract-python.result }}
+          CONTRACT_TS: ${{ needs.contract-typescript.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
         run: |
-          if [ "$CONTRACT_RESULT" != "success" ]; then
-            echo "::error::contract tests failed"
+          if [ "$CONTRACT_PY" != "success" ]; then
+            echo "::error::Python contract tests failed"
+            exit 1
+          fi
+          if [ "$CONTRACT_TS" != "success" ]; then
+            echo "::error::TypeScript contract tests failed"
             exit 1
           fi
           if [ "$RELEASE_RESULT" != "success" ]; then
