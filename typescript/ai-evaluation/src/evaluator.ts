@@ -1,5 +1,5 @@
-import { 
-    APIKeyAuth, 
+import {
+    APIKeyAuth,
     ResponseHandler,
     HttpMethod,
     RequestConfig,
@@ -8,8 +8,9 @@ import {
     SDKException,
     InvalidValueType,
     MissingRequiredKey,
-    AUTH_ENVVAR_NAME
-} from '@future-agi/sdk';
+    AUTH_ENVVAR_NAME,
+} from './core';
+import { mapInputsToBackend } from './core/cloudRegistry';
 import { AxiosResponse } from 'axios';
 
 import { Execution, normalizeStatus } from './execution';
@@ -285,23 +286,39 @@ export class Evaluator extends APIKeyAuth {
             }
         }
 
-        const transformedApiInputs: Record<string, string[]> = {};
-
         if (Array.isArray(inputs)) {
-            // Explicitly disallow array-of-dicts per spec
             throw new TypeError("'inputs' must be a dictionary, array-of-dicts is not supported.");
         }
 
-        for (const [key, value] of Object.entries(inputs)) {
+        // Dynamic registry: map user kwargs to exact required_keys before POST.
+        // The api rejects supersets (e.g. {output,input,context} for a template
+        // that only wants {output}), so this can't be a pass-through. On
+        // registry miss, leaves inputs untouched — backend surfaces its own error.
+        let mappedInputs: Record<string, any> = inputs;
+        try {
+            mappedInputs = await mapInputsToBackend(evalName, inputs, {
+                baseUrl: this.baseUrl,
+                apiKey: this.fiApiKey,
+                secretKey: this.fiSecretKey,
+            });
+        } catch (err) {
+            console.debug("Dynamic input mapping skipped:", err);
+        }
+
+        const transformedApiInputs: Record<string, any> = {};
+        for (const [key, value] of Object.entries(mappedInputs)) {
             if (Array.isArray(value)) {
-                if (!value.every(v => typeof v === "string")) {
-                    throw new TypeError(`All values in array for key '${key}' must be strings.`);
+                if (value.every(v => typeof v === "string")) {
+                    transformedApiInputs[key] = value;
+                } else {
+                    // Non-string arrays (e.g. conversation messages) pass through as-is.
+                    transformedApiInputs[key] = value;
                 }
-                transformedApiInputs[key] = value;
             } else if (typeof value === "string") {
                 transformedApiInputs[key] = [value];
             } else {
-                throw new TypeError(`Invalid input type for key '${key}'. Expected string or string[].`);
+                // Objects (e.g. single message dict) pass through as-is.
+                transformedApiInputs[key] = value;
             }
         }
 
@@ -320,7 +337,6 @@ export class Evaluator extends APIKeyAuth {
             finalApiPayload.config = { params: evalConfig };
         }
 
-        // Convert timeout (seconds) to milliseconds for axios. Use a higher default (200s) if not provided.
         const timeoutMs = timeout !== undefined ? timeout * 1000 : this.defaultTimeout * 1000;
 
         try {
@@ -335,8 +351,21 @@ export class Evaluator extends APIKeyAuth {
             ) as BatchRunResult;
             return response;
         } catch (error) {
-            console.error("Evaluation failed:", error);
-            throw error;
+            // Silent-empty fix: return a failed EvalResult with the api's error
+            // text so callers can see *why* instead of getting an IndexError
+            // downstream from an empty list.
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`Evaluation failed for '${evalName}':`, message);
+            return {
+                eval_results: [
+                    {
+                        name: evalName,
+                        output: null,
+                        reason: message,
+                        runtime: 0,
+                    } as any,
+                ],
+            } as BatchRunResult;
         }
     }
 

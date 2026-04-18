@@ -7,7 +7,7 @@ import {
     SDKException,
     InvalidValueType,
     MissingRequiredKey,
-} from '@future-agi/sdk';
+} from './core';
 import { EvalResponseHandler, Evaluator } from './evaluator';
 import { Templates } from './templates';
 import { BatchRunResult } from './types';

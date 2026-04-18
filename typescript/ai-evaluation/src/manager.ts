@@ -5,7 +5,7 @@ import {
     RequestConfig,
     Routes,
     InvalidAuthError,
-} from '@future-agi/sdk';
+} from './core';
 import { AxiosResponse } from 'axios';
 
 import { Execution } from './execution';

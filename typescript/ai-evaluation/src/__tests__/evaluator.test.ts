@@ -1,11 +1,11 @@
 import { Evaluator } from '../evaluator';
 import { BatchRunResult } from '../types';
-import { HttpMethod, InvalidAuthError } from '@future-agi/sdk';
+import { HttpMethod, InvalidAuthError } from '../core';
 import { Templates } from '../templates';
 
 // Mock the entire APIKeyAuth class from the SDK to spy on the 'request' method
-jest.mock('@future-agi/sdk', () => {
-    const originalModule = jest.requireActual('@future-agi/sdk');
+jest.mock('../core', () => {
+    const originalModule = jest.requireActual('../core');
     return {
         ...originalModule,
         APIKeyAuth: class {

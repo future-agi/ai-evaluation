@@ -1,6 +1,6 @@
 import { Protect } from '../protect';
 import { Evaluator } from '../evaluator';
-import { InvalidAuthError, SDKException } from '@future-agi/sdk';
+import { InvalidAuthError, SDKException } from '../core';
 
 describe('Protect', () => {
     let protect: Protect;
