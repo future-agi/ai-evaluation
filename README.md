@@ -17,6 +17,12 @@ Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com
 
 ---
 
+<div align="center">
+  <img src="eval-repo.gif" alt="AI-Evaluation Demo" width="70%" />
+</div>
+
+---
+
 ## What's New in 1.0
 
 - **Unified `evaluate()` API** — one function, 50+ metrics, local or cloud
