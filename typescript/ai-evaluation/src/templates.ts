@@ -1,4 +1,17 @@
-// TypeScript translation of the Python EvalTemplate classes
+// Template registry for cloud evals.
+//
+// Pure metadata — no Input schema enforcement. The cloud registry
+// (src/core/cloudRegistry.ts) fetches required_keys from the api and
+// maps user inputs dynamically at call time.
+//
+// To call a template by name without the metadata object, just pass the
+// string directly:
+//   evaluator.evaluate("customer_agent_query_handling", { conversation: [...] })
+//
+// Renamed templates get a module-level alias from the old key to the new
+// entry (see bottom of file) so existing user code keeps working. Truly
+// removed templates are gone — callers get a clean "undefined" signal
+// instead of a silent runtime 400 from the api.
 
 interface EvalTemplate {
   eval_id: string;
@@ -67,14 +80,6 @@ const Templates: Record<string, EvalTemplate> = {
     eval_name: "prompt_injection",
     eval_id: "18"
   },
-  NotGibberishText: {
-    eval_name: "not_gibberish_text",
-    eval_id: "19"
-  },
-  SafeForWorkText: {
-    eval_name: "safe_for_work_text",
-    eval_id: "20"
-  },
   PromptAdherence: {
     eval_name: "prompt_adherence",
     eval_id: "65"
@@ -98,10 +103,6 @@ const Templates: Record<string, EvalTemplate> = {
   IsEmail: {
     eval_name: "is_email",
     eval_id: "40"
-  },
-  NoValidLinks: {
-    eval_name: "no_valid_links",
-    eval_id: "42"
   },
   Groundedness: {
     eval_name: "groundedness",
@@ -131,14 +132,6 @@ const Templates: Record<string, EvalTemplate> = {
     eval_name: "bias_detection",
     eval_id: "69"
   },
-  LLMFunctionCalling: {
-    eval_name: "llm_function_calling",
-    eval_id: "72"
-  },
-  AudioTranscriptionEvaluator: {
-    eval_name: "audio_transcription",
-    eval_id: "73"
-  },
   AudioQualityEvaluator: {
     eval_name: "audio_quality",
     eval_id: "75"
@@ -154,10 +147,6 @@ const Templates: Record<string, EvalTemplate> = {
   NoAgeBias: {
     eval_name: "no_age_bias",
     eval_id: "79"
-  },
-  NoOpenAIReference: {
-    eval_name: "no_openai_reference",
-    eval_id: "80"
   },
   NoApologies: {
     eval_name: "no_apologies",
@@ -175,14 +164,6 @@ const Templates: Record<string, EvalTemplate> = {
     eval_name: "is_helpful",
     eval_id: "84"
   },
-  IsCode: {
-    eval_name: "is_code",
-    eval_id: "85"
-  },
-  IsCSV: {
-    eval_name: "is_csv",
-    eval_id: "86"
-  },
   FuzzyMatch: {
     eval_name: "fuzzy_match",
     eval_id: "87"
@@ -190,10 +171,6 @@ const Templates: Record<string, EvalTemplate> = {
   AnswerRefusal: {
     eval_name: "answer_refusal",
     eval_id: "88"
-  },
-  DetectHallucinationMissingInfo: {
-    eval_name: "detect_hallucination_missing_info",
-    eval_id: "89"
   },
   NoHarmfulTherapeuticGuidance: {
     eval_name: "no_harmful_therapeutic_guidance",
@@ -242,8 +219,42 @@ const Templates: Record<string, EvalTemplate> = {
   BleuScore: {
     eval_name: "bleu_score",
     eval_id: "101"
-  }
+  },
+
+  // -------------------- New in the api revamp --------------------
+  NoLLMReference: { eval_name: "no_llm_reference", eval_id: "" },
+  DetectHallucination: { eval_name: "detect_hallucination", eval_id: "" },
+  ContainsCode: { eval_name: "contains_code", eval_id: "" },
+  TextToSQL: { eval_name: "text_to_sql", eval_id: "" },
+  GroundTruthMatch: { eval_name: "ground_truth_match", eval_id: "" },
+  PromptInstructionAdherence: { eval_name: "prompt_instruction_adherence", eval_id: "" },
+  ProtectFlash: { eval_name: "protect_flash", eval_id: "" },
+  ImageInstructionAdherence: { eval_name: "image_instruction_adherence", eval_id: "" },
+  SyntheticImageEvaluator: { eval_name: "synthetic_image_evaluator", eval_id: "" },
+  OCREvaluation: { eval_name: "ocr_evaluation", eval_id: "" },
+  ASRAccuracy: { eval_name: "ASR/STT_accuracy", eval_id: "" },
+  TTSAccuracy: { eval_name: "TTS_accuracy", eval_id: "" },
+
+  // Customer-agent family
+  CustomerAgentClarificationSeeking: { eval_name: "customer_agent_clarification_seeking", eval_id: "" },
+  CustomerAgentContextRetention: { eval_name: "customer_agent_context_retention", eval_id: "" },
+  CustomerAgentConversationQuality: { eval_name: "customer_agent_conversation_quality", eval_id: "" },
+  CustomerAgentHumanEscalation: { eval_name: "customer_agent_human_escalation", eval_id: "" },
+  CustomerAgentInterruptionHandling: { eval_name: "customer_agent_interruption_handling", eval_id: "" },
+  CustomerAgentLanguageHandling: { eval_name: "customer_agent_language_handling", eval_id: "" },
+  CustomerAgentLoopDetection: { eval_name: "customer_agent_loop_detection", eval_id: "" },
+  CustomerAgentObjectionHandling: { eval_name: "customer_agent_objection_handling", eval_id: "" },
+  CustomerAgentPromptConformance: { eval_name: "customer_agent_prompt_conformance", eval_id: "" },
+  CustomerAgentQueryHandling: { eval_name: "customer_agent_query_handling", eval_id: "" },
+  CustomerAgentTerminationHandling: { eval_name: "customer_agent_termination_handling", eval_id: "" },
 };
+
+// -------------------- Back-compat aliases for renamed templates --------------------
+// Old name → current entry so existing user code keeps working.
+Templates.NoOpenAIReference = Templates.NoLLMReference;
+Templates.DetectHallucinationMissingInfo = Templates.DetectHallucination;
+Templates.LLMFunctionCalling = Templates.EvaluateFunctionCalling;
+Templates.AudioTranscriptionEvaluator = Templates.ASRAccuracy;
 
 
 export {

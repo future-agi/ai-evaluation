@@ -1,6 +1,6 @@
 {
   "name": "@future-agi/ai-evaluation",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "We help GenAI teams maintain high-accuracy for their Models in production.",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -89,7 +89,6 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@future-agi/sdk": "^0.1.1",
     "@traceai/fi-core": "^0.1.16",
     "axios": "^1.6.0",
     "chalk": "^5.3.0",

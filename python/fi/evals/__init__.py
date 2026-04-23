@@ -11,16 +11,23 @@ warnings.filterwarnings("ignore", message='Field name "schema" in .* shadows an 
 from .core import evaluate, EvalResult, BatchResult, Turing  # noqa: F401
 
 # ---------------------------------------------------------------------------
+# Execution handles (async eval / composite polling)
+# ---------------------------------------------------------------------------
+from .execution import Execution, ExecutionError  # noqa: F401
+
+# ---------------------------------------------------------------------------
 # Cloud Evaluator + Protect (existing)
 # ---------------------------------------------------------------------------
 try:
     from .evaluator import Evaluator, list_evaluations  # noqa: F401
+    from .manager import EvalTemplateManager  # noqa: F401
     from .protect import Protect, protect  # noqa: F401
     from .templates import *  # noqa: F403, F401
     _evaluator_available = True
 except (ImportError, ModuleNotFoundError):
     _evaluator_available = False
     Evaluator = None
+    EvalTemplateManager = None
     list_evaluations = None
     Protect = None
     protect = None
@@ -75,8 +82,17 @@ if _evaluator_available:
 # New unified API
 new_api_names = ["evaluate", "EvalResult", "BatchResult", "Turing"]
 
+# Execution handles
+execution_names = ["Execution", "ExecutionError"]
+
 # Existing clients
-client_names = ["Evaluator", "Protect", "protect", "list_evaluations"]
+client_names = [
+    "Evaluator",
+    "EvalTemplateManager",
+    "Protect",
+    "protect",
+    "list_evaluations",
+]
 
 # Framework exports
 framework_names = [
@@ -105,4 +121,11 @@ streaming_names = [
     "StreamingState",
 ]
 
-__all__ = sorted(new_api_names + evaluation_template_names + client_names + framework_names + streaming_names)
+__all__ = sorted(
+    new_api_names
+    + execution_names
+    + evaluation_template_names
+    + client_names
+    + framework_names
+    + streaming_names
+)

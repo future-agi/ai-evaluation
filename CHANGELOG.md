@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.1.0] (Python) / [0.2.0] (TypeScript) - 2026-04-18
+
+Major update to align the SDK with the api-side Turing eval revamp.
+
+### Python
+
+#### Added
+- **Dynamic cloud eval registry** (`fi.evals.core.cloud_registry`). Fetches `required_keys` from the live api on first use and maps user kwargs to the exact backend shape. New backend templates work without an SDK release.
+- **`TuringEngine` string fallback** — `evaluate("customer_agent_query_handling", ...)` works with only a string, no `EvalTemplate` class needed.
+- **14 new template classes** for the revamp: full `customer_agent_*` family (11 classes), plus `TextToSQL`, `ContainsCode`, `NoLLMReference`, `DetectHallucination`, `GroundTruthMatch`, `PromptInstructionAdherence`, `ProtectFlash`, `ImageInstructionAdherence`, `SyntheticImageEvaluator`, `OCREvaluation`, `ASRAccuracy`, `TTSAccuracy`.
+- **Failed `EvalResult` sentinel** on backend 4xx/5xx. Previously the SDK returned `BatchRunResult(eval_results=[])` silently, crashing downstream consumers. Now every failure surfaces as a concrete `EvalResult` with the api error text in `.reason`.
+- **`EvalTemplateManager` is usable** — previously threw `AttributeError` because the routes weren't shipped. All eval-template / composite / ground-truth / playground routes are now in `fi.utils.routes.Routes`.
+- **Contract + release test tiers** (`tests/contract/`, `tests/release/`) + `.github/workflows/dev-to-main.yml` CI gate.
+
+#### Changed
+- **Python version constraint relaxed to `>=3.10`** (was `>=3.10,<3.14`).
+- **`templates.py` no longer hardcodes Pydantic `Input` models** — schemas come from the live registry. `OutputOnly`, `OutputWithContext`, `OutputWithExpected`, `InputOnly`, `OutputWithInput`, `ConversationMessages`, `ImageInput`, `AudioInput` base classes are removed.
+- **Decoupled from the `futureagi` package.** `fi.api.auth`, `fi.api.types`, `fi.utils.routes`, `fi.utils.errors`, `fi.utils.executor`, `fi.utils.constants`, `fi.utils.utils` are vendored in-repo. `futureagi` is no longer a dependency.
+- New direct deps: `requests-futures`, `pydantic>=2`, `levenshtein`, `nltk`, `rouge-score` (previously transitive via `futureagi`).
+
+#### Removed
+- **5 upstream-removed templates** raise `ImportError`: `SafeForWorkText`, `NotGibberishText`, `NoValidLinks`, `IsCode`, `IsCSV`.
+- Dead `evaluate = lambda ...` shim at `evaluator.py` bottom — use `from fi.evals import evaluate`.
+- `Evaluator._validate_inputs` stub and `_get_eval_configs` method.
+- `ApiKeyName` enum in `fi.utils.utils` — unused internal.
+- 6 stale test files (~3,700 LOC) referencing symbols renamed in earlier phases.
+
+#### Deprecated — BC aliases (to be removed in 2.0)
+- `NoOpenAIReference` → `NoLLMReference`
+- `DetectHallucinationMissingInfo` → `DetectHallucination`
+- `LLMFunctionCalling` → `EvaluateFunctionCalling`
+- `AudioTranscriptionEvaluator` → `ASRAccuracy`
+
+#### Fixed
+- `Evaluator.evaluate()` no longer drops results silently on backend 4xx/5xx — always returns a concrete `EvalResult`.
+- Response parser handles both legacy `outputType`/`evalId` (camelCase) and revamped `output_type`/`eval_id` (snake_case).
+
+### TypeScript
+
+#### Added
+- **Dynamic cloud eval registry** (`src/core/cloudRegistry.ts`) — mirrors the Python implementation. Maps user inputs to backend `required_keys`.
+- **23 new template entries** for the revamp (same list as Python).
+- **Failed `EvalResult` sentinel** on 4xx/5xx — `Evaluator.evaluate()` returns a concrete failed result instead of throwing.
+- **`EvalTemplateManager` works** — routes were missing from `@future-agi/sdk`. All routes inlined in `src/core/routes.ts`.
+- **Contract test suite** (`src/__tests__/contract/`) — drift, input mapping, response parsing, silent-empty, routes-enum.
+
+#### Changed
+- **Decoupled from `@future-agi/sdk`.** `APIKeyAuth`, `ResponseHandler`, `HttpMethod`, `RequestConfig`, `Routes`, `BoundedExecutor`, errors, constants are vendored in `src/core/`. `@future-agi/sdk` is no longer a dependency.
+
+#### Removed
+- **5 upstream-removed templates** — `Templates.SafeForWorkText`, `NotGibberishText`, `NoValidLinks`, `IsCode`, `IsCSV` are gone.
+
+#### Deprecated — BC aliases (to be removed in 1.0)
+- `Templates.NoOpenAIReference` → `Templates.NoLLMReference`
+- `Templates.DetectHallucinationMissingInfo` → `Templates.DetectHallucination`
+- `Templates.LLMFunctionCalling` → `Templates.EvaluateFunctionCalling`
+- `Templates.AudioTranscriptionEvaluator` → `Templates.ASRAccuracy`
+
+### Known issues
+
+- Async `Evaluator.submit()` + `Execution.wait()` — submit works, but completion depends on the api's temporal worker being healthy (see [TH-4305](https://linear.app/future-agi/issue/TH-4305)). Sync `.evaluate()` is the safe default.
+- Audio/PDF evals require `turing_large`; `turing_flash` rejects them with a clear error.
+
+
 ## [1.0.2] - 2026-04-02
 
 ### Python

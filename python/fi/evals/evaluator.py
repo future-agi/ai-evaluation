@@ -5,11 +5,27 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-import pandas as pd
 from requests import Response
 
 from fi.api.auth import APIKeyAuth, ResponseHandler
+
+
+def _coerce_to_api_input(value: Any) -> Any:
+    """The api accepts strings, list[str], or list[list[str]]. Serialize
+    anything richer (dict, list[dict], list[mixed]) to JSON so users can
+    pass native Python objects for conversation/messages/structured inputs.
+    """
+    if isinstance(value, dict):
+        return json.dumps(value)
+    if isinstance(value, list):
+        if all(isinstance(v, str) for v in value):
+            return value
+        if all(isinstance(v, list) and all(isinstance(x, str) for x in v) for v in value):
+            return value
+        return json.dumps(value)
+    return value
 from fi.api.types import HttpMethod, RequestConfig
+from fi.evals.execution import Execution, _normalize_status
 from fi.evals.templates import EvalTemplate
 from fi.evals.types import BatchRunResult, EvalResult
 from fi.utils.errors import InvalidAuthError
@@ -55,27 +71,36 @@ class EvalResponseHandler(ResponseHandler[BatchRunResult, None]):
         """
         eval_results = []
 
-        for result in response.get("result", {}):
-            for evaluation in result.get("evaluations", []):
-                new_metadata = {}
-                if evaluation.get("metadata"):
-                    if isinstance(evaluation.get("metadata"), dict):
-                        metadata = evaluation.get("metadata")
-                    elif isinstance(evaluation.get("metadata"), str):
-                        metadata = json.loads(evaluation.get("metadata"))
-                    else:
-                        metadata = {}
-                    new_metadata["usage"] = metadata.get("usage", {})
-                    new_metadata["cost"] = metadata.get("cost", {})
-                    new_metadata["explanation"] = metadata.get("explanation", {})
+        # The revamped backend (post 2026-04-12) returns pure snake_case:
+        #   {"result": [{"evaluations": [
+        #       {"name", "reason", "runtime", "output", "output_type",
+        #        "eval_id", "model"?, "error_localizer_enabled"?,
+        #        "error_localizer"?}
+        #   ]}]}
+        # Async / error-localization paths may return the eval wrapped in
+        # {"eval_status": "...", "result": <eval>} — handle that too.
+        for result in response.get("result", []) or []:
+            if isinstance(result, dict) and "evaluations" in result:
+                entries = result.get("evaluations", []) or []
+            else:
+                entries = [result] if isinstance(result, dict) else []
+
+            for evaluation in entries:
+                if not isinstance(evaluation, dict):
+                    continue
                 eval_results.append(
                     EvalResult(
                         name=evaluation.get("name", ""),
-                        output=evaluation.get("output", None),
+                        output=evaluation.get("output", evaluation.get("value")),
                         reason=evaluation.get("reason", ""),
                         runtime=evaluation.get("runtime", 0),
-                        output_type=evaluation.get("outputType", ""),
-                        eval_id=evaluation.get("evalId", ""),
+                        output_type=evaluation.get("output_type", ""),
+                        eval_id=evaluation.get("eval_id", ""),
+                        model=evaluation.get("model"),
+                        error_localizer_enabled=evaluation.get(
+                            "error_localizer_enabled"
+                        ),
+                        error_localizer=evaluation.get("error_localizer"),
                     )
                 )
 
@@ -235,6 +260,30 @@ class Evaluator(APIKeyAuth):
                 "Expect eval template class/obj or name str."
             )
 
+        # Dynamic registry: filter user-supplied inputs to only the keys the
+        # backend currently accepts for this eval. The api rejects supersets
+        # (e.g. {output,input,context} for a template that only wants
+        # {output}), so this can't be a pass-through. If the registry fetch
+        # fails or the name is unknown, leave inputs untouched.
+        if kwargs.get("skip_input_mapping") is not True and isinstance(inputs, dict):
+            try:
+                from fi.evals.core.cloud_registry import map_inputs_to_backend
+                inputs = map_inputs_to_backend(
+                    eval_name,
+                    inputs,
+                    base_url=self._base_url,
+                    api_key=self._fi_api_key,
+                    secret_key=self._fi_secret_key,
+                )
+            except Exception as exc:
+                logging.debug("Dynamic input mapping skipped: %s", exc)
+
+        # The api validator accepts only strings, list[str], or list[list[str]].
+        # JSON-serialize dict / list-of-dicts values (e.g. conversation messages)
+        # so users can pass native Python objects without manually stringifying.
+        if isinstance(inputs, dict):
+            inputs = {k: _coerce_to_api_input(v) for k, v in inputs.items()}
+
         final_api_payload = {
             "eval_name": eval_name,
             "inputs": inputs,
@@ -274,11 +323,26 @@ class Evaluator(APIKeyAuth):
                     input_case = future_to_input[future]
                     logging.error(f"Evaluation timed out for input: {input_case}")
                     failed_inputs.append(input_case)
-                
+                    all_results.append(
+                        EvalResult(
+                            name=eval_name,
+                            output=None,
+                            reason=f"Evaluation timed out after {timeout or self._default_timeout}s",
+                            runtime=0,
+                        )
+                    )
                 except Exception as exc:
                     input_case = future_to_input[future]
                     logging.error(f"Evaluation failed for input {input_case}: {str(exc)}")
                     failed_inputs.append(input_case)
+                    all_results.append(
+                        EvalResult(
+                            name=eval_name,
+                            output=None,
+                            reason=str(exc),
+                            runtime=0,
+                        )
+                    )
 
         if failed_inputs:
             logging.warning(f"Failed to evaluate {len(failed_inputs)} inputs out of {len(inputs)} total inputs")
@@ -301,7 +365,10 @@ class Evaluator(APIKeyAuth):
 
     def get_eval_result(self, eval_id: str):
         """
-        Get the result of an evaluation by its ID
+        Get the raw evaluation status payload by ID (unparsed).
+
+        For a higher-level handle that understands the status envelope
+        and can be awaited, see :py:meth:`get_execution`.
         """
         url = f"{self._base_url}/{Routes.get_eval_result.value}"
         response = self.request(
@@ -314,6 +381,162 @@ class Evaluator(APIKeyAuth):
         )
 
         return response.json()
+
+    # ------------------------------------------------------------------
+    # Async submission / execution handles
+    # ------------------------------------------------------------------
+
+    def submit(
+        self,
+        eval_templates: Union[str, type[EvalTemplate]],
+        inputs: Dict[str, Any],
+        *,
+        model_name: Optional[str] = None,
+        custom_eval_name: Optional[str] = None,
+        trace_eval: bool = False,
+        error_localizer: bool = False,
+        timeout: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Execution:
+        """
+        Submit an eval for async execution and return an :class:`Execution`
+        handle immediately. Use ``handle.wait()`` or
+        :py:meth:`get_execution` to poll for completion.
+
+        This is the non-blocking equivalent of :py:meth:`evaluate` —
+        internally it always sets ``is_async=True`` so the backend records
+        the evaluation and starts a worker without holding the HTTP
+        connection open.
+        """
+
+        def _extract_name(t: Any) -> Optional[str]:
+            if isinstance(t, str):
+                return t
+            if isinstance(t, EvalTemplate):
+                return t.eval_name
+            if inspect.isclass(t) and issubclass(t, EvalTemplate):
+                return t.eval_name
+            return None
+
+        eval_name = _extract_name(
+            eval_templates[0] if isinstance(eval_templates, list) else eval_templates
+        )
+        if eval_name is None:
+            raise TypeError(
+                "Unsupported eval_templates argument. "
+                "Expect eval template class/obj or name str."
+            )
+
+        payload = {
+            "eval_name": eval_name,
+            "inputs": inputs,
+            "model": model_name,
+            "span_id": kwargs.get("span_id"),
+            "custom_eval_name": custom_eval_name,
+            "trace_eval": trace_eval,
+            "is_async": True,
+            "error_localizer": error_localizer,
+        }
+
+        response = self.request(
+            config=RequestConfig(
+                method=HttpMethod.POST,
+                url=f"{self._base_url}/{Routes.evaluatev2.value}",
+                json=payload,
+                timeout=timeout or self._default_timeout,
+            ),
+        )
+        body = response.json() if hasattr(response, "json") else {}
+
+        # Backend responds with:
+        #   {"status": true,  "result": [{"evaluations": [{name, output_type, eval_id}]}]}
+        # on success, or
+        #   {"status": false, "result": {...error dict...}}
+        # on validation failure.
+        if not body.get("status", True):
+            raise RuntimeError(
+                f"Async submit rejected by backend: {body.get('result')}"
+            )
+
+        results = body.get("result") or []
+        if not isinstance(results, list) or not results:
+            raise RuntimeError(
+                f"Async submit did not return a result list (response: {body})"
+            )
+        evaluations = results[0].get("evaluations") or []
+        first_eval = evaluations[0] if evaluations else {}
+        execution_id = first_eval.get("eval_id")
+        if not execution_id:
+            raise RuntimeError(
+                f"Async submit did not return an eval_id (response: {body})"
+            )
+
+        handle = Execution(
+            id=str(execution_id),
+            kind="eval",
+            status="pending",
+        )
+        handle._refresher = lambda eid=execution_id: self._refresh_eval_execution(eid)
+        return handle
+
+    def get_execution(self, execution_id: str) -> Execution:
+        """
+        Fetch the latest state of an async single-eval execution by ID.
+
+        Returns an :class:`Execution` handle with an attached refresher
+        closure — call ``handle.wait()`` to block until completion.
+        """
+        handle = self._refresh_eval_execution(execution_id)
+        handle._refresher = (
+            lambda eid=execution_id: self._refresh_eval_execution(eid)
+        )
+        return handle
+
+    def _refresh_eval_execution(self, execution_id: str) -> Execution:
+        url = f"{self._base_url}/{Routes.get_eval_result.value}"
+        response = self.request(
+            config=RequestConfig(
+                method=HttpMethod.GET,
+                url=url,
+                params={"eval_id": execution_id},
+                timeout=self._default_timeout,
+            ),
+        )
+        body = response.json() if hasattr(response, "json") else {}
+        # Envelope: {"status": true, "result": {"eval_status": ..., "result": <body|str>}}
+        payload = body.get("result") or {}
+        status = _normalize_status(payload.get("eval_status"))
+        raw_result = payload.get("result")
+        error_message = payload.get("error_message")
+
+        parsed_result: Any = None
+        error_localizer: Optional[Dict[str, Any]] = None
+        if isinstance(raw_result, dict):
+            # Completed / failed state — full eval record.
+            parsed_result = EvalResult(
+                name=raw_result.get("name", ""),
+                output=raw_result.get("output", raw_result.get("value")),
+                reason=raw_result.get("reason"),
+                runtime=raw_result.get("runtime", 0),
+                output_type=raw_result.get("output_type"),
+                eval_id=str(raw_result.get("eval_id", execution_id)),
+                model=raw_result.get("model"),
+                error_localizer_enabled=raw_result.get("error_localizer_enabled"),
+                error_localizer=raw_result.get("error_localizer"),
+            )
+            error_localizer = raw_result.get("error_localizer")
+            error_message = raw_result.get("error_message") or error_message
+        # else: raw_result is a human-readable string like "Evaluation is
+        # being processed." — leave parsed_result as None.
+
+        return Execution(
+            id=str(execution_id),
+            kind="eval",
+            status=status,
+            result=parsed_result,
+            error_message=error_message,
+            error_localizer=error_localizer,
+        )
 
 
     def _configure_evaluations(
@@ -401,69 +624,6 @@ class Evaluator(APIKeyAuth):
             return
 
 
-    def _validate_inputs(
-        self,
-        inputs: List[Dict[str, Any]],
-        eval_objects: List[EvalTemplate],
-    ):
-        """
-        Validate the inputs against the evaluation templates
-
-        Args:
-            inputs: List of test cases to validate
-            eval_objects: List of evaluation templates to validate against
-
-        Returns:
-            bool: True if validation passes
-
-        Raises:
-            Exception: If validation fails or templates don't share common tags
-        """
-
-        # First validate that all eval objects share at least one common tag
-        if len(eval_objects) > 1:
-            # Get sets of tags for each eval object
-            tag_sets = [set(obj.eval_tags) for obj in eval_objects]
-
-            # Find intersection of all tag sets
-            common_tags = set.intersection(*tag_sets)
-
-            if not common_tags:
-                template_names = [obj.name for obj in eval_objects]
-                raise Exception(
-                    f"Evaluation templates {template_names} must share at least one common tag. "
-                    f"Current tags for each template: {[list(tags) for tags in tag_sets]}"
-                )
-
-        # Then validate each eval object's required inputs
-        for eval_object in eval_objects:
-            eval_object.validate_input(inputs)
-
-        return True
-
-    def _get_eval_configs(
-        self, eval_templates: Union[str, List[str]]
-    ) -> List[EvalTemplate]:
-        if isinstance(eval_templates, str):
-            eval_templates = [eval_templates]
-
-        for template in eval_templates:
-            eval_info = self._get_eval_info(template)
-            template.eval_id = eval_info["eval_id"]
-            template.name = eval_info["name"]
-            template.description = eval_info["description"]
-            template.eval_tags = eval_info["eval_tags"]
-            template.required_keys = eval_info["config"]["required_keys"]
-            template.output = eval_info["config"]["output"]
-            template.eval_type_id = eval_info["config"]["eval_type_id"]
-            template.config_schema = (
-                eval_info["config"]["config"] if "config" in eval_info["config"] else {}
-            )
-            template.criteria = eval_info["criteria"]
-            template.choices = eval_info["choices"]
-            template.multi_choice = eval_info["multi_choice"]
-        return eval_templates
-
     @lru_cache(maxsize=100)
     def _get_eval_info(self, eval_name: str) -> Dict[str, Any]:
         url = (
@@ -548,8 +708,8 @@ class Evaluator(APIKeyAuth):
         return response.json()
 
 
-evaluate = lambda eval_templates, inputs, timeout=None: Evaluator().evaluate(eval_templates, inputs, timeout)
-
+# Top-level convenience for the common "list everything" case.
+# The main ``evaluate()`` entrypoint is imported from ``fi.evals.core``.
 list_evaluations = lambda: Evaluator().list_evaluations()
 
 

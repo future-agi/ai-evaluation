@@ -122,6 +122,9 @@ class EvalResult(BaseModel):
     runtime: int = 0
     output_type: Optional[str] = None
     eval_id: Optional[str] = None
+    model: Optional[str] = None
+    error_localizer_enabled: Optional[bool] = None
+    error_localizer: Optional[Dict[str, Any]] = None
 
 
 class BatchRunResult(BaseModel):

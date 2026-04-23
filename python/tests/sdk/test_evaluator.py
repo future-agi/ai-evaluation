@@ -6,7 +6,6 @@ from fi.evals.evaluator import (
     Evaluator,
     EvalResponseHandler,
     EvalInfoResponseHandler,
-    evaluate,
     list_evaluations,
 )
 from fi.evals.types import BatchRunResult, EvalResult
@@ -402,21 +401,6 @@ class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""
 
     @patch('fi.evals.evaluator.Evaluator')
-    def test_evaluate_convenience(self, MockEvaluator):
-        """Test evaluate convenience function."""
-        mock_evaluator = Mock()
-        mock_evaluator.evaluate.return_value = BatchRunResult(eval_results=[])
-        MockEvaluator.return_value = mock_evaluator
-
-        result = evaluate(
-            eval_templates="groundedness",
-            inputs={"context": "test", "output": "test"},
-            timeout=100
-        )
-
-        mock_evaluator.evaluate.assert_called_once()
-
-    @patch('fi.evals.evaluator.Evaluator')
     def test_list_evaluations_convenience(self, MockEvaluator):
         """Test list_evaluations convenience function."""
         mock_evaluator = Mock()
@@ -426,46 +410,6 @@ class TestConvenienceFunctions:
         result = list_evaluations()
 
         mock_evaluator.list_evaluations.assert_called_once()
-
-
-class TestValidateInputs:
-    """Tests for input validation."""
-
-    def test_validate_inputs_shared_tags(self, evaluator):
-        """Test validation with shared evaluation tags."""
-        # Create mock eval objects with shared tags
-        eval1 = Mock()
-        eval1.eval_tags = ["RAG", "TEXT"]
-        eval1.validate_input = Mock()
-        eval1.name = "eval1"
-
-        eval2 = Mock()
-        eval2.eval_tags = ["RAG", "CUSTOM"]
-        eval2.validate_input = Mock()
-        eval2.name = "eval2"
-
-        result = evaluator._validate_inputs(
-            inputs=[{"context": "test", "output": "test"}],
-            eval_objects=[eval1, eval2]
-        )
-
-        assert result is True
-
-    def test_validate_inputs_no_shared_tags(self, evaluator):
-        """Test validation fails without shared tags."""
-        eval1 = Mock()
-        eval1.eval_tags = ["RAG"]
-        eval1.name = "eval1"
-
-        eval2 = Mock()
-        eval2.eval_tags = ["SAFETY"]
-        eval2.name = "eval2"
-
-        with pytest.raises(Exception, match="share at least one common tag"):
-            evaluator._validate_inputs(
-                inputs=[{"text": "test"}],
-                eval_objects=[eval1, eval2]
-            )
 
 
 class TestGetEvalInfo:

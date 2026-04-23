@@ -1,0 +1,143 @@
+name: dev→main gate
+
+# Runs only on pull requests that target `main` (typically from `dev` or
+# hotfix branches). Skipped on all other PRs — cuts CI spend by >90%.
+#
+# Tests run against production api (api.futureagi.com) — the endpoint
+# customers actually hit. If the SDK + prod combo doesn't work, main
+# shouldn't release. Requires FI_PROD_API_KEY + FI_PROD_SECRET_KEY
+# GitHub secrets.
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: dev-to-main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------
+  # Python contract tests — drift + parsing + mapping. <30s.
+  # --------------------------------------------------------------
+  contract-python:
+    name: Python contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --dev
+
+      - name: Run contract tests
+        working-directory: python
+        env:
+          FI_API_KEY: ${{ secrets.FI_PROD_API_KEY }}
+          FI_SECRET_KEY: ${{ secrets.FI_PROD_SECRET_KEY }}
+          FI_BASE_URL: https://api.futureagi.com
+        run: uv run pytest tests/contract/ -v --tb=short
+
+  # --------------------------------------------------------------
+  # TypeScript contract tests — same drift + mapping protections.
+  # --------------------------------------------------------------
+  contract-typescript:
+    name: TypeScript contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: typescript/ai-evaluation/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: typescript/ai-evaluation
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: typescript/ai-evaluation
+        run: pnpm typecheck
+
+      - name: Run contract tests
+        working-directory: typescript/ai-evaluation
+        run: pnpm jest src/__tests__/contract --no-coverage
+
+  # --------------------------------------------------------------
+  # Tier 4 — release scenarios. Hits the live api. Gates the merge.
+  # --------------------------------------------------------------
+  release:
+    name: Release scenarios (live api)
+    runs-on: ubuntu-latest
+    needs: [contract-python, contract-typescript]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        working-directory: python
+        run: uv sync --dev
+
+      - name: Run release scenarios
+        working-directory: python
+        env:
+          FI_API_KEY: ${{ secrets.FI_PROD_API_KEY }}
+          FI_SECRET_KEY: ${{ secrets.FI_PROD_SECRET_KEY }}
+          FI_BASE_URL: https://api.futureagi.com
+        run: uv run pytest tests/release/ -v --tb=short --maxfail=3
+
+  # --------------------------------------------------------------
+  # Result aggregation — branch protection rule checks this name.
+  # --------------------------------------------------------------
+  gate:
+    name: dev→main gate passed
+    runs-on: ubuntu-latest
+    needs: [contract-python, contract-typescript, release]
+    if: always()
+    steps:
+      - name: Verify all jobs succeeded
+        env:
+          CONTRACT_PY: ${{ needs.contract-python.result }}
+          CONTRACT_TS: ${{ needs.contract-typescript.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          if [ "$CONTRACT_PY" != "success" ]; then
+            echo "::error::Python contract tests failed"
+            exit 1
+          fi
+          if [ "$CONTRACT_TS" != "success" ]; then
+            echo "::error::TypeScript contract tests failed"
+            exit 1
+          fi
+          if [ "$RELEASE_RESULT" != "success" ]; then
+            echo "::error::release scenario tests failed"
+            exit 1
+          fi
+          echo "All gate jobs passed."
