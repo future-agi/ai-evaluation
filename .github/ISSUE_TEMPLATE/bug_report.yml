@@ -1,0 +1,65 @@
+name: Bug report
+description: Something is broken in a Python or TypeScript SDK package.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check [open issues](https://github.com/future-agi/ai-evaluation/issues) and [Discussions](https://github.com/orgs/future-agi/discussions) — your question may already be answered.
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Affected package
+      options:
+        - ai-evaluation (Python)
+        - "@future-agi/ai-evaluation (TypeScript)"
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "e.g. ai-evaluation==1.1.0 or @future-agi/ai-evaluation@1.0.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The shortest self-contained code that shows the problem. Remove any real API keys.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output / stack trace
+      render: shell
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Python version, Node version, OS, gateway version or cloud vs self-hosted.
+      placeholder: |
+        Python 3.11.9 / Node 20.12.0
+        macOS 14.4 / Ubuntu 22.04
+        Gateway: Future AGI Cloud (gateway.futureagi.com) / self-hosted v0.9.1
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
