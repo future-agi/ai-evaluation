@@ -2,7 +2,9 @@ name: release
 
 # Continuous deployment: publishes Python (PyPI) and TypeScript (npm)
 # packages when their version in the source is higher than the latest
-# published version.
+# published version. Uses Trusted Publishing (OIDC) — no long-lived
+# tokens. Short-lived credentials minted per workflow run; provenance
+# metadata attached to both registries automatically.
 #
 # Intended flow:
 #   1. Open PR from feature → dev (no CI — normal PR).
@@ -13,10 +15,22 @@ name: release
 #
 # If you merge to main without bumping versions, the publish jobs no-op.
 #
-# Required secrets:
-#   PYPI_API_TOKEN   — PyPI token scoped to the `ai-evaluation` project
-#   NPM_TOKEN        — npm token with publish rights on @future-agi/ai-evaluation
-#   GITHUB_TOKEN     — provided by Actions (no setup needed)
+# One-time setup (no token secrets — OIDC trusted publishing):
+#   PyPI:
+#     https://pypi.org/manage/project/ai-evaluation/settings/publishing/
+#     Add trusted publisher → owner=future-agi, repo=ai-evaluation,
+#     workflow=release.yml, environment=pypi
+#   npm:
+#     https://www.npmjs.com/package/@future-agi/ai-evaluation → Settings
+#     → Add trusted publisher (GitHub Actions) with matching values,
+#     environment=npm
+#   GitHub:
+#     Repo → Settings → Environments → create "pypi" and "npm"
+#     (optional: add required-reviewers for a manual publish gate).
+#
+# Still needed as secrets:
+#   FI_PROD_API_KEY / FI_PROD_SECRET_KEY — prod api creds for contract tests
+#   GITHUB_TOKEN — provided by Actions automatically
 
 on:
   push:
@@ -35,8 +49,10 @@ jobs:
     name: Publish Python to PyPI
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: pypi  # trusted-publisher binds to this environment name
     permissions:
-      contents: write  # for tagging + releases
+      contents: write   # tagging + GitHub Release
+      id-token: write   # OIDC token for PyPI trusted publishing
     outputs:
       published: ${{ steps.compare.outputs.should_publish }}
       version: ${{ steps.compare.outputs.local_version }}
@@ -98,12 +114,11 @@ jobs:
         working-directory: python
         run: uv build
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI (trusted publishing via OIDC)
         if: steps.compare.outputs.should_publish == 'yes'
-        working-directory: python
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: uv publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist/
 
       - name: Tag release
         if: steps.compare.outputs.should_publish == 'yes'
@@ -136,8 +151,10 @@ jobs:
     name: Publish TypeScript to npm
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: npm  # trusted-publisher binds to this environment name
     permissions:
-      contents: write
+      contents: write   # tagging + GitHub Release
+      id-token: write   # OIDC token for npm trusted publishing + provenance
     outputs:
       published: ${{ steps.compare.outputs.should_publish }}
       version: ${{ steps.compare.outputs.local_version }}
@@ -203,12 +220,10 @@ jobs:
         working-directory: typescript/ai-evaluation
         run: pnpm build
 
-      - name: Publish to npm
+      - name: Publish to npm (trusted publishing via OIDC + provenance)
         if: steps.compare.outputs.should_publish == 'yes'
         working-directory: typescript/ai-evaluation
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --access public --no-git-checks
+        run: pnpm publish --access public --provenance --no-git-checks
 
       - name: Tag release
         if: steps.compare.outputs.should_publish == 'yes'
