@@ -1,0 +1,248 @@
+name: release
+
+# Continuous deployment: publishes Python (PyPI) and TypeScript (npm)
+# packages when their version in the source is higher than the latest
+# published version.
+#
+# Intended flow:
+#   1. Open PR from feature → dev (no CI — normal PR).
+#   2. Open PR dev → main (dev-to-main.yml gate runs against prod api).
+#   3. Merge to main. This workflow fires.
+#   4. For each language: compare local version → registry, publish if higher.
+#   5. Tag and create GitHub Release on publish.
+#
+# If you merge to main without bumping versions, the publish jobs no-op.
+#
+# Required secrets:
+#   PYPI_API_TOKEN   — PyPI token scoped to the `ai-evaluation` project
+#   NPM_TOKEN        — npm token with publish rights on @future-agi/ai-evaluation
+#   GITHUB_TOKEN     — provided by Actions (no setup needed)
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a publish mid-flight
+
+jobs:
+  # ------------------------------------------------------------------
+  # Python: build + publish to PyPI if version bumped
+  # ------------------------------------------------------------------
+  publish-python:
+    name: Publish Python to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write  # for tagging + releases
+    outputs:
+      published: ${{ steps.compare.outputs.should_publish }}
+      version: ${{ steps.compare.outputs.local_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Read local version
+        id: compare
+        working-directory: python
+        run: |
+          LOCAL=$(grep '^version' pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "local_version=$LOCAL" >> $GITHUB_OUTPUT
+          echo "Local version: $LOCAL"
+
+          # Latest on PyPI (missing → empty)
+          REMOTE=$(curl -s https://pypi.org/pypi/ai-evaluation/json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('info',{}).get('version',''))" 2>/dev/null || echo "")
+          echo "PyPI version: ${REMOTE:-<none>}"
+
+          if [ -z "$REMOTE" ] || [ "$LOCAL" != "$REMOTE" ]; then
+            # Semver newer check — publish if strictly higher
+            HIGHER=$(python3 -c "
+          from packaging.version import Version
+          try:
+              print('yes' if Version('$LOCAL') > Version('${REMOTE:-0.0.0}') else 'no')
+          except Exception:
+              print('no')
+          ")
+            echo "should_publish=$HIGHER" >> $GITHUB_OUTPUT
+          else
+            echo "should_publish=no" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: python
+        run: uv sync --dev
+
+      - name: Smoke-run contract tests
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: python
+        env:
+          FI_API_KEY: ${{ secrets.FI_PROD_API_KEY }}
+          FI_SECRET_KEY: ${{ secrets.FI_PROD_SECRET_KEY }}
+          FI_BASE_URL: https://api.futureagi.com
+        run: uv run pytest tests/contract/ -q
+
+      - name: Build distribution
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: python
+        run: uv build
+
+      - name: Publish to PyPI
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: python
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish
+
+      - name: Tag release
+        if: steps.compare.outputs.should_publish == 'yes'
+        env:
+          VERSION: ${{ steps.compare.outputs.local_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="py-v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: steps.compare.outputs.should_publish == 'yes'
+        env:
+          VERSION: ${{ steps.compare.outputs.local_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="py-v$VERSION"
+          gh release create "$TAG" \
+            --title "ai-evaluation (Python) $VERSION" \
+            --notes "Python SDK release. See CHANGELOG.md for full notes." \
+            python/dist/*
+
+  # ------------------------------------------------------------------
+  # TypeScript: build + publish to npm if version bumped
+  # ------------------------------------------------------------------
+  publish-typescript:
+    name: Publish TypeScript to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.compare.outputs.should_publish }}
+      version: ${{ steps.compare.outputs.local_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: typescript/ai-evaluation/pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - name: Read local version
+        id: compare
+        working-directory: typescript/ai-evaluation
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          echo "local_version=$LOCAL" >> $GITHUB_OUTPUT
+          echo "Local version: $LOCAL"
+
+          REMOTE=$(npm view @future-agi/ai-evaluation version 2>/dev/null || echo "")
+          echo "npm version: ${REMOTE:-<none>}"
+
+          if [ "$LOCAL" != "$REMOTE" ]; then
+            # semver comparison via node
+            HIGHER=$(node -e "
+              const local = '$LOCAL'.split('.').map(Number);
+              const remote = ('${REMOTE:-0.0.0}').split('.').map(Number);
+              for (let i = 0; i < 3; i++) {
+                if (local[i] > remote[i]) { console.log('yes'); process.exit(0); }
+                if (local[i] < remote[i]) { console.log('no'); process.exit(0); }
+              }
+              console.log('no');
+            ")
+            echo "should_publish=$HIGHER" >> $GITHUB_OUTPUT
+          else
+            echo "should_publish=no" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: typescript/ai-evaluation
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck + contract tests
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: typescript/ai-evaluation
+        run: |
+          pnpm typecheck
+          pnpm jest src/__tests__/contract --no-coverage
+
+      - name: Build
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: typescript/ai-evaluation
+        run: pnpm build
+
+      - name: Publish to npm
+        if: steps.compare.outputs.should_publish == 'yes'
+        working-directory: typescript/ai-evaluation
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --access public --no-git-checks
+
+      - name: Tag release
+        if: steps.compare.outputs.should_publish == 'yes'
+        env:
+          VERSION: ${{ steps.compare.outputs.local_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="ts-v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: steps.compare.outputs.should_publish == 'yes'
+        env:
+          VERSION: ${{ steps.compare.outputs.local_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="ts-v$VERSION"
+          gh release create "$TAG" \
+            --title "@future-agi/ai-evaluation (TypeScript) $VERSION" \
+            --notes "TypeScript SDK release. See CHANGELOG.md for full notes."
+
+  # ------------------------------------------------------------------
+  # Summary — tells you at a glance whether anything shipped
+  # ------------------------------------------------------------------
+  summary:
+    name: Release summary
+    runs-on: ubuntu-latest
+    needs: [publish-python, publish-typescript]
+    if: always()
+    steps:
+      - name: Report
+        run: |
+          echo "Python: ${{ needs.publish-python.outputs.published }} (v${{ needs.publish-python.outputs.version }})"
+          echo "TypeScript: ${{ needs.publish-typescript.outputs.published }} (v${{ needs.publish-typescript.outputs.version }})"

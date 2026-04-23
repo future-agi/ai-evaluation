@@ -1,15 +1,19 @@
 [project]
 name = "ai-evaluation"
-version = "1.0.2"
+version = "1.1.0"
 description = "We help GenAI teams maintain high-accuracy for their Models in production."
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10"
 authors = [{name = "Future AGI", email = "no-reply@futureagi.com"}]
 
 dependencies = [
-    "futureagi>=0.6.7",
     "jsonschema>=4.25.1,<5",
     "requests>=2.32.5,<3",
+    "requests-futures>=1.0.0",
+    "pydantic>=2.0,<3",
+    "levenshtein>=0.25.0",
+    "nltk>=3.9.0",
+    "rouge-score>=0.1.2",
     "litellm>=1.77.4,<2",
     "openai>=1.109.1,<2",
     "typer>=0.9.0,<1.0.0",

@@ -117,8 +117,8 @@ interface EvalResultMetric {
  * ```
  */
 interface EvalResult {
-  /** Name of the evaluation metric */
-  name: string;
+  /** Name of the evaluation metric (optional for backwards compat with v1 responses) */
+  name?: string;
   /** Evaluation output (typically a score 0-1, boolean, or structured data) */
   output?: any;
   /** Human-readable explanation of the evaluation result */
@@ -129,9 +129,15 @@ interface EvalResult {
   output_type?: string;
   /** Unique identifier for async evaluations */
   eval_id?: string;
-  /** @deprecated Legacy field - additional evaluation data */
+  /** Model used by the eval (populated by the revamped v2 backend) */
+  model?: string;
+  /** Whether error localization was enabled for this run */
+  error_localizer_enabled?: boolean;
+  /** Error localization analysis dict (present when enabled and available) */
+  error_localizer?: Record<string, any> | null;
+  /** @deprecated Legacy field returned by the v1 `/sdk/api/v1/eval/` path. */
   data?: Record<string, any> | any[];
-  /** @deprecated Legacy field - whether the evaluation failed */
+  /** @deprecated Legacy field returned by the v1 `/sdk/api/v1/eval/` path. */
   failure?: boolean;
   /** Additional metadata (usage stats, cost, explanation) */
   metadata?: string | any[] | Record<string, any>;
@@ -441,6 +447,10 @@ interface JudgeResult {
   /** Raw LLM response before parsing (for debugging) */
   raw_response?: string;
 }
+
+// Re-export EvalTemplate from templates.ts so existing tests importing it
+// from this module continue to resolve.
+export type { EvalTemplate } from './templates';
 
 export {
     ConfigParam,
