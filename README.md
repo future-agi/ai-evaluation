@@ -4,12 +4,15 @@
 
 # AI-Evaluation SDK
 
-**Assess, Guard, and Monitor Your LLM Applications**
-Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com) | [Platform](https://app.futureagi.com)
+**Your LLM passed every eval. Then it hallucinated in production.**
+
+72 local metrics, guardrail scanners, streaming assessment, and cloud scoring — one `evaluate()` call.
+
+[Docs](https://docs.futureagi.com) · [Platform](https://app.futureagi.com) · [Cookbooks](https://docs.futureagi.com/cookbook) · [Discord](https://discord.gg/UjZ2gRT5p)
 
 [![PyPI version](https://badge.fury.io/py/ai-evaluation.svg)](https://badge.fury.io/py/ai-evaluation)
 [![npm version](https://badge.fury.io/js/%40future-agi%2Fai-evaluation.svg)](https://badge.fury.io/js/%40future-agi%2Fai-evaluation)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 
@@ -23,9 +26,9 @@ Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com
 
 ---
 
-## What's New in 1.0
+## What's New in 1.1
 
-- **Unified `evaluate()` API** — one function, 50+ metrics, local or cloud
+- **Unified `evaluate()` API** — one function, 72 local metrics, local or cloud
 - **LLM-as-Judge** — augment local heuristics with Gemini/GPT/Claude via `augment=True`
 - **Guardrail Scanners** — jailbreak, code injection, PII, secrets detection in <10ms
 - **Streaming Assessment** — monitor token-by-token, early-stop on safety violations
@@ -40,14 +43,14 @@ Built by [Future AGI](https://futureagi.com) | [Docs](https://docs.futureagi.com
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Local Metrics](#local-metrics)
-- [LLM-as-Judge](#llm-as-judge)
-- [Guardrails](#guardrails)
-- [Streaming Assessment](#streaming-assessment)
-- [AutoEval Pipelines](#autoeval-pipelines)
-- [Feedback Loop](#feedback-loop)
-- [OpenTelemetry](#opentelemetry)
-- [Cloud Assessment (Turing)](#cloud-assessment-turing)
+- [Local Metrics](#local-metrics--72-metrics-zero-network-calls)
+- [LLM-as-Judge](#llm-as-judge--when-heuristics-arent-enough)
+- [Guardrails](#guardrails--block-attacks-in-10ms)
+- [Streaming Assessment](#streaming-assessment--cut-the-stream-before-damage-is-done)
+- [AutoEval Pipelines](#autoeval-pipelines--describe-your-app-get-a-test-pipeline)
+- [Feedback Loop](#feedback-loop--teach-your-judge-from-mistakes)
+- [OpenTelemetry](#opentelemetry--quality-scores-on-every-trace)
+- [Cloud Assessment](#cloud-assessment--zero-setup-production-scoring)
 - [Cookbooks](#cookbooks)
 - [TypeScript SDK](#typescript-sdk)
 - [Integrations](#integrations)
@@ -114,9 +117,9 @@ for r in batch:
 
 ---
 
-## Local Metrics
+## Local Metrics — 72 metrics, zero network calls
 
-50+ metrics that run entirely on your machine — no API keys, no network calls.
+Run entirely on your machine. No API keys, no latency, no data leaving your box. See the full list with `fi list templates`.
 
 | Category | Metrics |
 |----------|---------|
@@ -146,9 +149,9 @@ result = evaluate("function_call_accuracy",
 
 ---
 
-## LLM-as-Judge
+## LLM-as-Judge — when heuristics aren't enough
 
-When heuristics miss paraphrases or domain nuances, augment with an LLM.
+Heuristics miss paraphrases. "Twice daily" ≠ "2x per day" to a string matcher. Augment with an LLM that gets it.
 
 ```python
 # augment=True: local first, then LLM refines
@@ -174,9 +177,9 @@ Supports any model via LiteLLM: `gemini/*`, `gpt-*`, `claude-*`, `ollama/*`.
 
 ---
 
-## Guardrails
+## Guardrails — block attacks in <10ms
 
-Block attacks in <10ms, zero API calls.
+Zero API calls. Zero dependencies. Runs inline in your request path.
 
 ```python
 from fi.evals.guardrails.scanners import (
@@ -208,16 +211,15 @@ result = gateway.screen("user message")
 
 ---
 
-## Streaming Assessment
+## Streaming Assessment — cut the stream before damage is done
 
-Monitor LLM output token-by-token. Cut the stream the instant it turns toxic.
+Monitor LLM output token-by-token. Stop generation the instant a safety threshold is crossed.
 
 ```python
-from fi.evals import StreamingEvaluator, EarlyStopPolicy
+from fi.evals import StreamingEvaluator
 
+# for_safety() pre-configures thresholds and a strict early-stop policy
 scorer = StreamingEvaluator.for_safety(toxicity_threshold=0.3)
-scorer.add_eval("toxicity", my_toxicity_fn, threshold=0.2, pass_above=False)
-scorer.set_policy(EarlyStopPolicy.strict())
 
 for token in llm_stream:
     result = scorer.process_token(token)
@@ -231,9 +233,9 @@ print(final.early_stopped, final.final_scores)
 
 ---
 
-## AutoEval Pipelines
+## AutoEval Pipelines — describe your app, get a test pipeline
 
-Describe your app, get a test pipeline.
+Stop hand-picking metrics. Describe what your agent does, and get an eval pipeline configured for your use case.
 
 ```python
 from fi.evals.autoeval.pipeline import AutoEvalPipeline
@@ -261,9 +263,9 @@ pipeline.export_yaml("eval_config.yaml")
 
 ---
 
-## Feedback Loop
+## Feedback Loop — teach your judge from mistakes
 
-When the LLM judge gets cases wrong, teach it from your corrections.
+LLM judges get cases wrong. Store corrections in ChromaDB, and they come back as few-shot examples on the next run.
 
 ```python
 from fi.evals import evaluate
@@ -295,9 +297,9 @@ print(result.metadata["feedback_examples_used"])  # 3
 
 ---
 
-## OpenTelemetry
+## OpenTelemetry — quality scores on every trace
 
-Attach quality scores to your traces. Search for bad responses in Jaeger/Datadog.
+Attach eval scores to your spans. Search for bad responses in Jaeger, Datadog, or Grafana — filter by `faithfulness < 0.5` instead of eyeballing logs.
 
 ```python
 from fi.evals.otel import setup_tracing, trace_llm_call, enable_auto_enrichment
@@ -317,9 +319,9 @@ Exporters: Console, OTLP (gRPC/HTTP), Jaeger, Zipkin, Arize, Phoenix, Langfuse, 
 
 ---
 
-## Cloud Assessment (Turing)
+## Cloud Assessment — zero-setup production scoring
 
-Use Future AGI's hosted models for zero-setup production scoring.
+Use Future AGI's hosted models when you need scoring without managing infrastructure.
 
 ```python
 from fi.evals import evaluate, Turing
@@ -339,7 +341,7 @@ evaluator = Evaluator(
 )
 result = evaluator.evaluate(
     eval_templates="groundedness",
-    inputs={"context": "...", "output": "..."},
+    inputs={"input": "...", "context": "...", "output": "..."},
     model_name="turing_flash",
 )
 ```
@@ -381,8 +383,8 @@ npm install @future-agi/ai-evaluation
 import { Evaluator } from "@future-agi/ai-evaluation";
 
 const evaluator = new Evaluator({
-  apiKey: "your_api_key",
-  secretKey: "your_secret_key",
+  fiApiKey: "your_api_key",
+  fiSecretKey: "your_secret_key",
 });
 
 const result = await evaluator.evaluate(
@@ -414,8 +416,7 @@ const result = await evaluator.evaluate(
     FI_SECRET_KEY: ${{ secrets.FI_SECRET_KEY }}
   run: |
     pip install ai-evaluation
-    ai-eval run eval-config.yaml --output results.json
-    ai-eval check-thresholds results.json
+    fi run eval-config.yaml --output results.json
 ```
 
 Or use AutoEval YAML configs:
@@ -430,7 +431,7 @@ assert result.passed
 
 ## Platform Features
 
-Future AGI delivers a complete lifecycle for quality assurance:
+This SDK is one piece of the [Future AGI platform](https://futureagi.com). Here's what else plugs in:
 
 | Stage | What You Can Do |
 |-------|----------------|
@@ -449,7 +450,7 @@ Future AGI delivers a complete lifecycle for quality assurance:
 
 ## Roadmap
 
-- [x] Unified `evaluate()` API with 50+ local metrics
+- [x] Unified `evaluate()` API with 72 local metrics
 - [x] LLM-as-Judge augmentation (Gemini, GPT, Claude, Ollama)
 - [x] Guardrail scanner pipeline (<10ms, zero-dep)
 - [x] Streaming with early stopping
@@ -457,7 +458,7 @@ Future AGI delivers a complete lifecycle for quality assurance:
 - [x] Feedback loop with ChromaDB semantic retrieval
 - [x] OpenTelemetry tracing with auto-enrichment
 - [x] Distributed backends (Celery, Ray, Temporal, K8s)
-- [x] Cloud templates (Turing)
+- [x] Cloud evaluation templates
 - [ ] FutureAGI Gateway integration (unified API gateway for all LLM providers)
 - [ ] Native CI/CD pipelines (Jenkins, GitLab CI, CircleCI plugins)
 - [ ] Session-level multi-turn tracing
@@ -469,14 +470,12 @@ Future AGI delivers a complete lifecycle for quality assurance:
 
 ## Contributing
 
-We welcome contributions! Whether it's bug reports, feature requests, or code improvements.
+We love contributions — bug fixes, new metrics, guardrail scanners, docs, cookbooks, anything.
 
-- Report bugs — [Open an issue](https://github.com/future-agi/ai-evaluation/issues)
-- Suggest features — Share your ideas
-- Improve docs — Fix typos, add examples
-- Submit code — Fork, create branch, submit PR
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+1. [Browse `good first issue`](https://github.com/future-agi/ai-evaluation/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+2. Read the [Contributing Guide](CONTRIBUTING.md)
+3. Say hi on [Discord](https://discord.gg/UjZ2gRT5p) or [Discussions](https://github.com/future-agi/ai-evaluation/discussions)
+4. Sign the CLA on your first PR (automatic bot)
 
 ---
 
@@ -487,3 +486,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 - [Future AGI Models](https://docs.futureagi.com/future-agi/get-started/evaluation/future-agi-models)
 - [Cookbooks](https://docs.futureagi.com/cookbook/cookbook1/AI-Evaluation-for-Meeting-Summarization)
 - [CI/CD Pipeline](https://docs.futureagi.com/future-agi/get-started/evaluation/evaluate-ci-cd-pipeline)
+
+---
+
+<div align="center">
+
+**Built with ❤️ by the [Future AGI team](https://www.futureagi.com) and [contributors](https://github.com/future-agi/ai-evaluation/graphs/contributors).**
+
+If this SDK helps you ship better AI, a ⭐ helps more teams find it.
+
+[🌐 futureagi.com](https://futureagi.com) · [📖 docs.futureagi.com](https://docs.futureagi.com) · [☁️ app.futureagi.com](https://app.futureagi.com)
+
+</div>

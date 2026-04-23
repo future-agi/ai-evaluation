@@ -82,14 +82,16 @@ jobs:
           echo "PyPI version: ${REMOTE:-<none>}"
 
           if [ -z "$REMOTE" ] || [ "$LOCAL" != "$REMOTE" ]; then
-            # Semver newer check — publish if strictly higher
-            HIGHER=$(python3 -c "
+            # Semver newer check — publish if strictly higher.
+            # `packaging` isn't stdlib; fetch it on-demand via uv (already installed).
+            HIGHER=$(LOCAL="$LOCAL" REMOTE="${REMOTE:-0.0.0}" uv run --with packaging --no-project python3 -c '
+          import os
           from packaging.version import Version
           try:
-              print('yes' if Version('$LOCAL') > Version('${REMOTE:-0.0.0}') else 'no')
+              print("yes" if Version(os.environ["LOCAL"]) > Version(os.environ["REMOTE"]) else "no")
           except Exception:
-              print('no')
-          ")
+              print("no")
+          ')
             echo "should_publish=$HIGHER" >> $GITHUB_OUTPUT
           else
             echo "should_publish=no" >> $GITHUB_OUTPUT
@@ -173,7 +175,7 @@ jobs:
         with:
           node-version: "20"
           cache: "pnpm"
-          cache-dependency-path: typescript/ai-evaluation/pnpm-lock.yaml
+          cache-dependency-path: typescript/pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
 
       - name: Read local version
