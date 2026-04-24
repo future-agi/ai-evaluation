@@ -7,7 +7,6 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@future-agi/sdk": "workspace:*",
     "@future-agi/ai-evaluation": "workspace:*",
     "uuid": "^11.1.0"
   },
