@@ -121,6 +121,13 @@ streaming_names = [
     "StreamingState",
 ]
 
+# A2A exports
+a2a_names = [
+    "A2A_TASK_COMPLETION",
+    "A2A_RESPONSE_ALIGNMENT",
+    "A2A_SAFETY_PASS_THROUGH"
+]
+
 __all__ = sorted(
     new_api_names
     + execution_names
@@ -128,4 +135,5 @@ __all__ = sorted(
     + client_names
     + framework_names
     + streaming_names
+    + a2a_names
 )
