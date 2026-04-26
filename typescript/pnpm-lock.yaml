@@ -42,6 +42,9 @@ importers:
         specifier: ^3.22.0
         version: 3.25.76
     devDependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@types/jest':
         specifier: ^29.5.0
         version: 29.5.14

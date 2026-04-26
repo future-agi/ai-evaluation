@@ -86,7 +86,16 @@
     "ts-jest": "^29.1.0",
     "tsc-alias": "^1.8.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@traceai/fi-core": "^0.1.16",
