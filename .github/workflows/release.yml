@@ -222,10 +222,14 @@ jobs:
         working-directory: typescript/ai-evaluation
         run: pnpm build
 
+      - name: Ensure npm >= 11.5.1 (OIDC trusted publishing)
+        if: steps.compare.outputs.should_publish == 'yes'
+        run: npm install -g npm@latest
+
       - name: Publish to npm (trusted publishing via OIDC + provenance)
         if: steps.compare.outputs.should_publish == 'yes'
         working-directory: typescript/ai-evaluation
-        run: pnpm publish --access public --provenance --no-git-checks
+        run: npm publish --access public --provenance
 
       - name: Tag release
         if: steps.compare.outputs.should_publish == 'yes'
