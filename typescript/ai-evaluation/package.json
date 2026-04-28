@@ -61,12 +61,12 @@
   "author": "Future AGI <no-reply@futureagi.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/futureagi/ai-evaluation.git"
+    "url": "git+https://github.com/future-agi/ai-evaluation.git"
   },
   "bugs": {
-    "url": "https://github.com/futureagi/ai-evaluation/issues"
+    "url": "https://github.com/future-agi/ai-evaluation/issues"
   },
-  "homepage": "https://github.com/futureagi/ai-evaluation#readme",
+  "homepage": "https://github.com/future-agi/ai-evaluation#readme",
   "engines": {
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"
