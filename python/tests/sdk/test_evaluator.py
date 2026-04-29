@@ -1,5 +1,8 @@
 """Comprehensive tests for fi.evals.evaluator module."""
 
+import gc
+import weakref
+
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from fi.evals.evaluator import (
@@ -451,6 +454,47 @@ class TestGetEvalInfo:
 
         # Should only make one request due to caching
         assert mock_request.call_count == 1
+
+    @patch.object(Evaluator, 'request')
+    def test_get_eval_info_no_memory_leak_after_gc(self, mock_request, mock_api_keys):
+        """Regression test: cache must not retain a strong reference to the
+        Evaluator instance. With @lru_cache on the bound method, the cache
+        held `self` as part of the cache key, preventing GC of the instance
+        in long-running processes."""
+        mock_request.return_value = [
+            {"name": "groundedness", "eval_id": "47"}
+        ]
+
+        evaluator = Evaluator()
+        evaluator._get_eval_info("groundedness")  # populate cache
+        ref = weakref.ref(evaluator)
+
+        del evaluator
+        gc.collect()
+
+        assert ref() is None, (
+            "Evaluator was not garbage-collected after deletion — "
+            "cache is likely retaining a strong reference (regression of "
+            "@lru_cache-on-bound-method memory leak)."
+        )
+
+    @patch.object(Evaluator, 'request')
+    def test_get_eval_info_cache_isolated_per_instance(self, mock_request, mock_api_keys):
+        """Two Evaluator instances must not share a cache. Each call on a
+        fresh instance should hit the underlying request, even for the same
+        eval_name."""
+        mock_request.return_value = [
+            {"name": "groundedness", "eval_id": "47"}
+        ]
+
+        evaluator_a = Evaluator()
+        evaluator_b = Evaluator()
+
+        evaluator_a._get_eval_info("groundedness")
+        evaluator_b._get_eval_info("groundedness")
+
+        # Each instance fetches independently.
+        assert mock_request.call_count == 2
 
 
 class TestConfigureEvaluations:
