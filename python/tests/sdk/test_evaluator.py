@@ -141,6 +141,46 @@ class TestEvaluate:
 
         assert result is not None
 
+    @patch.object(Evaluator, 'request')
+    def test_evaluate_a2a_task_completion(self, mock_request, evaluator):
+        """Test evaluate with A2ATaskCompletion."""
+        mock_request.return_value = BatchRunResult(eval_results=[
+            EvalResult(name="a2a_task_completion", output=1.0)
+        ])
+        result = evaluator.evaluate(
+            eval_templates="a2a_task_completion",
+            inputs={"output": "success", "expected_output": "success", "task_description": "test"},
+            model_name="turing_flash"
+        )
+        assert result is not None
+        assert result.eval_results[0].name == "a2a_task_completion"
+
+    @patch.object(Evaluator, 'request')
+    def test_evaluate_a2a_response_alignment(self, mock_request, evaluator):
+        """Test evaluate with A2AResponseAlignment."""
+        mock_request.return_value = BatchRunResult(eval_results=[
+            EvalResult(name="a2a_response_alignment", output=0.9)
+        ])
+        result = evaluator.evaluate(
+            eval_templates="a2a_response_alignment",
+            inputs={"input": "test request", "output": "test response", "context": "test context"},
+            model_name="turing_flash"
+        )
+        assert result is not None
+
+    @patch.object(Evaluator, 'request')
+    def test_evaluate_a2a_safety_pass_through(self, mock_request, evaluator):
+        """Test evaluate with A2ASafetyPassThrough."""
+        mock_request.return_value = BatchRunResult(eval_results=[
+            EvalResult(name="a2a_safety_pass_through", output="SAFE")
+        ])
+        result = evaluator.evaluate(
+            eval_templates="a2a_safety_pass_through",
+            inputs={"input": "test input", "output": "test output"},
+            model_name="turing_flash"
+        )
+        assert result is not None
+
     def test_evaluate_invalid_template_type(self, evaluator):
         """Test evaluate with invalid template type."""
         with pytest.raises(TypeError):

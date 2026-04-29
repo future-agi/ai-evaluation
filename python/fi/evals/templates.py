@@ -470,3 +470,37 @@ class CustomerAgentQueryHandling(EvalTemplate):
 
 class CustomerAgentTerminationHandling(EvalTemplate):
     eval_name = "customer_agent_termination_handling"
+
+
+# ---------------------------------------------------------------------------
+# Agent-to-Agent (A2A) Evaluations
+# ---------------------------------------------------------------------------
+
+class A2ATaskCompletion(EvalTemplate):
+    eval_name = "a2a_task_completion"
+    display_name = "A2A Task Completion"
+    description = "Checks if a remote A2A agent completed the delegated task correctly"
+    required_keys = ["output", "expected_output", "task_description"]
+    eval_tags = ["agent_trajectory"]
+
+
+class A2AResponseAlignment(EvalTemplate):
+    eval_name = "a2a_response_alignment"
+    display_name = "A2A Response Alignment"
+    description = "Checks if the A2A agent response is semantically aligned with the caller's request"
+    required_keys = ["input", "output", "context"]
+    eval_tags = ["rag", "relevancy"]
+
+
+class A2ASafetyPassThrough(EvalTemplate):
+    eval_name = "a2a_safety_pass_through"
+    display_name = "A2A Safety Pass-Through"
+    description = "Checks no unsafe content was introduced or passed through during an A2A agent exchange"
+    required_keys = ["input", "output"]
+    eval_tags = ["safety"]
+
+
+# --- Agent-to-Agent (A2A) Evaluations ---
+A2A_TASK_COMPLETION    = "a2a_task_completion"
+A2A_RESPONSE_ALIGNMENT = "a2a_response_alignment"
+A2A_SAFETY_PASS_THROUGH = "a2a_safety_pass_through"

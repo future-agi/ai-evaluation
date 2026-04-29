@@ -55,6 +55,12 @@ from fi.evals.templates import (
     TaskCompletion,
     CaptionHallucination,
     BleuScore,
+    A2ATaskCompletion,
+    A2AResponseAlignment,
+    A2ASafetyPassThrough,
+    A2A_TASK_COMPLETION,
+    A2A_RESPONSE_ALIGNMENT,
+    A2A_SAFETY_PASS_THROUGH,
 )
 
 
@@ -443,6 +449,41 @@ class TestOtherTemplates:
         template = BleuScore()
         assert template.eval_name == "bleu_score"
         assert template.eval_id == "101"
+
+
+class TestA2ATemplates:
+    """Tests for A2A-related templates and constants."""
+
+    def test_a2a_task_completion(self):
+        """Test A2ATaskCompletion template."""
+        template = A2ATaskCompletion()
+        assert template.eval_name == "a2a_task_completion"
+        assert A2A_TASK_COMPLETION == "a2a_task_completion"
+
+    def test_a2a_response_alignment(self):
+        """Test A2AResponseAlignment template."""
+        template = A2AResponseAlignment()
+        assert template.eval_name == "a2a_response_alignment"
+        assert A2A_RESPONSE_ALIGNMENT == "a2a_response_alignment"
+
+    def test_a2a_safety_pass_through(self):
+        """Test A2ASafetyPassThrough template."""
+        template = A2ASafetyPassThrough()
+        assert template.eval_name == "a2a_safety_pass_through"
+        assert A2A_SAFETY_PASS_THROUGH == "a2a_safety_pass_through"
+
+    def test_a2a_public_api_exports(self):
+        """Test that A2A names are accessible via public API."""
+        import fi.evals as evals
+        assert "A2A_TASK_COMPLETION" in dir(evals)
+        assert evals.A2A_TASK_COMPLETION == "a2a_task_completion"
+        assert "A2A_RESPONSE_ALIGNMENT" in dir(evals)
+        assert evals.A2A_RESPONSE_ALIGNMENT == "a2a_response_alignment"
+        assert "A2A_SAFETY_PASS_THROUGH" in dir(evals)
+        assert evals.A2A_SAFETY_PASS_THROUGH == "a2a_safety_pass_through"
+        assert "A2ATaskCompletion" in dir(evals)
+        assert "A2AResponseAlignment" in dir(evals)
+        assert "A2ASafetyPassThrough" in dir(evals)
 
 
 class TestTemplateWithConfig:
