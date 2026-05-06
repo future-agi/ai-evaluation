@@ -2,7 +2,6 @@ import inspect
 import json
 import logging
 import os
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from requests import Response
@@ -160,6 +159,14 @@ class Evaluator(APIKeyAuth):
         self.langfuse_secret_key = kwargs.get("langfuse_secret_key") or os.getenv("LANGFUSE_SECRET_KEY")
         self.langfuse_public_key = kwargs.get("langfuse_public_key") or os.getenv("LANGFUSE_PUBLIC_KEY")
         self.langfuse_host = kwargs.get("langfuse_host") or os.getenv("LANGFUSE_HOST")
+
+        # Instance-level cache for _get_eval_info results.
+        # Previously decorated with @lru_cache, but @lru_cache on a bound
+        # method (one taking `self`) holds a strong reference to the
+        # instance via the cache key, preventing the Evaluator from being
+        # garbage-collected. In long-running processes (Celery / Temporal
+        # workers, FastAPI lifespans) that creates a slow memory leak.
+        self._eval_info_cache: Dict[str, Dict[str, Any]] = {}
 
 
     def evaluate(
@@ -624,8 +631,11 @@ class Evaluator(APIKeyAuth):
             return
 
 
-    @lru_cache(maxsize=100)
     def _get_eval_info(self, eval_name: str) -> Dict[str, Any]:
+        cached = self._eval_info_cache.get(eval_name)
+        if cached is not None:
+            return cached
+
         url = (
             self._base_url
             + "/"
@@ -640,6 +650,7 @@ class Evaluator(APIKeyAuth):
             raise KeyError(f"Evaluation template '{eval_name}' not found in registry")
         if not eval_info:
             raise Exception(f"Evaluation template with name '{eval_name}' not found")
+        self._eval_info_cache[eval_name] = eval_info
         return eval_info
 
     def list_evaluations(self):
