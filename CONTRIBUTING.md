@@ -35,4 +35,4 @@ Open a [Discussion](https://github.com/future-agi/ai-evaluation/discussions) or 
 
 ---
 
-By contributing, you agree that your contributions will be licensed under GPL-3.0.
+By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
