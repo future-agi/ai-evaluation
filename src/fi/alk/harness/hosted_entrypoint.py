@@ -500,6 +500,79 @@ def load_build_output(work_directory: Path) -> dict[str, Any]:
         raise WorldFactoryError(f"build.json unreadable at {path}: {exc}") from exc
 
 
+# The closed set of degrade reason STRINGS the guest may emit -- C4 v1.3 §2's five members
+# (`outbound.DegradeReason`). `port_not_consumable` is deliberately absent (D28: a TERMINAL job
+# failure, never a degrade); membership here is what keeps it (and any non-member) out of the
+# `parallelism_degraded` channel at the mapper below, before any event is built.
+_DEGRADE_REASON_VALUES: frozenset[str] = frozenset(
+    member.value for member in ob.DegradeReason
+)
+
+
+def degrade_events_to_emit(
+    degrade_events: Sequence[Any], *, requested: int
+) -> list[tuple[int, str]]:
+    """C4 v1.3 §2 forward transport: map build.json's `degrade_events` ledger
+    (`[{reason, from_w, to_w}]`, appended in causal order by Track B's provisioner) to the
+    ordered `(effective, reason)` pairs the emitter turns into ONE `parallelism_degraded`
+    event each. `effective` is the entry's `to_w`; `requested` is the ATTEMPT CONSTANT the
+    caller supplies (never an entry's `from_w`).
+
+    Enforces the guest-side MUSTs (§2/§8) over the WHOLE list BEFORE any emit, so a violation
+    never leaves a partial event stream:
+
+    - every `reason` is a `DegradeReason` member -- `port_not_consumable` (D28) and any other
+      non-member are REJECTED here, never mis-routed into the degrade channel;
+    - AT MOST ONE entry per reason (B-prov's dedup guarantees this; we assert it holds);
+    - `effective` (`to_w`) STRICTLY DECREASING across entries in list order;
+    - `1 <= effective < requested` for every entry (no `effective: 0` -- W'=0 is a job
+      failure, not a degrade; no non-degrade `effective == requested`).
+
+    Raises `ValueError` on any violation or malformed entry; the emitter's guarded block routes
+    that to a `log` (never a crash, never a partial/mis-routed emit). An empty list yields an
+    empty result (the caller then applies the §2 missing-list legacy-scalar fallback)."""
+    seen_reasons: set[str] = set()
+    previous_effective: int | None = None
+    to_emit: list[tuple[int, str]] = []
+    for entry in degrade_events:
+        if not isinstance(entry, dict):
+            raise ValueError(f"degrade_events entry is not an object: {entry!r}")
+        reason = entry.get("reason")
+        if reason not in _DEGRADE_REASON_VALUES:
+            # covers `port_not_consumable` (D28) AND any unknown string -- the guest enum is in
+            # lockstep with Track B's writer (§8), so a non-member is a malformed ledger.
+            raise ValueError(
+                f"degrade_events entry carries a non-degrade reason {reason!r}; "
+                "the closed DegradeReason vocabulary does not list it "
+                "(port_not_consumable is a terminal job failure, not a degrade)"
+            )
+        reason = str(reason)
+        if reason in seen_reasons:
+            raise ValueError(
+                f"degrade_events lists reason {reason!r} more than once "
+                "(>1 event per reason per attempt violates the C4 §2 invariant)"
+            )
+        seen_reasons.add(reason)
+        to_w = entry.get("to_w")
+        if not isinstance(to_w, int) or isinstance(to_w, bool):
+            raise ValueError(
+                f"degrade_events entry {reason!r} has a non-int to_w: {to_w!r}"
+            )
+        if not (1 <= to_w < requested):
+            raise ValueError(
+                f"degrade_events entry {reason!r} has to_w={to_w} outside "
+                f"1 <= effective < requested={requested}"
+            )
+        if previous_effective is not None and not (to_w < previous_effective):
+            raise ValueError(
+                f"degrade_events effective not strictly decreasing: "
+                f"{previous_effective} -> {to_w} at reason {reason!r}"
+            )
+        previous_effective = to_w
+        to_emit.append((to_w, reason))
+    return to_emit
+
+
 def row_counts_for_capability(
     build_output: dict[str, Any], capability: str
 ) -> dict[str, int]:
@@ -2072,11 +2145,33 @@ async def run_job(
                         inputs_digest=str(store.get("inputs_digest", "")),
                         baseline_ref=str(store.get("baseline_reference", "")),
                     )
-            degrade_reason = build_output.get("degrade_reason")
-            if degrade_reason:
-                requested = int(
-                    build_output.get("requested_parallelism") or parallelism
-                )
+            requested = int(build_output.get("requested_parallelism") or parallelism)
+            degrade_events = build_output.get("degrade_events")
+            if isinstance(degrade_events, list) and degrade_events:
+                # C4 v1.3 §2 forward transport: emit ONE `parallelism_degraded` event per
+                # ledger entry, in causal (list) order -- `requested` the attempt constant,
+                # `effective` the entry's `to_w`, `reason` the entry's reason. Emission is
+                # ONE-SHOT (§2 / C2 §6 emission split): the ledger is read ONCE here at
+                # entrypoint emission; post-emission ledger updates are NOT re-emitted (they
+                # surface via the scheduler's sick-world path). The mapper enforces the two
+                # invariants (effective strictly decreasing, <=1 event per reason) and the
+                # `1 <= effective < requested` bound over the WHOLE list before any emit, and
+                # rejects `port_not_consumable`/any non-`DegradeReason` string (D28) -- a
+                # violation raises and is routed to a `log` below, never a partial/mis-routed
+                # emit.
+                for effective, reason in degrade_events_to_emit(
+                    degrade_events, requested=requested
+                ):
+                    adapter.parallelism_degraded(
+                        requested=requested, effective=effective, reason=reason
+                    )
+                    degrade_emitted = True
+            elif build_output.get("degrade_reason"):
+                # C4 §2 missing-list fallback: no `degrade_events` list (a snapshot where the
+                # v2 emitter is ahead of Track B's list writer, so only the legacy scalar
+                # fields are present) -- fall back to them and still emit today's
+                # `fixed_port`/`conformance_gate_failed` event, NEVER nothing.
+                degrade_reason = build_output["degrade_reason"]
                 effective = int(build_output.get("effective_parallelism") or 1)
                 # `ParallelismDegradedPayload` requires `1 <= effective < requested` --
                 # `fixed_port` is recorded at `instances == 1` too (provider-side gap), where
@@ -2313,6 +2408,7 @@ __all__ = [
     "ScenarioSourceNotWired",
     "ScenariosClient",
     "WorldFactoryError",
+    "degrade_events_to_emit",
     "install_sigterm_handler",
     "job_secret_purposes",
     "load_build_output",

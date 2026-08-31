@@ -61,6 +61,7 @@ from fi.alk.harness.outbound import (
     CapabilitiesError,
     ChannelOutcome,
     ChannelState,
+    DegradeReason,
     EventsClient,
     HostedAttemptSupersededError,
     HostedCapabilities,
@@ -745,6 +746,54 @@ def test_parallelism_degraded_effective_must_be_strictly_below_requested() -> No
             OutboundEventType.PARALLELISM_DEGRADED,
             HarnessStage.VALIDATING_ENVIRONMENT,
             {"requested": 3, "effective": 3, "reason": "fixed_port"},
+        )
+
+
+def test_degrade_reason_enum_is_exactly_the_c4_five_members() -> None:
+    # C4 v1.3 §2 (FROZEN): the degrade enum is closed at EXACTLY these five members,
+    # unconditionally. `port_not_consumable` was the former sixth member; C1 v1.3 §4
+    # decision 2 / D28 reclassifies it OUT of the degrade enum to a TERMINAL job failure.
+    # The fixture list here IS C4 §2's table verbatim -- a reviewer changing it without a
+    # matching C4 version bump is a contract violation (§8 cross-repo lockstep).
+    assert {member.value for member in DegradeReason} == {
+        "resource_limited",
+        "literal_local_endpoint",
+        "world_start_failed",
+        "fixed_port",
+        "conformance_gate_failed",
+    }
+    assert "port_not_consumable" not in {member.value for member in DegradeReason}
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "resource_limited",
+        "literal_local_endpoint",
+        "world_start_failed",
+        "fixed_port",
+        "conformance_gate_failed",
+    ],
+)
+def test_parallelism_degraded_accepts_each_of_the_five_reasons(reason: str) -> None:
+    record = _event(
+        OutboundEventType.PARALLELISM_DEGRADED,
+        HarnessStage.VALIDATING_ENVIRONMENT,
+        {"requested": 4, "effective": 2, "reason": reason},
+    )
+    assert record["payload"]["reason"] == reason
+
+
+def test_parallelism_degraded_rejects_port_not_consumable_as_a_degrade_reason() -> None:
+    # D28: `port_not_consumable` is a TERMINAL job failure, never a degrade. The closed
+    # `DegradeReason` enum no longer constructs it, so a `parallelism_degraded` payload
+    # carrying it fails validation -- it cannot enter the degrade / parallelism_degraded
+    # channel at all (it surfaces via the job-failure path instead).
+    with pytest.raises(ValidationError):
+        _event(
+            OutboundEventType.PARALLELISM_DEGRADED,
+            HarnessStage.VALIDATING_ENVIRONMENT,
+            {"requested": 4, "effective": 1, "reason": "port_not_consumable"},
         )
 
 

@@ -1822,6 +1822,221 @@ def test_build_json_fixed_port_at_w1_does_not_crash() -> None:
     asyncio.run(scenario())
 
 
+# --- C4 v1.3 §2 forward degrade transport: build.json `degrade_events` ledger -> events -------
+# The pure ledger->(effective, reason) mapper enforces the two guest-side invariants
+# (§2/§8: effective strictly decreasing, <=1 entry per reason) plus the `1 <= effective <
+# requested` bound and the "reason must be a DegradeReason member" rule (D28), before any emit.
+
+
+def test_degrade_events_to_emit_maps_each_entry_to_effective_and_reason() -> None:
+    assert he.degrade_events_to_emit(
+        [
+            {"reason": "resource_limited", "from_w": 4, "to_w": 2},
+            {"reason": "world_start_failed", "from_w": 2, "to_w": 1},
+        ],
+        requested=4,
+    ) == [(2, "resource_limited"), (1, "world_start_failed")]
+
+
+def _degrade_ledger_is_rejected(degrade_events: list, *, requested: int) -> None:
+    """The file drives `test_*` directly (no pytest runner), so expected-exception cases use
+    the try/except/else idiom rather than `pytest.raises`."""
+    try:
+        he.degrade_events_to_emit(degrade_events, requested=requested)
+    except ValueError:
+        return
+    raise AssertionError(
+        f"expected ValueError for degrade_events={degrade_events!r} requested={requested}"
+    )
+
+
+def test_degrade_events_to_emit_requires_effective_strictly_decreasing() -> None:
+    _degrade_ledger_is_rejected(
+        [
+            {"reason": "resource_limited", "from_w": 4, "to_w": 2},
+            {"reason": "world_start_failed", "from_w": 2, "to_w": 2},
+        ],
+        requested=4,
+    )
+
+
+def test_degrade_events_to_emit_requires_at_most_one_event_per_reason() -> None:
+    _degrade_ledger_is_rejected(
+        [
+            {"reason": "resource_limited", "from_w": 4, "to_w": 3},
+            {"reason": "resource_limited", "from_w": 3, "to_w": 2},
+        ],
+        requested=4,
+    )
+
+
+def test_degrade_events_to_emit_rejects_effective_zero() -> None:
+    # W'=0 is unrepresentable (`1 <= effective`, C4 §2); world 0 failing at the first
+    # provision call is a JOB FAILURE, never a degrade event.
+    _degrade_ledger_is_rejected(
+        [{"reason": "world_start_failed", "from_w": 2, "to_w": 0}], requested=2
+    )
+
+
+def test_degrade_events_to_emit_rejects_effective_not_below_requested() -> None:
+    _degrade_ledger_is_rejected(
+        [{"reason": "resource_limited", "from_w": 4, "to_w": 4}], requested=4
+    )
+
+
+def test_degrade_events_to_emit_rejects_a_non_degrade_reason() -> None:
+    # D28: `port_not_consumable` (or any non-`DegradeReason` string) must never be
+    # mis-routed into the degrade channel -- the mapper rejects it before any emit.
+    _degrade_ledger_is_rejected(
+        [{"reason": "port_not_consumable", "from_w": 4, "to_w": 1}], requested=4
+    )
+
+
+def test_build_json_degrade_events_list_emits_one_event_per_entry_in_causal_order() -> (
+    None
+):
+    # C4 §2: the emitter turns each `degrade_events` entry into ONE parallelism_degraded
+    # event, in list order; `requested` is the ATTEMPT CONSTANT (never `from_w`), `effective`
+    # is the entry's `to_w`, `reason` is the entry's reason.
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 4,
+            "effective_parallelism": 1,
+            "degrade_reason": "world_start_failed",
+            "degrade_events": [
+                {"reason": "resource_limited", "from_w": 4, "to_w": 2},
+                {"reason": "world_start_failed", "from_w": 2, "to_w": 1},
+            ],
+        }
+        harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert [event["payload"] for event in degrade_events] == [
+            {"requested": 4, "effective": 2, "reason": "resource_limited"},
+            {"requested": 4, "effective": 1, "reason": "world_start_failed"},
+        ]
+        # invariants ON THE EMITTED STREAM (§8 guest MUSTs): effective strictly decreasing,
+        # at most one event per reason.
+        effectives = [event["payload"]["effective"] for event in degrade_events]
+        assert effectives == [2, 1]
+        assert all(a > b for a, b in zip(effectives, effectives[1:]))
+        reasons = [event["payload"]["reason"] for event in degrade_events]
+        assert len(reasons) == len(set(reasons))
+
+    asyncio.run(scenario())
+
+
+def test_build_json_missing_degrade_events_list_falls_back_to_legacy_scalars() -> None:
+    # C4 §2 missing-list fallback: an older guest (Track B behind Track C') writes only the
+    # legacy scalar fields. The emitter MUST fall back to them and still emit today's
+    # fixed_port/conformance_gate_failed event under the `1 <= effective < requested` guard --
+    # never nothing.
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 3,
+            "effective_parallelism": 1,
+            "degrade_reason": "fixed_port",
+        }
+        harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert len(degrade_events) == 1
+        assert degrade_events[0]["payload"] == {
+            "requested": 3,
+            "effective": 1,
+            "reason": "fixed_port",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_build_json_empty_degrade_events_list_uses_the_legacy_fallback() -> None:
+    # An EMPTY list is the no-forward-degrade snapshot: fall back to the legacy scalars
+    # exactly as a missing list does (never silence when the scalars record a degrade).
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 2,
+            "effective_parallelism": 1,
+            "degrade_reason": "conformance_gate_failed",
+            "degrade_events": [],
+        }
+        harness = _build_harness(scenarios=[], instances=1, build_output=build_output)
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert len(degrade_events) == 1
+        assert degrade_events[0]["payload"] == {
+            "requested": 2,
+            "effective": 1,
+            "reason": "conformance_gate_failed",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_build_json_port_not_consumable_in_ledger_is_not_emitted_as_a_degrade() -> None:
+    # D28 / §2 terminal block: `port_not_consumable` must never reach build.json's
+    # degrade_events (B-prov raises it as a TERMINAL job failure, out-of-band). If a
+    # malformed ledger carries it anyway, the emitter routes it to a `log` and emits NO
+    # parallelism_degraded event -- it is never swallowed silently nor mis-routed into the
+    # degrade channel, and the run does not crash.
+    async def scenario() -> None:
+        build_output = {
+            "requested_parallelism": 4,
+            "effective_parallelism": 1,
+            "degrade_reason": "world_start_failed",
+            "degrade_events": [
+                {"reason": "port_not_consumable", "from_w": 4, "to_w": 1},
+            ],
+        }
+        scenarios = [FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])]
+        harness = _build_harness(
+            scenarios=scenarios, instances=1, build_output=build_output
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        assert harness.provisioner.closed is True  # no crash, pool not orphaned.
+        degrade_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "parallelism_degraded"
+        ]
+        assert degrade_events == []
+        log_events = [
+            record
+            for record in harness.transport.event_records
+            if record.get("type") == "log"
+        ]
+        assert any(
+            "port_not_consumable" in record["payload"]["message"]
+            for record in log_events
+        )
+
+    asyncio.run(scenario())
+
+
 def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> None:
     async def scenario() -> None:
         scenarios = [

@@ -582,8 +582,16 @@ def load_capabilities(
 
 
 class DegradeReason(str, Enum):
-    CONFORMANCE_GATE_FAILED = "conformance_gate_failed"
+    # C4 v1.3 §2 (FROZEN) -- the `parallelism_degraded` reason vocabulary, closed at EXACTLY
+    # these FIVE members, unconditionally. `port_not_consumable` was the former sixth member;
+    # C1 v1.3 §4 decision 2 / D28 reclassifies it OUT of the degrade enum to a TERMINAL job
+    # failure (raised out-of-band, surfaced via the job-failure path), so it is deliberately
+    # absent here and can never be constructed into a `parallelism_degraded` payload.
+    RESOURCE_LIMITED = "resource_limited"
+    LITERAL_LOCAL_ENDPOINT = "literal_local_endpoint"
+    WORLD_START_FAILED = "world_start_failed"
     FIXED_PORT = "fixed_port"
+    CONFORMANCE_GATE_FAILED = "conformance_gate_failed"
 
 
 class LogLevel(str, Enum):
