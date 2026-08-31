@@ -805,3 +805,88 @@ def test_load_bundle_v2_parses_a_valid_manifest_from_its_directory(tmp_path) -> 
     (tmp_path / "manifest.json").write_text(json.dumps(FULL_MANIFEST_EXAMPLE))
     bundle = load_bundle_v2(tmp_path)
     assert bundle.name == "demo"
+
+
+# --- C1 (world-port-model v1.3): the consumability split on `SourceProcess` -----------------
+
+
+def test_fixed_port_consumable_defaults_false_and_is_accepted() -> None:
+    process = SourceProcess.model_validate(TOOLS_API_PROCESS_EXAMPLE)
+    assert process.fixed_port_consumable is False
+
+
+def test_fixed_port_consumable_true_with_a_fixed_port_is_accepted() -> None:
+    process = SourceProcess.model_validate(
+        {**TOOLS_API_PROCESS_EXAMPLE, "fixed_port": 8080, "fixed_port_consumable": True}
+    )
+    assert process.fixed_port == 8080
+    assert process.fixed_port_consumable is True
+
+
+def test_fixed_port_consumable_true_without_a_fixed_port_is_rejected() -> None:
+    # C1 §1: the flag qualifies a declaration; with no `fixed_port` there is nothing to qualify.
+    with pytest.raises(ValidationError, match="fixed_port_consumable_requires_fixed_port"):
+        SourceProcess.model_validate(
+            {**TOOLS_API_PROCESS_EXAMPLE, "fixed_port": None, "fixed_port_consumable": True}
+        )
+
+
+def test_fixed_port_consumable_is_omitted_from_the_dump_when_false() -> None:
+    # C1 §1 serialization rule (normative): a `false` value is never written, and the omission
+    # MUST hold in the exact `model_dump(mode="json")` that `seal_bundle_v2` consumes — so an
+    # existing sealed manifest re-serializes byte-for-byte, digest unchanged.
+    process = SourceProcess.model_validate(TOOLS_API_PROCESS_EXAMPLE)
+    assert "fixed_port_consumable" not in process.model_dump(mode="json")
+    assert "fixed_port_consumable" not in process.model_dump()
+
+
+def test_fixed_port_consumable_is_written_to_the_dump_when_true() -> None:
+    process = SourceProcess.model_validate(
+        {**TOOLS_API_PROCESS_EXAMPLE, "fixed_port": 8080, "fixed_port_consumable": True}
+    )
+    assert process.model_dump(mode="json")["fixed_port_consumable"] is True
+
+
+def test_a_manifest_without_the_new_field_seals_and_round_trips_unchanged(tmp_path) -> None:
+    # Checklist 3: an existing sealed manifest (no new field) validates unchanged, its
+    # `model_dump(mode="json")` carries no `fixed_port_consumable` key anywhere, and re-sealing
+    # reproduces the same digest — the field is invisible to every previously sealed bundle.
+    manifest = EnvironmentBundleV2.model_validate(FULL_MANIFEST_EXAMPLE)
+    core = manifest.model_dump(mode="json")
+    assert all(
+        "fixed_port_consumable" not in process for process in core["processes"]
+    )
+    sealed = seal_bundle_v2(manifest)
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({**FULL_MANIFEST_EXAMPLE, "digest": sealed})
+    )
+    reloaded = load_bundle_v2(tmp_path)
+    assert seal_bundle_v2(reloaded) == sealed
+    assert all(
+        process.fixed_port_consumable is False
+        for process in reloaded.processes
+        if isinstance(process, SourceProcess)
+    )
+
+
+def test_a_consumable_declaration_changes_the_sealed_digest() -> None:
+    # The complement of the omit-when-default rule: once a producer opts a process in, the flag
+    # is part of the manifest and therefore part of its identity.
+    base = EnvironmentBundleV2.model_validate(FULL_MANIFEST_EXAMPLE)
+    consumable_tools = {
+        **TOOLS_API_PROCESS_EXAMPLE,
+        "fixed_port": 8080,
+        "fixed_port_consumable": True,
+    }
+    opted_in = EnvironmentBundleV2.model_validate(
+        {
+            **FULL_MANIFEST_EXAMPLE,
+            "processes": [
+                POSTGRES_PROCESS_EXAMPLE,
+                consumable_tools,
+                AGENT_PROCESS_EXAMPLE,
+            ],
+        }
+    )
+    assert seal_bundle_v2(opted_in) != seal_bundle_v2(base)

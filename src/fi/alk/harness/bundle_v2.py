@@ -34,8 +34,10 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    SerializerFunctionWrapHandler,
     ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -179,6 +181,13 @@ class SourceProcess(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
     build_environment: dict[str, str] | None = None
     fixed_port: int | None = Field(default=None, ge=1, le=65535)
+    # C1 (world-port-model v1.3) §1: splits `fixed_port` by consumability. `false` (code-fixed) is
+    # today's semantics unchanged — honored exactly, forces effective W=1 at requested W>1. `true`
+    # (env-consumable) means the process binds the port its own `{{PORT_<name>}}` renders, so every
+    # world including 0 gets an allocated formula port at plan-time W>1; the declared value is only
+    # the plan-time-W=1 compatibility port. Serialized omit-when-default (see `_serialize`) so every
+    # previously sealed manifest re-serializes byte-for-byte, digest unchanged.
+    fixed_port_consumable: bool = False
     started_check: StartedCheck | None = None
     secret_purposes: list[SecretPurpose] = Field(default_factory=list)
     user: ProcessUser
@@ -195,7 +204,23 @@ class SourceProcess(BaseModel):
         for step in self.build_commands:
             if not step:
                 raise ValueError("build_command_step_empty")
+        # C1 §1: the flag qualifies a `fixed_port` declaration — with nothing to qualify it is a
+        # validation error, not a silent no-op.
+        if self.fixed_port_consumable and self.fixed_port is None:
+            raise ValueError("fixed_port_consumable_requires_fixed_port")
         return self
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # C1 §1 serialization rule (normative): `fixed_port_consumable` is omit-when-default — a
+        # `false` value is never written, and the omission must hold in the exact
+        # `model_dump(mode="json")` that `seal_bundle_v2` consumes so an existing sealed manifest
+        # reproduces its bytes and digest unchanged. A pydantic v2 `@field_serializer` cannot drop a
+        # key (it only rewrites a value), so the omission is done here at the model level.
+        data = handler(self)
+        if not self.fixed_port_consumable:
+            data.pop("fixed_port_consumable", None)
+        return data
 
 
 ProcessEntry = Annotated[

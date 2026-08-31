@@ -13,6 +13,7 @@ import ast
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import sqlite3
 import tempfile
@@ -978,6 +979,96 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
+# --- C1 (world-port-model v1.3) authoring seams ----------------------------------------------
+
+# The env var the rewritten tools-api command reads its per-world port from (C1 §1, checklist 2).
+_FI_TOOLS_PORT = "FI_TOOLS_PORT"
+
+# C1 §4 worker knobs — livekit-agents 1.7.1 exposes these ONLY as WorkerOptions constructor args
+# (no env/CLI override), so the harness delivers them as env vars a conformant agent reads.
+_FI_LOAD_THRESHOLD_VALUE = "inf"  # §4: the shedding signal is system CPU, shared by all W workers
+#: OD-1 (open decision): the value is not frozen. `1` bounds idle memory and still exercises the
+#: read path; author it in the dev/E2E lane until Track D calibrates. Change this one constant.
+_FI_NUM_IDLE_PROCESSES_DEV = "1"
+
+
+def _shell_port_command(argv: list[str], port: str, env_key: str) -> str | None:
+    """Render ``argv`` as a single ``sh -c`` string with the literal ``--port <port>`` replaced by
+    an unquoted ``$env_key`` reference, or ``None`` if the command declares no such port.
+
+    C1 §1: ``run_command`` is exec'd verbatim and never template-rendered, so a ``{{PORT_<self>}}``
+    token in argv would reach the process as literal bytes. The ONLY valid consumability wiring is
+    a ``{{PORT_<self>}}``-bearing environment value referenced by ``$KEY`` inside ``sh -c``. Every
+    other token is shell-quoted; only the ``$KEY`` reference is left unquoted so the shell expands
+    it. Returning ``None`` (no ``--port`` literal to rewrite) means the process cannot be wired
+    honestly and MUST NOT be flagged consumable (that is the ``fixed_port_consumable_unwired`` lie).
+    """
+    ref = f"${env_key}"
+    rendered: list[str] = []
+    replaced = False
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "--port" and index + 1 < len(argv) and argv[index + 1] == port:
+            rendered.append(shlex.quote(token))
+            rendered.append(ref)
+            index += 2
+            replaced = True
+            continue
+        if token == f"--port={port}":
+            rendered.append(f"--port={ref}")
+            index += 1
+            replaced = True
+            continue
+        rendered.append(shlex.quote(token))
+        index += 1
+    if not replaced:
+        return None
+    return " ".join(rendered)
+
+
+def _consumable_source_process(
+    process: SourceProcess, env_key: str, port_token: str
+) -> SourceProcess:
+    """Opt a fixed-port source process into env-consumable parallelism, or leave it code-fixed.
+
+    Rewrites ``run_command`` to the ``sh -c`` + ``$KEY`` form, adds ``env_key: port_token`` to the
+    environment, and sets ``fixed_port_consumable=True`` — but ONLY when the command carries a
+    rewritable ``--port <fixed_port>`` literal. When it does not, the process is returned unchanged
+    (code-fixed, honestly degrading at W>1) rather than flagged with a wiring that does not exist.
+    """
+    if process.fixed_port is None:
+        return process
+    shelled = _shell_port_command(
+        list(process.run_command), str(process.fixed_port), env_key
+    )
+    if shelled is None:
+        return process
+    environment = dict(process.environment)
+    environment[env_key] = port_token
+    return process.model_copy(
+        update={
+            "run_command": ["sh", "-c", shelled],
+            "environment": environment,
+            "fixed_port_consumable": True,
+        }
+    )
+
+
+def _worker_knob_env(process_name: str) -> dict[str, str]:
+    """C1 §4: the FI_* worker-knob trio for one LiveKit-worker process, fed its OWN token.
+
+    ``FI_WORKER_HEALTH_PORT``'s presence IS the knob-bearing mark (both authoring and runtime key
+    on it). A conformant agent reads all three into its ``WorkerOptions``/``AgentServer``; absent,
+    it stays on library defaults.
+    """
+    return {
+        "FI_WORKER_HEALTH_PORT": f"{{{{PORT_{process_name}}}}}",
+        "FI_LOAD_THRESHOLD": _FI_LOAD_THRESHOLD_VALUE,
+        "FI_NUM_IDLE_PROCESSES": _FI_NUM_IDLE_PROCESSES_DEV,
+    }
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
@@ -1124,6 +1215,9 @@ def resolve_environment_plan(
                     "HARNESS_TOOL_TRACE",
                     "{{WORLD_DIR}}/agent-tool-calls.jsonl",
                 )
+                # C1 §4: author the worker-knob trio UNCONDITIONALLY into the LiveKit worker,
+                # fed its own `{{PORT_<name>}}`. This IS what marks it knob-bearing.
+                environment.update(_worker_knob_env(service_name))
             entry = (
                 "agent/agent.py"
                 if (service_root / "agent" / "agent.py").is_file()
@@ -1143,6 +1237,14 @@ def resolve_environment_plan(
                 livekit_download=is_livekit and service_name == control_name,
                 run_override=_dockerfile_run(service_root),
             )
+            if port and service_name in {"api", "tools-api"}:
+                # C1 §1 / checklist 2: the tools-api/api server pins its port in a Dockerfile CMD
+                # copied verbatim into run_command. Rewrite it to consume its per-world allocated
+                # port through the one valid wiring ($FI_TOOLS_PORT in `sh -c`) so it parallelizes
+                # at W>1 instead of forcing a degrade to W=1.
+                process = _consumable_source_process(
+                    process, _FI_TOOLS_PORT, f"{{{{PORT_{service_name}}}}}"
+                )
             if is_livekit and service_name == control_name:
                 # The LiveKit worker opens its HTTP health port before it has registered with
                 # the dispatch service.  Treating the port as readiness creates a race where a
@@ -1246,6 +1348,8 @@ def resolve_environment_plan(
                     root.name.replace("_", "-") + "-{{JOB_ID}}-w{{WORLD_INDEX}}"
                 ),
                 "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+                # C1 §4: the single LiveKit worker carries the knob trio, fed its own token.
+                **_worker_knob_env(control_name),
             }
             if is_livekit
             else dict(declared_runtime_environment)

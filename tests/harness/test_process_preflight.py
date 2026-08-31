@@ -1006,6 +1006,9 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "process_name_duplicate",
         "inputs_digest_mismatch",
         "fixed_port_reserved",  # §2e, v1.9.
+        # C1 (world-port-model v1.3) §1: `fixed_port_consumable: true` with no `fixed_port` to qualify
+        # is a model-layer validation error (raised in bundle_v2.py's SourceProcess validator).
+        "fixed_port_consumable_requires_fixed_port",
     }
 )
 _SECTION_2E_MECHANICAL_CODES = frozenset(
