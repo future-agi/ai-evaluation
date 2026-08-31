@@ -149,6 +149,344 @@ _BACKGROUND_MIXER_RATE = 48000
 # ``ALK_VOICE_MAX_CASE_CONCURRENCY`` to the pod's cores. Caps web cases only.
 _VOICE_MAX_CASE_CONCURRENCY_DEFAULT = 4
 
+# --- C3 dispatch acknowledgment (call-affinity contract v0.4) ---------------------------------
+#
+# The structured marker the ack ladder raises on exhaustion. It travels as the failure ``code``
+# (a STRUCTURED field), NEVER as a substring of ``failure.message`` (C3 §4.4/§4.5). CallRunner
+# re-raises it on ``CallAborted.marker`` and the hosted scheduler selects the receipt code from
+# that same field.
+VOICE_DISPATCH_UNACKNOWLEDGED = "voice_dispatch_unacknowledged"
+
+# Fixed WALL-CLOCK ack marks (seconds) measured from the FIRST ``create_dispatch`` return
+# (C3 §4.3 "Budget semantics"). +20/+40 are re-creation marks (attempts 2 and 3); +60 is the
+# exhaustion mark. Total ack budget <= 60s, which nests inside READINESS_TIMEOUT_SECONDS=120 by
+# construction, so exhaustion preempts the readiness timeout (60 < 120) without touching
+# ``run_seconds`` or its pad.
+DISPATCH_ACK_MARKS: tuple[float, float, float] = (20.0, 40.0, 60.0)
+
+# Hosted-harness-only opt-in (C3 §4.5 cross-lane gate). The ladder activates ONLY when this
+# environment flag is truthy. The hosted provisioner sets it in the hosted sandbox environment
+# (present only on the hosted path / parallelism runtime context); it is ABSENT on the local lane,
+# where the engine's readiness path stays byte-unchanged (no ladder, no re-dispatch, no new code).
+# TODO(azain): confirm the hosted provisioner threads this flag (or an equivalent parallelism
+# runtime-context signal) through to the guest environment; the engine reads it here the same way
+# it reads the other FI_* worker knobs directly from ``os.environ``.
+_DISPATCH_ACK_ENV = "FI_HOSTED_DISPATCH_ACK"
+
+
+class DispatchUnacknowledgedError(Exception):
+    """Raised by the dispatch-ack ladder at the +60s exhaustion mark (C3 §4.3 step 4).
+
+    Deliberately NOT an :class:`asyncio.TimeoutError`: that path (the engine's readiness-stage
+    handler) maps to ``TestCaseStatus.AGENT_UNAVAILABLE`` -> ``WorldUnavailable`` -> world
+    retirement, the exact outcome C3 §7 decision 2 forbids. The marker rides a structured
+    attribute, never message text, so downstream code selects the receipt code without
+    string-matching ``failure.message``.
+    """
+
+    marker = VOICE_DISPATCH_UNACKNOWLEDGED
+
+    def __init__(
+        self,
+        *,
+        room_name: str,
+        agent_name: str,
+        attempts: int,
+        marks: tuple[float, ...],
+    ) -> None:
+        super().__init__(
+            f"{VOICE_DISPATCH_UNACKNOWLEDGED}: dispatch to agent "
+            f"{agent_name!r} in room {room_name!r} not acknowledged after {attempts} attempt(s)"
+        )
+        self.room_name = room_name
+        self.agent_name = agent_name
+        self.attempts = attempts
+        self.marks = tuple(marks)
+
+
+def _dispatch_ack_enabled() -> bool:
+    """Hosted-harness opt-in gate for the dispatch-ack ladder (C3 §4.5).
+
+    Byte-unchanged local-lane behaviour depends on this returning ``False`` whenever the hosted
+    flag is absent, so the check is deliberately strict (an explicitly truthy value only).
+    """
+    raw = (os.environ.get(_DISPATCH_ACK_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _dispatch_agent_name_of(dispatch: Any) -> str | None:
+    """Agent name carried by a listed dispatch object (ListAgentDispatch row).
+
+    TODO(azain): confirm the EU LiveKit ``AgentDispatch`` field name for the target agent; the
+    1.7.1 protobuf uses ``agent_name``. Kept behind this accessor so the field is changed in one
+    place.
+    """
+    return getattr(dispatch, "agent_name", None) or getattr(dispatch, "name", None)
+
+
+def _dispatch_id_of(dispatch: Any) -> str | None:
+    """Server dispatch id used to delete a stale dispatch (DeleteAgentDispatch).
+
+    TODO(azain): confirm the EU LiveKit ``AgentDispatch`` id field; the 1.7.1 protobuf uses ``id``.
+    """
+    return getattr(dispatch, "id", None) or getattr(dispatch, "dispatch_id", None)
+
+
+def _listed_dispatches(response: Any) -> list[Any]:
+    """Normalize a ListAgentDispatch response into a list of dispatch rows.
+
+    TODO(azain): confirm whether the EU server returns a bare list or a wrapper carrying
+    ``.agent_dispatches``; both shapes are accepted here.
+    """
+    if response is None:
+        return []
+    inner = getattr(response, "agent_dispatches", None)
+    if inner is not None:
+        return list(inner)
+    if isinstance(response, (list, tuple)):
+        return list(response)
+    return []
+
+
+async def _run_dispatch_ack_ladder(
+    *,
+    await_join: "Callable[[float], Awaitable[Any]]",
+    list_dispatches: "Callable[[], Awaitable[Any]]",
+    delete_dispatch: "Callable[[Any], Awaitable[None]]",
+    create_dispatch: "Callable[[], Awaitable[None]]",
+    dispatch_name_of: "Callable[[Any], str | None]",
+    agent_name: str,
+    room_name: str,
+    first_dispatch_at: float,
+    marks: tuple[float, ...] = DISPATCH_ACK_MARKS,
+    now: "Callable[[], float]" = time.monotonic,
+    logger: "logging.Logger" = logger,
+) -> Any:
+    """The concurrent dispatch-ack ladder (C3 §4.3), decoupled from LiveKit types for testability.
+
+    ``await_join(timeout)`` waits up to ``timeout`` seconds for the end-to-end join signal and
+    returns the joined target (truthy) or ``None`` on timeout — it is the ladder's ONLY blocking
+    seam and it stops being consulted the instant a join is observed (C3 §4.4: no delete/re-create
+    after the join edge). Marks are FIXED wall-clock offsets from ``first_dispatch_at``; a slow
+    attempt is forfeited at its mark, never extended. Returns the joined target on ack; raises
+    :class:`DispatchUnacknowledgedError` at the +60s mark on exhaustion.
+
+    Invariant (C3 §4.3 step 2): at most ONE outstanding dispatch per (room, agent name). Before any
+    re-create the ladder (a) reconciles a prior attempt's still-in-flight create — possibly
+    outstanding, so it issues NO new dispatch that mark; (b) lists the room's dispatches and
+    delete-firsts any still listed for this agent name; (c) never re-dispatches on a failed list.
+    """
+
+    attempts = 1  # the initial pre-ladder create_dispatch is attempt 1
+    inflight_create: "asyncio.Future[Any] | None" = None
+    leftover: list["asyncio.Future[Any]"] = []
+    try:
+        for idx, mark in enumerate(marks):
+            deadline = first_dispatch_at + mark
+            timeout = deadline - now()
+            join = await await_join(timeout if timeout > 0.0 else 0.0)
+            if join is not None:
+                # Join observed -> stop evaluating marks; never delete/re-create after this edge.
+                return join
+            if idx == len(marks) - 1:
+                # +60s exhaustion mark: abort the readiness wait with the ladder's OWN typed
+                # exception (NOT an asyncio.TimeoutError).
+                raise DispatchUnacknowledgedError(
+                    room_name=room_name,
+                    agent_name=agent_name,
+                    attempts=attempts,
+                    marks=tuple(marks),
+                )
+
+            next_deadline = first_dispatch_at + marks[idx + 1]
+
+            # (a) Reconcile any still-in-flight create from the prior attempt (C3 §4.3 forfeit
+            # rule). It cannot be confirmed-absent cheaply, so treat it as possibly-outstanding
+            # and issue NO new dispatch this mark. The at-most-one-outstanding invariant wins over
+            # the fixed-mark cadence; the clock still advances on schedule.
+            if inflight_create is not None:
+                if not inflight_create.done():
+                    logger.warning(
+                        "dispatch-ack: prior create still in-flight at +%ss mark; skipping "
+                        "re-dispatch to preserve at-most-one-outstanding (room=%s agent=%s)",
+                        mark,
+                        room_name,
+                        agent_name,
+                    )
+                    continue
+                inflight_create = None
+
+            # (b) List the room's dispatches BEFORE any re-create (C3 §4.3 step 1). A failed list
+            # means possibly-outstanding: MUST NOT re-dispatch on it.
+            try:
+                listed = _listed_dispatches(await list_dispatches())
+            except Exception:  # noqa: BLE001 - any list error is "possibly-outstanding"
+                logger.warning(
+                    "dispatch-ack: ListAgentDispatch failed at +%ss mark; not re-dispatching "
+                    "(room=%s agent=%s)",
+                    mark,
+                    room_name,
+                    agent_name,
+                )
+                continue
+
+            # (c) Delete any stale dispatch still listed for THIS agent name, then re-create. If a
+            # listed dispatch cannot be deleted it remains outstanding, so do NOT create a second.
+            stale = [d for d in listed if dispatch_name_of(d) == agent_name]
+            blocked = False
+            for d in stale:
+                try:
+                    await delete_dispatch(d)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "dispatch-ack: DeleteAgentDispatch failed; leaving the single outstanding "
+                        "dispatch, no re-create this mark (room=%s agent=%s)",
+                        room_name,
+                        agent_name,
+                    )
+                    blocked = True
+                    break
+            if blocked:
+                continue
+
+            # (d) Create the replacement dispatch, bounded to this attempt's window. A create that
+            # has not returned by the next mark is possibly-outstanding -> reconciled at (a). A
+            # create that fails spends the attempt and folds into the ack budget (C3 §4.3 step 4).
+            attempts += 1
+            create_task = asyncio.ensure_future(create_dispatch())
+            create_timeout = next_deadline - now()
+            done, _ = await asyncio.wait(
+                {create_task}, timeout=create_timeout if create_timeout > 0.0 else 0.0
+            )
+            if create_task not in done:
+                inflight_create = create_task
+                leftover.append(create_task)
+                continue
+            try:
+                create_task.result()
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "dispatch-ack: re-create failed at +%ss mark; attempt spent, folds into the "
+                    "ack budget (room=%s agent=%s)",
+                    mark,
+                    room_name,
+                    agent_name,
+                )
+                continue
+
+        # Defensive: the last mark always returns or raises above.
+        raise DispatchUnacknowledgedError(
+            room_name=room_name,
+            agent_name=agent_name,
+            attempts=attempts,
+            marks=tuple(marks),
+        )
+    finally:
+        for task in leftover:
+            if not task.done():
+                task.cancel()
+        if leftover:
+            await asyncio.gather(*leftover, return_exceptions=True)
+
+
+async def _await_target_audio_with_dispatch_ack(
+    room: "rtc.Room",
+    *,
+    excluded_identities: set[str],
+    target_identity: str | None,
+    readiness_timeout: float,
+    api_client: Any,
+    room_name: str,
+    agent_name: str,
+    metadata: str,
+    first_dispatch_at: float,
+    marks: tuple[float, ...] = DISPATCH_ACK_MARKS,
+    now: "Callable[[], float]" = time.monotonic,
+) -> "_TargetParticipant":
+    """Hosted-lane wrapper: run ``_wait_for_target_audio`` under the concurrent ack ladder.
+
+    The single readiness wait is the ack signal (C3 §4.2: end-to-end join). It is kept alive for
+    at least the full ack budget so a late-but-acked join inside the window is not pre-empted by
+    the readiness wait's own timeout; the ladder ends the wait early at +60s on exhaustion by
+    raising :class:`DispatchUnacknowledgedError`. The wrapper owns cancellation of the readiness
+    task.
+
+    TODO(azain): the join signal consumed here is the engine's existing target-audio readiness
+    edge. Confirm the concrete EU-LiveKit end-to-end signal (participant-joined event vs. poll vs.
+    dispatch job-state) and the participant-identity convention the dispatched agent joins under
+    (C3 §8 items 1/10); an event/push edge is preferred over polling to close the
+    delete-a-delivered-dispatch race.
+    """
+
+    readiness_task: "asyncio.Future[_TargetParticipant]" = asyncio.ensure_future(
+        _wait_for_target_audio(
+            room,
+            excluded_identities=excluded_identities,
+            target_identity=target_identity,
+            # Keep the readiness wait alive across the whole ack budget; the ladder governs the
+            # early +60s cutoff. Hosted-gated, so the local lane is unaffected.
+            timeout=max(readiness_timeout, marks[-1] + 1.0),
+        )
+    )
+
+    async def await_join(timeout: float) -> "_TargetParticipant | None":
+        if timeout <= 0.0:
+            if (
+                readiness_task.done()
+                and not readiness_task.cancelled()
+                and readiness_task.exception() is None
+            ):
+                return readiness_task.result()
+            return None
+        done, _ = await asyncio.wait({readiness_task}, timeout=timeout)
+        if readiness_task in done:
+            if readiness_task.cancelled() or readiness_task.exception() is not None:
+                return None
+            return readiness_task.result()
+        return None
+
+    async def list_dispatches() -> Any:
+        # TODO(azain): confirm the harness LiveKit API key carries ListAgentDispatch grants on EU
+        # and the deployed server version supports it (C3 §4.5 / §8 item 3).
+        return await api_client.agent_dispatch.list_dispatch(
+            api.ListAgentDispatchRequest(room=room_name)
+        )
+
+    async def delete_dispatch(dispatch: Any) -> None:
+        # TODO(azain): confirm DeleteAgentDispatch grants + whether a dropped dispatch lingers in
+        # the list, and the delete-vs-slow-join race semantics (C3 §4.5(a)/(b), §8 items 4/5).
+        dispatch_id = _dispatch_id_of(dispatch)
+        await api_client.agent_dispatch.delete_dispatch(
+            api.DeleteAgentDispatchRequest(dispatch_id=dispatch_id, room=room_name)
+        )
+
+    async def create_dispatch() -> None:
+        await api_client.agent_dispatch.create_dispatch(
+            api.CreateAgentDispatchRequest(
+                agent_name=agent_name,
+                room=room_name,
+                metadata=metadata,
+            )
+        )
+
+    try:
+        return await _run_dispatch_ack_ladder(
+            await_join=await_join,
+            list_dispatches=list_dispatches,
+            delete_dispatch=delete_dispatch,
+            create_dispatch=create_dispatch,
+            dispatch_name_of=_dispatch_agent_name_of,
+            agent_name=agent_name,
+            room_name=room_name,
+            first_dispatch_at=first_dispatch_at,
+            marks=marks,
+            now=now,
+        )
+    finally:
+        if not readiness_task.done():
+            readiness_task.cancel()
+        await asyncio.gather(readiness_task, return_exceptions=True)
+
 
 def _simulator_participant_identity(persona: Persona, test_case_id: str) -> str:
     """Give repository agents the scenario caller ANI through a standard identity seam.
@@ -1029,6 +1367,11 @@ class LiveKitEngine(BaseEngine):
         # unconditional) main handler once the target is selected.
         pending_target_transcriptions: list[tuple["rtc.TextStreamReader", str]] = []
         target_dispatch_deferred = False
+        # C3 dispatch-ack: the agent name and the WALL-CLOCK mark of the first create_dispatch
+        # return, captured when the deferred target dispatch fires so the ack ladder can key its
+        # fixed +20/+40/+60s marks off it. Both stay ``None`` when no deferred dispatch happens.
+        dispatch_agent_name: str | None = None
+        first_dispatch_at: float | None = None
         _MAX_BUFFERED_TARGET_STREAMS = 16
         managed_room_owned = runtime.room_mode == "managed"
         room_connected = False
@@ -1386,6 +1729,8 @@ class LiveKitEngine(BaseEngine):
                         ),
                     )
                     return outcome
+                # C3 §4.3: the ack budget is wall-clock from the FIRST create_dispatch return.
+                first_dispatch_at = time.monotonic()
                 logger.info(
                     "livekit_target_dispatched agent=%s room=%s run=%s case=%s",
                     dispatch_agent_name,
@@ -1563,12 +1908,34 @@ class LiveKitEngine(BaseEngine):
                         ),
                     )
                     return outcome
-            target = await _wait_for_target_audio(
-                room,
-                excluded_identities={simulator_identity, recorder_identity},
-                target_identity=effective_target_identity,
-                timeout=effective_readiness_timeout,
-            )
+            if (
+                _dispatch_ack_enabled()
+                and target_dispatch_deferred
+                and api_client is not None
+                and first_dispatch_at is not None
+                and dispatch_agent_name is not None
+            ):
+                # Hosted lane only (C3 §4.5 opt-in): run the readiness wait under the concurrent
+                # dispatch-ack ladder. On +60s exhaustion this raises DispatchUnacknowledgedError
+                # (NOT an asyncio.TimeoutError), handled below into a structured-marker failure.
+                target = await _await_target_audio_with_dispatch_ack(
+                    room,
+                    excluded_identities={simulator_identity, recorder_identity},
+                    target_identity=effective_target_identity,
+                    readiness_timeout=effective_readiness_timeout,
+                    api_client=api_client,
+                    room_name=room_name,
+                    agent_name=dispatch_agent_name,
+                    metadata=_dispatch_metadata_json(agent_definition),
+                    first_dispatch_at=first_dispatch_at,
+                )
+            else:
+                target = await _wait_for_target_audio(
+                    room,
+                    excluded_identities={simulator_identity, recorder_identity},
+                    target_identity=effective_target_identity,
+                    timeout=effective_readiness_timeout,
+                )
             if (
                 runtime.room_name_verbatim
                 and profile.receives_inbound_call
@@ -1766,6 +2133,34 @@ class LiveKitEngine(BaseEngine):
                 stop_reason,
                 messages,
                 min_turn_messages=min_turn_messages,
+            )
+        except DispatchUnacknowledgedError as exc:
+            # C3 §4.3 step 4 / §4.5: ack exhaustion is a scenario-level call failure (errored),
+            # NEVER world retirement. The marker rides ``failure.code`` (structured), never the
+            # message. This deliberately BYPASSES the readiness-stage asyncio.TimeoutError handler
+            # below (which maps to AGENT_UNAVAILABLE -> WorldUnavailable -> world retirement).
+            logger.warning(
+                "livekit_dispatch_unacknowledged room=%s agent=%s attempts=%s marks=%s "
+                "run=%s case=%s",
+                exc.room_name,
+                exc.agent_name,
+                exc.attempts,
+                exc.marks,
+                run_id,
+                test_case_id,
+            )
+            outcome = _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.READINESS,
+                exc.marker,
+                "Target agent dispatch was not acknowledged within the ack budget",
+                retryable=True,
+                details={
+                    "room_name": exc.room_name,
+                    "agent_name": exc.agent_name,
+                    "attempts": str(exc.attempts),
+                    "ack_marks": ",".join(str(m) for m in exc.marks),
+                },
             )
         except asyncio.TimeoutError:
             stage = (

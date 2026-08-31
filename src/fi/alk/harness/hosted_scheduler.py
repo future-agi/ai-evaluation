@@ -222,11 +222,22 @@ class CallOutcome:
 class CallAborted(RuntimeError):
     """The call step started but did not finish. `partial`, when known, carries whatever timing
     the call runner already measured — the receipt's `call` field must not be null once the call
-    has genuinely started (outbound-channels.md Channel 2, "errored receipt body")."""
+    has genuinely started (outbound-channels.md Channel 2, "errored receipt body").
 
-    def __init__(self, message: str, *, partial: CallOutcome | None = None) -> None:
+    `marker` carries an OPTIONAL structured failure marker the engine surfaced (C3 §4.5 —
+    e.g. `voice_dispatch_unacknowledged`), read from a structured field, NEVER string-matched from
+    the message. The scheduler's `except CallAborted` catch selects the receipt code from it."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial: CallOutcome | None = None,
+        marker: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.partial = partial
+        self.marker = marker
 
 
 class CallRunner(Protocol):
@@ -360,10 +371,36 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
     "call_failed": FailureDomain.INFRASTRUCTURE,
+    # C3 §4.5 step 4: the engine's dispatch-ack ladder exhausting at +60s. Domain infrastructure,
+    # like `call_failed`, so it retries once on a fresh world (run-178's post-recovery deliveries
+    # give a retry genuine success probability); classified scenario-errored, never world
+    # retirement (C3 §7 decision 2).
+    "voice_dispatch_unacknowledged": FailureDomain.INFRASTRUCTURE,
     "driver_crashed": FailureDomain.SIMULATOR,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
 }
 _RETRYABLE_CODES = frozenset({"evidence_missing"})
+
+# C3 §4.5 step 5: unknown codes must never KeyError inside the `CallAborted` handler (that would
+# mask the real failure), and the seam must be safe if the map-add and the catch-branch land out
+# of order across a deploy. Default any unmapped code to infrastructure + retryable.
+_DEFAULT_UNKNOWN_DOMAIN = FailureDomain.INFRASTRUCTURE
+
+
+def _domain_for(code: str) -> FailureDomain:
+    return _CODE_DOMAIN.get(code, _DEFAULT_UNKNOWN_DOMAIN)
+
+
+def _call_aborted_code(exc: "CallAborted") -> str:
+    """Select the receipt code for a `CallAborted` from its STRUCTURED marker (C3 §4.5 step 3).
+
+    Ack-exhaustion surfaces its own code; every other `CallAborted` keeps the byte-unchanged
+    `call_failed`. The marker is read from `exc.marker`, NEVER string-matched from the message.
+    """
+    marker = getattr(exc, "marker", None)
+    if marker == "voice_dispatch_unacknowledged":
+        return "voice_dispatch_unacknowledged"
+    return "call_failed"
 
 # hosted-execution-seams.md v1.13 §5.4/§2f: the closed provisioner build/run failure-code table --
 # these used to be discarded at the reset()/provision() seam (caught as a bare `Exception`, only
@@ -445,7 +482,9 @@ _USERINFO_PATTERN = re.compile(r"://[^@/]+@")
 
 
 def _is_retryable(code: str) -> bool:
-    return _CODE_DOMAIN[code] in (
+    # C3 §4.5 step 5: `.get(...)`-with-default so an unmapped code defaults to
+    # infrastructure (retryable) instead of KeyError inside the `CallAborted` handler.
+    return _domain_for(code) in (
         FailureDomain.ENVIRONMENT,
         FailureDomain.INFRASTRUCTURE,
     ) or (code in _RETRYABLE_CODES)
@@ -465,7 +504,8 @@ def _sanitize_cause(message: str) -> str:
 
 def _failure(code: str, message: str) -> ReceiptFailure:
     return ReceiptFailure(
-        domain=_CODE_DOMAIN[code].value,
+        # C3 §4.5 step 5: `.get(...)`-with-default so an unmapped code cannot KeyError here.
+        domain=_domain_for(code).value,
         stage=HarnessStage.RUNNING.value,
         code=code,
         message=_truncate(message),
@@ -1888,11 +1928,15 @@ class HostedScheduler:
             )
         except CallAborted as exc:
             call = self._call_summary(exc.partial)
+            # C3 §4.5 step 3: select the receipt code from the CallAborted's structured marker.
+            # Ack-exhaustion -> `voice_dispatch_unacknowledged` (infrastructure, retried once on a
+            # fresh world like `call_failed`); everything else stays the byte-unchanged
+            # `call_failed`.
             return self._fault(
                 scenario,
                 world_index,
                 attempt,
-                _failure("call_failed", str(exc)),
+                _failure(_call_aborted_code(exc), str(exc)),
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=call,
             )

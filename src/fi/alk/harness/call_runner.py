@@ -152,6 +152,12 @@ _SILENT_AGENT_FAILURE_CODES = frozenset(
     {"no_conversation", "conversation_silence_timeout"}
 )
 
+# C3 §4.5: the engine's dispatch-ack ladder marks +60s exhaustion with this structured
+# `failure.code`. Matched here to pass the marker through on `CallAborted.marker` (never
+# string-matched from `failure.message`). Kept as a literal — the engine module that owns it
+# requires the optional `livekit` dependency this runner must import without.
+_VOICE_DISPATCH_UNACKNOWLEDGED = "voice_dispatch_unacknowledged"
+
 
 # --- collaborator seams (named, injectable test boundaries) -----------------------------------
 
@@ -1324,8 +1330,21 @@ class CallRunnerImpl:
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )
+            # C3 §4.5 step 2 (the one narrow call_runner change): the engine's dispatch-ack ladder
+            # surfaces +60s exhaustion via a STRUCTURED marker (`failure.code`), never a substring
+            # of `failure.message`. Pass it through on `CallAborted.marker` so the scheduler's
+            # code-selection branch emits the `voice_dispatch_unacknowledged` receipt code instead
+            # of the generic `call_failed`. No ladder logic lives here.
+            marker = (
+                case.failure.code
+                if case.failure is not None
+                and case.failure.code == _VOICE_DISPATCH_UNACKNOWLEDGED
+                else None
+            )
             raise CallAborted(
-                f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
+                f"voice_call_not_completed: {case.status.value}: {reason}",
+                partial=base,
+                marker=marker,
             )
 
         # Never fabricate calls for a call that produced no conversation -- the scheduler's own
