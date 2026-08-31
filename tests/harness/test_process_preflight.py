@@ -66,7 +66,10 @@ def _base_manifest_body() -> dict[str, Any]:
                 "run_command": ["python", "agent.py"],
                 "environment": {
                     "DATABASE_URL": "{{DATABASE_URL}}",
-                    "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}",
+                    # C3 / C1 §4: at parallelism>1 the dispatch name must carry BOTH
+                    # {{WORLD_INDEX}} and {{JOB_ID}} to stay unique across worlds and concurrent
+                    # jobs on the shared LiveKit namespace.
+                    "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}-{{JOB_ID}}",
                 },
                 "secret_purposes": ["target_provider"],
                 "user": "svc-agent",
@@ -1009,6 +1012,12 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         # C1 (world-port-model v1.3) §1: `fixed_port_consumable: true` with no `fixed_port` to qualify
         # is a model-layer validation error (raised in bundle_v2.py's SourceProcess validator).
         "fixed_port_consumable_requires_fixed_port",
+        # C1 (world-port-model v1.3) §1 / §6 preflight rejects (Track B): a duplicate declared port,
+        # a consumable declaration whose run command does not consume its per-world port, and (C3 /
+        # C1 §4) a non-world-unique LIVEKIT_AGENT_NAME at parallelism>1.
+        "fixed_port_duplicate",
+        "fixed_port_consumable_unwired",
+        "agent_name_not_world_unique",
     }
 )
 _SECTION_2E_MECHANICAL_CODES = frozenset(
@@ -1148,6 +1157,12 @@ _SECTION_2F_CODES = frozenset(
         # engine fault, `infrastructure` domain (retryable), never `seed_failed` (that code is
         # reserved for the customer's own migration/seed content).
         "store_statement_failed",
+        # `port_not_consumable` (C1 world-port-model v1.3 §4 decision 2): a TERMINAL job-failure
+        # reason — a consumable/knob-bearing process that binds its declared port instead of its
+        # allocated formula port leaves world 0 internally inconsistent under the frozen plan and
+        # cannot be salvaged into a W=1 run. Crosses the outbound seam as a surfaced failure reason
+        # (NOT a `parallelism_degraded` degrade event); `agent` domain (the customer agent's defect).
+        "port_not_consumable",
     }
 )
 # `ProcessRuntimeError` also raises codes that are deliberately INTERNAL-only — each marks a
@@ -1196,3 +1211,142 @@ def test_the_section_2f_extraction_itself_finds_a_nonempty_set() -> None:
     assert "spawn_failed" in raised
     assert "source_tree_unavailable" in raised
     assert "unsupported_capability_protocol" in raised
+
+
+# --- C1 §1 / C3 preflight rejects (Track B) --------------------------------------------------
+
+
+def _consumable_agent(body: dict[str, Any], **agent_overrides: Any) -> dict[str, Any]:
+    """Give the base `agent` source process a consumable fixed_port with the specified wiring."""
+    body["processes"][1] = {**body["processes"][1], **agent_overrides}
+    return body
+
+
+def test_a_consumable_process_wired_via_sh_c_and_env_dollar_key_passes(tmp_path: Path) -> None:
+    """C1 §1 one-clause check: {{PORT_<self>}} in an environment value the run_command references
+    by $KEY inside sh -c is the ONLY valid wiring — and it passes."""
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        return _consumable_agent(
+            body,
+            fixed_port=8080,
+            fixed_port_consumable=True,
+            run_command=["sh", "-c", "python agent.py --port $AGENT_PORT"],
+            environment={
+                "DATABASE_URL": "{{DATABASE_URL}}",
+                "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}-{{JOB_ID}}",
+                "AGENT_PORT": "{{PORT_agent}}",
+            },
+        )
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    assert (
+        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+        is None
+    )
+
+
+def test_a_consumable_token_only_in_an_unreferenced_env_var_is_unwired(tmp_path: Path) -> None:
+    """The token sits in an env var, but the run_command never references it — env-token presence
+    alone is not wiring (C1 §1)."""
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        return _consumable_agent(
+            body,
+            fixed_port=8080,
+            fixed_port_consumable=True,
+            run_command=["python", "agent.py"],
+            environment={
+                "DATABASE_URL": "{{DATABASE_URL}}",
+                "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}-{{JOB_ID}}",
+                "AGENT_PORT": "{{PORT_agent}}",
+            },
+        )
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="fixed_port_consumable_unwired"):
+        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_a_consumable_token_placed_directly_in_the_argv_is_unwired(tmp_path: Path) -> None:
+    """run_command is exec'd verbatim, never rendered — the argv-token clause was DELETED (C1
+    v1.3), so a {{PORT_<self>}} token in an argv no longer satisfies the check."""
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        return _consumable_agent(
+            body,
+            fixed_port=8080,
+            fixed_port_consumable=True,
+            run_command=["python", "agent.py", "--port", "{{PORT_agent}}"],
+            environment={
+                "DATABASE_URL": "{{DATABASE_URL}}",
+                "LIVEKIT_AGENT_NAME": "agent-w{{WORLD_INDEX}}-{{JOB_ID}}",
+            },
+        )
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="fixed_port_consumable_unwired"):
+        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_two_processes_declaring_the_same_fixed_port_is_a_duplicate(tmp_path: Path) -> None:
+    """C1 §1: two SourceProcesses cannot both bind the same port in the shared namespace."""
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1] = {**body["processes"][1], "fixed_port": 8080}
+        body["processes"].append(
+            {
+                "name": "sidecar",
+                "kind": "source",
+                "working_directory": ".",
+                "build_commands": [],
+                "run_command": ["python", "sidecar.py"],
+                "environment": {},
+                "secret_purposes": [],
+                "user": "svc-tools",
+                "depends_on": [],
+                "fixed_port": 8080,
+            }
+        )
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="fixed_port_duplicate"):
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_agent_name_missing_job_id_at_w_gt_1_is_rejected(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "agent-w{{WORLD_INDEX}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="agent_name_not_world_unique"):
+        preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_agent_name_missing_world_index_at_w_gt_1_is_rejected(tmp_path: Path) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "agent-{{JOB_ID}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="agent_name_not_world_unique"):
+        preflight_bundle(tmp_path, manifest, parallelism=4, secret_refs=TARGET_PROVIDER_REFS)
+
+
+def test_agent_name_not_world_unique_is_accepted_at_w1(tmp_path: Path) -> None:
+    """The guard is W>1 only — a degraded/serial job (parallelism=1) keeps a plain name."""
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["environment"]["LIVEKIT_AGENT_NAME"] = "agent-w{{WORLD_INDEX}}"
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    assert (
+        preflight_bundle(tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS)
+        is None
+    )
+
+
+def test_agent_name_with_both_placeholders_passes_at_high_w(tmp_path: Path) -> None:
+    manifest = _build_bundle(tmp_path)  # base body already carries both placeholders.
+    assert (
+        preflight_bundle(tmp_path, manifest, parallelism=8, secret_refs=TARGET_PROVIDER_REFS)
+        is None
+    )

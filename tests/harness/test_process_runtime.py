@@ -6970,3 +6970,786 @@ def test_provision_surfaces_dispatch_identity_on_runtime_metadata(
         {"livekit_agent_name": "agent-w0"},
         {"livekit_agent_name": "agent-w1"},
     ]
+
+
+# ============================================================================================
+# Track B-prov: C1 consumability + C2 admission / scan / partial-failure / freeze
+# ============================================================================================
+
+
+def _consumable_manifest(
+    *, fixed_port: int = 8080, consumable: bool = True
+) -> EnvironmentBundleV2:
+    """The shared `_manifest()` with `tools-api` given a (by default consumable) fixed_port."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1] = {
+            **body["processes"][1],
+            "fixed_port": fixed_port,
+            "fixed_port_consumable": consumable,
+        }
+        return body
+
+    return _manifest(mutate)
+
+
+# --- item 1: plan_ports consumability (pure) -------------------------------------------------
+
+
+def test_plan_ports_consumable_at_w_gt_1_allocates_formula_ports_excluding_declared() -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    plan = pr.plan_ports(manifest, instances=4)
+    assert plan.effective_instances == 4
+    assert plan.degraded_reason is None
+    for world_index in range(4):
+        port = plan.port_for("tools-api", world_index)
+        assert port != 8080  # declared value EXCLUDED at W>1.
+        assert port in range(15000, 15800)  # a per-world formula band port.
+    # every world, world 0 included, gets its OWN allocated port.
+    assert len({plan.port_for("tools-api", w) for w in range(4)}) == 4
+
+
+def test_plan_ports_consumable_at_w1_honors_the_declared_port() -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    plan = pr.plan_ports(manifest, instances=1)
+    assert plan.effective_instances == 1
+    assert plan.port_for("tools-api", 0) == 8080  # honored exactly, plan-time W=1 carve-out.
+
+
+def test_plan_ports_non_consumable_fixed_port_still_forces_effective_one() -> None:
+    manifest = _consumable_manifest(fixed_port=8080, consumable=False)
+    plan = pr.plan_ports(manifest, instances=4)
+    assert plan.effective_instances == 1
+    assert plan.degraded_reason == "fixed_port"
+    assert plan.port_for("tools-api", 0) == 8080
+
+
+def test_plan_ports_mixed_bundle_lands_at_effective_one_and_honors_consumable() -> None:
+    """A code-fixed sibling forces effective 1; the consumability iff-rule then keys on the
+    EFFECTIVE count (=1) and the consumable declaration IS honored (D15)."""
+
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        # tools-api consumable @8080; agent code-fixed @9000 (forces effective 1).
+        body["processes"][1] = {
+            **body["processes"][1],
+            "fixed_port": 8080,
+            "fixed_port_consumable": True,
+        }
+        body["processes"][2] = {
+            **body["processes"][2],
+            "fixed_port": 9000,
+            "fixed_port_consumable": False,
+        }
+        return body
+
+    manifest = _manifest(mutate)
+    plan = pr.plan_ports(manifest, instances=4)
+    assert plan.effective_instances == 1
+    assert plan.degraded_reason == "fixed_port"
+    assert plan.port_for("tools-api", 0) == 8080  # consumable honored at effective 1.
+    assert plan.port_for("agent", 0) == 9000
+
+
+# --- item 3: admission math (pure) -----------------------------------------------------------
+
+
+def test_admit_parallelism_clamps_on_observed_cpu() -> None:
+    # cpu_fit = floor((2.1 - 0.5) / (0.6 + 0.2)) = floor(2.0) = 2
+    assert pr.admit_parallelism(
+        4, cpu_observed=2.1, mem_observed_gib=None, cpu_declared=None, mem_declared_gib=None
+    ) == 2
+
+
+def test_admit_parallelism_falls_back_to_declared_per_dimension() -> None:
+    # observed cpu None -> declared 1.0 -> cpu_fit = floor((1-0.5)/0.8)=0 -> W'=max(1,0)=1
+    assert pr.admit_parallelism(
+        4, cpu_observed=None, mem_observed_gib=8.0, cpu_declared=1.0, mem_declared_gib=None
+    ) == 1
+
+
+def test_admit_parallelism_no_bound_does_not_clamp() -> None:
+    assert pr.admit_parallelism(
+        4, cpu_observed=None, mem_observed_gib=None, cpu_declared=None, mem_declared_gib=None
+    ) == 4
+
+
+def test_admit_parallelism_never_zero_or_above_requested() -> None:
+    assert pr.admit_parallelism(
+        4, cpu_observed=0.1, mem_observed_gib=0.1, cpu_declared=None, mem_declared_gib=None
+    ) == 1
+    assert pr.admit_parallelism(
+        2, cpu_observed=64.0, mem_observed_gib=256.0, cpu_declared=None, mem_declared_gib=None
+    ) == 2
+
+
+# --- item 2: pre-plan scan (pure) ------------------------------------------------------------
+
+
+def test_scan_loopback_ports_finds_all_three_forms() -> None:
+    found = pr.scan_loopback_ports(
+        {
+            "A": "http://localhost:8080/x",
+            "B": "127.0.0.1:9000",
+            "C": "http://[::1]:7000",
+            "D": "https://example.com:443",  # not loopback.
+        }
+    )
+    assert found == {"A": {8080}, "B": {9000}, "C": {7000}}
+
+
+# --- C1 §4 bind-error attribution (pure) -----------------------------------------------------
+
+
+def test_parse_bind_error_port_reads_the_errored_port() -> None:
+    assert pr.parse_bind_error_port("OSError: [Errno 48] Address already in use: 0.0.0.0:8081") == 8081
+    assert pr.parse_bind_error_port("started_check timed out") is None
+
+
+def test_attribute_declared_port_by_consumable_process_is_terminal() -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    plan = pr.plan_ports(manifest, instances=2)
+    reason = pr.attribute_world_start_failure(
+        process_name="tools-api",
+        log_tail="[Errno 48] Address already in use: 127.0.0.1:8080",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=False,
+    )
+    assert reason == "port_not_consumable"
+
+
+def test_attribute_formula_port_collision_is_stale_squat_graceful() -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    plan = pr.plan_ports(manifest, instances=2)
+    squatted = plan.port_for("tools-api", 1)  # a live formula port.
+    reason = pr.attribute_world_start_failure(
+        process_name="tools-api",
+        log_tail=f"[Errno 48] Address already in use: 127.0.0.1:{squatted}",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=False,
+    )
+    assert reason == "world_start_failed"
+
+
+def test_attribute_default_port_by_knob_bearing_worker_is_terminal() -> None:
+    manifest = _manifest()
+    plan = pr.plan_ports(manifest, instances=2)
+    reason = pr.attribute_world_start_failure(
+        process_name="agent",
+        log_tail="[Errno 48] Address already in use: 0.0.0.0:8081",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=True,
+    )
+    assert reason == "port_not_consumable"
+
+
+def test_attribute_no_bind_evidence_knob_bearing_is_conformance_gate_failed() -> None:
+    manifest = _manifest()
+    plan = pr.plan_ports(manifest, instances=2)
+    reason = pr.attribute_world_start_failure(
+        process_name="agent",
+        log_tail="worker crashed for an unrelated reason",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=True,
+    )
+    assert reason == "conformance_gate_failed"
+
+
+# --- integration: admission clamp (item 3) ---------------------------------------------------
+
+
+def test_provision_admission_clamps_to_one_and_records_resource_limited(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: 1.0,  # cpu_fit = floor((1-0.5)/0.8) = 0 -> W'=1
+        mem_observer=lambda: None,
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["requested_parallelism"] == 4
+    assert build["effective_parallelism"] == 1
+    assert build["degrade_reason"] == "resource_limited"
+    assert build["degrade_events"] == [
+        {"reason": "resource_limited", "from_w": 4, "to_w": 1}
+    ]
+
+
+def test_provision_admission_falls_back_to_declared_when_observed_read_raises(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "job.json").write_text(
+        json.dumps({"job_id": "j", "runtime": {"cpu_units": 1, "memory_mb": 64000}})
+    )
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+
+    def boom() -> float | None:
+        raise OSError("cgroup read blew up")
+
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=boom,  # falls back to declared cpu_units=1 -> cpu_fit 0 -> W'=1
+        mem_observer=lambda: None,  # memory declared 64GiB is generous; cpu binds.
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_reason"] == "resource_limited"
+
+
+def test_provision_no_observed_no_declared_does_not_clamp(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: None,
+        mem_observer=lambda: None,
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0, 1, 2]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == []
+
+
+# --- integration: pre-plan scan (item 2) -----------------------------------------------------
+
+
+def _no_clamp(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = dict(
+        cpu_observer=lambda: None,
+        mem_observer=lambda: None,
+        listener_probe=lambda port: False,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_provision_scan_degrade_tier_declared_port_degrades_to_one(tmp_path: Path) -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "http://localhost:8080/tools"}))
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
+        **_no_clamp(),
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0]
+    # plan-time W=1 carve-out: the declared port is honored again.
+    assert runtimes[0].endpoints["tools"].address == "http://localhost:8080"
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == [
+        {"reason": "literal_local_endpoint", "from_w": 4, "to_w": 1}
+    ]
+
+
+def test_provision_scan_warn_tier_non_declared_port_runs_at_requested_w(tmp_path: Path) -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "http://localhost:18090"}))
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
+        **_no_clamp(),
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0, 1, 2, 3]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == []  # warn tier never degrades.
+
+
+def test_provision_scan_skipped_at_w1(tmp_path: Path) -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "http://localhost:8080"}))
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
+        **_no_clamp(),
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == []  # no scan at ceiling 1.
+
+
+def test_provision_per_ref_resolution_gap_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "j",
+                "agent": {
+                    "secret_refs": {
+                        "LIVEKIT_API_KEY": {
+                            "manager": "platform-vault",
+                            "key": "k",
+                            "version": "1",
+                            "purpose": "target_provider",
+                        }
+                    }
+                },
+            }
+        )
+    )
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    # secrets.json absent -> the declared ref has no value -> typed job failure, fail closed.
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    with pytest.raises(pr.ProcessRuntimeError):
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=2,
+                require_declared_user=False,
+            )
+        )
+
+
+# --- integration: partial world-start failure (item 4) ---------------------------------------
+
+
+def _inject_world_failure(
+    provider: pr.ProcessRuntimeProvider,
+    fail_index: int,
+    *,
+    process: str,
+    log: str,
+) -> None:
+    """Wrap `_ensure_world` so a chosen world index raises a typed failure carrying a partial
+    handle whose captured log is `log` (the bind-error evidence attribution reads)."""
+    original = provider._ensure_world
+
+    def wrapped(world_index: int) -> None:
+        if world_index == fail_index:
+            exc = pr.ProcessRuntimeError(
+                "spawn", "spawn_failed", "world build failed", process=process
+            )
+            handle = FakeHandle(output=log)
+            exc.partial_handles = {  # type: ignore[attr-defined]
+                process: pr.SpawnedWorldProcess(
+                    process_name=process,
+                    handle=handle,
+                    port=0,
+                    world_index=world_index,
+                )
+            }
+            raise exc
+        return original(world_index)
+
+    provider._ensure_world = wrapped  # type: ignore[method-assign]
+
+
+def test_provision_main_loop_partial_failure_continues_on_prefix(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    _inject_world_failure(provider, 2, process="agent", log="boom (no bind error)")
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0, 1]  # contiguous prefix, no renumbering.
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["effective_parallelism"] == 2
+    assert build["degrade_events"] == [
+        {"reason": "world_start_failed", "from_w": 4, "to_w": 2}
+    ]
+
+
+def test_provision_world_zero_failure_on_first_build_is_a_job_failure(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    _inject_world_failure(provider, 0, process="agent", log="boom")
+    with pytest.raises(pr.ProcessRuntimeError):
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=2,
+                require_declared_user=False,
+            )
+        )
+    # E=0 is unrepresentable — no degrade event was written.
+    build_path = tmp_path / "artifacts" / "build.json"
+    if build_path.exists():
+        build = json.loads(build_path.read_text())
+        assert build.get("degrade_events", []) == []
+
+
+# --- integration: port_not_consumable terminal vs world_start_failed (item 5) ----------------
+
+
+def test_provision_gate_branch_declared_port_bind_by_consumable_is_terminal(
+    tmp_path: Path,
+) -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    _inject_world_failure(
+        provider,
+        1,
+        process="tools-api",
+        log="[Errno 48] Address already in use: 127.0.0.1:8080",
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=2,
+                require_declared_user=False,
+            )
+        )
+    assert excinfo.value.code == "port_not_consumable"
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    # NO degrade event, no synthetic conformance=False (terminal, not a degrade).
+    assert build["degrade_events"] == []
+    assert build["conformance"] is None
+
+
+def test_provision_gate_branch_formula_squat_is_graceful_world_start_failed(
+    tmp_path: Path,
+) -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    squatted = pr.plan_ports(manifest, instances=2).port_for("tools-api", 1)
+    _inject_world_failure(
+        provider,
+        1,
+        process="tools-api",
+        log=f"[Errno 48] Address already in use: 127.0.0.1:{squatted}",
+    )
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0]  # graceful degrade to 1.
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == [
+        {"reason": "world_start_failed", "from_w": 2, "to_w": 1}
+    ]
+
+
+def test_provision_gate_listener_check_finds_declared_listener_terminal(
+    tmp_path: Path,
+) -> None:
+    manifest = _consumable_manifest(fixed_port=8080)
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: None,
+        mem_observer=lambda: None,
+        listener_probe=lambda port: port == 8080,  # a lying consumable left 8080 bound.
+    )
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=2,
+                require_declared_user=False,
+            )
+        )
+    assert excinfo.value.code == "port_not_consumable"
+
+
+# --- integration: per-build-identity freeze (item 6) -----------------------------------------
+
+
+def test_provision_reconcile_carries_the_first_port_plan_forward(tmp_path: Path) -> None:
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=3,
+            require_declared_user=False,
+        )
+    )
+    frozen = provider._frozen_port_plan
+    # A reconcile call passing a DIFFERENT instances must NOT re-plan.
+    asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            require_declared_user=False,
+        )
+    )
+    assert provider._context.port_plan is frozen
+    assert provider._context.port_plan.effective_instances == 3
+
+
+def test_provision_digest_rebuild_carries_ledger_forward_and_reclassifies_ports(
+    tmp_path: Path,
+) -> None:
+    # First build (W=4): a warn-tier secret whose port is NOT declared -> retained, no degrade.
+    manifest_a = _manifest()
+    manifest_b = _consumable_manifest(fixed_port=18090)  # NEWLY declares the retained port.
+    manifest_b = _manifest(
+        lambda body: {
+            **body,
+            "processes": [
+                body["processes"][0],
+                {**body["processes"][1], "fixed_port": 18090, "fixed_port_consumable": True},
+                body["processes"][2],
+            ],
+            "digest": "sha256:" + "9" * 64,
+        }
+    )
+    source, bundle_dir = _provision_dirs(tmp_path)
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps({"LIVEKIT_API_KEY": "http://localhost:18090"}))
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path,
+        secret_purpose_map={"LIVEKIT_API_KEY": "target_provider"},
+        **_no_clamp(),
+    )
+    first = asyncio.run(
+        provider.provision(
+            manifest_a,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in first] == [0, 1, 2, 3]  # warn tier: runs at 4.
+    assert 18090 in provider._retained_scan_ports
+
+    # Digest rebuild: the new manifest NEWLY declares 18090 -> reclassify -> degrade to 1.
+    second = asyncio.run(
+        provider.provision(
+            manifest_b,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in second] == [0]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert {"reason": "literal_local_endpoint", "from_w": 4, "to_w": 1} in build[
+        "degrade_events"
+    ]
+
+
+# --- integration: spawn-time override warning (item 8) ---------------------------------------
+
+
+def test_spawn_time_override_warning_fires_when_secret_overrides_a_guarded_key(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    process = _source_process(
+        name="agent",
+        environment={"FI_LOAD_THRESHOLD": "inf"},
+        secret_purposes=["target_provider"],
+    )
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    with caplog.at_level("WARNING"):
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=tmp_path / "w0",
+            world_index=0,
+            port_plan=_solo_port_plan("agent"),
+            configuration_addresses={},
+            secret_values={"FI_LOAD_THRESHOLD": "0.7"},
+            secret_purposes={"FI_LOAD_THRESHOLD": "target_provider"},
+            runner=lambda *a, **k: FakeHandle(),
+            require_declared_user=False,
+        )
+    assert any("FI_LOAD_THRESHOLD" in r.message for r in caplog.records)
+    # the values themselves must never be logged.
+    assert all("0.7" not in r.message for r in caplog.records)
+
+
+def test_spawn_time_override_warning_silent_when_no_rendered_value(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    process = _source_process(
+        name="agent", environment={}, secret_purposes=["target_provider"]
+    )  # no rendered guarded key.
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    with caplog.at_level("WARNING"):
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=tmp_path / "w0",
+            world_index=0,
+            port_plan=_solo_port_plan("agent"),
+            configuration_addresses={},
+            secret_values={"FI_LOAD_THRESHOLD": "0.7"},
+            secret_purposes={"FI_LOAD_THRESHOLD": "target_provider"},
+            runner=lambda *a, **k: FakeHandle(),
+            require_declared_user=False,
+        )
+    assert not any("FI_LOAD_THRESHOLD" in r.message for r in caplog.records)
+
+
+def test_provision_two_stage_degrade_yields_two_ordered_ledger_entries(tmp_path: Path) -> None:
+    """C2 checklist 15: resource_limited (4->3) then world_start_failed (3->2) → two entries,
+    in causal order, requested constant."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: 3.1,  # cpu_fit = floor((3.1-0.5)/0.8) = floor(3.25) = 3 -> W'=3
+        mem_observer=lambda: None,
+        listener_probe=lambda port: False,
+    )
+    _inject_world_failure(provider, 2, process="agent", log="boom (no bind error)")
+    runtimes = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in runtimes] == [0, 1]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == [
+        {"reason": "resource_limited", "from_w": 4, "to_w": 3},
+        {"reason": "world_start_failed", "from_w": 3, "to_w": 2},
+    ]
+    assert build["requested_parallelism"] == 4
+    assert build["degrade_reason"] == "world_start_failed"  # final state mirror.
+
+
+def test_provision_reconcile_failure_re_raises_and_leaves_ledger_unchanged(
+    tmp_path: Path,
+) -> None:
+    """C2 §5 rule 2R: the stage-5 catches are NOT armed on reconcile — a rebuild failure
+    re-raises to WorldPool with NO ledger entry and NO ceiling change."""
+    manifest = _manifest()
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(secrets_path=tmp_path / "secrets.json", **_no_clamp())
+    first = asyncio.run(
+        provider.provision(
+            manifest,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in first] == [0, 1]
+    ledger_before = json.loads(
+        (tmp_path / "artifacts" / "build.json").read_text()
+    )["degrade_events"]
+    # Mark world 1 sick so the reconcile call actually rebuilds it, and make that rebuild fail.
+    provider._runtimes[1].state = pr.RuntimeState.UNHEALTHY
+    _inject_world_failure(provider, 1, process="agent", log="rebuild failed")
+    with pytest.raises(pr.ProcessRuntimeError):
+        asyncio.run(
+            provider.provision(
+                manifest,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=2,
+                require_declared_user=False,
+            )
+        )
+    assert ledger_before == []  # nothing was recorded on the first (clean) build.
+    assert provider._effective_ceiling == 2  # unchanged by the reconcile failure.

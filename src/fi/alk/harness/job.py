@@ -232,6 +232,10 @@ class HarnessJob(BaseModel):
                 raise ValueError("hosted_scenario_count_out_of_range")
             if self.runtime.isolation is not RuntimeIsolation.DEDICATED_VM:
                 raise ValueError("hosted_isolation_must_be_dedicated_vm")
+            # C2 §2 (KEPT, universal, unchanged): the guest gate rejects W > DECLARED cpu_units
+            # for every hosted job, before any admission stage runs. Runtime-observed admission
+            # (process_runtime._provision_sync) then clamps on observed resources, so effective W
+            # binds on MIN(observed, declared) — neither side can admit past the other.
             if self.runtime.parallelism > self.runtime.cpu_units:
                 raise ValueError("hosted_parallelism_exceeds_cpu")
             if self.artifacts.level is ArtifactLevel.LOCAL_ONLY:

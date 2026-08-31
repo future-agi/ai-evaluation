@@ -39,7 +39,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -248,20 +248,339 @@ class PortPlan:
 
 
 def plan_ports(manifest: EnvironmentBundleV2, *, instances: int) -> PortPlan:
+    """C1 §2 consumability-aware allocation. `fixed_port` splits by `fixed_port_consumable`:
+
+    - **code-fixed** (`fixed_port_consumable=False`): today's semantics — forces
+      `effective_instances` to 1 (reason `fixed_port` at requested W>1) and is honored exactly.
+    - **env-consumable** (`fixed_port_consumable=True`): parallelizes — at the plan's EFFECTIVE
+      W>1 EVERY world (world 0 included) gets an allocated formula port and the declared value is
+      EXCLUDED; at plan-time effective W=1 the declared value is honored exactly as today.
+
+    The consumability iff-rule keys on the plan's EFFECTIVE instance count computed HERE, AFTER
+    code-fixed forcing (D15): a mixed bundle (code-fixed + consumable) lands at effective 1 and
+    the consumable declaration IS honored — matching today's behavior."""
     ordinals = _ordinal_map(manifest)
     job_shared = _job_shared_process_names(manifest)
-    fixed_ports = {
+    code_fixed_ports = {
         process.name: process.fixed_port
         for process in manifest.processes
-        if isinstance(process, SourceProcess) and process.fixed_port is not None
+        if isinstance(process, SourceProcess)
+        and process.fixed_port is not None
+        and not process.fixed_port_consumable
     }
+    consumable_ports = {
+        process.name: process.fixed_port
+        for process in manifest.processes
+        if isinstance(process, SourceProcess)
+        and process.fixed_port is not None
+        and process.fixed_port_consumable
+    }
+    # Only a CODE-FIXED port forces effective 1 (today's clean degrade). Consumability then keys
+    # on this EFFECTIVE count.
+    effective_instances = 1 if code_fixed_ports else instances
+    fixed_ports = dict(code_fixed_ports)
+    if effective_instances == 1:
+        # Plan-time effective W=1 (requested 1, an admission/scan clamp landing here, or a
+        # code-fixed sibling forcing it): the consumable declared port is honored exactly.
+        fixed_ports.update(consumable_ports)
+    else:
+        # Plan-time effective W>1: consumable processes get allocated formula ports in EVERY
+        # world; the declared value is structurally excluded (reserved bands are disjoint from a
+        # legal fixed_port). Assert the exclusion per plan — a belt against a future band edit.
+        for name, declared in consumable_ports.items():
+            ordinal = ordinals[name]
+            for world_index in range(effective_instances):
+                formula = _PER_WORLD_BASE + _PER_WORLD_STRIDE * world_index + ordinal
+                if formula == declared:
+                    raise ProcessRuntimeError(
+                        "provision",
+                        _INTERNAL_INVARIANT_VIOLATED,
+                        f"consumable {name}: formula port {formula} collides with its declared "
+                        f"value {declared} (a band edit broke the fixed_port_reserved guard)",
+                    )
     return PortPlan(
         ordinals=ordinals,
         job_shared=job_shared,
         fixed_ports=fixed_ports,
-        effective_instances=1 if fixed_ports else instances,
-        degraded_reason="fixed_port" if fixed_ports and instances > 1 else None,
+        effective_instances=effective_instances,
+        degraded_reason="fixed_port" if code_fixed_ports and instances > 1 else None,
     )
+
+
+def declared_fixed_ports(manifest: EnvironmentBundleV2) -> frozenset[int]:
+    """The set of every `SourceProcess.fixed_port` value in the manifest — the same set
+    `plan_ports` collects (`:236-240`), computed directly here for the pre-plan secret scan
+    (C2 §4 item 2a) and the gate declared-port listener check (C1 §4), both of which run
+    BEFORE / independent of a `PortPlan`. Consumability is irrelevant to membership: a declared
+    port is declared whether or not it is flagged consumable (C1 §5.4a)."""
+    return frozenset(
+        process.fixed_port
+        for process in manifest.processes
+        if isinstance(process, SourceProcess) and process.fixed_port is not None
+    )
+
+
+def consumable_declared_ports(manifest: EnvironmentBundleV2) -> dict[int, str]:
+    """Map each CONSUMABLE-declared `fixed_port` value to its process name (C1 §4's fourth
+    attribution arm: a consumable-declared process binding its OWN declared port is the defect,
+    knob-bearing or not)."""
+    return {
+        process.fixed_port: process.name
+        for process in manifest.processes
+        if isinstance(process, SourceProcess)
+        and process.fixed_port is not None
+        and process.fixed_port_consumable
+    }
+
+
+# --- C2 §2 admission math (the `resource_limited` anchor) --------------------------------------
+#
+# Constants are plan §6 estimates (±40%, OD-1) — the single voice-tier default until Track D
+# measures. The formula shape is normative (C2 §2); only the numbers are provisional.
+
+_ADMISSION_R_CPU = 0.5  # vCPU harness reserve
+_ADMISSION_R_MEM = 1.0  # GiB harness reserve
+_ADMISSION_C_WORLD = 0.6  # vCPU per-world in-call cost (voice tier)
+_ADMISSION_M_WORLD = 0.7  # GiB per-world in-call cost
+_ADMISSION_C_CALL = 0.2  # vCPU per active call
+_ADMISSION_M_CALL = 0.25  # GiB per active call
+
+
+def _cgroup_cpu_quota() -> float | None:
+    """Runtime-observed CPU quota binding the sandbox (C2 §2/D29), in vCPU — the cgroup QUOTA,
+    NEVER `os.cpu_count()`/host cores. cgroup v2 `cpu.max` (`quota period`, `max` == unbounded),
+    then cgroup v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us` (`-1` quota == unbounded). Returns
+    `None` when no bound is readable or the bound is unbounded — the caller then falls back to
+    the declared value (C2 §2 read-failure rule), so admission never raises."""
+    try:
+        raw = Path("/sys/fs/cgroup/cpu.max").read_text(encoding="utf-8").split()
+        if raw:
+            if raw[0] == "max":
+                return None
+            quota = int(raw[0])
+            period = int(raw[1]) if len(raw) > 1 else 100000
+            if quota > 0 and period > 0:
+                return quota / period
+    except (OSError, ValueError):
+        pass
+    try:
+        quota = int(
+            Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text(encoding="utf-8").strip()
+        )
+        period = int(
+            Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text(encoding="utf-8").strip()
+        )
+        if quota > 0 and period > 0:
+            return quota / period
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _cgroup_memory_limit_gib() -> float | None:
+    """Runtime-observed memory limit binding the sandbox (C2 §2), in GiB — cgroup v2
+    `memory.max` (`max` == unbounded), then cgroup v1 `memory.limit_in_bytes` (a sentinel near
+    2**63 == unbounded). Returns `None` when unreadable or unbounded (caller falls back to the
+    declared value)."""
+    try:
+        raw = Path("/sys/fs/cgroup/memory.max").read_text(encoding="utf-8").strip()
+        if raw == "max":
+            return None
+        value = int(raw)
+        if value > 0:
+            return value / (1024**3)
+    except (OSError, ValueError):
+        pass
+    try:
+        value = int(
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+            .read_text(encoding="utf-8")
+            .strip()
+        )
+        # cgroup v1 encodes "no limit" as a huge page-aligned sentinel (~2**63); treat anything
+        # implausibly large (> 1 PiB) as unbounded.
+        if 0 < value < (1 << 50):
+            return value / (1024**3)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def admit_parallelism(
+    requested: int,
+    *,
+    cpu_observed: float | None,
+    mem_observed_gib: float | None,
+    cpu_declared: float | None,
+    mem_declared_gib: float | None,
+) -> int:
+    """C2 §2's `W' = max(1, min(W_requested, cpu_fit, mem_fit))`, per-dimension fail-closed
+    (D29): a dimension whose observed read failed/None/unbounded falls back to its DECLARED
+    job.json value; a dimension with neither observed nor declared bound does not constrain W'
+    (its fit term is dropped). `max(1, …)` is load-bearing — admission NEVER raises and never
+    yields 0. Returns W' in `1..requested`."""
+    if requested <= 1:
+        return max(1, requested)
+
+    fits: list[int] = [requested]
+    cpu = cpu_observed if cpu_observed is not None else cpu_declared
+    if cpu is not None:
+        cpu_fit = int((cpu - _ADMISSION_R_CPU) // (_ADMISSION_C_WORLD + _ADMISSION_C_CALL))
+        fits.append(cpu_fit)
+    mem = mem_observed_gib if mem_observed_gib is not None else mem_declared_gib
+    if mem is not None:
+        mem_fit = int(
+            (mem - _ADMISSION_R_MEM) // (_ADMISSION_M_WORLD + _ADMISSION_M_CALL)
+        )
+        fits.append(mem_fit)
+    return max(1, min(fits))
+
+
+# --- C2 §4 pre-plan literal-endpoint secret scan ----------------------------------------------
+
+# All three loopback spellings (C1 §5.4 / C2 §4 item 2: `localhost`, `127.0.0.1`, `[::1]`),
+# each followed by `:<port>`. `[::1]` is bracketed in a URL authority; the bare forms are not.
+_LOOPBACK_LITERAL = re.compile(
+    r"(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})",
+    re.IGNORECASE,
+)
+
+
+def scan_loopback_ports(secret_values: dict[str, str]) -> dict[str, set[int]]:
+    """C2 §4: scan resolved secret VALUES for loopback endpoint literals, returning
+    `{alias: {ports}}` for every alias whose value carries at least one. Ports only — values are
+    never retained or logged past this (§4 item 5 hygiene). A port outside `1..65535` is ignored
+    (a false lexical match, e.g. a long digit run)."""
+    found: dict[str, set[int]] = {}
+    for alias, value in secret_values.items():
+        ports = {
+            port
+            for match in _LOOPBACK_LITERAL.finditer(value)
+            if 1 <= (port := int(match.group(1))) <= 65535
+        }
+        if ports:
+            found[alias] = ports
+    return found
+
+
+# C2 §4a: the four guarded keys whose injected-secret override is surfaced as a spawn-time
+# warning (C1 §4 legislates all four as MUST members of the same channel).
+_SPAWN_GUARDED_KEYS = (
+    "LIVEKIT_AGENT_NAME",
+    "FI_LOAD_THRESHOLD",
+    "FI_NUM_IDLE_PROCESSES",
+    "FI_WORKER_HEALTH_PORT",
+)
+
+
+# --- C1 §4 bind-error attribution -------------------------------------------------------------
+
+# `[Errno 48]` (macOS/BSD) / `[Errno 98]` (Linux) address-in-use, and the textual form both
+# libc and Python surface. The port is read off the same line, when one is present.
+_BIND_ERROR = re.compile(
+    r"errno\s*(?:48|98)|address already in use|address in use", re.IGNORECASE
+)
+_BIND_ERROR_PORT = re.compile(r":(\d{1,5})\b")
+
+
+def parse_bind_error_port(log_tail: str) -> int | None:
+    """C1 §4 bind-death evidence: return the errored port named on an address-in-use line in a
+    failing process's log tail, or `None` when there is no bind-error line (a non-bind failure —
+    a bare started_check timeout — carries no port, which the attribution treats as
+    `conformance_gate_failed`, never `port_not_consumable`)."""
+    for line in log_tail.splitlines():
+        if _BIND_ERROR.search(line):
+            port_match = None
+            for port_match in _BIND_ERROR_PORT.finditer(line):
+                pass  # keep the LAST `:<port>` on the line — the address is usually rightmost.
+            if port_match is not None:
+                port = int(port_match.group(1))
+                if 1 <= port <= 65535:
+                    return port
+    return None
+
+
+def _formula_port_values(port_plan: PortPlan) -> frozenset[int]:
+    """Every port the plan formula would hand out (the reserved bands, offset by each process's
+    ordinal) — used to identify the stale-squat class (bind evidence naming a FORMULA port is a
+    graceful `world_start_failed`, never `port_not_consumable`; C1 §4 anti-false-positive). A
+    fixed port is never a formula port by construction (band-disjoint), so `fixed_ports` is
+    excluded."""
+    values: set[int] = set()
+    for name, ordinal in port_plan.ordinals.items():
+        if name in port_plan.fixed_ports:
+            continue
+        if name in port_plan.job_shared:
+            values.add(_JOB_SHARED_BASE + ordinal)
+        else:
+            # Per-world ports across a modest world span; the exact world is not known at the
+            # attribution site, so cover a generous prefix of the stride.
+            for world_index in range(64):
+                values.add(_PER_WORLD_BASE + _PER_WORLD_STRIDE * world_index + ordinal)
+    return frozenset(values)
+
+
+def attribute_world_start_failure(
+    *,
+    process_name: str | None,
+    log_tail: str,
+    manifest: EnvironmentBundleV2,
+    port_plan: PortPlan,
+    knob_bearing: bool,
+) -> str:
+    """C1 §4's world-≥1 start-failure attribution mapping. Returns one of
+    `port_not_consumable` (TERMINAL job failure — decision 2), `world_start_failed`
+    (graceful degrade), or `conformance_gate_failed` (graceful degrade). Inputs are the failing
+    process name, its log tail (for bind evidence), and whether it is knob-bearing (its rendered
+    env carries `FI_WORKER_HEALTH_PORT`)."""
+    errored_port = parse_bind_error_port(log_tail)
+    if errored_port is None:
+        # No bind evidence: a knob-bearing worker can die at world 1 for port-unrelated reasons
+        # (conformance_gate_failed); any other process is world_start_failed.
+        return "conformance_gate_failed" if knob_bearing else "world_start_failed"
+
+    consumable = consumable_declared_ports(manifest)
+    declared = declared_fixed_ports(manifest)
+    formula = _formula_port_values(port_plan)
+
+    # Arm 4 (declared port bound by a consumable-declared process — the lying consumable),
+    # regardless of knob-bearing status.
+    if (
+        errored_port in consumable
+        and consumable[errored_port] == process_name
+    ) or (errored_port in consumable):
+        return "port_not_consumable"
+    # A formula-assigned port collision is the stale-squat class — graceful, never terminal.
+    if errored_port in formula:
+        return "world_start_failed"
+    # A declared (but non-consumable) port bound by another process is not this arm's subject —
+    # a non-consumable fixed_port never reaches W>1 (it forces effective 1 in plan_ports), so a
+    # bind death on it at W>1 is a stale squat / unrelated failure: graceful.
+    if errored_port in declared:
+        return "world_start_failed"
+    # Non-formula, non-declared port (e.g. framework default 8081) squatted by a knob-bearing
+    # worker → the worker ignored its FI_WORKER_HEALTH_PORT allocation.
+    if knob_bearing:
+        return "port_not_consumable"
+    return "world_start_failed"
+
+
+def _default_listener_probe(port: int) -> bool:
+    """C1 §4 gate declared-port listener check: return True iff something is listening on
+    `localhost:<port>` in the sandbox's single shared network namespace. A connect that
+    succeeds (or is refused with EISCONN-class) means a listener exists; connection-refused
+    means none. Point-in-time by design (the known residual is recorded in C1 §4)."""
+    for family, addr in ((socket.AF_INET, ("127.0.0.1", port)), (socket.AF_INET6, ("::1", port))):
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.settimeout(0.2)
+        try:
+            sock.connect(addr)
+            return True
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    return False
 
 
 # --- engine credentials, generated once per job -----------------------------------------------
@@ -1703,6 +2022,23 @@ def spawn_source_process(
         for name, address in configuration_addresses.items()
         if name in process.environment
     }
+    # C2 §4a spawn-time override warning: if an injected secret OVERRIDES a guarded knob/name
+    # (injected value present AND a rendered value present AND the two differ), surface a warning
+    # naming the KEY — never either value (the injected one is a secret). Authoritative
+    # capability endpoints are exempt (re-asserted world-correct AFTER injection below).
+    for key in _SPAWN_GUARDED_KEYS:
+        if (
+            key in injected
+            and key in rendered
+            and key not in authoritative_endpoints
+            and injected[key] != rendered[key]
+        ):
+            logger.warning(
+                "spawn: injected secret overrides %s for process %s "
+                "(values withheld); the harness-set value will not take effect",
+                key,
+                process.name,
+            )
     env = _base_process_env(
         build_dir,
         {
@@ -3324,6 +3660,12 @@ class BuildOutput:
     requested_parallelism: int | None = None
     effective_parallelism: int | None = None
     degrade_reason: str | None = None
+    # C2 §6 / C4 §2: the ordered degrade ledger — `{reason, from_w, to_w}` in causal order, one
+    # entry per reason (dedup UPDATES `to_w`, never a second entry). The Track C′ emitter
+    # (`hosted_entrypoint`) turns each entry into one `parallelism_degraded` event; C2 (this
+    # module) owns only the WRITER side. `port_not_consumable` is NEVER a member — it is a
+    # terminal job failure, not a degrade (C1 v1.3 §4 decision 2).
+    degrade_events: list[dict[str, JsonValue]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, JsonValue]:
         return {
@@ -3334,6 +3676,7 @@ class BuildOutput:
             "requested_parallelism": self.requested_parallelism,
             "effective_parallelism": self.effective_parallelism,
             "degrade_reason": self.degrade_reason,
+            "degrade_events": [dict(event) for event in self.degrade_events],
         }
 
 
@@ -4516,6 +4859,9 @@ class ProcessRuntimeProvider:
         public_url_resolver: Callable[[int, int], str] | None = None,
         provider_attempt_id: str | None = None,
         provider_expires_at: datetime | None = None,
+        cpu_observer: Callable[[], float | None] = _cgroup_cpu_quota,
+        mem_observer: Callable[[], float | None] = _cgroup_memory_limit_gib,
+        listener_probe: Callable[[int], bool] | None = None,
     ) -> None:
         self._runner = runner
         self._sync_run = sync_run
@@ -4570,6 +4916,20 @@ class ProcessRuntimeProvider:
         self._provider_receipts: dict[int, ProviderProvisionReceipt] = {}
         self._provider_contexts: dict[int, ProviderContext] = {}
 
+        # C2 §1 rule 3 / §2 / §4 provider-instance state (per attempt): the effective ceiling
+        # latch (monotone non-increasing), the degrade ledger, the in-memory retained scan
+        # port-set (ports only, never values, never written to build.json), and the FIRST
+        # build's frozen port plan (carried forward UNCHANGED on the reconcile path — C1 §2 /
+        # C2 §1 rule 4 (b)). All reset only by a new attempt (`close()`); carried FORWARD across
+        # a same-job-identity digest rebuild.
+        self._cpu_observer = cpu_observer
+        self._mem_observer = mem_observer
+        self._listener_probe = listener_probe or _default_listener_probe
+        self._effective_ceiling: int | None = None
+        self._degrade_ledger: list[dict[str, JsonValue]] = []
+        self._retained_scan_ports: set[int] = set()
+        self._frozen_port_plan: PortPlan | None = None
+
     async def provision(
         self,
         bundle: EnvironmentBundleV2,
@@ -4599,6 +4959,253 @@ class ProcessRuntimeProvider:
             require_declared_user=require_declared_user,
         )
 
+    # --- C2 §1/§2/§4/§6 pipeline helpers -----------------------------------------------------
+
+    def _append_degrade(self, reason: str, from_w: int, to_w: int) -> None:
+        """C2 §6 dedup rule: a repeat failure with an already-present reason UPDATES that entry's
+        `to_w` downward — never a second entry. `from_w` keeps the first appearance's value
+        (the ceiling entering the stage the first time this reason fired)."""
+        for event in self._degrade_ledger:
+            if event["reason"] == reason:
+                event["to_w"] = to_w
+                return
+        self._degrade_ledger.append(
+            {"reason": reason, "from_w": from_w, "to_w": to_w}
+        )
+
+    def _read_declared_resources(
+        self, work_directory: Path
+    ) -> tuple[float | None, float | None]:
+        """The DECLARED job.json fit inputs (C2 §2 fail-closed fallback): `runtime.cpu_units`
+        (vCPU) and `runtime.memory_mb`→GiB. Absent/unreadable job.json → `(None, None)` (the
+        local/test lane and the fallback's own no-declared case — the fit term is then simply
+        dropped, never forcing a clamp)."""
+        path = work_directory / "job.json"
+        if not path.is_file():
+            return (None, None)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return (None, None)
+        runtime = raw.get("runtime") if isinstance(raw, dict) else None
+        if not isinstance(runtime, dict):
+            return (None, None)
+        cpu = runtime.get("cpu_units")
+        mem = runtime.get("memory_mb")
+        cpu_val = float(cpu) if isinstance(cpu, (int, float)) else None
+        mem_val = float(mem) / 1024.0 if isinstance(mem, (int, float)) else None
+        return (cpu_val, mem_val)
+
+    def _verify_secret_refs_resolved(self, work_directory: Path) -> None:
+        """C2 §4 item 1b / D10: every DECLARED `agent.secret_refs` alias (job.json) MUST have a
+        value in the loaded secrets — an individual unresolvable ref is a typed JOB FAILURE, fail
+        closed (a partially-scanned run silently bypasses the mandatory scan). Skipped when a
+        `secret_purpose_map` override is supplied (the local/test lane has no job.json)."""
+        if self._secret_purpose_map is not None:
+            return
+        declared = _read_job_secret_purposes(work_directory)
+        missing = sorted(alias for alias in declared if alias not in self._secret_values)
+        if missing:
+            raise ProcessRuntimeError(
+                "secrets",
+                "spawn_failed",
+                "declared agent.secret_refs alias(es) with no value in the loaded secrets "
+                f"(fail closed, C2 §4): {missing}",
+                domain=FailureDomain.INFRASTRUCTURE,
+            )
+
+    def _run_admission(self, requested: int, work_directory: Path) -> int:
+        """Stage 1 — C2 §2 admission clamp using RUNTIME-OBSERVED sandbox resources with a
+        per-dimension DECLARED fallback. Never raises, never yields 0 or above `requested`."""
+        try:
+            cpu_observed = self._cpu_observer()
+        except Exception:  # observation must never raise admission (C2 §2)
+            cpu_observed = None
+        try:
+            mem_observed = self._mem_observer()
+        except Exception:
+            mem_observed = None
+        cpu_declared, mem_declared = self._read_declared_resources(work_directory)
+        return admit_parallelism(
+            requested,
+            cpu_observed=cpu_observed,
+            mem_observed_gib=mem_observed,
+            cpu_declared=cpu_declared,
+            mem_declared_gib=mem_declared,
+        )
+
+    def _run_pre_plan_scan(
+        self, bundle: EnvironmentBundleV2, ceiling: int, *, is_digest_rebuild: bool
+    ) -> int:
+        """Stage 2 — C2 §4 pre-plan literal-endpoint secret scan (two tiers). Runs only while
+        the incoming `ceiling > 1` (C2 §1 rule 2). On a digest rebuild the value scan does NOT
+        re-run (secrets file deleted); the RETAINED port-set is re-classified against the NEW
+        manifest's declared-port set instead. Returns the (possibly lowered-to-1) ceiling."""
+        declared = declared_fixed_ports(bundle)
+
+        if is_digest_rebuild:
+            # Reclassify the retained port-set against the NEW declared set (C2 §4 item 4 /
+            # §1 rule 3 scan-staleness) — BEFORE plan_ports. Ports only; no value is read.
+            if ceiling > 1:
+                newly_declared = self._retained_scan_ports & set(declared)
+                if newly_declared:
+                    self._append_degrade("literal_local_endpoint", ceiling, 1)
+                    logger.warning(
+                        "pre-plan scan (digest rebuild): retained loopback port(s) %s are now "
+                        "declared fixed ports; degrading to effective parallelism 1",
+                        sorted(newly_declared),
+                    )
+                    return 1
+            return ceiling
+
+        if ceiling <= 1:
+            # C2 §1 rule 2 / C1 §5.4 W-scoping: no scan, no warning at ceiling 1 (today's
+            # behavior exactly). Nothing is retained — a ceiling-1 first build that later digest-
+            # rebuilds stays at 1 (the carried ceiling floors it), so there is nothing to
+            # reclassify.
+            return ceiling
+
+        # Fresh scan of the resolved secret VALUES (ceiling > 1).
+        found = scan_loopback_ports(self._secret_values)
+        all_ports: set[int] = set()
+        for ports in found.values():
+            all_ports |= ports
+        self._retained_scan_ports = all_ports
+
+        declared_hit_alias: str | None = None
+        declared_hit_port: int | None = None
+        warn: list[tuple[str, int]] = []
+        for alias, ports in found.items():
+            for port in sorted(ports):
+                if port in declared:
+                    if declared_hit_alias is None:
+                        declared_hit_alias, declared_hit_port = alias, port
+                else:
+                    warn.append((alias, port))
+        if declared_hit_alias is not None:
+            # Degrade tier — FIRST set the ceiling to 1 + ledger, THEN plan at W=1 (§4 item 3).
+            self._append_degrade("literal_local_endpoint", ceiling, 1)
+            logger.warning(
+                "pre-plan scan: secret %r carries a loopback literal on declared port %d; "
+                "degrading to effective parallelism 1 (the declared port is then honored)",
+                declared_hit_alias,
+                declared_hit_port,
+            )
+            return 1
+        for alias, port in warn:
+            # Warn tier — W unchanged (§4 item 2b). Alias + port only, never the value.
+            logger.warning(
+                "pre-plan scan: secret %r carries a loopback literal on non-declared port %d; "
+                "nothing binds it at any parallelism — running at the requested count (a "
+                "declared capability variable is additionally re-asserted world-correct)",
+                alias,
+                port,
+            )
+        return ceiling
+
+    def _knob_bearing_process_names(self) -> frozenset[str]:
+        """C1 §4 operational definition: a process is knob-bearing iff its `environment` carries
+        the key `FI_WORKER_HEALTH_PORT` (authored unconditionally by Track A′, so the key's
+        presence is the mark — never a guess about "is this a worker")."""
+        if self._manifest is None:
+            return frozenset()
+        return frozenset(
+            process.name
+            for process in self._manifest.processes
+            if isinstance(process, SourceProcess)
+            and "FI_WORKER_HEALTH_PORT" in process.environment
+        )
+
+    def _world_process_log_tail(
+        self, exc: BaseException, world_index: int
+    ) -> tuple[str | None, str]:
+        """Recover the failing process name and its log tail from a world-build failure. The
+        name comes from the typed `ProcessRuntimeError.process`; the log tail from that
+        process's own published partial handle (`exc.partial_handles`) if present, else its
+        on-disk `process.log`."""
+        process_name = getattr(exc, "process", None)
+        partial = getattr(exc, "partial_handles", None)
+        if isinstance(partial, dict) and process_name in partial:
+            try:
+                return process_name, partial[process_name].handle.captured_output()
+            except Exception:
+                pass
+        if process_name is not None and self._context is not None:
+            log_path = (
+                world_scratch_dir(
+                    self._context.work_directory, world_index, process_name
+                )
+                / "process.log"
+            )
+            try:
+                return process_name, log_path.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError:
+                pass
+        return process_name, ""
+
+    def _attribute_and_apply(
+        self, exc: BaseException, world_index: int, from_ceiling: int
+    ) -> None:
+        """C1 §4 / C2 §5 rule 3 attribution for a world-≥1 gate-branch build failure. Either
+        RAISES a terminal `port_not_consumable` job failure (world 0 internally inconsistent, no
+        salvage), or records the graceful `world_start_failed` / `conformance_gate_failed`
+        degrade (ceiling→1 + ledger) and returns."""
+        assert self._manifest is not None and self._frozen_port_plan is not None
+        process_name, log_tail = self._world_process_log_tail(exc, world_index)
+        knob = process_name in self._knob_bearing_process_names()
+        reason = attribute_world_start_failure(
+            process_name=process_name,
+            log_tail=log_tail,
+            manifest=self._manifest,
+            port_plan=self._frozen_port_plan,
+            knob_bearing=knob,
+        )
+        if reason == "port_not_consumable":
+            self._raise_port_not_consumable(process_name)
+        # Graceful degrade to 1.
+        self._append_degrade(reason, from_ceiling, 1)
+
+    def _raise_port_not_consumable(self, process_name: str | None) -> None:
+        """C1 §4 decision 2 / C2 §5 rule 3: a TERMINAL job failure, raised out-of-band — never a
+        ledger append, never a ceiling drop, never a synthetic `conformance=False`."""
+        located = f" ({process_name})" if process_name else ""
+        raise ProcessRuntimeError(
+            "provision",
+            "port_not_consumable",
+            "the agent is declared parallel-capable but did not honor its assigned port"
+            f"{located}; fix it to read its port env, or request parallelism=1 to run serially "
+            "(the declared port is then honored)",
+            process=process_name,
+            domain=FailureDomain.AGENT,
+        )
+
+    def _check_no_declared_port_listener(self, bundle: EnvironmentBundleV2) -> None:
+        """C1 §4 gate declared-port LISTENER check — a DISTINCT provision step at effective
+        W>1, AFTER the gate worlds build: no listener may exist on ANY declared `fixed_port`
+        value. A listener found → TERMINAL `port_not_consumable`, raised out-of-band. It does
+        NOT set `build_output.conformance`, does NOT append a ledger entry, and does NOT change
+        `run_conformance_gate`'s return vocabulary (C1 §4 locus decoupling)."""
+        for port in sorted(declared_fixed_ports(bundle)):
+            if self._listener_probe(port):
+                self._raise_port_not_consumable(None)
+
+    def _mirror_ledger(
+        self, build_output: BuildOutput, requested: int, effective: int
+    ) -> None:
+        """C4 §2 / C2 §6: mirror the provider-instance degrade ledger + the latched ceiling onto
+        `build.json`'s durable read surface on every write. The legacy scalar `degrade_reason`
+        mirrors the FINAL state (the last ledger entry's reason) whenever `effective < requested`,
+        else `None`."""
+        build_output.requested_parallelism = requested
+        build_output.effective_parallelism = effective
+        build_output.degrade_events = [dict(event) for event in self._degrade_ledger]
+        if effective < requested and self._degrade_ledger:
+            build_output.degrade_reason = str(self._degrade_ledger[-1]["reason"])
+        else:
+            build_output.degrade_reason = None
+
     def _provision_sync(
         self,
         bundle: EnvironmentBundleV2,
@@ -4609,11 +5216,17 @@ class ProcessRuntimeProvider:
         instances: int,
         require_declared_user: bool,
     ) -> list[EnvironmentRuntime]:
-        port_plan = plan_ports(bundle, instances=instances)
-        effective = port_plan.effective_instances
         bundle_digest = bundle.digest
+        requested = instances
+        # C2 §1 rule 4's crisp trichotomy, keyed on WHICH branch runs. FIRST BUILD and DIGEST
+        # REBUILD both take the first-call branch (plan + scan run, stage-5 catches ARMED);
+        # RECONCILE takes the else branch (carry the first plan forward, catches NOT armed).
+        first_or_rebuild = self._manifest is None or self._bundle_digest != bundle_digest
+        is_digest_rebuild = (
+            self._manifest is not None and self._bundle_digest != bundle_digest
+        )
 
-        if self._manifest is None or self._bundle_digest != bundle_digest:
+        if first_or_rebuild:
             if self._manifest is not None:
                 # M6, p6-review-r1: a bundle-digest change used to reassign this instance's own
                 # identity fields straight over the PREVIOUS job's still-running processes and
@@ -4623,16 +5236,56 @@ class ProcessRuntimeProvider:
                 # in-memory secret map must survive it).
                 self._teardown_processes_and_directories(work_directory)
             if not self._secrets_loaded:
-                # B3 / §0.3, p6-review-r1: loaded and the file deleted BEFORE any customer
-                # process starts — done here, before `build_process_trees`/`freeze_baseline`
-                # below ever spawn anything. N10, p6-review-r2: purposes come from `job.json`'s
-                # own `agent.secret_refs` (or the constructor override), never invented.
+                # C2 §4 item 1: HOISTED to BEFORE plan_ports (stage 2 needs the resolved values).
+                # B3 / §0.3: loaded and the file deleted BEFORE any customer process starts.
                 self._secret_values, self._secret_purposes = _load_and_delete_secrets(
                     self._secrets_path,
                     work_directory=work_directory,
                     secret_purpose_map=self._secret_purpose_map,
                 )
                 self._secrets_loaded = True
+            # C2 §4 item 1b / D10: a per-ref resolution gap is a typed JOB FAILURE (fail closed);
+            # a corrupt/missing file already raised inside the load above.
+            self._verify_secret_refs_resolved(work_directory)
+
+            # A fresh attempt (FIRST BUILD, not a digest rebuild) starts the per-attempt state
+            # cleared; a DIGEST REBUILD carries ceiling + ledger + retained port-set FORWARD.
+            if not is_digest_rebuild:
+                self._degrade_ledger = []
+                self._retained_scan_ports = set()
+
+            # STAGE 1 — admission clamp (C2 §2). W′ from runtime-observed resources, declared
+            # fallback; never raises. Ledger `resource_limited` iff admission ITSELF clamps below
+            # requested — attributed to admission alone, so a rebuild whose ceiling is floored by
+            # a CARRIED-FORWARD lower ceiling (from a prior world_start_failed etc.) does not
+            # spuriously attribute that reduction to `resource_limited`.
+            admitted = self._run_admission(requested, work_directory)
+            if admitted < requested:
+                self._append_degrade("resource_limited", requested, admitted)
+            ceiling = admitted
+            if is_digest_rebuild and self._effective_ceiling is not None:
+                # C2 §1 rule 3: the ceiling is monotone non-increasing across a rebuild.
+                ceiling = min(ceiling, self._effective_ceiling)
+
+            # STAGE 2 — pre-plan literal-endpoint secret scan (C2 §4). May lower the ceiling to 1
+            # (degrade tier) or reclassify the retained port-set on a digest rebuild.
+            ceiling = self._run_pre_plan_scan(
+                bundle, ceiling, is_digest_rebuild=is_digest_rebuild
+            )
+
+            # STAGE 3 — port plan (C1 §2), with the post-clamp/post-scan ceiling, NEVER raw W.
+            port_plan = plan_ports(bundle, instances=ceiling)
+            if port_plan.effective_instances < ceiling:
+                # A code-fixed `fixed_port` forced effective 1 inside plan_ports (§1/§2). The
+                # PIPELINE appends the ledger entry; the PortPlan carries only the legacy string.
+                self._append_degrade(
+                    "fixed_port", ceiling, port_plan.effective_instances
+                )
+            ceiling = port_plan.effective_instances
+            self._effective_ceiling = ceiling
+            # C1 §2 freeze locus: this FIRST build's plan is carried forward UNCHANGED by every
+            # later reconcile call (the else branch below no longer re-derives it).
+            self._frozen_port_plan = port_plan
 
             # First call for this job identity, or the bundle changed underneath it (§2c: a
             # digest mismatch forces a rebuild) — build once, seed+freeze once, gate once.
@@ -4697,6 +5350,7 @@ class ProcessRuntimeProvider:
             self._context = context
             self._build_output = freeze_result.build_output
             self._job_shared_handles = freeze_result.job_shared_handles
+            self._mirror_ledger(freeze_result.build_output, requested, ceiling)
             write_build_output(work_directory, self._build_output)
             self._world_handles = {}
             self._runtimes = {}
@@ -4707,9 +5361,11 @@ class ProcessRuntimeProvider:
             # `bundle_dir` (m7, p6-review-r1: the two used to silently diverge from whatever this
             # call actually passed, since only `port_plan`/`require_declared_user` were carried
             # forward here). The sealed baseline never re-runs regardless (§4 rule 1).
+            # C1 §2 / C2 §1 rule 4 (b) freeze locus: carry the FIRST build's port plan FORWARD
+            # UNCHANGED — reconcile no longer re-derives it from this call's `instances`.
             self._context = replace(
                 self._context,
-                port_plan=port_plan,
+                port_plan=self._frozen_port_plan,
                 require_declared_user=require_declared_user,
                 work_directory=work_directory,
                 bundle_dir=bundle_dir,
@@ -4728,52 +5384,86 @@ class ProcessRuntimeProvider:
                 "context/build_output unset after the first-call/reconcile branch",
             )
 
-        requested = instances
-        # At requested=1 nothing can degrade (effective=1 too, so no valid
-        # `parallelism_degraded` payload exists; outbound-channels.md's `1 <= effective <
-        # requested` bound is empty at requested=1). `port_plan.degraded_reason` is already
-        # None at instances=1, but that alone is not sufficient — see the
-        # `build_output.degrade_reason` write below, which is what actually enforces it
-        # against the conformance-gate paths that reassign `degrade_reason` further down.
-        degrade_reason = port_plan.degraded_reason if effective < requested else None
+        # The latched ceiling is the running effective for this call. Stage-5 catches are ARMED
+        # only on the first-build/digest-rebuild branch (C2 §5); reconcile failures re-raise to
+        # WorldPool (rule 2R), so the gate/main-loop catches below are guarded by `armed`.
+        armed = first_or_rebuild
+        effective = self._effective_ceiling or 1
 
+        # STAGE 4 — conformance gate + gate-branch stage-5 catch (C2 §5 rule 3).
         if effective > 1 and not self._conformance_checked:
+            # World 0 failing on this branch is a terminal JOB FAILURE (C2 §5 rule 1, E=0
+            # unrepresentable) — propagates uncaught.
             self._ensure_world(0)
-            self._ensure_world(1)
-            passed, reason = run_conformance_gate(
-                bundle,
-                context=context,
-                baseline=build_output,
-                job_shared_handles=self._job_shared_handles,
-                world_handles=self._world_handles,
-            )
-            build_output.conformance = passed
-            build_output.conformance_reason = reason
-            self._conformance_checked = True
-            if not passed:
+            try:
+                self._ensure_world(1)
+            except (ProcessRuntimeError, OSError, shutil.Error) as exc:
+                # Gate-branch catch: either RAISES terminal `port_not_consumable`, or records a
+                # graceful `world_start_failed` / `conformance_gate_failed` degrade to 1.
+                self._attribute_and_apply(exc, 1, from_ceiling=effective)
+                self._teardown_world(1)
                 effective = 1
-                degrade_reason = reason
+                self._conformance_checked = True
+            else:
+                passed, reason = run_conformance_gate(
+                    bundle,
+                    context=context,
+                    baseline=build_output,
+                    job_shared_handles=self._job_shared_handles,
+                    world_handles=self._world_handles,
+                )
+                build_output.conformance = passed
+                build_output.conformance_reason = reason
+                self._conformance_checked = True
+                if not passed:
+                    self._append_degrade("conformance_gate_failed", effective, 1)
+                    effective = 1
+                else:
+                    # Gate declared-port LISTENER check (C1 §4) — a DISTINCT provision step that
+                    # raises a TERMINAL `port_not_consumable` out-of-band; it never touches the
+                    # conformance flag or the gate-return vocabulary.
+                    self._check_no_declared_port_listener(bundle)
         elif self._conformance_checked and build_output.conformance is False:
             # A degrade decided by an EARLIER call must keep holding on every later reconcile call
-            # too — `effective` above is freshly recomputed from `port_plan` each time and knows
-            # nothing about a gate result from a call that already happened.
+            # too — the latched ceiling already reflects it, but `conformance is False` predates
+            # the ceiling latch for the genuine-gate path, so it is re-asserted here.
             effective = 1
-            degrade_reason = "conformance_gate_failed"
 
-        build_output.requested_parallelism = requested
-        build_output.effective_parallelism = effective
-        # The conformance-gate branches above reassign `degrade_reason` unconditionally (they
-        # only know a gate result, not this call's `requested`) — re-checking the invariant here,
-        # at the single write site, covers those paths too instead of only the fixed_port input.
-        build_output.degrade_reason = degrade_reason if effective < requested else None
+        self._effective_ceiling = effective
+        self._mirror_ledger(build_output, requested, effective)
         write_build_output(work_directory, build_output)
 
         # Reconcile down first — a prior call may have over-provisioned (the canary's own 2-world
         # pair, before a gate failure dropped `effective` to 1).
         for stale_index in [index for index in self._runtimes if index >= effective]:
             self._teardown_world(stale_index)
-        for world_index in range(effective):
-            self._ensure_world(world_index)
+        # STAGE 5 — main-loop world builds. The catch is ARMED only on the first-build/digest-
+        # rebuild branch, and only for world index ≥ 1 (world 0 failing = terminal job failure);
+        # a reconcile failure re-raises to WorldPool (rule 2R).
+        world_index = 0
+        while world_index < effective:
+            if armed and world_index >= 1:
+                try:
+                    self._ensure_world(world_index)
+                except (ProcessRuntimeError, OSError, shutil.Error) as exc:
+                    if getattr(exc, "code", None) == "port_not_consumable":
+                        raise
+                    # Rule 2: continue on the contiguous 0..k−1 prefix — NO renumbering. Tear
+                    # down whatever this world published, drop the ceiling to k, ledger
+                    # `world_start_failed`, re-write build.json.
+                    self._teardown_world(world_index)
+                    self._append_degrade(
+                        "world_start_failed", effective, world_index
+                    )
+                    effective = world_index
+                    self._effective_ceiling = effective
+                    self._mirror_ledger(build_output, requested, effective)
+                    write_build_output(work_directory, build_output)
+                    break
+            else:
+                # World 0 (terminal on failure, rule 1) or a reconcile call (re-raise, rule 2R).
+                self._ensure_world(world_index)
+            world_index += 1
         # t3 / §4.1, p6-review-r1: "reconciles to exactly `instances` READY worlds" —
         # `_ensure_world` only ever leaves a (re)built world `PREPARING` (§3's transition table
         # promotes it later); promoted here via the same declared-readiness probe `healthy()`
@@ -5442,6 +6132,12 @@ class ProcessRuntimeProvider:
         self._secret_values = {}
         self._secret_purposes = {}
         self._secrets_loaded = False
+        # C2 §1 rule 3: a NEW attempt (a fresh `close()`) legitimately resets the per-attempt
+        # ceiling/ledger/retained-port-set/frozen-plan — the invariants are per-attempt.
+        self._effective_ceiling = None
+        self._degrade_ledger = []
+        self._retained_scan_ports = set()
+        self._frozen_port_plan = None
 
     def _ensure_job_shared_handles_alive(
         self, *, current_world_index: int | None = None
