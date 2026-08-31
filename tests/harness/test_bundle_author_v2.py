@@ -1280,12 +1280,16 @@ def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
     assert control.environment["FI_LOAD_THRESHOLD"] == "inf"
     assert control.environment["FI_NUM_IDLE_PROCESSES"] == "1"
+    # D32 / C3 §4.5: the hosted-only dispatch-ack opt-in rides the same knob authoring, arming
+    # the simulator's dispatch-ack ladder on the hosted path.
+    assert control.environment["FI_HOSTED_DISPATCH_ACK"] == "1"
     # LIVEKIT_AGENT_NAME carries BOTH the job-id and world-index (C1 item 4 / §3).
     dispatch = control.environment["LIVEKIT_AGENT_NAME"]
     assert "{{JOB_ID}}" in dispatch and "{{WORLD_INDEX}}" in dispatch
     # The non-worker tools-api process must NOT be marked knob-bearing.
     tools = next(p for p in plan.processes if p.name == "tools-api")
     assert "FI_WORKER_HEALTH_PORT" not in tools.environment
+    assert "FI_HOSTED_DISPATCH_ACK" not in tools.environment
 
 
 def test_generated_python_livekit_worker_carries_the_worker_knob_env(
@@ -1301,6 +1305,7 @@ def test_generated_python_livekit_worker_carries_the_worker_knob_env(
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
     assert control.environment["FI_LOAD_THRESHOLD"] == "inf"
     assert control.environment["FI_NUM_IDLE_PROCESSES"] == "1"
+    assert control.environment["FI_HOSTED_DISPATCH_ACK"] == "1"
     dispatch = control.environment["LIVEKIT_AGENT_NAME"]
     assert "{{JOB_ID}}" in dispatch and "{{WORLD_INDEX}}" in dispatch
 
@@ -1315,3 +1320,4 @@ def test_non_livekit_control_has_no_worker_knob_env(tmp_path: Path) -> None:
     control = next(p for p in plan.processes if p.name == "agent")
     assert "FI_WORKER_HEALTH_PORT" not in control.environment
     assert "FI_LOAD_THRESHOLD" not in control.environment
+    assert "FI_HOSTED_DISPATCH_ACK" not in control.environment

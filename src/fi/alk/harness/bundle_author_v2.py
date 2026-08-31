@@ -1061,11 +1061,18 @@ def _worker_knob_env(process_name: str) -> dict[str, str]:
     ``FI_WORKER_HEALTH_PORT``'s presence IS the knob-bearing mark (both authoring and runtime key
     on it). A conformant agent reads all three into its ``WorkerOptions``/``AgentServer``; absent,
     it stays on library defaults.
+
+    ``FI_HOSTED_DISPATCH_ACK`` (D32 / C3 §4.5) is the hosted-only opt-in that arms the simulator's
+    dispatch-ack ladder in ``engines/livekit.py`` (``engines.livekit._dispatch_ack_enabled`` reads
+    this exact key). This authoring path is the hosted bundle producer, so setting it here arms the
+    ladder on the hosted path ONLY — the local lane never runs this authoring and stays byte-for-byte
+    unchanged (no ladder, no re-dispatch).
     """
     return {
         "FI_WORKER_HEALTH_PORT": f"{{{{PORT_{process_name}}}}}",
         "FI_LOAD_THRESHOLD": _FI_LOAD_THRESHOLD_VALUE,
         "FI_NUM_IDLE_PROCESSES": _FI_NUM_IDLE_PROCESSES_DEV,
+        "FI_HOSTED_DISPATCH_ACK": "1",
     }
 
 

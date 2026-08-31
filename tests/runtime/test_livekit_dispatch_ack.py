@@ -205,6 +205,21 @@ def test_gate_off_for_non_truthy_values(monkeypatch, value) -> None:
     assert _dispatch_ack_enabled() is False
 
 
+def test_authored_hosted_bundle_value_arms_the_gate(monkeypatch) -> None:
+    # D32 cross-track seam (A′ bundle author -> B-ack engine gate): the value the hosted bundle
+    # author writes into the LiveKit control worker's environment must be the EXACT env var name
+    # the engine reads, at a value the gate accepts as armed. Pull the authored knob env straight
+    # from `bundle_author_v2._worker_knob_env` (the hosted bundle producer) and drive it through
+    # the engine's own gate, so authoring and runtime cannot silently drift apart.
+    from fi.alk.harness.bundle_author_v2 import _worker_knob_env
+
+    authored = _worker_knob_env("agent")
+    assert lk._DISPATCH_ACK_ENV == "FI_HOSTED_DISPATCH_ACK"
+    assert lk._DISPATCH_ACK_ENV in authored
+    monkeypatch.setenv(lk._DISPATCH_ACK_ENV, authored[lk._DISPATCH_ACK_ENV])
+    assert _dispatch_ack_enabled() is True
+
+
 # --- exhaustion exception is typed, structured, and NOT a TimeoutError ------------------------
 def test_exhaustion_error_is_not_asyncio_timeout() -> None:
     # The whole point of the ladder's own exception: it must NOT be an asyncio.TimeoutError, which

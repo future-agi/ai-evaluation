@@ -56,8 +56,10 @@ from fi.alk.harness.job import (
     SourceVisibility,
 )
 from fi.alk.harness.process_runtime import (
+    BuildOutput,
     EnvironmentRuntime,
     ProcessRuntimeError,
+    ProcessRuntimeProvider,
     RuntimeEndpoint,
     RuntimeState,
 )
@@ -2035,6 +2037,70 @@ def test_build_json_port_not_consumable_in_ledger_is_not_emitted_as_a_degrade() 
         )
 
     asyncio.run(scenario())
+
+
+def test_bprov_written_ledger_round_trips_through_the_cprime_emitter() -> None:
+    # Cross-track seam (B-prov WRITER -> C′ READER): drive the actual writer
+    # (`ProcessRuntimeProvider._append_degrade` + `BuildOutput.to_json`) and feed the produced
+    # `degrade_events` dict list straight into the C′ mapper. This proves the two tracks agree on
+    # the REAL serialized shape (key `degrade_events`, fields `{reason, from_w, to_w}`), not a
+    # hand-built stand-in. `_append_degrade`'s dedup (a repeat reason lowers `to_w` in place,
+    # never a second entry) is exercised here too.
+    provider = ProcessRuntimeProvider()
+    provider._append_degrade("resource_limited", 4, 3)
+    provider._append_degrade("world_start_failed", 3, 2)
+    provider._append_degrade("world_start_failed", 3, 1)  # dedup: lowers this entry's to_w to 1.
+
+    build_output = BuildOutput(
+        bundle_digest="digest",
+        stores=[],
+        requested_parallelism=4,
+        effective_parallelism=1,
+        degrade_events=list(provider._degrade_ledger),
+    )
+    serialized = build_output.to_json()
+
+    # The writer emits exactly the `{reason, from_w, to_w}` shape under key `degrade_events`, one
+    # entry per reason in causal order (the repeat `world_start_failed` updated in place, not
+    # appended twice).
+    assert list(serialized.keys()).count("degrade_events") == 1
+    assert serialized["degrade_events"] == [
+        {"reason": "resource_limited", "from_w": 4, "to_w": 3},
+        {"reason": "world_start_failed", "from_w": 3, "to_w": 1},
+    ]
+
+    # The C′ reader consumes that verbatim: each entry -> one (effective=to_w, reason) pair.
+    assert he.degrade_events_to_emit(
+        serialized["degrade_events"], requested=serialized["requested_parallelism"]
+    ) == [(3, "resource_limited"), (1, "world_start_failed")]
+
+
+def test_bprov_reason_vocabulary_is_lockstep_with_the_cprime_enum() -> None:
+    # Seam 3: every reason string B-prov's writer appends is a member of C′'s FIVE-member
+    # DegradeReason enum, and `port_not_consumable` is NEVER among them (D28: terminal, not a
+    # degrade). Drive the writer with each degrade reason it uses in process_runtime and assert
+    # the produced reason set equals the closed enum vocabulary.
+    writer_reasons = {
+        "resource_limited",
+        "literal_local_endpoint",
+        "fixed_port",
+        "world_start_failed",
+        "conformance_gate_failed",
+    }
+    enum_values = {member.value for member in ob.DegradeReason}
+    assert writer_reasons == enum_values
+    assert "port_not_consumable" not in enum_values
+    assert "port_not_consumable" not in he._DEGRADE_REASON_VALUES
+
+    # The reasons actually round-trip through the reader as members (no non-member leaks). Each is
+    # emitted in its own single-entry ledger so the strictly-decreasing check never gates them.
+    for reason in writer_reasons:
+        provider = ProcessRuntimeProvider()
+        provider._append_degrade(reason, 4, 1)
+        pairs = he.degrade_events_to_emit(
+            list(provider._degrade_ledger), requested=4
+        )
+        assert pairs == [(1, reason)]
 
 
 def test_e2e_two_scenarios_one_pass_one_fail_reaches_completed_and_exits_0() -> None:
