@@ -7539,6 +7539,14 @@ def test_provision_gate_listener_check_finds_declared_listener_terminal(
     assert excinfo.value.code == "port_not_consumable"
 
 
+def test_port_not_consumable_is_in_the_section_2f_table_with_agent_domain() -> None:
+    # D28: `port_not_consumable` must live inside §2f's closed code table so the outbound
+    # `_section_2f_code` passthrough (hosted_entrypoint) ships the actionable terminal code intact
+    # instead of clamping it to `spawn_failed`. Its fallback domain matches the AGENT that
+    # `_raise_port_not_consumable` carries directly.
+    assert pr.SECTION_2F_DOMAIN["port_not_consumable"] is FailureDomain.AGENT
+
+
 # --- integration: per-build-identity freeze (item 6) -----------------------------------------
 
 

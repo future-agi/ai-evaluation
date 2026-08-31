@@ -1795,6 +1795,12 @@ async def run_job(
     simulator_secret_values = deps.load_simulator_secret_values()
     os.environ.update(simulator_secret_values)
 
+    # Arm the C3 dispatch-ack ladder (engines/livekit.py `_dispatch_ack_enabled`) on THIS guest
+    # main process, whose in-process `os.environ` the engine reads -- inherently hosted-only, since
+    # `hosted_entrypoint` IS the hosted guest main (the local lane never runs it, so its gate stays
+    # off). Must precede any scenario/engine run below.
+    os.environ.setdefault("FI_HOSTED_DISPATCH_ACK", "1")
+
     # 1. Boot -- capabilities. CapabilitiesError -> exit non-zero-and-NOT-3, no event (v1.3 table):
     # there is no channel yet to report a terminal event through.
     try:

@@ -140,6 +140,10 @@ SECTION_2F_DOMAIN: dict[str, FailureDomain] = {
     "unsupported_capability_protocol": FailureDomain.ENVIRONMENT,
     "seed_failed": FailureDomain.ENVIRONMENT,
     "store_statement_failed": FailureDomain.INFRASTRUCTURE,
+    # D28: the parallel-capability TERMINAL. `_raise_port_not_consumable` carries AGENT directly;
+    # this entry keeps the code inside §2f's closed table so `_section_2f_code` passes it through
+    # intact instead of clamping the actionable terminal to `spawn_failed`.
+    "port_not_consumable": FailureDomain.AGENT,
 }
 
 

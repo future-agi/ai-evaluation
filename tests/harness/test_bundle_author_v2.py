@@ -1280,9 +1280,10 @@ def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
     assert control.environment["FI_LOAD_THRESHOLD"] == "inf"
     assert control.environment["FI_NUM_IDLE_PROCESSES"] == "1"
-    # D32 / C3 §4.5: the hosted-only dispatch-ack opt-in rides the same knob authoring, arming
-    # the simulator's dispatch-ack ladder on the hosted path.
-    assert control.environment["FI_HOSTED_DISPATCH_ACK"] == "1"
+    # D32 / C3 §4.5: the dispatch-ack opt-in does NOT belong on the agent-under-test child. The
+    # engine reads it from the GUEST MAIN PROCESS env (armed by `hosted_entrypoint`), not from the
+    # spawned worker's environment, so the worker-knob authoring must not carry it.
+    assert "FI_HOSTED_DISPATCH_ACK" not in control.environment
     # LIVEKIT_AGENT_NAME carries BOTH the job-id and world-index (C1 item 4 / §3).
     dispatch = control.environment["LIVEKIT_AGENT_NAME"]
     assert "{{JOB_ID}}" in dispatch and "{{WORLD_INDEX}}" in dispatch
@@ -1305,7 +1306,8 @@ def test_generated_python_livekit_worker_carries_the_worker_knob_env(
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
     assert control.environment["FI_LOAD_THRESHOLD"] == "inf"
     assert control.environment["FI_NUM_IDLE_PROCESSES"] == "1"
-    assert control.environment["FI_HOSTED_DISPATCH_ACK"] == "1"
+    # D32 / C3 §4.5: the flag is guest-main-only, never authored onto the agent-under-test child.
+    assert "FI_HOSTED_DISPATCH_ACK" not in control.environment
     dispatch = control.environment["LIVEKIT_AGENT_NAME"]
     assert "{{JOB_ID}}" in dispatch and "{{WORLD_INDEX}}" in dispatch
 

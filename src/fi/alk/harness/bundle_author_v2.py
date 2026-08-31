@@ -1062,17 +1062,16 @@ def _worker_knob_env(process_name: str) -> dict[str, str]:
     on it). A conformant agent reads all three into its ``WorkerOptions``/``AgentServer``; absent,
     it stays on library defaults.
 
-    ``FI_HOSTED_DISPATCH_ACK`` (D32 / C3 §4.5) is the hosted-only opt-in that arms the simulator's
-    dispatch-ack ladder in ``engines/livekit.py`` (``engines.livekit._dispatch_ack_enabled`` reads
-    this exact key). This authoring path is the hosted bundle producer, so setting it here arms the
-    ladder on the hosted path ONLY — the local lane never runs this authoring and stays byte-for-byte
-    unchanged (no ladder, no re-dispatch).
+    NOTE: ``FI_HOSTED_DISPATCH_ACK`` (D32 / C3 §4.5) is deliberately NOT authored here. The
+    dispatch-ack ladder in ``engines/livekit.py`` runs in the GUEST MAIN PROCESS (under
+    ``hosted_entrypoint`` -> ``call_runner``), not in this spawned agent-under-test child, so the
+    engine reads the flag from the guest main process's own ``os.environ`` -- ``hosted_entrypoint``
+    arms it there. Putting it on this worker env would leave the ladder dormant (wrong process).
     """
     return {
         "FI_WORKER_HEALTH_PORT": f"{{{{PORT_{process_name}}}}}",
         "FI_LOAD_THRESHOLD": _FI_LOAD_THRESHOLD_VALUE,
         "FI_NUM_IDLE_PROCESSES": _FI_NUM_IDLE_PROCESSES_DEV,
-        "FI_HOSTED_DISPATCH_ACK": "1",
     }
 
 

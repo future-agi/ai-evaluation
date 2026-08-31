@@ -205,18 +205,19 @@ def test_gate_off_for_non_truthy_values(monkeypatch, value) -> None:
     assert _dispatch_ack_enabled() is False
 
 
-def test_authored_hosted_bundle_value_arms_the_gate(monkeypatch) -> None:
-    # D32 cross-track seam (A′ bundle author -> B-ack engine gate): the value the hosted bundle
-    # author writes into the LiveKit control worker's environment must be the EXACT env var name
-    # the engine reads, at a value the gate accepts as armed. Pull the authored knob env straight
-    # from `bundle_author_v2._worker_knob_env` (the hosted bundle producer) and drive it through
-    # the engine's own gate, so authoring and runtime cannot silently drift apart.
+def test_dispatch_ack_flag_is_not_authored_onto_the_agent_child(monkeypatch) -> None:
+    # D32 cross-track seam correction: the engine runs in the GUEST MAIN PROCESS (under
+    # `hosted_entrypoint` -> `call_runner`), so it reads the flag from that process's own
+    # `os.environ`. The bundle author's `_worker_knob_env` describes the SPAWNED agent-under-test
+    # child, which never runs the engine -- authoring the flag there put it on the wrong process
+    # and left the ladder dormant. The knob env must therefore NOT carry it.
     from fi.alk.harness.bundle_author_v2 import _worker_knob_env
 
-    authored = _worker_knob_env("agent")
     assert lk._DISPATCH_ACK_ENV == "FI_HOSTED_DISPATCH_ACK"
-    assert lk._DISPATCH_ACK_ENV in authored
-    monkeypatch.setenv(lk._DISPATCH_ACK_ENV, authored[lk._DISPATCH_ACK_ENV])
+    assert lk._DISPATCH_ACK_ENV not in _worker_knob_env("agent")
+    # The gate itself reads that exact key from the process env -- the value `hosted_entrypoint`
+    # arms on the guest main process ("1") drives it True.
+    monkeypatch.setenv(lk._DISPATCH_ACK_ENV, "1")
     assert _dispatch_ack_enabled() is True
 
 

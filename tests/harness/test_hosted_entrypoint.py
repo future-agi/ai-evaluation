@@ -2252,6 +2252,77 @@ def test_process_runtime_error_uses_the_carried_domain_over_the_fallback_map() -
     asyncio.run(run_case("seed_failed", None, "environment"))
 
 
+def test_run_job_arms_dispatch_ack_on_the_guest_process_env() -> None:
+    # FINDING 1 (D32 / C3 §4.5): the engine's dispatch-ack gate runs IN THIS guest main process
+    # (`hosted_entrypoint` -> `call_runner` -> `engines/livekit.py`) and reads
+    # `FI_HOSTED_DISPATCH_ACK` from `os.environ`. `run_job` (the guest main body) must arm it on the
+    # process env before any scenario/engine runs -- otherwise the ladder is dormant on the hosted
+    # path (the seam bug this test guards: the flag used to be authored onto the WRONG process, the
+    # spawned agent-under-test child, which never runs the engine). The gate's own read of this same
+    # key is proved in `test_livekit_dispatch_ack.py`.
+    async def scenario() -> None:
+        harness = _build_harness(scenarios=[], instances=1)
+        result = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert result == he.EXIT_OK
+        assert os.environ["FI_HOSTED_DISPATCH_ACK"] == "1"
+
+    had = "FI_HOSTED_DISPATCH_ACK" in os.environ
+    prev = os.environ.get("FI_HOSTED_DISPATCH_ACK")
+    os.environ.pop("FI_HOSTED_DISPATCH_ACK", None)
+    try:
+        asyncio.run(scenario())
+    finally:
+        if had:
+            os.environ["FI_HOSTED_DISPATCH_ACK"] = prev  # type: ignore[assignment]
+        else:
+            os.environ.pop("FI_HOSTED_DISPATCH_ACK", None)
+
+
+def test_port_not_consumable_crosses_the_terminal_seam_with_its_code_preserved() -> None:
+    # FINDING 2 (D28): B-prov raises `ProcessRuntimeError(code="port_not_consumable", domain=AGENT)`
+    # as the actionable terminal. `_section_2f_code` clamps any code absent from `SECTION_2F_DOMAIN`
+    # to `spawn_failed`, so unless `port_not_consumable` is in that table the actionable terminal
+    # code is lost. This drives the code through the real entrypoint terminal seam and asserts it
+    # ships intact (NOT relabeled `spawn_failed`), carrying its AGENT domain.
+    async def scenario() -> None:
+        class RaisingProvisioner(FakeProvisioner):
+            async def provision(
+                self,
+                bundle: Any,
+                *,
+                source: Path,
+                bundle_dir: Path,
+                work_directory: Path,
+                contract: Any | None = None,
+                instances: int = 1,
+            ) -> list[EnvironmentRuntime]:
+                del bundle, source, bundle_dir, work_directory, contract, instances
+                raise ProcessRuntimeError(
+                    "provision",
+                    "port_not_consumable",
+                    "the agent did not honor its assigned port",
+                    domain=FailureDomain.AGENT,
+                )
+
+        harness = _build_harness(scenarios=[], instances=1)
+        harness.deps.build_provider = lambda _capabilities, _transport: RaisingProvisioner(instances=1)
+        result = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert result == he.EXIT_OK
+        terminals = harness.transport.terminal_events()
+        assert len(terminals) == 1
+        failure = terminals[0]["payload"]["failure"]
+        assert failure["code"] == "port_not_consumable"
+        assert failure["code"] != "spawn_failed"
+        assert failure["domain"] == "agent"
+        assert failure["stage"] == "building_environment"
+
+    asyncio.run(scenario())
+
+
 def test_scenario_entry_missing_scenario_key_fails_cleanly_never_an_attributeerror() -> (
     None
 ):
