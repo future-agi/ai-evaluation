@@ -350,23 +350,63 @@ _ADMISSION_C_CALL = 0.2  # vCPU per active call
 _ADMISSION_M_CALL = 0.25  # GiB per active call
 
 
+_CGROUP_V2_ROOT = Path("/sys/fs/cgroup")  # the unified-hierarchy mount point.
+_PROC_SELF_CGROUP = Path("/proc/self/cgroup")
+
+
+def _cgroup_v2_self_dir() -> Path:
+    """The sandbox's OWN delegated cgroup-v2 directory, resolved from the `0::<path>` line of
+    `/proc/self/cgroup` (the single unified-hierarchy entry; `<path>` is relative to the mount
+    root). Controllers are delegated to this subtree, so its `cpu.max`/`memory.max` bind THIS
+    sandbox — the hierarchy ROOT's files describe the whole host/parent and can over-read →
+    over-admit (D29). Falls back to the root when `/proc/self/cgroup` is unreadable or carries no
+    v2 line."""
+    try:
+        for line in _PROC_SELF_CGROUP.read_text(encoding="utf-8").splitlines():
+            if line.startswith("0::"):
+                rel = line[3:].strip().lstrip("/")
+                return _CGROUP_V2_ROOT / rel if rel else _CGROUP_V2_ROOT
+    except OSError:
+        pass
+    return _CGROUP_V2_ROOT
+
+
+def _read_cgroup_v2(filename: str) -> str | None:
+    """Read a cgroup-v2 interface file from the sandbox's delegated subtree, falling back to the
+    unified-hierarchy root when the delegated file is absent/unreadable. Returns the file text, or
+    `None` when neither is readable (the caller then tries cgroup v1, then the declared value)."""
+    candidates = [_cgroup_v2_self_dir() / filename]
+    root_file = _CGROUP_V2_ROOT / filename
+    if root_file != candidates[0]:
+        candidates.append(root_file)
+    for path in candidates:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return None
+
+
 def _cgroup_cpu_quota() -> float | None:
     """Runtime-observed CPU quota binding the sandbox (C2 §2/D29), in vCPU — the cgroup QUOTA,
-    NEVER `os.cpu_count()`/host cores. cgroup v2 `cpu.max` (`quota period`, `max` == unbounded),
-    then cgroup v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us` (`-1` quota == unbounded). Returns
-    `None` when no bound is readable or the bound is unbounded — the caller then falls back to
-    the declared value (C2 §2 read-failure rule), so admission never raises."""
-    try:
-        raw = Path("/sys/fs/cgroup/cpu.max").read_text(encoding="utf-8").split()
-        if raw:
-            if raw[0] == "max":
-                return None
-            quota = int(raw[0])
-            period = int(raw[1]) if len(raw) > 1 else 100000
-            if quota > 0 and period > 0:
-                return quota / period
-    except (OSError, ValueError):
-        pass
+    NEVER `os.cpu_count()`/host cores. cgroup v2 `cpu.max` read from the sandbox's DELEGATED
+    subtree (`quota period`, `max` == unbounded), then cgroup v1 `cpu.cfs_quota_us`/
+    `cpu.cfs_period_us` (`-1` quota == unbounded). Returns `None` when no bound is readable or the
+    bound is unbounded — the caller then falls back to the declared value (C2 §2 read-failure
+    rule), so admission never raises."""
+    text = _read_cgroup_v2("cpu.max")
+    if text is not None:
+        raw = text.split()
+        try:
+            if raw:
+                if raw[0] == "max":
+                    return None
+                quota = int(raw[0])
+                period = int(raw[1]) if len(raw) > 1 else 100000
+                if quota > 0 and period > 0:
+                    return quota / period
+        except ValueError:
+            pass
     try:
         quota = int(
             Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text(encoding="utf-8").strip()
@@ -383,18 +423,20 @@ def _cgroup_cpu_quota() -> float | None:
 
 def _cgroup_memory_limit_gib() -> float | None:
     """Runtime-observed memory limit binding the sandbox (C2 §2), in GiB — cgroup v2
-    `memory.max` (`max` == unbounded), then cgroup v1 `memory.limit_in_bytes` (a sentinel near
-    2**63 == unbounded). Returns `None` when unreadable or unbounded (caller falls back to the
-    declared value)."""
-    try:
-        raw = Path("/sys/fs/cgroup/memory.max").read_text(encoding="utf-8").strip()
+    `memory.max` read from the sandbox's DELEGATED subtree (`max` == unbounded), then cgroup v1
+    `memory.limit_in_bytes` (a sentinel near 2**63 == unbounded). Returns `None` when unreadable
+    or unbounded (caller falls back to the declared value)."""
+    text = _read_cgroup_v2("memory.max")
+    if text is not None:
+        raw = text.strip()
         if raw == "max":
             return None
-        value = int(raw)
-        if value > 0:
-            return value / (1024**3)
-    except (OSError, ValueError):
-        pass
+        try:
+            value = int(raw)
+            if value > 0:
+                return value / (1024**3)
+        except ValueError:
+            pass
     try:
         value = int(
             Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
@@ -548,11 +590,12 @@ def attribute_world_start_failure(
     formula = _formula_port_values(port_plan)
 
     # Arm 4 (declared port bound by a consumable-declared process — the lying consumable),
-    # regardless of knob-bearing status.
-    if (
-        errored_port in consumable
-        and consumable[errored_port] == process_name
-    ) or (errored_port in consumable):
+    # regardless of knob-bearing status. The ownership guard is load-bearing: ONLY the
+    # consumable-declared OWNER of the errored port binding its OWN port is the defect. A
+    # non-owner colliding on that port (or an unrecoverable `process_name is None`) is NOT this
+    # arm's subject and falls through to the declared-port graceful arm below (anti-false-positive
+    # mandate). `.get()` keeps `None` from ever matching an owner.
+    if errored_port in consumable and consumable.get(errored_port) == process_name:
         return "port_not_consumable"
     # A formula-assigned port collision is the stale-squat class — graceful, never terminal.
     if errored_port in formula:
@@ -5264,12 +5307,21 @@ class ProcessRuntimeProvider:
             # a CARRIED-FORWARD lower ceiling (from a prior world_start_failed etc.) does not
             # spuriously attribute that reduction to `resource_limited`.
             admitted = self._run_admission(requested, work_directory)
-            if admitted < requested:
-                self._append_degrade("resource_limited", requested, admitted)
-            ceiling = admitted
             if is_digest_rebuild and self._effective_ceiling is not None:
-                # C2 §1 rule 3: the ceiling is monotone non-increasing across a rebuild.
-                ceiling = min(ceiling, self._effective_ceiling)
+                # C2 §1 rule 3: the ceiling is monotone non-increasing across a rebuild. Clamp the
+                # fresh admission to the CARRIED ceiling BEFORE attributing `resource_limited`, and
+                # record it only when it strictly decreases that ceiling — otherwise a fresh
+                # admission that merely equals/exceeds the carried ceiling would append a
+                # `resource_limited` entry with a `to_w` higher than an already-carried later
+                # (e.g. `world_start_failed`) entry, breaking the ledger's strictly-decreasing
+                # `to_w` invariant (C2 §6).
+                ceiling = min(admitted, self._effective_ceiling)
+                if ceiling < self._effective_ceiling:
+                    self._append_degrade("resource_limited", requested, ceiling)
+            else:
+                ceiling = admitted
+                if admitted < requested:
+                    self._append_degrade("resource_limited", requested, admitted)
 
             # STAGE 2 — pre-plan literal-endpoint secret scan (C2 §4). May lower the ceiling to 1
             # (degrade tier) or reclassify the retained port-set on a digest rebuild.

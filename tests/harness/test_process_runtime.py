@@ -7082,6 +7082,93 @@ def test_admit_parallelism_never_zero_or_above_requested() -> None:
     ) == 2
 
 
+# --- cgroup-v2 delegated-subtree observation (pure) ------------------------------------------
+
+
+def _fake_cgroup_v2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    rel: str | None,
+    root_files: dict[str, str],
+    subtree_files: dict[str, str],
+) -> None:
+    """Wire `pr`'s cgroup-v2 roots at a faked unified hierarchy: `/proc/self/cgroup` carries the
+    `0::<rel>` line (or is absent when `rel is None`), `root_files` land at the hierarchy root and
+    `subtree_files` in the delegated `<rel>` subtree."""
+    root = tmp_path / "cgroup"
+    root.mkdir(parents=True, exist_ok=True)
+    for name, text in root_files.items():
+        (root / name).write_text(text, encoding="utf-8")
+    if rel is not None:
+        subtree = root / rel.lstrip("/")
+        subtree.mkdir(parents=True, exist_ok=True)
+        for name, text in subtree_files.items():
+            (subtree / name).write_text(text, encoding="utf-8")
+        proc = tmp_path / "proc_self_cgroup"
+        proc.write_text(f"0::/{rel.lstrip('/')}\n", encoding="utf-8")
+    else:
+        proc = tmp_path / "absent_proc_self_cgroup"  # never created.
+    monkeypatch.setattr(pr, "_CGROUP_V2_ROOT", root)
+    monkeypatch.setattr(pr, "_PROC_SELF_CGROUP", proc)
+
+
+def test_cgroup_cpu_quota_reads_the_delegated_subtree_not_the_looser_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Root advertises 8 vCPU (host/parent); the sandbox's delegated subtree binds it to 2.
+    _fake_cgroup_v2(
+        tmp_path,
+        monkeypatch,
+        rel="sandbox/job",
+        root_files={"cpu.max": "800000 100000"},
+        subtree_files={"cpu.max": "200000 100000"},
+    )
+    assert pr._cgroup_cpu_quota() == 2.0  # delegated wins; never the looser 8.0.
+
+
+def test_cgroup_memory_limit_reads_the_delegated_subtree_not_the_looser_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_cgroup_v2(
+        tmp_path,
+        monkeypatch,
+        rel="sandbox/job",
+        root_files={"memory.max": str(8 * 1024**3)},  # 8 GiB at the root.
+        subtree_files={"memory.max": str(2 * 1024**3)},  # 2 GiB delegated.
+    )
+    assert pr._cgroup_memory_limit_gib() == 2.0
+
+
+def test_cgroup_cpu_quota_falls_back_to_root_when_proc_self_cgroup_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No readable /proc/self/cgroup -> the resolver falls back to the hierarchy-root file.
+    _fake_cgroup_v2(
+        tmp_path,
+        monkeypatch,
+        rel=None,
+        root_files={"cpu.max": "400000 100000"},
+        subtree_files={},
+    )
+    assert pr._cgroup_cpu_quota() == 4.0
+
+
+def test_cgroup_cpu_quota_unbounded_delegated_max_is_unbounded_not_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A readable delegated `max` (unbounded) is authoritative — it must NOT re-read the root's
+    # looser bound.
+    _fake_cgroup_v2(
+        tmp_path,
+        monkeypatch,
+        rel="sandbox/job",
+        root_files={"cpu.max": "200000 100000"},
+        subtree_files={"cpu.max": "max"},
+    )
+    assert pr._cgroup_cpu_quota() is None
+
+
 # --- item 2: pre-plan scan (pure) ------------------------------------------------------------
 
 
@@ -7156,6 +7243,54 @@ def test_attribute_no_bind_evidence_knob_bearing_is_conformance_gate_failed() ->
         knob_bearing=True,
     )
     assert reason == "conformance_gate_failed"
+
+
+# --- C1 §4 arm 4 ownership guard (the consumable-declared OWNER of the port) ------------------
+
+
+def test_attribute_consumable_owner_colliding_on_its_own_port_is_terminal() -> None:
+    """(a) the consumable owner binding its OWN declared port at world 1 is the arm-4 defect."""
+    manifest = _consumable_manifest(fixed_port=8080)  # tools-api owns consumable 8080.
+    plan = pr.plan_ports(manifest, instances=2)
+    reason = pr.attribute_world_start_failure(
+        process_name="tools-api",  # the owner.
+        log_tail="[Errno 48] Address already in use: 127.0.0.1:8080",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=False,
+    )
+    assert reason == "port_not_consumable"
+
+
+def test_attribute_non_owner_on_a_consumable_port_is_not_terminal() -> None:
+    """(b) a NON-owner (agent) colliding on tools-api's declared consumable port is NOT the
+    arm-4 defect — it falls through to the declared-port graceful arm (world_start_failed)."""
+    manifest = _consumable_manifest(fixed_port=8080)  # tools-api owns 8080, agent does not.
+    plan = pr.plan_ports(manifest, instances=2)
+    reason = pr.attribute_world_start_failure(
+        process_name="agent",  # NOT the owner of 8080.
+        log_tail="[Errno 48] Address already in use: 127.0.0.1:8080",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=False,
+    )
+    assert reason == "world_start_failed"
+
+
+def test_attribute_unrecoverable_none_process_on_consumable_port_is_not_terminal() -> None:
+    """(c) an unrecoverable failure (process_name is None) on a declared consumable port never
+    fires the terminal arm — `.get() == None` is False — and falls through gracefully."""
+    manifest = _consumable_manifest(fixed_port=8080)
+    plan = pr.plan_ports(manifest, instances=2)
+    reason = pr.attribute_world_start_failure(
+        process_name=None,  # unrecoverable — no owning process to blame.
+        log_tail="[Errno 48] Address already in use: 127.0.0.1:8080",
+        manifest=manifest,
+        port_plan=plan,
+        knob_bearing=False,
+    )
+    assert reason != "port_not_consumable"
+    assert reason == "world_start_failed"
 
 
 # --- integration: admission clamp (item 3) ---------------------------------------------------
@@ -7634,6 +7769,59 @@ def test_provision_digest_rebuild_carries_ledger_forward_and_reclassifies_ports(
     assert {"reason": "literal_local_endpoint", "from_w": 4, "to_w": 1} in build[
         "degrade_events"
     ]
+
+
+def test_provision_digest_rebuild_fresh_admission_above_ceiling_appends_no_resource_limited(
+    tmp_path: Path,
+) -> None:
+    """C2 §6 strictly-decreasing `to_w` invariant across a rebuild: a fresh admission that only
+    equals/exceeds the CARRIED ceiling must not append a `resource_limited` entry AFTER an
+    existing lower `world_start_failed` entry (which would land a higher `to_w` later in the
+    ledger). Stage 1 clamps to the carried ceiling BEFORE attributing resource_limited."""
+    manifest_a = _manifest()
+    manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
+    source, bundle_dir = _provision_dirs(tmp_path)
+    cpu_box: dict[str, float | None] = {"value": None}  # first build: no admission clamp.
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: cpu_box["value"],
+        mem_observer=lambda: None,
+        listener_probe=lambda port: False,
+    )
+    # First build (W=4): admission does not clamp; world 2 dies -> world_start_failed 4->2.
+    _inject_world_failure(provider, 2, process="agent", log="boom (no bind error)")
+    first = asyncio.run(
+        provider.provision(
+            manifest_a,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in first] == [0, 1]
+    assert provider._effective_ceiling == 2
+
+    # Digest rebuild: fresh admission = 3 (cpu_fit floor((3.1-0.5)/0.8)=3) EXCEEDS the carried
+    # ceiling of 2, so the min-clamp yields 2 (no further reduction) and NO resource_limited is
+    # recorded. The carried world_start_failed entry stays the sole, ordered entry.
+    cpu_box["value"] = 3.1
+    second = asyncio.run(
+        provider.provision(
+            manifest_b,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in second] == [0, 1]
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["degrade_events"] == [
+        {"reason": "world_start_failed", "from_w": 4, "to_w": 2}
+    ]  # no resource_limited appended; order + strictly-decreasing to_w preserved.
 
 
 # --- integration: spawn-time override warning (item 8) ---------------------------------------
