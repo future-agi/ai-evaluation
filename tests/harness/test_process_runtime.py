@@ -7949,3 +7949,151 @@ def test_provision_reconcile_failure_re_raises_and_leaves_ledger_unchanged(
         )
     assert ledger_before == []  # nothing was recorded on the first (clean) build.
     assert provider._effective_ceiling == 2  # unchanged by the reconcile failure.
+
+
+# --- D40 (per-track review r2): ledger monotonicity + per-attempt state across a rebuild --------
+
+
+def test_provision_digest_rebuild_normalizes_ledger_to_strictly_decreasing_chain(
+    tmp_path: Path,
+) -> None:
+    """C2 §6 / C4 §2: an in-place `to_w` update on a digest rebuild can lower the always-first
+    `resource_limited` entry BELOW a carried `world_start_failed`, leaving the ledger's `to_w`
+    non-decreasing. After any mutation the ledger is normalized to a strictly-decreasing chain
+    (ordered by `to_w` descending, `from_w` re-derived), regardless of firing order."""
+    manifest_a = _manifest()
+    manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
+    source, bundle_dir = _provision_dirs(tmp_path)
+    cpu_box: dict[str, float | None] = {"value": 3.1}  # cpu_fit floor((3.1-0.5)/0.8)=3 -> W'=3.
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: cpu_box["value"],
+        mem_observer=lambda: None,
+        listener_probe=lambda port: False,
+    )
+    # First build (W=4): admission clamps to 3 (resource_limited 4->3); world 2 dies afterward
+    # (world_start_failed 3->2) -> [resource_limited 4->3, world_start_failed 3->2].
+    _inject_world_failure(provider, 2, process="agent", log="boom (no bind error)")
+    first = asyncio.run(
+        provider.provision(
+            manifest_a,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in first] == [0, 1]
+    build_a = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build_a["degrade_events"] == [
+        {"reason": "resource_limited", "from_w": 4, "to_w": 3},
+        {"reason": "world_start_failed", "from_w": 3, "to_w": 2},
+    ]
+
+    # Digest rebuild: fresh admission clamps to 1 (below the carried ceiling of 2). Updating the
+    # existing resource_limited entry's to_w to 1 IN PLACE would leave [resource_limited 4->1,
+    # world_start_failed 3->2] (to_w 1,2 -- NOT strictly decreasing); normalization reorders by
+    # to_w descending and re-derives from_w into a monotone chain.
+    cpu_box["value"] = 1.0  # cpu_fit floor((1-0.5)/0.8)=0 -> W'=1.
+    second = asyncio.run(
+        provider.provision(
+            manifest_b,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in second] == [0]
+    events = json.loads((tmp_path / "artifacts" / "build.json").read_text())[
+        "degrade_events"
+    ]
+    assert events == [
+        {"reason": "world_start_failed", "from_w": 4, "to_w": 2},
+        {"reason": "resource_limited", "from_w": 2, "to_w": 1},
+    ]
+    # Strictly-decreasing to_w, and each from_w == its predecessor's to_w (requested W leads).
+    to_ws = [e["to_w"] for e in events]
+    assert to_ws == sorted(to_ws, reverse=True) and len(set(to_ws)) == len(to_ws)
+    assert events[0]["from_w"] == 4
+    for previous, following in zip(events, events[1:]):
+        assert following["from_w"] == previous["to_w"]
+
+
+def test_provision_failed_rebuild_preserves_carried_ceiling_and_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2 §1 rule 3 / N3: a FAILED digest rebuild must NOT drop the previous successful job
+    identity. If it did, the next retry would take the fresh-first-build path -- wiping the ledger
+    and letting the ceiling grow back on a fresh admission. Preserving `_manifest`/`_bundle_digest`
+    (and the carried ceiling + ledger, never reset here) keeps the retry on the rebuild path."""
+    manifest_a = _manifest()
+    manifest_b = _manifest(lambda body: {**body, "digest": "sha256:" + "9" * 64})
+    source, bundle_dir = _provision_dirs(tmp_path)
+    cpu_box: dict[str, float | None] = {"value": 2.1}  # cpu_fit floor((2.1-0.5)/0.8)=2 -> W'=2.
+    provider = _sql_spy_provider(
+        secrets_path=tmp_path / "secrets.json",
+        cpu_observer=lambda: cpu_box["value"],
+        mem_observer=lambda: None,
+        listener_probe=lambda port: False,
+    )
+    # First build (W=4): admission clamps to 2 -> resource_limited 4->2, effective ceiling 2.
+    first = asyncio.run(
+        provider.provision(
+            manifest_a,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in first] == [0, 1]
+    assert provider._effective_ceiling == 2
+
+    # A digest rebuild whose build fails. cpu is now generous, so a fresh-first-build retry WOULD
+    # re-admit to 4 (ceiling grows back) on a wiped ledger -- the exact regression this guards.
+    cpu_box["value"] = 100.0
+    real_build = pr.build_process_trees
+    fail = {"on": True}
+
+    def flaky(*args: Any, **kwargs: Any) -> Any:
+        if fail["on"]:
+            raise OSError("disk full during rebuild")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(pr, "build_process_trees", flaky)
+    with pytest.raises(pr.ProcessRuntimeError):
+        asyncio.run(
+            provider.provision(
+                manifest_b,
+                source=source,
+                bundle_dir=bundle_dir,
+                work_directory=tmp_path,
+                instances=4,
+                require_declared_user=False,
+            )
+        )
+
+    # Retry the SAME rebuild, now succeeding: it must re-enter the rebuild path and carry the
+    # ceiling (2) + ledger forward, NOT re-admit up to 4 on a wiped ledger.
+    fail["on"] = False
+    second = asyncio.run(
+        provider.provision(
+            manifest_b,
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=4,
+            require_declared_user=False,
+        )
+    )
+    assert [r.world_index for r in second] == [0, 1]
+    assert provider._effective_ceiling == 2
+    build = json.loads((tmp_path / "artifacts" / "build.json").read_text())
+    assert build["effective_parallelism"] == 2
+    assert build["degrade_events"] == [
+        {"reason": "resource_limited", "from_w": 4, "to_w": 2}
+    ]

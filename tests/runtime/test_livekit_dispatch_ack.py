@@ -128,13 +128,17 @@ class _Ops:
         *,
         listed: list | None = None,
         list_error: bool = False,
+        list_hang: bool = False,
         delete_error: bool = False,
+        delete_hang: bool = False,
         create_hang: bool = False,
         create_error: bool = False,
     ) -> None:
         self.listed = list(listed or [])
         self.list_error = list_error
+        self.list_hang = list_hang
         self.delete_error = delete_error
+        self.delete_hang = delete_hang
         self.create_hang = create_hang
         self.create_error = create_error
         self.list_calls = 0
@@ -145,12 +149,16 @@ class _Ops:
         self.list_calls += 1
         if self.list_error:
             raise RuntimeError("ListAgentDispatch boom")
+        if self.list_hang:
+            await asyncio.sleep(3600)  # never returns inside the window
         return list(self.listed)
 
     async def delete_dispatch(self, dispatch) -> None:
         self.deletes.append(dispatch)
         if self.delete_error:
             raise RuntimeError("DeleteAgentDispatch boom")
+        if self.delete_hang:
+            await asyncio.sleep(3600)  # never returns inside the window
         try:
             self.listed.remove(dispatch)
         except ValueError:
@@ -345,6 +353,44 @@ def test_create_failure_spends_the_attempt_and_folds_into_exhaustion() -> None:
     assert ei.value.marker == "voice_dispatch_unacknowledged"
 
 
+def _run_capped(ops: _Ops, joiner: _Joiner, *, cap: float = 2.0):
+    # Bound the WHOLE ladder run so a regression that re-introduces an unbounded list/delete await
+    # fails fast (asyncio.TimeoutError) instead of hanging CI forever. Post-fix the ladder finishes
+    # in ~marks[-1]s, well under the cap.
+    async def go():
+        return await asyncio.wait_for(_ladder(ops, joiner), cap)
+
+    return asyncio.run(go())
+
+
+def test_stalled_list_forfeits_its_window_and_proceeds_to_exhaustion() -> None:
+    # A ListAgentDispatch that never returns MUST be bounded to its window mark (not awaited
+    # unbounded, which would block the ladder so the +40/+60 marks never fire and the scenario
+    # hangs to CallRunner's outer timeout as a generic timeout). It is treated as
+    # possibly-outstanding: no re-dispatch on it, and the ladder still reaches typed exhaustion on
+    # schedule.
+    ops = _Ops(list_hang=True)
+    joiner = _Joiner(join_at=None)
+    with pytest.raises(DispatchUnacknowledgedError) as ei:
+        _run_capped(ops, joiner)
+    assert ops.creates == 0  # a stalled list never re-dispatches
+    assert ops.list_calls == 2  # attempted (and forfeited) at both re-dispatch marks
+    assert ei.value.marker == "voice_dispatch_unacknowledged"
+
+
+def test_stalled_delete_forfeits_its_window_and_proceeds_to_exhaustion() -> None:
+    # A DeleteAgentDispatch that never returns MUST be bounded to its window mark. On overrun the
+    # listed dispatch is still outstanding -> no second create this mark; the ladder reaches typed
+    # exhaustion on schedule instead of hanging.
+    stale = SimpleNamespace(agent_name="agent-x", id="d1")
+    ops = _Ops(listed=[stale], delete_hang=True)
+    joiner = _Joiner(join_at=None)
+    with pytest.raises(DispatchUnacknowledgedError) as ei:
+        _run_capped(ops, joiner)
+    assert ops.creates == 0  # undeletable (hung) stale dispatch blocks every re-create
+    assert ei.value.marker == "voice_dispatch_unacknowledged"
+
+
 # --- production wrapper: readiness task + ops closures + cancellation --------------------------
 def _fake_api(ops: _Ops) -> SimpleNamespace:
     dispatch = SimpleNamespace(
@@ -394,3 +440,39 @@ def test_wrapper_raises_typed_exhaustion(monkeypatch) -> None:
     with pytest.raises(DispatchUnacknowledgedError):
         _run_wrapper(ops, join_delay=None, monkeypatch=monkeypatch)
     assert ops.creates == 2
+
+
+class _ReadinessCrash(RuntimeError):
+    """A genuine readiness-subsystem crash — distinct from a readiness TIMEOUT."""
+
+
+def test_non_timeout_readiness_exception_propagates(monkeypatch) -> None:
+    # A NON-timeout readiness crash must propagate as-is so the engine maps it to
+    # livekit_case_failed. Before the fix `await_join` swallowed any non-timeout exception into a
+    # not-joined -> ack-exhaustion path, mislabeling a real crash as voice_dispatch_unacknowledged
+    # (retryable INFRASTRUCTURE). Only a genuine TimeoutError/no-join continues to ack-exhaustion.
+    ops = _Ops()
+
+    async def crashing_wait(room, *, excluded_identities, target_identity, timeout):
+        await asyncio.sleep(0.02)  # crashes early, before the first ladder mark
+        raise _ReadinessCrash("readiness subsystem blew up")
+
+    monkeypatch.setattr(lk, "_wait_for_target_audio", crashing_wait)
+
+    async def go():
+        return await lk._await_target_audio_with_dispatch_ack(
+            SimpleNamespace(),  # room (unused by the fake)
+            excluded_identities=set(),
+            target_identity=None,
+            readiness_timeout=120.0,
+            api_client=_fake_api(ops),
+            room_name="room-1",
+            agent_name="agent-x",
+            metadata="{}",
+            first_dispatch_at=time.monotonic(),
+            marks=_MARKS,
+        )
+
+    with pytest.raises(_ReadinessCrash):
+        asyncio.run(go())
+    assert ops.creates == 0  # the crash pre-empts the ladder; never a re-dispatch

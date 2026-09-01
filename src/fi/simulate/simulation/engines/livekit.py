@@ -317,13 +317,23 @@ async def _run_dispatch_ack_ladder(
                 inflight_create = None
 
             # (b) List the room's dispatches BEFORE any re-create (C3 §4.3 step 1). A failed list
-            # means possibly-outstanding: MUST NOT re-dispatch on it.
+            # means possibly-outstanding: MUST NOT re-dispatch on it. The call is window-bounded
+            # exactly like the create below (:316-320): a stalled dispatch-API call MUST NOT run
+            # past this attempt's mark, or the whole ladder blocks and no typed exhaustion fires.
+            # A wait_for overrun raises asyncio.TimeoutError, caught here as a possibly-outstanding
+            # list — same handling as any other list error.
+            list_timeout = next_deadline - now()
             try:
-                listed = _listed_dispatches(await list_dispatches())
-            except Exception:  # noqa: BLE001 - any list error is "possibly-outstanding"
+                listed = _listed_dispatches(
+                    await asyncio.wait_for(
+                        list_dispatches(),
+                        timeout=list_timeout if list_timeout > 0.0 else 0.0,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - any list error/overrun is "possibly-outstanding"
                 logger.warning(
-                    "dispatch-ack: ListAgentDispatch failed at +%ss mark; not re-dispatching "
-                    "(room=%s agent=%s)",
+                    "dispatch-ack: ListAgentDispatch failed or overran its window at +%ss mark; "
+                    "not re-dispatching (room=%s agent=%s)",
                     mark,
                     room_name,
                     agent_name,
@@ -335,12 +345,20 @@ async def _run_dispatch_ack_ladder(
             stale = [d for d in listed if dispatch_name_of(d) == agent_name]
             blocked = False
             for d in stale:
+                # Window-bounded like the list/create: a stalled delete must not run past this
+                # attempt's mark. A wait_for overrun raises asyncio.TimeoutError, caught here — the
+                # dispatch is then possibly-outstanding, so no re-create this mark (same handling as
+                # any other delete error).
+                delete_timeout = next_deadline - now()
                 try:
-                    await delete_dispatch(d)
-                except Exception:  # noqa: BLE001
+                    await asyncio.wait_for(
+                        delete_dispatch(d),
+                        timeout=delete_timeout if delete_timeout > 0.0 else 0.0,
+                    )
+                except Exception:  # noqa: BLE001 - delete error/overrun -> still outstanding
                     logger.warning(
-                        "dispatch-ack: DeleteAgentDispatch failed; leaving the single outstanding "
-                        "dispatch, no re-create this mark (room=%s agent=%s)",
+                        "dispatch-ack: DeleteAgentDispatch failed or overran its window; leaving "
+                        "the single outstanding dispatch, no re-create this mark (room=%s agent=%s)",
                         room_name,
                         agent_name,
                     )
@@ -429,20 +447,30 @@ async def _await_target_audio_with_dispatch_ack(
         )
     )
 
+    def _consume_readiness() -> "_TargetParticipant | None":
+        # Precondition: readiness_task is done. Distinguish its outcome (C3 §4.2): a genuine
+        # readiness TIMEOUT (or a cancellation) means not-joined -> continue the ladder to
+        # ack-exhaustion. ANY OTHER exception is a real readiness CRASH -> RE-RAISE it so it
+        # propagates to the engine's normal error handling (livekit_case_failed) instead of being
+        # swallowed into a not-joined path that mislabels it voice_dispatch_unacknowledged
+        # (retryable infrastructure).
+        if readiness_task.cancelled():
+            return None
+        exc = readiness_task.exception()
+        if exc is not None:
+            if isinstance(exc, asyncio.TimeoutError):
+                return None
+            raise exc
+        return readiness_task.result()
+
     async def await_join(timeout: float) -> "_TargetParticipant | None":
         if timeout <= 0.0:
-            if (
-                readiness_task.done()
-                and not readiness_task.cancelled()
-                and readiness_task.exception() is None
-            ):
-                return readiness_task.result()
+            if readiness_task.done():
+                return _consume_readiness()
             return None
         done, _ = await asyncio.wait({readiness_task}, timeout=timeout)
         if readiness_task in done:
-            if readiness_task.cancelled() or readiness_task.exception() is not None:
-                return None
-            return readiness_task.result()
+            return _consume_readiness()
         return None
 
     async def list_dispatches() -> Any:

@@ -1243,11 +1243,23 @@ def resolve_environment_plan(
                 livekit_download=is_livekit and service_name == control_name,
                 run_override=_dockerfile_run(service_root),
             )
-            if port and service_name in {"api", "tools-api"}:
+            if (
+                port
+                and service_name in {"api", "tools-api"}
+                and not (is_livekit and service_name == control_name)
+            ):
                 # C1 §1 / checklist 2: the tools-api/api server pins its port in a Dockerfile CMD
                 # copied verbatim into run_command. Rewrite it to consume its per-world allocated
                 # port through the one valid wiring ($FI_TOOLS_PORT in `sh -c`) so it parallelizes
                 # at W>1 instead of forcing a degrade to W=1.
+                #
+                # Track A′ D37 LIMITATION: a single process that is BOTH the knob-bearing LiveKit
+                # control worker AND a consumable HTTP server runs W=1 only. It is excluded here so
+                # it does NOT receive FI_TOOLS_PORT alongside FI_WORKER_HEALTH_PORT — both would
+                # carry the SAME `{{PORT_<name>}}` token, colliding the worker health server and the
+                # HTTP server on one port at any W. It stays a plain fixed_port (non-consumable) and
+                # degrades to W=1 honestly (at W=1 the default health port does not collide). The
+                # normal topology (control=agent + a separate tools-api) is unaffected.
                 process = _consumable_source_process(
                     process, _FI_TOOLS_PORT, f"{{{{PORT_{service_name}}}}}"
                 )

@@ -5010,15 +5010,39 @@ class ProcessRuntimeProvider:
 
     def _append_degrade(self, reason: str, from_w: int, to_w: int) -> None:
         """C2 §6 dedup rule: a repeat failure with an already-present reason UPDATES that entry's
-        `to_w` downward — never a second entry. `from_w` keeps the first appearance's value
-        (the ceiling entering the stage the first time this reason fired)."""
+        `to_w` downward — never a second entry. After any mutation the ledger is normalized to a
+        strictly-decreasing `to_w` chain (see `_normalize_degrade_ledger`), so the recorded
+        `from_w`/order is independent of the firing order."""
         for event in self._degrade_ledger:
             if event["reason"] == reason:
                 event["to_w"] = to_w
+                self._normalize_degrade_ledger()
                 return
         self._degrade_ledger.append(
             {"reason": reason, "from_w": from_w, "to_w": to_w}
         )
+        self._normalize_degrade_ledger()
+
+    def _normalize_degrade_ledger(self) -> None:
+        """C2 §6 / C4 §2: force the ledger into a strictly-decreasing `to_w` chain regardless of
+        the order the reasons fired in. Updating an existing reason's `to_w` in place (dedup) can
+        lower an earlier entry below a later one — e.g. lowering the always-first `resource_limited`
+        below a carried `world_start_failed` on a digest rebuild — leaving `to_w` non-decreasing.
+        Keep ≤1 entry per reason (dedup already guarantees this), ORDER entries by `to_w`
+        descending, and RE-DERIVE each entry's `from_w` from its predecessor's `to_w` — the
+        attempt's requested W (the largest recorded `from_w`, i.e. the ceiling the FIRST degrade
+        entered) for the leading entry."""
+        if not self._degrade_ledger:
+            return
+        requested = max(int(event["from_w"]) for event in self._degrade_ledger)
+        ordered = sorted(
+            self._degrade_ledger, key=lambda event: int(event["to_w"]), reverse=True
+        )
+        previous = requested
+        for event in ordered:
+            event["from_w"] = previous
+            previous = int(event["to_w"])
+        self._degrade_ledger = ordered
 
     def _read_declared_resources(
         self, work_directory: Path
@@ -5253,6 +5277,19 @@ class ProcessRuntimeProvider:
         else:
             build_output.degrade_reason = None
 
+    def _reset_identity_on_build_failure(self, is_digest_rebuild: bool) -> None:
+        """N3 / C2 §1 rule 3: on a build/freeze failure clear the not-yet-committed job identity so
+        an in-process retry re-attempts the build. On a FIRST build clear it fully (nothing to
+        carry). On a DIGEST REBUILD keep the PREVIOUS successful `_manifest`/`_bundle_digest` (and
+        the carried `_effective_ceiling`/`_degrade_ledger`, which are never reset here) so the retry
+        re-enters the rebuild path — carrying the ceiling + ledger FORWARD (per-attempt monotone)
+        instead of the fresh-first-build path, which would wipe the ledger and let the ceiling grow
+        back."""
+        if is_digest_rebuild:
+            return
+        self._manifest = None
+        self._bundle_digest = None
+
     def _provision_sync(
         self,
         bundle: EnvironmentBundleV2,
@@ -5389,8 +5426,7 @@ class ProcessRuntimeProvider:
                 # closest §2f code in a closed table with no generic `provisioner_io_failed`), but
                 # the domain is `infrastructure` either way, so it is set directly here rather than
                 # left to the fallback map.
-                self._manifest = None
-                self._bundle_digest = None
+                self._reset_identity_on_build_failure(is_digest_rebuild)
                 raise ProcessRuntimeError(
                     "baseline",
                     "store_statement_failed",
@@ -5398,8 +5434,7 @@ class ProcessRuntimeProvider:
                     domain=FailureDomain.INFRASTRUCTURE,
                 ) from exc
             except BaseException:
-                self._manifest = None
-                self._bundle_digest = None
+                self._reset_identity_on_build_failure(is_digest_rebuild)
                 raise
             self._manifest = bundle
             self._bundle_digest = bundle_digest

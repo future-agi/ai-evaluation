@@ -1269,6 +1269,69 @@ def test_tools_api_without_a_port_command_stays_non_consumable(tmp_path: Path) -
     assert "FI_TOOLS_PORT" not in tools_proc.environment
 
 
+def _livekit_compose_single_api_worker(source: Path) -> None:
+    """A voice bundle whose ONLY source service is `api` (no separate agent): the LiveKit control
+    worker is ALSO a command-fixed HTTP server. Track A′ D37: this ONE process would receive both
+    FI_WORKER_HEALTH_PORT and FI_TOOLS_PORT bound to the SAME `{{PORT_api}}` token."""
+    source.mkdir()
+    api = source / "api"
+    api.mkdir()
+    (api / "agent.py").write_text("print('api')\n", encoding="utf-8")
+    (api / "pyproject.toml").write_text(
+        "[project]\nname='api'\nversion='1'\n", encoding="utf-8"
+    )
+    (api / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]\n',
+        encoding="utf-8",
+    )
+    (source / "compose.yml").write_text(
+        """services:
+  postgres:
+    image: postgres:16
+  api:
+    build: ./api
+    depends_on: {postgres: {condition: service_healthy}}
+""",
+        encoding="utf-8",
+    )
+
+
+def test_conflated_worker_and_http_server_stays_non_consumable(tmp_path: Path) -> None:
+    # Track A′ D37: a single process that is BOTH the knob-bearing LiveKit control worker AND a
+    # consumable HTTP server would get FI_WORKER_HEALTH_PORT and FI_TOOLS_PORT bound to the SAME
+    # `{{PORT_api}}` token -> the worker health server and the HTTP server collide on one port at
+    # ANY W. Such a conflated process MUST NOT be flagged consumable; it stays code-fixed and
+    # degrades to W=1 honestly (at W=1 the default health port does not collide).
+    source = tmp_path / "conflated-voice"
+    _livekit_compose_single_api_worker(source)
+    plan = resolve_environment_plan(source, _job(connector="livekit", with_secrets=True))
+
+    api = next(p for p in plan.processes if p.name == "api")
+    # It IS the knob-bearing control worker...
+    assert api.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_api}}"
+    # ...so it is NOT flagged consumable and carries NO FI_TOOLS_PORT rewrite (no port collision).
+    assert api.fixed_port == 8080
+    assert api.fixed_port_consumable is False
+    assert "FI_TOOLS_PORT" not in api.environment
+
+
+def test_normal_separate_tools_api_is_still_consumable(tmp_path: Path) -> None:
+    # Track A′ D37 anti-regression: the NORMAL topology (control=agent + a SEPARATE tools-api) is
+    # unaffected — the separate tools-api still gets the consumable rewrite (it is not the
+    # knob-bearing worker), and the agent control worker is not an HTTP server at all.
+    source = tmp_path / "voice-compose"
+    _livekit_compose_with_command_fixed_tools(source)
+    plan = resolve_environment_plan(source, _job(connector="livekit", with_secrets=True))
+
+    tools = next(p for p in plan.processes if p.name == "tools-api")
+    assert tools.fixed_port_consumable is True
+    assert tools.environment["FI_TOOLS_PORT"] == "{{PORT_tools-api}}"
+    assert "FI_WORKER_HEALTH_PORT" not in tools.environment
+    control = next(p for p in plan.processes if p.name == "agent")
+    assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
+    assert "FI_TOOLS_PORT" not in control.environment
+
+
 def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:
     # C1 §4: the FI_* trio is authored UNCONDITIONALLY into every LiveKit-worker process, each
     # fed its OWN `{{PORT_<name>}}`. `FI_WORKER_HEALTH_PORT`'s presence IS the knob-bearing mark.
