@@ -6907,6 +6907,62 @@ def test_spawn_source_process_injects_child_safe_livekit_tool_trace(
         world_dir.chmod(0o755)
 
 
+def test_spawn_source_process_injects_sitecustomize_for_worker_isolation_alone(
+    tmp_path: Path,
+) -> None:
+    # The sitecustomize hook carries two independent responsibilities (tool tracing,
+    # LiveKit worker isolation) behind one file. A job that wants isolation but not tracing
+    # must still get the hook written and first on PYTHONPATH -- it must not be a side
+    # effect of HARNESS_TOOL_TRACE alone.
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, env=env)
+        return FakeHandle()
+
+    process = _source_process(
+        environment={"FI_WORKER_HEALTH_PORT": "{{PORT_svc}}"}
+    ).model_copy(update={"run_command": [".venv/bin/python", "agent.py", "start"]})
+    world_dir = tmp_path / "worlds" / "w0" / "svc"
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={},
+        secret_purposes={},
+        runner=fake_runner,
+    )
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(world_dir)
+    assert (world_dir / "sitecustomize.py").is_file()
+
+    # Mirrors the tool-trace reuse test above: a world reset spawns the process again in the
+    # same agent-owned scratch directory, and the isolation-only branch must reuse the
+    # immutable hook rather than trying (and failing) to rewrite a 0444 file after ownership
+    # has already moved from svc-control to svc-agent.
+    (world_dir / "sitecustomize.py").chmod(0o444)
+    world_dir.chmod(0o555)
+    try:
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=world_dir,
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={},
+            secret_purposes={},
+            runner=fake_runner,
+        )
+    finally:
+        world_dir.chmod(0o755)
+    assert (world_dir / "sitecustomize.py").is_file()
+
+
 def test_dispatch_metadata_sets_the_key_only_for_exactly_one_distinct_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -7682,6 +7738,35 @@ def test_port_not_consumable_is_in_the_section_2f_table_with_agent_domain() -> N
     assert pr.SECTION_2F_DOMAIN["port_not_consumable"] is FailureDomain.AGENT
 
 
+def test_raise_port_not_consumable_knob_bearing_wording() -> None:
+    # A knob-bearing (LiveKit worker) failure must point at the isolation hook and worker
+    # log, and must NOT use the generic "rewritten port env" wording -- the two causes are
+    # unrelated (a stuck sitecustomize hook vs. a consumable process not honoring its own
+    # rewritten $PORT env), and swapping the wordings would send an operator chasing the
+    # wrong process.
+    provider = _sql_spy_provider()
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        provider._raise_port_not_consumable("agent", knob_bearing=True)
+    message = str(excinfo.value)
+    assert "worker-isolation hook" in message
+    assert "check the worker log" in message
+    assert "rewritten port" not in message
+
+
+def test_raise_port_not_consumable_generic_wording() -> None:
+    # The non-knob-bearing case (a `fixed_port_consumable` process, e.g. tools-api, or the
+    # declared-port listener check that never has a process name) must use the generic
+    # rewritten-port wording, and must NOT claim anything about a LiveKit worker or its
+    # isolation hook -- that would be false for this cause.
+    provider = _sql_spy_provider()
+    with pytest.raises(pr.ProcessRuntimeError) as excinfo:
+        provider._raise_port_not_consumable("tools-api")
+    message = str(excinfo.value)
+    assert "rewritten port" in message
+    assert "worker-isolation hook" not in message
+    assert "check the worker log" not in message
+
+
 # --- integration: per-build-identity freeze (item 6) -----------------------------------------
 
 
@@ -7827,9 +7912,66 @@ def test_provision_digest_rebuild_fresh_admission_above_ceiling_appends_no_resou
 # --- integration: spawn-time override warning (item 8) ---------------------------------------
 
 
+@pytest.mark.parametrize("guarded_key", pr._SPAWN_GUARDED_KEYS)
 def test_spawn_time_override_warning_fires_when_secret_overrides_a_guarded_key(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, guarded_key: str
+) -> None:
+    process = _source_process(
+        name="agent",
+        environment={guarded_key: "rendered-value"},
+        secret_purposes=["target_provider"],
+    )
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    with caplog.at_level("WARNING"):
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=tmp_path / "w0",
+            world_index=0,
+            port_plan=_solo_port_plan("agent"),
+            configuration_addresses={},
+            secret_values={guarded_key: "injected-secret-value"},
+            secret_purposes={guarded_key: "target_provider"},
+            runner=lambda *a, **k: FakeHandle(),
+            require_declared_user=False,
+        )
+    assert any(guarded_key in r.message for r in caplog.records)
+    # the values themselves must never be logged.
+    assert all("injected-secret-value" not in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("guarded_key", pr._SPAWN_GUARDED_KEYS)
+def test_spawn_time_override_warning_silent_when_no_rendered_value(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, guarded_key: str
+) -> None:
+    process = _source_process(
+        name="agent", environment={}, secret_purposes=["target_provider"]
+    )  # no rendered guarded key.
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    with caplog.at_level("WARNING"):
+        pr.spawn_source_process(
+            process,
+            build_dir=build_dir,
+            world_dir=tmp_path / "w0",
+            world_index=0,
+            port_plan=_solo_port_plan("agent"),
+            configuration_addresses={},
+            secret_values={guarded_key: "injected-secret-value"},
+            secret_purposes={guarded_key: "target_provider"},
+            runner=lambda *a, **k: FakeHandle(),
+            require_declared_user=False,
+        )
+    assert not any(guarded_key in r.message for r in caplog.records)
+
+
+def test_spawn_time_override_warning_silent_for_a_key_outside_the_guarded_tuple(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # FI_LOAD_THRESHOLD is no longer authored or guarded -- the worker-isolation shim
+    # hardcodes it internally at worker start rather than reading it from env -- so an
+    # injected secret of this name overriding a same-named rendered value must NOT warn.
     process = _source_process(
         name="agent",
         environment={"FI_LOAD_THRESHOLD": "inf"},
@@ -7850,33 +7992,11 @@ def test_spawn_time_override_warning_fires_when_secret_overrides_a_guarded_key(
             runner=lambda *a, **k: FakeHandle(),
             require_declared_user=False,
         )
-    assert any("FI_LOAD_THRESHOLD" in r.message for r in caplog.records)
-    # the values themselves must never be logged.
-    assert all("0.7" not in r.message for r in caplog.records)
-
-
-def test_spawn_time_override_warning_silent_when_no_rendered_value(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    process = _source_process(
-        name="agent", environment={}, secret_purposes=["target_provider"]
-    )  # no rendered guarded key.
-    build_dir = tmp_path / "build"
-    build_dir.mkdir()
-    with caplog.at_level("WARNING"):
-        pr.spawn_source_process(
-            process,
-            build_dir=build_dir,
-            world_dir=tmp_path / "w0",
-            world_index=0,
-            port_plan=_solo_port_plan("agent"),
-            configuration_addresses={},
-            secret_values={"FI_LOAD_THRESHOLD": "0.7"},
-            secret_purposes={"FI_LOAD_THRESHOLD": "target_provider"},
-            runner=lambda *a, **k: FakeHandle(),
-            require_declared_user=False,
-        )
     assert not any("FI_LOAD_THRESHOLD" in r.message for r in caplog.records)
+
+
+def test_spawn_guarded_keys_is_exactly_the_two_remaining_members() -> None:
+    assert pr._SPAWN_GUARDED_KEYS == ("LIVEKIT_AGENT_NAME", "FI_WORKER_HEALTH_PORT")
 
 
 def test_provision_two_stage_degrade_yields_two_ordered_ledger_entries(tmp_path: Path) -> None:

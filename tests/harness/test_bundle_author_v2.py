@@ -1333,16 +1333,18 @@ def test_normal_separate_tools_api_is_still_consumable(tmp_path: Path) -> None:
 
 
 def test_livekit_worker_carries_the_worker_knob_env(tmp_path: Path) -> None:
-    # C1 §4: the FI_* trio is authored UNCONDITIONALLY into every LiveKit-worker process, each
-    # fed its OWN `{{PORT_<name>}}`. `FI_WORKER_HEALTH_PORT`'s presence IS the knob-bearing mark.
+    # C1 §4: FI_WORKER_HEALTH_PORT is authored UNCONDITIONALLY into every LiveKit-worker process,
+    # each fed its OWN `{{PORT_<name>}}`. Its presence IS the knob-bearing mark; it is the only
+    # worker knob authored -- FI_LOAD_THRESHOLD / FI_NUM_IDLE_PROCESSES are hardcoded by the
+    # harness's own sitecustomize shim at worker start instead, so there is nothing to author.
     source = tmp_path / "voice-compose"
     _livekit_compose_with_command_fixed_tools(source)
     plan = resolve_environment_plan(source, _job(connector="livekit", with_secrets=True))
 
     control = next(p for p in plan.processes if p.name == "agent")
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
-    assert control.environment["FI_LOAD_THRESHOLD"] == "inf"
-    assert control.environment["FI_NUM_IDLE_PROCESSES"] == "1"
+    assert "FI_LOAD_THRESHOLD" not in control.environment
+    assert "FI_NUM_IDLE_PROCESSES" not in control.environment
     # D32 / C3 §4.5: the dispatch-ack opt-in does NOT belong on the agent-under-test child. The
     # engine reads it from the GUEST MAIN PROCESS env (armed by `hosted_entrypoint`), not from the
     # spawned worker's environment, so the worker-knob authoring must not carry it.
@@ -1367,8 +1369,8 @@ def test_generated_python_livekit_worker_carries_the_worker_knob_env(
 
     control = next(p for p in plan.processes if p.name == "agent")
     assert control.environment["FI_WORKER_HEALTH_PORT"] == "{{PORT_agent}}"
-    assert control.environment["FI_LOAD_THRESHOLD"] == "inf"
-    assert control.environment["FI_NUM_IDLE_PROCESSES"] == "1"
+    assert "FI_LOAD_THRESHOLD" not in control.environment
+    assert "FI_NUM_IDLE_PROCESSES" not in control.environment
     # D32 / C3 §4.5: the flag is guest-main-only, never authored onto the agent-under-test child.
     assert "FI_HOSTED_DISPATCH_ACK" not in control.environment
     dispatch = control.environment["LIVEKIT_AGENT_NAME"]

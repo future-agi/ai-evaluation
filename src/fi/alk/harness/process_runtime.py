@@ -509,12 +509,12 @@ def scan_loopback_ports(secret_values: dict[str, str]) -> dict[str, set[int]]:
     return found
 
 
-# C2 §4a: the four guarded keys whose injected-secret override is surfaced as a spawn-time
-# warning (C1 §4 legislates all four as MUST members of the same channel).
+# C2 §4a: the two guarded keys whose injected-secret override is surfaced as a spawn-time
+# warning (C1 §4 legislates both as MUST members of the same channel). The worker-isolation
+# shim hardcodes its other tunables internally rather than reading them from authored env, so
+# there is nothing else here for a secret to collide with.
 _SPAWN_GUARDED_KEYS = (
     "LIVEKIT_AGENT_NAME",
-    "FI_LOAD_THRESHOLD",
-    "FI_NUM_IDLE_PROCESSES",
     "FI_WORKER_HEALTH_PORT",
 )
 
@@ -2012,21 +2012,28 @@ def spawn_source_process(
         stage="spawn",
         domain=FailureDomain.AGENT,
     )
-    trace_bootstrap: Path | None = None
+    sitecustomize_hook: Path | None = None
     try:
         world_dir.mkdir(parents=True, exist_ok=True)
-        if "HARNESS_TOOL_TRACE" in process.environment:
-            trace_bootstrap = world_dir / "sitecustomize.py"
+        # The hook file carries two independent responsibilities (tool tracing, LiveKit
+        # worker isolation) behind one `sitecustomize.py`, so either env marker alone is
+        # enough to justify writing it -- a worker-isolation-only job must not silently miss
+        # the hook just because it happens not to also want tool tracing.
+        if (
+            "HARNESS_TOOL_TRACE" in process.environment
+            or "FI_WORKER_HEALTH_PORT" in process.environment
+        ):
+            sitecustomize_hook = world_dir / "sitecustomize.py"
             # Reset reuses this agent-owned directory. The hook is immutable for the job,
             # so preserve an existing copy instead of overwriting a 0444 file after ownership
             # has already moved from svc-control to svc-agent.
-            if not trace_bootstrap.exists():
-                trace_bootstrap.write_bytes(
+            if not sitecustomize_hook.exists():
+                sitecustomize_hook.write_bytes(
                     Path(__file__)
                     .with_name("livekit_tool_trace_bootstrap.py")
                     .read_bytes()
                 )
-                trace_bootstrap.chmod(0o444)
+                sitecustomize_hook.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
     except OSError as exc:
@@ -2096,7 +2103,7 @@ def spawn_source_process(
         },
     )
     command = list(process.run_command)
-    if trace_bootstrap is not None:
+    if sitecustomize_hook is not None:
         # Python imports ``sitecustomize`` at interpreter startup. Put the ALK-owned hook first
         # on PYTHONPATH so it is installed in the parent worker and every LiveKit job child.
         # Preserve any repository-supplied path after it.
@@ -5234,20 +5241,46 @@ class ProcessRuntimeProvider:
             knob_bearing=knob,
         )
         if reason == "port_not_consumable":
-            self._raise_port_not_consumable(process_name)
+            self._raise_port_not_consumable(process_name, knob_bearing=knob)
         # Graceful degrade to 1.
         self._append_degrade(reason, from_ceiling, 1)
 
-    def _raise_port_not_consumable(self, process_name: str | None) -> None:
+    def _raise_port_not_consumable(
+        self, process_name: str | None, *, knob_bearing: bool = False
+    ) -> None:
         """C1 §4 decision 2 / C2 §5 rule 3: a TERMINAL job failure, raised out-of-band — never a
-        ledger append, never a ceiling drop, never a synthetic `conformance=False`."""
+        ledger append, never a ceiling drop, never a synthetic `conformance=False`.
+
+        Two distinct causes reach this one terminal: a `fixed_port_consumable` process (e.g.
+        tools-api, rewritten by the harness itself to read `$FI_TOOLS_PORT`) still binding its
+        old fixed port, or a `knob_bearing` LiveKit worker whose `sitecustomize` isolation hook
+        did not take effect. Neither is something the operator can fix by editing the agent under
+        test -- that is precisely what this whole mechanism exists to avoid -- so the message
+        never tells them to. `knob_bearing` is only ever True from the attribution arm that
+        already identified a specific worker process; the declared-port listener check below
+        cannot name one, so it always gets the generic wording.
+        """
         located = f" ({process_name})" if process_name else ""
+        if knob_bearing:
+            detail = (
+                "the harness could not isolate this world's LiveKit worker: its "
+                "worker-isolation hook did not take effect (unsupported livekit-agents version, "
+                "a Python interpreter started with -S/-I/-E so sitecustomize was skipped, or a "
+                f"worker that is not a Python livekit-agents process){located}; check the worker "
+                "log for 'livekit worker isolation applied: mode=', or request parallelism=1 to "
+                "run serially"
+            )
+        else:
+            detail = (
+                "a declared, harness-rewritten port was not actually bound at its assigned "
+                f"value{located}; check the process log for why the rewritten port env was not "
+                "honored, or request parallelism=1 to run serially (the declared port is then "
+                "honored)"
+            )
         raise ProcessRuntimeError(
             "provision",
             "port_not_consumable",
-            "the agent is declared parallel-capable but did not honor its assigned port"
-            f"{located}; fix it to read its port env, or request parallelism=1 to run serially "
-            "(the declared port is then honored)",
+            detail,
             process=process_name,
             domain=FailureDomain.AGENT,
         )

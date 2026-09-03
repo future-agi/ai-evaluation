@@ -984,12 +984,9 @@ def _tool_proxy_process() -> SourceProcess:
 # The env var the rewritten tools-api command reads its per-world port from (C1 §1, checklist 2).
 _FI_TOOLS_PORT = "FI_TOOLS_PORT"
 
-# C1 §4 worker knobs — livekit-agents 1.7.1 exposes these ONLY as WorkerOptions constructor args
-# (no env/CLI override), so the harness delivers them as env vars a conformant agent reads.
-_FI_LOAD_THRESHOLD_VALUE = "inf"  # §4: the shedding signal is system CPU, shared by all W workers
-#: OD-1 (open decision): the value is not frozen. `1` bounds idle memory and still exercises the
-#: read path; author it in the dev/E2E lane until Track D calibrates. Change this one constant.
-_FI_NUM_IDLE_PROCESSES_DEV = "1"
+# C1 §4 worker knob — the port livekit-agents 1.7.1 exposes ONLY as a WorkerOptions constructor
+# arg (no env/CLI override), so the harness delivers it as an env var and consumes it itself (see
+# `_worker_knob_env` below) rather than requiring the agent under test to read it.
 
 
 def _shell_port_command(argv: list[str], port: str, env_key: str) -> str | None:
@@ -1056,11 +1053,13 @@ def _consumable_source_process(
 
 
 def _worker_knob_env(process_name: str) -> dict[str, str]:
-    """C1 §4: the FI_* worker-knob trio for one LiveKit-worker process, fed its OWN token.
+    """C1 §4: the FI_* worker knob for one LiveKit-worker process, fed its OWN token.
 
     ``FI_WORKER_HEALTH_PORT``'s presence IS the knob-bearing mark (both authoring and runtime key
-    on it). A conformant agent reads all three into its ``WorkerOptions``/``AgentServer``; absent,
-    it stays on library defaults.
+    on it). It is not read by the agent under test: the harness's own ``sitecustomize`` shim
+    (``livekit_tool_trace_bootstrap.py``) consumes it at worker start, flipping the worker into
+    livekit-agents' own side-by-side mode -- the agent under test is never modified. Absent, the
+    shim is a no-op and the worker stays on library defaults.
 
     NOTE: ``FI_HOSTED_DISPATCH_ACK`` (D32 / C3 §4.5) is deliberately NOT authored here. The
     dispatch-ack ladder in ``engines/livekit.py`` runs in the GUEST MAIN PROCESS (under
@@ -1070,8 +1069,6 @@ def _worker_knob_env(process_name: str) -> dict[str, str]:
     """
     return {
         "FI_WORKER_HEALTH_PORT": f"{{{{PORT_{process_name}}}}}",
-        "FI_LOAD_THRESHOLD": _FI_LOAD_THRESHOLD_VALUE,
-        "FI_NUM_IDLE_PROCESSES": _FI_NUM_IDLE_PROCESSES_DEV,
     }
 
 
@@ -1221,7 +1218,7 @@ def resolve_environment_plan(
                     "HARNESS_TOOL_TRACE",
                     "{{WORLD_DIR}}/agent-tool-calls.jsonl",
                 )
-                # C1 §4: author the worker-knob trio UNCONDITIONALLY into the LiveKit worker,
+                # C1 §4: author the worker knob UNCONDITIONALLY into the LiveKit worker,
                 # fed its own `{{PORT_<name>}}`. This IS what marks it knob-bearing.
                 environment.update(_worker_knob_env(service_name))
             entry = (
@@ -1366,7 +1363,7 @@ def resolve_environment_plan(
                     root.name.replace("_", "-") + "-{{JOB_ID}}-w{{WORLD_INDEX}}"
                 ),
                 "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                # C1 §4: the single LiveKit worker carries the knob trio, fed its own token.
+                # C1 §4: the single LiveKit worker carries the worker knob, fed its own token.
                 **_worker_knob_env(control_name),
             }
             if is_livekit
