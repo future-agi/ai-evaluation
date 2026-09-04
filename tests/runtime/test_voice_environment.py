@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fi.simulate.hosted.child_entrypoint import _build_voice_spec
 from fi.simulate.hosted.job import RunnerMode, StartRunnerJob, VoiceRunConfig
@@ -119,6 +120,94 @@ def test_voice_runs_through_simulation_runner(monkeypatch) -> None:
     assert report.test_cases[0].result.transcript
 
 
+def test_hosted_voice_params_drops_unknown_platform_keys(monkeypatch, caplog) -> None:
+    """run_voice_simulation is keyword-only with a closed parameter list, so a
+    platform-sent params key it doesn't know (e.g. a leased-DID slot key the
+    hosted runner splats into voice.params) must be dropped before the call
+    instead of raising TypeError and killing the run. No livekit import
+    needed: run_voice_simulation is monkeypatched at the exact module
+    attribute the plugin calls."""
+    job = _voice_job()
+    job.voice.params["inbound_did"] = "+15557654321"
+    spec = _build_voice_spec(job)
+    persona = spec.scenario.dataset[0]
+    seen: dict = {}
+
+    # Closed signature (no **kwargs) mirroring the real run_voice_simulation's
+    # accepted names for this test's params — deliberately omits inbound_did.
+    async def fake_run_voice_simulation(
+        *,
+        agent_definition,
+        livekit_runtime=None,
+        scenario=None,
+        simulator=None,
+        simulation_run_id=None,
+        on_case_complete=None,
+        on_case_start=None,
+        max_seconds=45.0,
+        record_audio=False,
+    ):
+        seen["max_seconds"] = max_seconds
+        seen["record_audio"] = record_audio
+        return _legacy(persona)
+
+    monkeypatch.setattr(
+        "fi.simulate.voice.run_voice_simulation", fake_run_voice_simulation
+    )
+    with caplog.at_level(logging.WARNING, logger="fi.simulate.environments.voice"):
+        report = asyncio.run(SimulationRunner().run(spec))
+
+    assert report.status == RunStatus.COMPLETED
+    # the call succeeded, proving inbound_did never reached the closed kwargs
+    assert seen == {"max_seconds": 120, "record_audio": False}
+    warnings = [r for r in caplog.records if r.message == "hosted_voice_params_ignored"]
+    assert len(warnings) == 1
+    assert warnings[0].keys == ["inbound_did"]
+
+
+def test_hosted_voice_params_drops_plugin_owned_keys(monkeypatch, caplog) -> None:
+    """A voice.params key that names a kwarg VoiceEnvironmentPlugin.run already
+    passes explicitly (e.g. scenario) must be dropped by the filter before the
+    call, not forwarded via **params — else run_voice_simulation raises
+    TypeError: got multiple values for keyword argument 'scenario'. The fake
+    signature below still accepts scenario as a named parameter (mirroring the
+    real one), so this only passes if the filter reserves plugin-owned names
+    itself rather than relying on the signature to reject them."""
+    job = _voice_job()
+    job.voice.params["scenario"] = "bogus-collision-value"
+    spec = _build_voice_spec(job)
+    persona = spec.scenario.dataset[0]
+    seen: dict = {}
+
+    async def fake_run_voice_simulation(
+        *,
+        agent_definition,
+        livekit_runtime=None,
+        scenario=None,
+        simulator=None,
+        simulation_run_id=None,
+        on_case_complete=None,
+        on_case_start=None,
+        max_seconds=45.0,
+        record_audio=False,
+    ):
+        seen["scenario"] = scenario
+        return _legacy(persona)
+
+    monkeypatch.setattr(
+        "fi.simulate.voice.run_voice_simulation", fake_run_voice_simulation
+    )
+    with caplog.at_level(logging.WARNING, logger="fi.simulate.environments.voice"):
+        report = asyncio.run(SimulationRunner().run(spec))
+
+    assert report.status == RunStatus.COMPLETED
+    # the plugin's own scenario reached the call, not the bogus params value
+    assert seen["scenario"] is spec.scenario
+    warnings = [r for r in caplog.records if r.message == "hosted_voice_params_ignored"]
+    assert len(warnings) == 1
+    assert warnings[0].keys == ["scenario"]
+
+
 def _agent_def(**overrides):
     from fi.simulate.agent.definition import AgentDefinition
 
@@ -172,6 +261,24 @@ def test_required_env_parity_across_transport_kinds() -> None:
         "VAPI_PHONE_NUMBER_ID",
         "LIVEKIT_INBOUND_DID",
     ]
+
+
+def test_retell_evidence_source_reads_api_key_from_env(monkeypatch) -> None:
+    """RetellEvidenceSource(config) with no api_key argument falls back to
+    RETELL_API_KEY from the environment (mirrors Vapi's from_env())."""
+    from fi.simulate.agent.definition import ProviderEvidenceConfig
+    from fi.simulate.evidence.providers.retell import RetellEvidenceSource
+
+    monkeypatch.setenv("RETELL_API_KEY", "env-retell-key")
+    source = RetellEvidenceSource(
+        ProviderEvidenceConfig(
+            provider="retell",
+            call_id_source="originator_response",
+        )
+    )
+    assert source._api_key == "env-retell-key"
+    # The attribute alone doesn't prove the key reaches the wire; the header does.
+    assert source._client.headers["Authorization"] == "Bearer env-retell-key"
 
 
 def test_profile_flags_for_target_adapters() -> None:

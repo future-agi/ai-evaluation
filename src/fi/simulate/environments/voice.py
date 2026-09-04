@@ -19,6 +19,9 @@ different role, kept under its existing public name.
 
 from __future__ import annotations
 
+import inspect
+import logging
+
 from fi.simulate.environments.base import EnvironmentManifest
 from fi.simulate.registry import register_environment
 from fi.simulate.runtime.capabilities import EndpointCapabilities
@@ -26,6 +29,42 @@ from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import RunStatus, TestCaseStatus
 from fi.simulate.simulation.models import TestReport
+
+_logger = logging.getLogger(__name__)
+
+# Kwargs VoiceEnvironmentPlugin.run already binds explicitly when it calls
+# run_voice_simulation (see below) — reserved so a same-named key surviving in
+# hosted voice.params cannot collide with them at the call site.
+_PLUGIN_OWNED = frozenset(
+    {
+        "agent_definition",
+        "livekit_runtime",
+        "scenario",
+        "simulator",
+        "simulation_run_id",
+        "on_case_complete",
+        "on_case_start",
+    }
+)
+
+
+def _filter_hosted_voice_params(params: dict, run_voice_simulation) -> dict:
+    """Drop platform-sent keys run_voice_simulation can't bind: it is
+    keyword-only with a closed parameter list, so one stray key would raise
+    TypeError at hydration and kill the whole hosted run. (A **kwargs sink, if
+    one is ever added, accepts everything, so nothing is dropped.)"""
+    parameters = inspect.signature(run_voice_simulation).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return dict(params)
+    accepted = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+    } - _PLUGIN_OWNED
+    dropped = set(params) - accepted
+    if dropped:
+        _logger.warning("hosted_voice_params_ignored", extra={"keys": sorted(dropped)})
+    return {key: value for key, value in params.items() if key in accepted}
 
 
 @register_environment("voice")
@@ -76,7 +115,9 @@ class VoiceEnvironmentPlugin:
             if config.get("simulator")
             else None
         )
-        params = dict(config.get("params") or {})
+        params = _filter_hosted_voice_params(
+            dict(config.get("params") or {}), voice_api.run_voice_simulation
+        )
 
         # When streaming, score the case's goal (if any) BEFORE the case is
         # submitted, so the streamed payload carries ``goal_machine`` metadata

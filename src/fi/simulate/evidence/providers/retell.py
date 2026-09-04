@@ -37,7 +37,10 @@ from .base import (
 )
 
 _RETELL_API_BASE = "https://api.retellai.com"
-_TERMINAL_STATUSES = {"ended", "completed", "error"}
+# "completed" is not a real Retell status; a never-connected dial is terminal.
+_TERMINAL_STATUSES = {"ended", "not_connected", "error"}
+# the two hint sources route to _poll_call; polling_window goes to list-calls
+_HINT_CALL_ID_SOURCES = frozenset({"participant_attribute", "originator_response"})
 _ADAPTER = "retell"
 logger = logging.getLogger(__name__)
 
@@ -91,6 +94,12 @@ class RetellEvidenceSource:
         except httpx.HTTPError as exc:
             return self._unavailable("retell_fetch_failed", error=type(exc).__name__)
         if call_payload is None:
+            if (
+                self._config.call_id_source in _HINT_CALL_ID_SOURCES
+                and self._context.call_id_hint
+            ):
+                # hint path has no matching step; None here means the GET failed
+                return self._unavailable("retell_get_call_failed")
             return self._unavailable("retell_call_not_matched")
         artifacts = await self._download_recording(call_payload)
         summary = self._summarize(call_payload, artifacts)
@@ -104,14 +113,10 @@ class RetellEvidenceSource:
         assert self._context is not None
         context = self._context
         if (
-            self._config.call_id_source
-            in {
-                "participant_attribute",
-                "originator_response",
-            }
+            self._config.call_id_source in _HINT_CALL_ID_SOURCES
             and context.call_id_hint
         ):
-            return await self._get_call(context.call_id_hint)
+            return await self._poll_call(context.call_id_hint)
         window = self._config.polling_window_seconds
         if not window:
             return None
@@ -160,6 +165,24 @@ class RetellEvidenceSource:
                     return await self._get_call(str(call_id))
             if asyncio.get_running_loop().time() >= deadline:
                 return None
+            await asyncio.sleep(self._config.poll_interval_seconds)
+
+    async def _poll_call(self, call_id: str) -> dict[str, Any] | None:
+        # Mirrors vapi._poll_call: Retell fills transcript/recording asynchronously.
+        deadline = (
+            asyncio.get_running_loop().time() + self._config.poll_deadline_seconds
+        )
+        while True:
+            payload = await self._get_call(call_id)
+            if payload is None:
+                return (
+                    None  # 4xx/5xx on get-call: preserve existing return-None behaviour
+                )
+            status = str(payload.get("call_status") or "").lower()
+            if status in _TERMINAL_STATUSES:
+                return payload
+            if asyncio.get_running_loop().time() >= deadline:
+                return payload
             await asyncio.sleep(self._config.poll_interval_seconds)
 
     async def _get_call(self, call_id: str) -> dict[str, Any] | None:

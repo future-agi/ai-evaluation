@@ -41,3 +41,8 @@ jobs:
           tests/runtime/test_livekit_engine.py
           tests/runtime/test_manifest_engine_dispatch.py
           tests/test_acceptance_regressions.py
+          tests/runtime/test_voice_environment.py
+          tests/test_retell_endpoint.py
+          tests/test_retell_transport_validation.py
+          tests/test_call_originator_factory.py
+          tests/test_retell_evidence.py
