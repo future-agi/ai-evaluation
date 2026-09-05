@@ -30,7 +30,17 @@ jobs:
           report=json.loads(pathlib.Path('smoke-report.json').read_text());
           assert report['status'] == 'ran' and report['report']['results']"
       - name: Install test dependencies
-        run: python -m pip install '.[livekit]' pytest pytest-asyncio
+        # Pin livekit-agents to the version the runner image ships
+        # (Dockerfile.simulation-runner); an unpinned install resolves a
+        # newer release whose usage schema the engine does not target.
+        run: >-
+          python -m pip install '.[livekit]' pytest pytest-asyncio
+          'livekit-agents==1.5.17'
+          'livekit-plugins-cartesia==1.5.17'
+          'livekit-plugins-deepgram==1.5.17'
+          'livekit-plugins-google==1.5.17'
+          'livekit-plugins-openai==1.5.17'
+          'livekit-plugins-silero==1.5.17'
       - name: Run engine + dispatch + acceptance tests
         # Scoped to the suites this PR adds/relies on. The broader tests/ tree has
         # pre-existing failures unrelated to the voice engine (CLI golden-path,

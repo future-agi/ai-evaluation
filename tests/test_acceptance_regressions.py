@@ -21,7 +21,7 @@ from fi.simulate.evidence.providers.vapi import (
     VapiEvidenceSource,
     _extract_vapi_recording_urls,
 )
-from fi.simulate.simulation import generator
+from fi.simulate.simulation import generator, livekit_models
 from fi.simulate.simulation.engines import livekit
 
 
@@ -62,7 +62,9 @@ def test_scenario_generator_uses_configured_llm_provider(
         captured.append(value)
         return FakeLLM()
 
-    monkeypatch.setattr(generator, "build_livekit_llm", build_llm)
+    # The generator imports the builder lazily inside __init__, so the name
+    # resolves in livekit_models at call time, never on the generator module.
+    monkeypatch.setattr(livekit_models, "build_livekit_llm", build_llm)
 
     personas = asyncio.run(
         generator.ScenarioGenerator(_agent(), llm_config=config).generate(
