@@ -1981,8 +1981,25 @@ def wait_for_dependency(
         def condition() -> bool:
             return marker in spawned.handle.captured_output()
 
+    def condition_or_exited() -> bool:
+        if condition():
+            return True
+        if not spawned.handle.is_running():
+            # A dependency that has already died can never pass its check; waiting out the
+            # full timeout only hides the crash. Surface its own output instead: this is the
+            # customer's process (`SourceProcess`), so the fault is theirs to read, not infra.
+            raise ProcessRuntimeError(
+                "depends_on",
+                "spawn_failed",
+                f"{dependency_name}: exited before started_check passed"
+                f"{_output_tail(spawned.handle)}",
+                process=dependency_name,
+                domain=FailureDomain.AGENT,
+            )
+        return False
+
     _poll_until(
-        condition,
+        condition_or_exited,
         timeout=started_check.timeout_seconds,
         interval=0.25,
         clock=clock,
@@ -1991,11 +2008,27 @@ def wait_for_dependency(
             "depends_on",
             "depends_on_timeout",
             f"{dependency_name}: started_check did not pass within "
-            f"{started_check.timeout_seconds}s",
+            f"{started_check.timeout_seconds}s"
+            f"{_output_tail(spawned.handle)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
         ),
     )
+
+
+_OUTPUT_TAIL_LINES = 40
+_OUTPUT_TAIL_CHARS = 1500
+
+
+def _output_tail(handle: SpawnedProcess) -> str:
+    """The dependency's last output lines, formatted as a message suffix (empty when silent)."""
+    lines = handle.captured_output().splitlines()[-_OUTPUT_TAIL_LINES:]
+    tail = "\n".join(line.rstrip() for line in lines if line.strip())
+    if not tail:
+        return "; process wrote no output"
+    if len(tail) > _OUTPUT_TAIL_CHARS:
+        tail = "…" + tail[-_OUTPUT_TAIL_CHARS:]
+    return "; last output:\n" + tail
 
 
 def _topological_order(manifest: EnvironmentBundleV2) -> list[str]:

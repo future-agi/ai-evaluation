@@ -72,7 +72,7 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260905-retell-provider-end-call-r26
+ARG ALK_HOSTED_SOURCE_REVISION=20260905-bundle-v2-c4f858b2-r27
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src
