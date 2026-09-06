@@ -1065,7 +1065,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
 # =================================================================================================
 # p13 -- scenario pre-allocation (`register_with_platform`), wired against the platform's actual
 # route (a single `POST .../scenarios/`, discriminated by a body-level `operation` field, keyed
-# provision response, full-set `begin`) rather than the documented two-path/position-ordered
+# provision response, full-set `begin`) rather than Karthik's documented two-path/position-ordered
 # shape -- see `ScenariosClient`'s and `register_with_platform`'s own docstrings for the file:line
 # evidence, and reports/p13-worker-r2.md CONTRACT NOTES for where the two disagree.
 # =================================================================================================
@@ -1328,7 +1328,7 @@ def test_register_with_platform_missing_run_test_id_is_a_typed_failure_before_be
 
 
 def test_mutation_positional_zip_matching_is_killed() -> None:
-    # Mutant: `_scenario_ids_by_key` replaced with a positional zip (the documented shape --
+    # Mutant: `_scenario_ids_by_key` replaced with a positional zip (Karthik's documented shape --
     # not what the platform actually returns). A reordered response must silently mismatch ids
     # under the mutant; the real (key-matching) implementation must not.
     submitted = (_scenario("a"), _scenario("b"))

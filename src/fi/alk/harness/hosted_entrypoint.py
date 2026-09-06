@@ -390,7 +390,7 @@ class DefaultBundleSource:
 
 
 # =================================================================================================
-# Scenario source -- generation is a separate contract (in review, not available here); the
+# Scenario source -- generation is Karthik's contract (in review, not available here); the
 # pre-allocation CALL is this module's (ScenariosClient below). Injectable for the same reason as
 # BundleSource: the glue between "generated scenarios" and "pre-allocated against the platform" can
 # only be finished once that contract's payload shape lands.
@@ -626,7 +626,7 @@ class ScenarioPreallocationError(RuntimeError):
 
 
 class ScenariosClient:
-    """RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the Scenario
+    """RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): Karthik's Scenario
     Generation Contract (PR #63) documented two paths (`run-tests/provision/` +
     `run-tests/{id}/test-executions/`) and a position-ordered `scenario_ids` response, but the
     platform's actual, live route (futureagi/simulate/views/hosted_harness.py:78-90,

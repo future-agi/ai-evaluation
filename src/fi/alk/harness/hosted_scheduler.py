@@ -20,7 +20,7 @@ Decoupling, deliberate:
   failure class that is NOT best-effort (a 401/403 fence, an exhausted channel, or a superseded
   attempt must stop the run, not be logged and forgotten); nothing else from that module is
   imported here.
-- The Scenario Generation Contract (in review) is not available here either, so `Scenario`
+- The Scenario Generation Contract (Karthik, in review) is not available here either, so `Scenario`
   is this module's own minimal Protocol for what the loop needs: a key/id pair, `setup`/`ready`,
   and named sub-goal checks. Same for the simulated "call" itself (a different track's seam) —
   `CallRunner` is injected.
@@ -177,7 +177,7 @@ class WorldProvisioner(Protocol):
     async def close(self, *, work_directory: Path) -> None: ...
 
 
-# --- scenarios (this module's own minimal surface; that contract is not wired yet) -------
+# --- scenarios (this module's own minimal surface; Karthik's contract is not wired yet) -------
 
 
 class SubGoal(Protocol):
