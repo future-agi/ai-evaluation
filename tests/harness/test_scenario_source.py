@@ -1451,12 +1451,34 @@ def test_chosen_evals_and_prompt_are_read_off_the_bundle_contract(tmp_path) -> N
         ),
         encoding="utf-8",
     )
-    names, prompt = ss._chosen_evals_and_prompt(tmp_path)
+    names, prompt, modality = ss._chosen_evals_and_prompt(tmp_path)
     assert names == ["customer_agent_conversation_quality"]
     assert prompt == "You book rides."
 
 
 def test_a_bundle_without_a_readable_contract_costs_the_run_nothing(tmp_path) -> None:
-    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "")
+    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "", "")
     (tmp_path / "contract.json").write_text("{not json", encoding="utf-8")
-    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "")
+    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "", "")
+
+
+def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_input(tmp_path) -> None:
+    """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a transcript.
+
+    Measured on run 0734ab2e: four eval configs were created with `conversation -> transcript` on a
+    voice run, because the guest never sent `modality` and `_resolve_scenario_modality` fell back to
+    text. For a spoken call the conversation is the recording.
+    """
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"modality": "voice", "chosen_evals": ["customer_agent_context_retention"]}),
+        encoding="utf-8",
+    )
+    names, _prompt, modality = ss._chosen_evals_and_prompt(tmp_path)
+    assert modality == "voice"
+
+    payload = ss._provision_payload("run", [], names, "", modality)
+    assert payload["modality"] == "voice"
+    assert payload["chosen_evals"] == ["customer_agent_context_retention"]
+
+    # Omitted rather than empty, so an older platform is unaffected.
+    assert "modality" not in ss._provision_payload("run", [], [], "", "")
