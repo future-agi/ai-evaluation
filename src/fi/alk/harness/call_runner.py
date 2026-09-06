@@ -56,6 +56,8 @@ from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .scenario import DEFAULT_VOICEMAIL_STYLE, voicemail_enabled
+from .voicemail_audio import clip_for
 from .simulator_voice import (
     CLEANUP_TIMEOUT_SECONDS,
     CONNECT_TIMEOUT_SECONDS,
@@ -96,6 +98,9 @@ BACKGROUND_NOISE_ALIAS = "ALK_BACKGROUND_NOISE"
 BACKGROUND_NOISE_CATALOG_ALIAS = "ALK_BACKGROUND_NOISE_CATALOG"
 BACKGROUND_NOISE_VOLUME_ALIAS = "HARNESS_BACKGROUND_NOISE_VOLUME"
 CALL_DIRECTION_ALIAS = "ALK_CALL_DIRECTION"
+VOICEMAIL_CLIP_ALIAS = "HARNESS_VOICEMAIL_CLIP"
+VOICEMAIL_CLIP_TONE_ALIAS = "HARNESS_VOICEMAIL_CLIP_HAS_TONE"
+VOICEMAIL_CLIP_TEXT_ALIAS = "HARNESS_VOICEMAIL_CLIP_TRANSCRIPT"
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
@@ -1009,14 +1014,66 @@ class CallRunnerImpl:
             # A mailbox rather than a person answering. Only meaningful outbound, and cleared
             # otherwise like the two above, so one voicemail scenario cannot silence the next
             # caller.
-            if str(doc.get("answered_by") or "").strip().lower() == "voicemail":
+            #
+            # The switch is read here as well as at authoring, because a suite written when
+            # mailboxes were allowed can be replayed on a run that has turned them off, and a
+            # scenario on disk would otherwise still silence its call.
+            if (
+                voicemail_enabled()
+                and str(doc.get("answered_by") or "").strip().lower() == "voicemail"
+            ):
                 self._environ["HARNESS_ANSWERED_BY"] = "voicemail"
+                # Which kind of mailbox, which decides the greeting and whether a tone follows it.
+                style = str(doc.get("voicemail_style") or "").strip().lower()
+                if style:
+                    self._environ["HARNESS_VOICEMAIL_STYLE"] = style
+                else:
+                    self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+                # A recorded greeting, where the catalogue offers one for this style. It replaces
+                # the spoken greeting rather than joining it, and a clip that already ends with its
+                # own tone must not be given a second one.
+                # A recording is only usable where it speaks the scenario's language, so the
+                # language decides as much as the style does.
+                languages = doc.get("languages") or []
+                chosen = clip_for(
+                    style or DEFAULT_VOICEMAIL_STYLE,
+                    str(languages[0]) if languages else "",
+                )
+                if chosen:
+                    self._environ[VOICEMAIL_CLIP_ALIAS] = chosen["source"]
+                    self._environ[VOICEMAIL_CLIP_TONE_ALIAS] = (
+                        "1" if chosen["has_tone"] else "0"
+                    )
+                    if chosen.get("transcript"):
+                        self._environ[VOICEMAIL_CLIP_TEXT_ALIAS] = chosen["transcript"]
+                    else:
+                        self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+                else:
+                    self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+                    self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+                    self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
             else:
                 self._environ.pop("HARNESS_ANSWERED_BY", None)
+                self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+                self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+                self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+                self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
         else:
             self._environ.pop("HARNESS_CALL_DIRECTION", None)
             self._environ.pop("HARNESS_CALLER_AWARENESS", None)
             self._environ.pop("HARNESS_ANSWERED_BY", None)
+            self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+            self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+            self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+            self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+
+        # A second voice in the room, read the same way and cleared the same way. Not tied to
+        # direction: somebody can talk across the caller whoever placed the call.
+        bystander = str(doc.get("bystander") or "").strip()
+        if bystander:
+            self._environ["HARNESS_BYSTANDER_LINE"] = bystander
+        else:
+            self._environ.pop("HARNESS_BYSTANDER_LINE", None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector

@@ -156,6 +156,28 @@ not exist. That is a failure to report, not a smaller world to carry on with.
 If the store is empty, or is built on first run, or lives somewhere you cannot reach, **say so and
 ask**. Do not fill the gap with data you made up.
 
+## The schema has to answer the queries, not describe the domain
+
+Whatever you adopt or create, the world's tables are right only if the agent's own queries run
+against them. A schema that reads perfectly and omits one column the code selects is the most
+expensive mistake available here, because nothing between the omission and the failure says so: the
+world stands up, `check_world` passes, the agent starts, and then the first tool call that runs that
+query raises inside the tool client, the job crashes, and the run reports that the target agent never
+joined the room. Seven runs were lost that way to a single column.
+
+So before `save_world`, reconcile the two directions:
+
+- **Source to world.** Collect the field names the source's queries use, every `SELECT`, `WHERE`,
+  `ORDER BY`, `INSERT` and ORM field that reaches the store. Every one of them has to exist in the
+  world. A name the code uses and the world lacks is a defect to fix now, whether the contract
+  mentioned it or not.
+- **Contract to source.** Where the contract's shape is thinner than the code's queries, the
+  contract is wrong and `amend_contract` is how you say so. Do not quietly add the column and leave
+  the contract disagreeing with the world: everything after you reads the contract.
+
+Adopting the agent's own store or loader usually gets this right for free, which is one more reason
+to prefer it. `create_schema` is where the risk lives, because then the column list is yours.
+
 ## Seeding
 
 Seed the agent's **real** data. Where the contract records something unavailable, a misspelled
@@ -177,6 +199,14 @@ Ask the person for values wherever the contract carries none.
 
 Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what they
 need.
+
+**Write values, not the names of values.** A generated seed that quotes a function reaches the
+database as a string and the insert fails on the column's type: `'CURRENT_TIMESTAMP'` is eleven
+characters, not a time, and a run died on exactly that at the seeding step. Where a row needs "now",
+write the call unquoted or write a literal timestamp. The same holds for anything the database is meant
+to evaluate rather than store: a default, a sequence, a cast. If a value in the contract is a
+placeholder rather than data, resolve it here or ask, because seeding is the last place it can be
+noticed cheaply.
 
 ## Standing up what the agent's code needs to run
 
@@ -435,6 +465,9 @@ Never work around a contract you believe is wrong. Everything after you inherits
    tools. If either cannot be done, report the missing seam and stop.
 4. `run_tool` to try the refusals yourself. Call something with an identifier that was never
    created. If it succeeds, the handler is wrong, and no other check will catch that for you.
+   Then call one tool on its ordinary path, with a row that exists, for each table the agent reads.
+   A refusal usually returns before the real query runs, so refusals alone never touch the columns
+   that matter, and a missing column stays invisible until a call crashes on it.
 5. `change_data` if you put a row in wrong. Seeding only inserts.
 6. `declare_sequence` for at least one flow where state has to carry across calls. Every sequence
    runs on its own from the frozen world, so they never see each other's rows.

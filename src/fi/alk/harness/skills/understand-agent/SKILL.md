@@ -134,8 +134,24 @@ Find, in roughly this order:
     to change the agent's code, which is a decision for the person, not for you.
 
 13. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
-    every field of every kind of record, and any values a field is constrained to. Record the
-    **contents** in proportion — a small dataset goes in whole; for a large one a representative
+    every field of every kind of record, and any values a field is constrained to.
+
+    **Take the shape from the queries, not only from a sample row.** A field the code selects can be
+    missing from every row you happened to read: written by one path and read by another, filled in
+    later, or absent from the fixture entirely. So before you record a table, find every query the
+    source runs against it and collect the names they use: each `SELECT`, `INSERT`, `UPDATE`,
+    `WHERE`, `ORDER BY`, and each ORM field if it reaches the store that way. The union of those
+    names is the shape. Where a query names a field no sample row has, record the field and say the
+    rows you saw did not carry it.
+
+    This is the single most expensive thing to get wrong at this stage, and it does not fail where
+    you would see it. A missing column does not break the build: the world stands up, the schema
+    reads sensibly, and the agent starts. It breaks on the first tool call that runs that query, the
+    tool client raises, the agent's job crashes, and the run reports that the target agent never
+    joined the room. Seven runs were lost to one omitted column that the repository's own SQL
+    selects on its most common path, and nothing between the omission and the crash said so.
+
+    Record the **contents** in proportion. A small dataset goes in whole; for a large one a representative
     sample is what belongs here, chosen to include the awkward rows an agent has to cope with: a
     record already cancelled, an item out of stock, an account with nothing on file.
 
@@ -203,8 +219,14 @@ Two rules, and both are refused rather than tolerated:
   constraints and prompt show it doing that work. An insurance-sounding eval on an agent that only
   books rides scores it against nothing and reads as a real failure.
 
-Choosing none is a legitimate answer, and better than padding the list. Keep it to a handful: every
-eval you name runs on every call of every scenario.
+Two to four is the usual answer for a conversational agent, because a spoken or written conversation
+always has conduct a deterministic check cannot see: whether the agent looped, whether it recovered
+from being interrupted, whether it stayed in the caller's language, whether the exchange was any good
+to be on the other end of. Name those.
+
+Choosing none is legitimate only where you can say what makes this agent an exception, and padding is
+the opposite mistake: every eval you name runs on every call of every scenario, so a list of ten costs
+ten judgements per call and buys little over four.
 
 ## Finishing
 

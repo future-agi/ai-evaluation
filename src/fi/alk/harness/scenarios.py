@@ -25,7 +25,7 @@ from .backends import SessionSpec, ToolServer, tool, tool_server
 from .config import artifact_dir, chosen_model, discovered_skills, load_skill
 from .catalogue import load_catalogue
 from .contract import AgentContract
-from .scenario import Scenario, suite_diversity_problems
+from .scenario import Scenario, suite_diversity_problems, voicemail_enabled
 from .scenario_tools import (
     journalled,
     worth_delegating,
@@ -90,7 +90,13 @@ def open_stage(
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
-            + discovered_skills(modality=contract.modality)
+            # `voicemail` gates the mailbox skill the same way `modality` gates this one, so a
+            # run with mailboxes turned off is never told they exist rather than being told and
+            # then refused.
+            + discovered_skills(
+                modality=contract.modality,
+                voicemail="on" if voicemail_enabled() else "off",
+            )
             + (
                 f"\n\nWrite {wanted} scenarios."
                 if not kept
@@ -556,7 +562,13 @@ async def _write_slice(
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
-            + discovered_skills(modality=contract.modality)
+            # `voicemail` gates the mailbox skill the same way `modality` gates this one, so a
+            # run with mailboxes turned off is never told they exist rather than being told and
+            # then refused.
+            + discovered_skills(
+                modality=contract.modality,
+                voicemail="on" if voicemail_enabled() else "off",
+            )
             + f"\n\n## Your slice\n\nYou are writing only: {mine.named()}"
         ),
         servers={

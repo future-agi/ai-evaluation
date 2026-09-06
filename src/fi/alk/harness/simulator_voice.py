@@ -86,7 +86,12 @@ SIMULATOR_INSTRUCTIONS = (
     "is background, not something to announce.\n"
     "12. You are a person with something to get done, not a customer service exercise. Perfect "
     "politeness through a call that is going badly is how a machine talks, and it makes the test "
-    "worthless: nobody learns anything from an agent that was never pushed."
+    "worthless: nobody learns anything from an agent that was never pushed.\n"
+    "13. Never say you have done something away from this call that you cannot actually do: "
+    "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
+    "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
+    "it, and let the agent find another way. Claiming it leaves the agent waiting for a change "
+    "that never happens, and the call goes nowhere for both of you."
 )
 
 # An outbound call is not an inbound call with the greeting reworded. The person did not dial in,
@@ -141,13 +146,44 @@ _VOICEMAIL_INSTRUCTIONS = (
     "3. Never answer a question, never confirm or deny anything, never give any detail, never say "
     "yes or no, and never repeat the greeting.\n"
     "4. Never end the call. A mailbox records until the caller hangs up or the line is cut.\n"
-    "5. With no greeting of your own, say only what an ordinary mailbox says: that the person is "
-    "not available and to leave a message after the tone.\n"
+)
+
+# What kind of mailbox this is. Only the greeting differs; every rule above still holds. The wording
+# matters because it is what an agent listens to when deciding whether a person or a machine
+# answered, and because "full" must never invite a message it cannot take.
+# Where a recording is the greeting, the session must not speak at all: the clip already says
+# everything a mailbox says, and a spoken greeting on top of it is two mailboxes answering one call.
+_VOICEMAIL_RECORDED = (
+    "YOU ARE A VOICEMAIL SYSTEM and your greeting is a recording that is already playing. Say "
+    "NOTHING for the whole call. Not a greeting, not a word, not a sound, whatever the caller says "
+    "or asks or how many times they ask it. There is no turn for you to take. Never end the call "
+    "either; a mailbox records until the caller hangs up.\n"
 )
 
 
+_VOICEMAIL_BY_STYLE = {
+    "personal": "5. Your greeting is your own, recorded in your own words: say who you are, that "
+    "you cannot take the call, and to leave a message. Keep it to a sentence or two.\n",
+    "carrier": "5. Your greeting is the network's default and names nobody at all. Say that the "
+    "person called is not available and to record a message after the tone. Never give a name, "
+    "not even if the caller asks for one.\n",
+    "operator": "5. Your greeting is a formal automated announcement, longer and more stilted than "
+    "a person would record: say the call has been forwarded to an automated voice messaging "
+    "system, that the subscriber is unavailable, and that a message may be recorded at the tone. "
+    "Name nobody.\n",
+    "full": "5. This mailbox is FULL. Say that it cannot accept any new messages, that the caller "
+    "should try again later, and end the greeting there. Never invite a message and never mention "
+    "a tone, because there is no tone and nothing will be recorded.\n",
+}
+_DEFAULT_VOICEMAIL_STYLE = "personal"
+
+
 def simulator_instructions(
-    direction: str = "", awareness: str = "", answered_by: str = ""
+    direction: str = "",
+    awareness: str = "",
+    answered_by: str = "",
+    voicemail_style: str = "",
+    recorded: bool = False,
 ) -> str:
     """The caller's rules, framed by whether this call was placed to them or by them.
 
@@ -155,7 +191,12 @@ def simulator_instructions(
     A mailbox answering replaces the rules outright, because it is not a person.
     """
     if str(answered_by).strip().lower() == "voicemail":
-        return _VOICEMAIL_INSTRUCTIONS
+        style = str(voicemail_style).strip().lower() or _DEFAULT_VOICEMAIL_STYLE
+        if recorded:
+            return _VOICEMAIL_RECORDED
+        return _VOICEMAIL_INSTRUCTIONS + _VOICEMAIL_BY_STYLE.get(
+            style, _VOICEMAIL_BY_STYLE[_DEFAULT_VOICEMAIL_STYLE]
+        )
     if str(direction).strip().lower() != "outbound":
         return SIMULATOR_INSTRUCTIONS
     chosen = str(awareness).strip().lower() or _DEFAULT_OUTBOUND_AWARENESS
@@ -617,6 +658,8 @@ def simulator_definition(
             get("HARNESS_CALL_DIRECTION") or "",
             get("HARNESS_CALLER_AWARENESS") or "",
             get("HARNESS_ANSWERED_BY") or "",
+            get("HARNESS_VOICEMAIL_STYLE") or "",
+            recorded=bool((get("HARNESS_VOICEMAIL_CLIP") or "").strip()),
         ),
         allow_interruptions=True,
     )

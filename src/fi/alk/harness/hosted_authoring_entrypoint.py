@@ -17,6 +17,10 @@ from .authoring_entrypoint import main as authoring_main
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _PASSTHROUGH = {
+    # Not a credential, and the only non-credential here on purpose: the switch that decides
+    # whether mailbox scenarios may be written has to reach the process that writes them, and this
+    # is the environment authoring runs in.
+    "ALK_VOICEMAIL_SCENARIOS",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_VERTEX_PROJECT_ID",
     "ANTHROPIC_VERTEX_REGION",

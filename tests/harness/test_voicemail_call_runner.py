@@ -95,3 +95,21 @@ def test_an_inbound_scenario_clears_every_outbound_marking(tmp_path: Path) -> No
     assert "HARNESS_CALL_DIRECTION" not in environ
     assert "HARNESS_CALLER_AWARENESS" not in environ
     assert "HARNESS_ANSWERED_BY" not in environ
+
+
+def test_the_switch_stops_a_mailbox_reaching_the_call(tmp_path: Path, monkeypatch) -> None:
+    """A suite written when mailboxes were allowed can be replayed on a run that has turned them
+    off, so the scenario on disk still says voicemail and must not silence the call anyway."""
+    monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "0")
+    environ = _drive(
+        tmp_path,
+        call_direction="outbound",
+        answered_by="voicemail",
+        voicemail_style="carrier",
+    )
+    assert "HARNESS_ANSWERED_BY" not in environ
+    assert "HARNESS_VOICEMAIL_STYLE" not in environ
+    assert cr.VOICEMAIL_CLIP_ALIAS not in environ
+    assert cr.VOICEMAIL_CLIP_TEXT_ALIAS not in environ
+    # The direction is not a mailbox concern and still travels.
+    assert environ.get("HARNESS_CALL_DIRECTION") == "outbound"

@@ -74,17 +74,32 @@ def test_validation_reports_a_mailbox_that_could_not_have_answered(tmp_path):
 
 def test_voicemail_stays_a_minority_of_a_suite():
     """One narrow test, worth a few scenarios and never a theme."""
-    from fi.alk.harness.scenario import suite_diversity_problems
+    from fi.alk.harness.scenario import VOICEMAIL, suite_diversity_problems
 
     over = [_mailbox(f"box-{index}", f"Mailbox {index}.") for index in range(3)] + [
         _person(index) for index in range(3)
     ]
-    assert "under a sixth of the suite" in " ".join(suite_diversity_problems(over))
+    assert f"are answered_by {VOICEMAIL!r}" in " ".join(suite_diversity_problems(over))
 
     within = [_mailbox("box-only", "You have reached Dana.")] + [
         _person(index) for index in range(11)
     ]
-    assert "under a sixth of the suite" not in " ".join(suite_diversity_problems(within))
+    assert f"are answered_by {VOICEMAIL!r}" not in " ".join(suite_diversity_problems(within))
+
+
+def test_the_rare_condition_ceiling_is_one_in_twenty():
+    """The share is a product judgement, so the number it produces is pinned here rather than left
+    to be inferred. A ceiling with no floor: none at all is a legitimate suite."""
+    from fi.alk.harness.scenario import RARE_CONDITION_SHARE, rare_event_ceiling
+
+    assert RARE_CONDITION_SHARE == 0.05
+    # Rounded up, so a short suite is allowed one rather than none.
+    assert rare_event_ceiling(4) == 1
+    assert rare_event_ceiling(10) == 1
+    assert rare_event_ceiling(20) == 1
+    assert rare_event_ceiling(21) == 2
+    assert rare_event_ceiling(50) == 3
+    assert rare_event_ceiling(200) == 10
 
 
 def test_several_mailboxes_have_to_be_different_mailboxes():
@@ -150,3 +165,175 @@ def test_a_judged_only_mailbox_is_refused_where_the_world_can_be_read(tmp_path):
 
     settled = _mailbox("settled-mailbox", "You have reached Dana.")
     assert prove(settled, catalogue, root).holds
+
+
+def _catalogue_with(check: str):
+    """A catalogue holding one sub-goal whose check is the text under test."""
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+
+    return Catalogue(sub_goals=[SubGoal(name="needs-a-call", what="a tool ran", check=check)])
+
+
+def test_a_mailbox_scenario_may_not_require_a_tool_call():
+    """Six measured mailbox calls failed on a tool the agent only reaches once somebody speaks, and on
+    a mailbox nobody ever does. The scenario was wrong, not the agent."""
+    from fi.alk.harness.scenario import voicemail_sub_goal_problems
+
+    scenario = _mailbox("carrier", "The person you called is not available.")
+    scenario.sub_goals = ["needs-a-call"]
+    catalogue = _catalogue_with(
+        "def check(world, calls):\n"
+        "    if not any(one['name'] == 'get_booking_status' for one in calls):\n"
+        "        return 'get_booking_status was not called'\n"
+    )
+
+    problems = voicemail_sub_goal_problems(scenario, catalogue)
+    assert len(problems) == 1
+    assert "needs-a-call" in problems[0]
+    assert "nobody on the line" in problems[0]
+
+
+def test_a_mailbox_sub_goal_about_not_calling_is_kept():
+    """Talking to a machine is where an agent should stop calling things, so a check that fails when a
+    call *was* made is exactly what a mailbox scenario should ask for."""
+    from fi.alk.harness.scenario import voicemail_sub_goal_problems
+
+    scenario = _mailbox("carrier", "The person you called is not available.")
+    scenario.sub_goals = ["needs-a-call"]
+    catalogue = _catalogue_with(
+        "def check(world, calls):\n"
+        "    if any(one['name'] == 'book_ride' for one in calls):\n"
+        "        return 'booked a ride into a mailbox'\n"
+    )
+
+    assert voicemail_sub_goal_problems(scenario, catalogue) == []
+
+
+def test_a_person_answering_keeps_every_sub_goal():
+    """The rule is about mailboxes only; an ordinary call is untouched."""
+    from fi.alk.harness.scenario import voicemail_sub_goal_problems
+
+    scenario = _mailbox("person", "Hello?")
+    scenario.answered_by = "person"
+    scenario.sub_goals = ["needs-a-call"]
+    catalogue = _catalogue_with(
+        "def check(world, calls):\n"
+        "    if not any(one['name'] == 'get_booking_status' for one in calls):\n"
+        "        return 'get_booking_status was not called'\n"
+    )
+
+    assert voicemail_sub_goal_problems(scenario, catalogue) == []
+
+
+def test_the_shape_a_real_writer_produced_is_caught():
+    """Verbatim from run 574d31ec, where two mailbox scenarios failed on it after an earlier version of
+    this validator matched neither `not any(` nor `if not calls` and let them through."""
+    from fi.alk.harness.scenario import voicemail_sub_goal_problems
+
+    scenario = _mailbox("carrier", "The person you called is not available.")
+    scenario.sub_goals = ["needs-a-call"]
+    catalogue = _catalogue_with(
+        'def check(world, calls):\n'
+        '    checks = [c for c in calls if c.name == "get_booking_status" and c.ok]\n'
+        '    if not checks:\n'
+        '        return "Booking status was not retrieved"\n'
+    )
+
+    problems = voicemail_sub_goal_problems(scenario, catalogue)
+    assert len(problems) == 1
+    assert "nobody on the line" in problems[0]
+
+
+def test_a_positive_test_on_the_same_shape_is_still_kept():
+    """The exemption has to survive the widening: failing when a call WAS made is a mailbox sub-goal."""
+    from fi.alk.harness.scenario import voicemail_sub_goal_problems
+
+    scenario = _mailbox("carrier", "The person you called is not available.")
+    scenario.sub_goals = ["needs-a-call"]
+    catalogue = _catalogue_with(
+        'def check(world, calls):\n'
+        '    booked = [c for c in calls if c.name == "book_ride" and c.ok]\n'
+        '    if booked:\n'
+        '        return "booked a ride into a mailbox"\n'
+    )
+
+    assert voicemail_sub_goal_problems(scenario, catalogue) == []
+
+
+def test_the_switch_refuses_a_mailbox_scenario(monkeypatch) -> None:
+    """Refused at validation as well as withheld from the schema, because a model that saw the field
+    on an earlier turn can still ask for it."""
+    from fi.alk.harness.scenario import answered_by_problems
+
+    monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "0")
+    said = " ".join(answered_by_problems(_mailbox("box", "You have reached Dana.")))
+    assert "turned off for this run" in said
+
+    monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "1")
+    assert "turned off for this run" not in " ".join(
+        answered_by_problems(_mailbox("box", "You have reached Dana."))
+    )
+
+
+def test_the_switch_withholds_the_fields_it_would_be_asked_through(monkeypatch) -> None:
+    from fi.alk.harness.scenario_tools import MAILBOX_FIELDS, _offered
+
+    offered = {"name": {}, "bystander": {}, **{one: {} for one in MAILBOX_FIELDS}}
+
+    monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "0")
+    withheld = _offered(offered)
+    assert not set(MAILBOX_FIELDS) & set(withheld)
+    # Only the mailbox fields go. Everything else a voice scenario varies stays.
+    assert {"name", "bystander"} <= set(withheld)
+
+    monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "1")
+    assert set(MAILBOX_FIELDS) <= set(_offered(offered))
+
+
+def test_the_switch_stops_the_writer_being_told_mailboxes_exist(monkeypatch) -> None:
+    """Gated through `applies_to`, the same seam that gates the voice skill itself, so turning it off
+    removes the instructions rather than leaving them to be read and then refused."""
+    from fi.alk.harness.config import discovered_skills
+
+    on = discovered_skills(modality="voice", voicemail="on")
+    off = discovered_skills(modality="voice", voicemail="off")
+
+    assert "mailbox" in on.lower()
+    assert "mailbox" not in off.lower()
+    assert "voicemail" not in off.lower()
+    # The rest of the voice skill is untouched by the switch.
+    assert "bystander" in off
+    assert "background_noise" in off
+
+
+def test_the_switch_survives_every_allowlist_between_here_and_the_writer() -> None:
+    """It has to cross four of them, and three silently dropping a name is how this went wrong for
+    background noise. Pinned here so adding a fifth is a failing test rather than a quiet run."""
+    from fi.alk.harness.hosted_authoring_entrypoint import _PASSTHROUGH
+    from fi.alk.harness.hosted_entrypoint import _SIMULATOR_SECRET_ALIASES
+    from fi.alk.harness.scenario import VOICEMAIL_SWITCH
+
+    assert VOICEMAIL_SWITCH in _SIMULATOR_SECRET_ALIASES, "the call lane cannot see it"
+    assert VOICEMAIL_SWITCH in _PASSTHROUGH, "authoring cannot see it, so the writer cannot"
+
+
+def test_two_mailboxes_already_have_to_differ():
+    """Three was reachable when the ceiling was a sixth of the suite. At a twentieth it needed forty
+    one scenarios, which put the rule beyond every suite we run."""
+    from fi.alk.harness.scenario import suite_diversity_problems
+
+    same = [
+        _mailbox("first", "Leave a message.", voicemail_style="personal"),
+        _mailbox("second", "Leave a message.", voicemail_style="personal"),
+    ] + [_person(index) for index in range(38)]
+    said = " ".join(suite_diversity_problems(same))
+    assert "use the same greeting" in said
+    assert "voicemail_style" in said
+
+    differing = [
+        _mailbox("named", "You have reached Dana Whitfield.", voicemail_style="personal"),
+        _mailbox("network", "The person you called is not available.", voicemail_style="carrier"),
+    ] + [_person(index) for index in range(38)]
+    said = " ".join(suite_diversity_problems(differing))
+    assert "use the same greeting" not in said
+    assert "voicemail_style" not in said

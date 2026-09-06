@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 from math import ceil
@@ -40,6 +41,46 @@ LEAST_AWARE = "unaware"
 # a person; "voicemail" means a mailbox answered and there is nobody on the line at all.
 ANSWERED_BY = ("person", "voicemail")
 VOICEMAIL = "voicemail"
+
+# Which kind of mailbox answered. The style settles two things and nothing else: what the greeting
+# says, and whether a tone follows it. Empty means a person's own greeting, which is the ordinary
+# case and the one that carries the persona's name.
+VOICEMAIL_STYLES = ("personal", "carrier", "operator", "full")
+DEFAULT_VOICEMAIL_STYLE = "personal"
+
+# The share of a suite a rare call condition may occupy: a mailbox answering, or a second voice in
+# the room. One number, in one place, because the right value is a product judgement rather than a
+# technical one and it will be argued about.
+#
+# A ceiling and nothing else. There is deliberately no floor: a suite with no mailbox at all is a
+# legitimate suite, and requiring one would put a narrow test into every run whether it earned its
+# place or not. The previous value was a sixth, which is 17 percent and not rare by any reading.
+RARE_CONDITION_SHARE = 0.05
+
+# The switch that removes mailboxes from a run altogether, for when they are not wanted at all
+# rather than merely kept rare.
+VOICEMAIL_SWITCH = "ALK_VOICEMAIL_SCENARIOS"
+_OFF = ("0", "off", "false", "no")
+
+
+def voicemail_enabled() -> bool:
+    """Whether this run may write or place a call a mailbox answers.
+
+    **On unless ``ALK_VOICEMAIL_SCENARIOS`` turns it off**, since a mailbox is a real thing that
+    happens to a real outbound agent and a suite that never meets one has not tested that path.
+
+    Off has to mean off at every layer, not just at the call: the writer is not told mailboxes exist,
+    the fields that would ask for one are not offered, a scenario that names one anyway is refused,
+    and nothing is exported to the call runtime. Anything less leaves a run that was asked not to
+    generate them generating them and failing quietly instead.
+    """
+    return os.environ.get(VOICEMAIL_SWITCH, "1").strip().lower() not in _OFF
+
+
+# The longest a second person's interjection may be. One line is the whole point: somebody in the
+# room says something across the call, and the test is whether the agent notices and who it answers.
+# A paragraph is a second caller, which is a different feature and not this one.
+LONGEST_BYSTANDER = 200
 
 
 class Step(BaseModel):
@@ -257,6 +298,16 @@ class Scenario(BaseModel):
     # rather than running its interactive script at a recording. Outbound only: a mailbox cannot
     # answer a call the person placed themselves.
     answered_by: str = ""
+    # Which kind of mailbox, when one answered: "personal" is the person's own recorded greeting,
+    # "carrier" the network default that names nobody, "operator" a formal automated announcement,
+    # and "full" a mailbox that cannot record at all. Only read where answered_by is "voicemail";
+    # empty means personal.
+    voicemail_style: str = ""
+    # One line somebody else in the room says across this call, a child from the back seat, a
+    # colleague at the next desk. Spoken over the caller's own audio partway through, so what is
+    # tested is whether the agent notices a second voice, keeps answering the person it is talking
+    # to, and does not treat the interruption as its caller's turn. Empty means nobody else speaks.
+    bystander: str = ""
 
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
@@ -329,7 +380,8 @@ def validate_scenario(
         )
     elif (
         scenario.fixture
-        and str(scenario.fixture.get("origin") or "").lower() in set(ORIGINS_THAT_CREATE)
+        and str(scenario.fixture.get("origin") or "").lower()
+        in set(ORIGINS_THAT_CREATE)
         and not (scenario.setup_code or "").strip()
     ):
         # A fixture claiming data it never creates is the whole class of scenario that names a value
@@ -370,6 +422,9 @@ def validate_scenario(
         )
     problems.extend(fixture_problems(scenario))
     problems.extend(answered_by_problems(scenario))
+    problems.extend(voicemail_style_problems(scenario))
+    problems.extend(voicemail_sub_goal_problems(scenario, catalogue))
+    problems.extend(bystander_problems(scenario))
     problems.extend(_world_credential_problems(scenario, world_state))
     problems.extend(self_sufficiency_problems(scenario))
     problems.extend(alignment_problems(scenario, world_state))
@@ -391,10 +446,17 @@ def answered_by_problems(scenario: Scenario) -> list[str]:
         return []
     if chosen not in set(ANSWERED_BY):
         return [
-            "answered_by must be " + ", ".join(ANSWERED_BY) + f", not {scenario.answered_by!r}"
+            "answered_by must be "
+            + ", ".join(ANSWERED_BY)
+            + f", not {scenario.answered_by!r}"
         ]
     if chosen != VOICEMAIL:
         return []
+    if not voicemail_enabled():
+        return [
+            f"answered_by {VOICEMAIL!r} is turned off for this run, so write a scenario somebody "
+            "answers instead"
+        ]
     if str(scenario.call_direction or "").strip().lower() != "outbound":
         return [
             "answered_by is 'voicemail', which only happens on a call the agent placed, so this "
@@ -402,6 +464,107 @@ def answered_by_problems(scenario: Scenario) -> list[str]:
             "taken from the contract and a mailbox would be answering a call the person dialled"
         ]
     return []
+
+
+def voicemail_sub_goal_problems(scenario: Scenario, catalogue: Catalogue) -> list[str]:
+    """Whether this mailbox scenario asks for something a mailbox call can produce.
+
+    A sub-goal that needs a tool call cannot hold when nobody answers: the agent reaches most of its
+    tools only once the person it called has said something, and on a mailbox nobody ever does. Six
+    measured mailbox calls failed on exactly this, all four styles, every one of them reporting a tool
+    "was not called" while the agent had behaved correctly. The scenario was wrong, not the agent, and
+    a suite that records it as a failure is measuring nothing.
+
+    Read from the check rather than from the name, because the name is the writer's word for it and
+    the check is what decides. Only a check that fails when a call is *absent* is caught; one that
+    fails when a call is present is a mailbox sub-goal worth having, since talking to a machine is
+    where an agent should stop calling things.
+    """
+    if str(scenario.answered_by or "").strip().lower() != VOICEMAIL:
+        return []
+    problems: list[str] = []
+    for name in scenario.sub_goals:
+        sub_goal = catalogue.named(name)
+        if sub_goal is None:
+            continue
+        check = " ".join(str(sub_goal.check or "").split())
+        if not check or "calls" not in check:
+            continue
+        # The shape writers actually produce, taken from a real run rather than imagined: filter the
+        # calls into a local, then fail when that local is empty.
+        #
+        #     checks = [c for c in calls if c.name == "get_booking_status" and c.ok]
+        #     if not checks:
+        #         return "Booking status was not retrieved"
+        #
+        # An earlier version of this looked for `not any(` and `if not calls`, matched neither, and let
+        # two mailbox scenarios through on a live run. What all these forms share is a negative test
+        # that fails when nothing was called, so that is what to look for. A check that fails when a
+        # call WAS made has no negation and stays welcome, since a mailbox is where an agent should
+        # stop calling things.
+        needs_a_call = (
+            "not any(" in check
+            or "not called" in check
+            or "calls == []" in check
+            or re.search(r"if not [A-Za-z_][A-Za-z0-9_]*\s*:", check) is not None
+            or re.search(r"len\([A-Za-z_][A-Za-z0-9_]*\) *== *0", check) is not None
+        )
+        if needs_a_call:
+            problems.append(
+                f"sub_goal {name!r} fails when a tool was not called, and on this scenario a mailbox "
+                "answers, so the agent never gets the turn that leads it to call anything. Ask for "
+                "what the agent can do with nobody on the line: that it recognised a machine, that "
+                "the message it left says who is calling and why, that it stopped instead of asking "
+                "questions. A sub-goal needing an answer marks a correctly handled mailbox as failed"
+            )
+    return problems
+
+
+def voicemail_style_problems(scenario: Scenario) -> list[str]:
+    """Whether the kind of mailbox named exists, and whether a mailbox answered at all.
+
+    A style with nobody to play it is a scenario that reads as though it varies the mailbox and does
+    not, which is worse than leaving it out, because the suite rule then counts a variation that
+    never reaches the call.
+    """
+    chosen = str(scenario.voicemail_style or "").strip().lower()
+    if not chosen:
+        return []
+    if chosen not in set(VOICEMAIL_STYLES):
+        return [
+            "voicemail_style must be "
+            + ", ".join(VOICEMAIL_STYLES)
+            + f", not {scenario.voicemail_style!r}"
+        ]
+    if str(scenario.answered_by or "").strip().lower() != VOICEMAIL:
+        return [
+            f"voicemail_style is {chosen!r} but answered_by is not 'voicemail', so no mailbox "
+            "answers and nothing plays it. State answered_by 'voicemail', or leave the style out"
+        ]
+    return []
+
+
+def bystander_problems(scenario: Scenario) -> list[str]:
+    """Whether a second voice in the room is one that could be there, and is one line.
+
+    Nobody speaks across a mailbox: `answered_by` voicemail means the other end is a recording, so
+    there is no room and no caller for a bystander to talk over.
+    """
+    said = str(scenario.bystander or "").strip()
+    if not said:
+        return []
+    problems: list[str] = []
+    if str(scenario.answered_by or "").strip().lower() == VOICEMAIL:
+        problems.append(
+            "bystander is set on a scenario a mailbox answers, and a recording has no room for "
+            "somebody to speak across. Drop one of the two"
+        )
+    if len(said) > LONGEST_BYSTANDER:
+        problems.append(
+            f"bystander is {len(said)} characters, over {LONGEST_BYSTANDER}. It is one thing said "
+            "across the call, not a second conversation"
+        )
+    return problems
 
 
 def _world_credential_problems(
@@ -579,7 +742,9 @@ def _six_digit_values(scenario: Scenario) -> list[str]:
 # A value the instruction hands the caller so they can say it back: a code, a reference, an account
 # number, an id. Deliberately not named after any one domain, because the failure is the same
 # whatever the agent does: the caller reads out something the agent then cannot find.
-_QUOTED_VALUE = re.compile(r"(?<![\w-])(?=[A-Za-z-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,}(?![\w-])")
+_QUOTED_VALUE = re.compile(
+    r"(?<![\w-])(?=[A-Za-z-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,}(?![\w-])"
+)
 
 # Values that look quotable but are never records the agent looks up.
 _NOT_A_RECORD = re.compile(
@@ -827,6 +992,16 @@ def fixture_problems(scenario: Scenario) -> list[str]:
     return problems
 
 
+def rare_event_ceiling(suite_size: int) -> int:
+    """The most scenarios in a suite of this size that may carry one rare call condition.
+
+    Rounded up, so a small suite is allowed one rather than none: a suite of ten would otherwise be
+    permitted half a mailbox, and refusing the only interesting call in a short suite is worse than
+    allowing one in ten. It grows from there, so 50 allows 3 and 200 allows 10.
+    """
+    return max(1, ceil(suite_size * RARE_CONDITION_SHARE))
+
+
 def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
     """Whether a conversational suite represents meaningfully different people and data."""
     if len(scenarios) < 4:
@@ -885,18 +1060,33 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
             )
     # A mailbox tests one narrow thing: that the agent notices nobody is listening. It is worth a
     # few scenarios and never a theme, because a suite of mailboxes learns nothing about the agent
-    # talking to people. A sixth is the ceiling, which no suite written so far comes near.
+    # talking to people.
     mailboxes = [one for one in scenarios if one.answered_by == VOICEMAIL]
-    if len(mailboxes) > ceil(len(scenarios) / 6):
+    allowed = rare_event_ceiling(len(scenarios))
+    if len(mailboxes) > allowed:
         problems.append(
             f"{len(mailboxes)} of {len(scenarios)} scenarios are answered_by {VOICEMAIL!r}; keep "
-            f"them under a sixth of the suite, so at most {ceil(len(scenarios) / 6)} here"
+            f"them to at most {allowed} here"
         )
-    # And where there are several, they have to be different mailboxes. Distinct greetings is what
-    # can be measured; the shapes worth covering are named in the voice skill.
-    if len(mailboxes) >= 3:
+    # A second voice in the room is a rare event, and a suite where it keeps happening is testing
+    # that instead of testing the agent. Same ceiling as mailboxes, for the same reason.
+    bystanders = [one for one in scenarios if str(one.bystander or "").strip()]
+    if len(bystanders) > allowed:
+        problems.append(
+            f"{len(bystanders)} of {len(scenarios)} scenarios have a bystander speaking; keep them "
+            f"to at most {allowed} here"
+        )
+    # And where there is more than one, they have to be different mailboxes. Distinct greetings is
+    # what can be measured; the shapes worth covering are named in the voice skill.
+    #
+    # Two, not three. Three was written when the ceiling was a sixth of the suite and it fitted in
+    # eighteen scenarios; at a twentieth it needs forty one, which put the rule beyond every suite we
+    # run. Two mailboxes wearing the same style is the same waste the rule was written for.
+    if len(mailboxes) >= 2:
         greetings = {
-            " ".join((one.persona.initial_message if one.persona else "").lower().split())
+            " ".join(
+                (one.persona.initial_message if one.persona else "").lower().split()
+            )
             for one in mailboxes
         }
         if len(greetings - {""}) < 2:
@@ -904,6 +1094,19 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
                 f"all {len(mailboxes)} voicemail scenarios use the same greeting; vary it, since a "
                 "named personal mailbox, a carrier mailbox with no name, a full mailbox and a long "
                 "greeting are four different tests of the agent"
+            )
+        # The style is the stronger axis, because it also decides whether a tone follows the
+        # greeting, and a suite of one style never tests the agent against a mailbox it cannot
+        # leave a message on.
+        styles = {
+            str(one.voicemail_style or DEFAULT_VOICEMAIL_STYLE).strip().lower()
+            for one in mailboxes
+        }
+        if len(styles) < 2:
+            problems.append(
+                f"all {len(mailboxes)} voicemail scenarios are voicemail_style "
+                f"{next(iter(styles))!r}; cover at least two of "
+                + ", ".join(VOICEMAIL_STYLES)
             )
     # A code naturally appears several times inside one scenario (fixture, caller script,
     # reference verify call). Diversity is about reuse *between* callers, not repeated mention
