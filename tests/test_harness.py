@@ -2233,7 +2233,9 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
     settled = SubGoal(
         name="order-placed",
         what="the order reached the system",
-        check="def check(world, calls):\n    return None\n",
+        # Asserts the world rather than returning None unconditionally, which settles nothing and is
+        # now refused in its own right.
+        check="def check(world, calls):\n    if not world['orders']:\n        return 'no order'\n",
     )
     assert validate_sub_goal(settled) == []
     assert settled.deterministic()
@@ -7281,3 +7283,31 @@ def test_choosing_evals_when_the_job_carries_no_catalogue_is_refused(tmp_path):
     said = call(_voice_contract(chosen_evals=["customer_agent_loop_detection"]))
     assert "no eval catalogue" in said
     assert not (tmp_path / "contract.json").exists()
+
+
+def test_a_check_that_only_asks_whether_a_tool_was_called_is_refused():
+    """Saying so in the skill was not enough: a measured suite produced three such sub-goals, all
+    reporting "end_call was not called" on calls the agent had ended correctly."""
+    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+
+    presence = SubGoal(
+        name="end_call_gracefully",
+        what="the agent ended the call",
+        check=(
+            "def check(world, calls):\n"
+            "    if not any(c.name == 'end_call' for c in calls):\n"
+            "        return 'end_call was not called'\n"
+        ),
+    )
+    said = " ".join(validate_sub_goal(presence))
+    assert "only asks whether a tool was called" in said
+
+    # A check about the world, or about the arguments a call was given, is what is wanted.
+    for body in (
+        "def check(world, calls):\n    if not world['answers']:\n        return 'nothing recorded'\n",
+        "def check(world, calls):\n"
+        "    booked = [c for c in calls if c.name == 'book']\n"
+        "    if booked and booked[0].arguments.get('date') != '2026-02-01':\n"
+        "        return 'wrong date'\n",
+    ):
+        assert not validate_sub_goal(SubGoal(name="ok", what="w", check=body))
