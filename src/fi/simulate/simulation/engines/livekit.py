@@ -136,8 +136,8 @@ _VOICEMAIL_TONE_VOLUME = 0.8
 # A mailbox plays one greeting and then records, so the eight-message conversation floor is
 # unreachable however well the agent behaves, and holding it there errored every voicemail call.
 _VOICEMAIL_MIN_TURN_MESSAGES = 1
-# How long a mailbox records before cutting the line, from the end of the tone or greeting. Without
-# a bound a measured call had the agent talking into a machine for a further minute and a half.
+# How long a mailbox records before cutting the line, from the end of the tone or greeting. Without a
+# bound the call runs to the silence watchdog with the agent still talking into a machine.
 _VOICEMAIL_RECORD_SECONDS = 40.0
 # Resamplers into the mixer's rate, one per source rate, kept because ``ratecv`` is stateful.
 _MIXER_RESAMPLERS: dict[tuple[int, int], PCMResampler] = {}
@@ -147,7 +147,7 @@ _VOICEMAIL_TONE_GAP_SECONDS = 0.7
 # mailbox that never speaks cannot leave this task pending for the length of the call.
 _VOICEMAIL_TONE_WAIT_SECONDS = 40.0
 # The mixer reinterprets frames at this rate rather than resampling them, so anything published
-# through it must be produced here. Measured: a 1000Hz tone built at 24000 came out at 2000Hz.
+# through it must be produced here or it plays at the wrong pitch and length.
 _BACKGROUND_MIXER_RATE = 48000
 # Each web case drives a full voice pipeline (STT/LLM/TTS + LiveKit conns) in one
 # child; too many starve the pod's CPU. This is an OPS CEILING on the
@@ -257,10 +257,8 @@ def _simulator_turn_handling(
 ) -> dict[str, object]:
     return {
         "turn_detection": "vad" if vad is not None else "stt",
-        # 0.4s fires inside a sentence, on a comma or a breath, so the caller decided the agent had
-        # finished mid-question and talked over it. Measured on a real call: the agent's turns were
-        # truncated to "Of course, I will not" and "I am Avery", and the caller then repeated its own
-        # line verbatim because it never heard an answer, which read as a broken simulator.
+        # A short delay fires inside a sentence, on a comma or a breath, so the caller treats a pause
+        # as the end of the turn, talks over the agent and then repeats itself for want of an answer.
         "endpointing": {
             "mode": "fixed",
             "min_delay": min_endpointing_delay or 0.9,
@@ -636,9 +634,8 @@ class _TestRunnerAgent(Agent):
         if self._session is None:
             raise RuntimeError("simulator_session_not_started")
         if self._voicemail_greeting is not None:
-            # A recording has already greeted, and a mailbox does not greet twice. Measured on a real
-            # call: the clip said "Hi. It's me. Leave a message." and the persona's own line followed
-            # in a different voice naming somebody else, so one mailbox answered as two people.
+            # A recording has already greeted, and a mailbox does not greet twice: a spoken line on
+            # top of the clip is one mailbox answering in two voices.
             return
         initial_message = self._persona.persona.get("initial_message")
         if isinstance(initial_message, str) and initial_message.strip():
@@ -652,9 +649,8 @@ class _TestRunnerAgent(Agent):
         """A mailbox speaks once and then never again, and that is counted here rather than asked for.
 
         The recorded-mailbox prompt asks for silence, and a model asked for a turn tends to give one
-        anyway: on a measured carrier call the mailbox greeted, the agent replied, and the mailbox said
-        "Alright, thank you, bye." A machine that answers the agent is not a machine, and the scenario
-        stops testing whether the agent noticed.
+        anyway, and a machine that answers the agent is not a machine: the scenario stops testing
+        whether the agent noticed.
 
         One turn is allowed rather than none, because a mailbox with no recording greets through this
         path: the persona's opening line goes through ``say``, but a scenario that omits it falls back

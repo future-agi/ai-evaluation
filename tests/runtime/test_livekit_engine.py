@@ -3297,9 +3297,8 @@ def test_dispatch_failure_is_typed_preparing_failure(monkeypatch) -> None:
 
 
 def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
-    """0.4s fired inside a sentence. Measured on a real call: the agent's turns were truncated to
-    "Of course, I will not" and "I am Avery", and the caller repeated its own line verbatim because it
-    never heard an answer."""
+    """A short delay fires inside a sentence, so the caller treats a pause as the end of the turn,
+    talks over the agent and then repeats itself for want of an answer."""
     from fi.simulate.simulation.engines.livekit import _simulator_turn_handling
 
     handling = _simulator_turn_handling(vad=object())

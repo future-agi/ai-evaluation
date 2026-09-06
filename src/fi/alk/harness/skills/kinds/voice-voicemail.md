@@ -47,7 +47,7 @@ a mailbox scenario never asks the agent to collect a value, confirm a detail or 
 those belong in a scenario where somebody picks up.
 
 That applies to the sub-goals as hard as it does to the situation, and it is where these scenarios go
-wrong in practice. Two measured mailbox calls failed on `check_booking_status` alone, because the agent
+wrong in practice. Mailbox calls fail on a sub-goal needing a tool call, because the agent
 only reaches that tool after the person it called has spoken, and on a mailbox nobody ever does. Every
 sub-goal on a mailbox scenario has to be something the agent can do with nobody on the line: it
 recognised a machine, the message it left says who is calling and why, it stopped instead of asking

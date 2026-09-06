@@ -200,7 +200,7 @@ def test_a_recorded_greeting_is_spoken_as_the_mailboxs_own_turn(monkeypatch):
 
 def test_the_mailbox_cuts_the_line_once_it_stops_recording(monkeypatch):
     """A mailbox is not a party to the call: it does not ask whether anybody is there and it does not
-    wait. Nothing was ending these calls, so a measured carrier call ran another minute and a half
+    wait. Nothing was ending these calls, so one ran another minute and a half
     after the agent had already left its message."""
     monkeypatch.setattr(livekit, "_VOICEMAIL_RECORD_SECONDS", 0.01)
     agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
@@ -242,7 +242,7 @@ def test_the_recording_window_starts_after_the_greeting_and_the_tone(monkeypatch
 
 
 def test_a_recorded_greeting_opens_the_call_by_itself(monkeypatch):
-    """Measured on a real call: the clip greeted, then the persona's own line greeted again in
+    """A clip greeting followed by the persona's own line greets twice, the second time in
     another voice naming somebody else, so one mailbox answered as two people."""
     said: list = []
 
@@ -313,7 +313,7 @@ def test_a_clip_without_words_is_heard_but_never_invents_a_turn(monkeypatch):
 
 
 def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
-    """Asking a model for silence does not get silence. Measured on a real carrier call: the mailbox
+    """Asking a model for silence does not get silence: the mailbox
     greeted, the agent replied, and the mailbox said "Alright, thank you, bye." One turn is allowed
     because a mailbox with no recording greets through this path; a second never is."""
     reached: list[str] = []

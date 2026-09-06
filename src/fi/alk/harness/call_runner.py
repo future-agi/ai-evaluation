@@ -1305,8 +1305,7 @@ class CallRunnerImpl:
 
         # A call that ran out of time after a real conversation is graded on what happened, not
         # discarded as infrastructure. An intake agent may ask thirty to fifty questions, so reaching
-        # the deadline is an ordinary outcome; a measured 51-turn call lost all three of its sub-goals
-        # to `held: null` because the timeout made it an abort.
+        # the deadline is an ordinary outcome and its evidence has to survive it.
         ran_out_of_time = (
             case.status is TestCaseStatus.TIMED_OUT
             and turns >= _GRADEABLE_AFTER_TIMEOUT_TURNS

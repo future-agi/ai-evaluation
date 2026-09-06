@@ -450,10 +450,8 @@ def voicemail_sub_goal_problems(scenario: Scenario, catalogue: Catalogue) -> lis
     """Whether this mailbox scenario asks for something a mailbox call can produce.
 
     A sub-goal that needs a tool call cannot hold when nobody answers: the agent reaches most of its
-    tools only once the person it called has said something, and on a mailbox nobody ever does. Six
-    measured mailbox calls failed on exactly this, all four styles, every one of them reporting a tool
-    "was not called" while the agent had behaved correctly. The scenario was wrong, not the agent, and
-    a suite that records it as a failure is measuring nothing.
+    tools only once the person it called has said something, and on a mailbox nobody ever does. Such a
+    sub-goal reports a correctly handled mailbox as a failure, so the scenario is wrong, not the agent.
 
     Read from the check rather than from the name, because the name is the writer's word for it and
     the check is what decides. Only a check that fails when a call is *absent* is caught; one that

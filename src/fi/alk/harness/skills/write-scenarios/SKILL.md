@@ -106,9 +106,9 @@ correctly by another route can. Assert the arguments it was given, or the state 
 **And do not make the mechanics of ending a call a sub-goal.** Whether a particular closing tool was
 invoked is plumbing. What is worth checking is what the agent did before it stopped: that it left a
 message naming who was calling and why, that it stopped asking questions once there was nobody to
-answer, that it did not press on after being told to stop. A measured run failed a scenario because a
-named closing tool was not called, while the agent had already closed the call through the tool that
-honours a removal request, which is correct behaviour scored as a failure. Where one tool's documented effect
+answer, that it did not press on after being told to stop. A scenario that requires a named closing
+tool fails an agent which closed the call correctly through another tool, scoring right behaviour as
+wrong. Where one tool's documented effect
 already covers another's, requiring both is asking for a redundant call.
 
 Name entries that already exist. Do not restate one in your own words and do not invent a second name

@@ -202,7 +202,7 @@ need.
 
 **Write values, not the names of values.** A generated seed that quotes a function reaches the
 database as a string and the insert fails on the column's type: `'CURRENT_TIMESTAMP'` is eleven
-characters, not a time, and a run died on exactly that at the seeding step. Where a row needs "now",
+characters, not a time, and seeding fails on the column's type. Where a row needs "now",
 write the call unquoted or write a literal timestamp. The same holds for anything the database is meant
 to evaluate rather than store: a default, a sequence, a cast. If a value in the contract is a
 placeholder rather than data, resolve it here or ask, because seeding is the last place it can be

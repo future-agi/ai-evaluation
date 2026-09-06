@@ -185,7 +185,7 @@ def _catalogue_with(check: str):
 
 
 def test_a_mailbox_scenario_may_not_require_a_tool_call():
-    """Six measured mailbox calls failed on a tool the agent only reaches once somebody speaks, and on
+    """A mailbox scenario fails on a tool the agent only reaches once somebody speaks, and on
     a mailbox nobody ever does. The scenario was wrong, not the agent."""
     from fi.alk.harness.scenario import voicemail_sub_goal_problems
 

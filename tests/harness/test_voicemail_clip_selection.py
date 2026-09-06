@@ -106,7 +106,7 @@ def test_an_unreadable_catalogue_is_not_an_error(tmp_path, monkeypatch):
 
 
 def test_the_shipped_catalogue_covers_the_styles_it_claims():
-    """The three clips Karthik supplied, read through the real resolver."""
+    """The supplied clips, read through the real resolver."""
     carrier = voicemail_audio.clip_for("carrier")
     personal = voicemail_audio.clip_for("personal")
     if carrier is None and personal is None:
