@@ -98,6 +98,19 @@ Prefer a check. You have the world afterwards and every call with its arguments,
 checking are visible in one of them. A judged sub-goal is reported as judged, and a suite of them
 tells you less than it appears to.
 
+**A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
+that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves
+correctly by another route can. Assert the arguments it was given, or the state the world was left in.
+"The row now holds the value the caller gave" is a check. "the tool appears in the calls" is not.
+
+**And do not make the mechanics of ending a call a sub-goal.** Whether a particular closing tool was
+invoked is plumbing. What is worth checking is what the agent did before it stopped: that it left a
+message naming who was calling and why, that it stopped asking questions once there was nobody to
+answer, that it did not press on after being told to stop. A measured run failed a scenario because a
+named closing tool was not called, while the agent had already closed the call through the tool that
+honours a removal request, which is correct behaviour scored as a failure. Where one tool's documented effect
+already covers another's, requiring both is asking for a redundant call.
+
 Name entries that already exist. Do not restate one in your own words and do not invent a second name
 for something already covered. If something genuinely needs checking and no entry covers it, add one
 with `add_sub_goal`.

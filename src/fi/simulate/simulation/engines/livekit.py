@@ -257,15 +257,20 @@ def _simulator_turn_handling(
 ) -> dict[str, object]:
     return {
         "turn_detection": "vad" if vad is not None else "stt",
+        # 0.4s fires inside a sentence, on a comma or a breath, so the caller decided the agent had
+        # finished mid-question and talked over it. Measured on a real call: the agent's turns were
+        # truncated to "Of course, I will not" and "I am Avery", and the caller then repeated its own
+        # line verbatim because it never heard an answer, which read as a broken simulator.
         "endpointing": {
             "mode": "fixed",
-            "min_delay": min_endpointing_delay or 0.4,
-            "max_delay": max_endpointing_delay or 2.2,
+            "min_delay": min_endpointing_delay or 0.9,
+            "max_delay": max_endpointing_delay or 3.0,
         },
+        # A real caller interrupts, but only over something long enough to be worth interrupting.
         "interruption": {
             "enabled": (True if allow_interruptions is None else allow_interruptions),
             "discard_audio_if_uninterruptible": True,
-            "min_duration": 0.3,
+            "min_duration": 0.6,
         },
         "preemptive_generation": {"enabled": True},
     }
