@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
 
+from . import spend
 from .backends import (
     Call,
     HarnessBackend,
@@ -324,6 +325,11 @@ class Stage:
             turn.outcome = "failed" if failed else received.outcome
             turn.turns = received.turns
             turn.cost_usd = received.cost_usd
+            # Every harness model call passes here, so the spend ledger is fed once rather than
+            # per stage: a writer added later is counted without anybody remembering to.
+            spend.record(
+                self.name, received.cost_usd, received.turns, received.models
+            )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id
             self.models_used |= received.models
