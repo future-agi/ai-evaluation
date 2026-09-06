@@ -57,8 +57,7 @@ you nothing.
 Keep these rare: at most one scenario in twenty, and none at all is a perfectly good suite. They test
 one narrow thing well, and a suite full of mailboxes has stopped testing the agent talking to people.
 
-**Nothing else goes on a mailbox scenario.** No `background_noise`, and no `bystander`. What the agent
-reaches is a recording played back by a switch, so there is no room to overhear and nobody in it to
-interrupt, and either one would tell the agent it is talking to a person when the whole point is that
-it is not.
+**Leave `background_noise` off a mailbox scenario.** What the agent reaches is a recording played back
+by a switch, so there is no room behind it to overhear, and a room behind a recording is the one
+detail that would tell the agent it is talking to a person when the whole point is that it is not.
 

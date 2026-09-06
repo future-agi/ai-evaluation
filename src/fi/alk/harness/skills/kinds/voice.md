@@ -38,24 +38,6 @@ scenario about handing off tests the offer or the attempt, and the work that wou
 in a separate scenario. A sub-goal that only holds once somebody answers will fail on a correct
 handoff.
 
-## When somebody else in the room speaks
-
-`bystander` is one line said by a second person across the call: a child from the back seat, a
-colleague at the next desk, somebody answering the door. It is spoken over the caller's own audio
-partway through, so the agent hears a voice that is not the person it has been talking to.
-
-What is being tested is narrow and worth having: does the agent keep answering the caller rather
-than the interruption, does it treat the stray line as its caller's turn and reply to the wrong
-thing, does its endpointing fall over when two voices overlap.
-
-Write the line as that person would say it, short, and unrelated to the agent's business. "Mum, are
-we nearly there" is a bystander. "Ask them about the refund" is not, because it is the scenario
-telling the caller what to say next through somebody else's mouth.
-
-This is rare, at most one scenario in twenty. The caller does not acknowledge it unless the agent
-brings it up; nothing in the instruction should mention it, because the caller is not performing an
-interruption, they are being interrupted.
-
 ## What this modality lets you vary
 
 `background_noise` is per scenario, not a suite setting. Choose it from the situation rather than

@@ -31,7 +31,12 @@ class _Session:
             type(
                 "Item",
                 (),
-                {"type": "message", "role": role, "text_content": text, "interrupted": False},
+                {
+                    "type": "message",
+                    "role": role,
+                    "text_content": text,
+                    "interrupted": False,
+                },
             )()
         )
 
@@ -154,7 +159,7 @@ def test_frames_from_a_slower_voice_are_resampled_for_the_mixer():
 
     from livekit import rtc
 
-    # What Deepgram aura returns for the bystander line.
+    # The rate a TTS voice arrives at, which is not the rate the mixer reads.
     body = array.array("h", [1000] * 2400).tobytes()
     source = rtc.AudioFrame(
         data=body, sample_rate=24000, num_channels=1, samples_per_channel=2400

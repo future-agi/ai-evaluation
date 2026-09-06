@@ -77,12 +77,6 @@ def voicemail_enabled() -> bool:
     return os.environ.get(VOICEMAIL_SWITCH, "1").strip().lower() not in _OFF
 
 
-# The longest a second person's interjection may be. One line is the whole point: somebody in the
-# room says something across the call, and the test is whether the agent notices and who it answers.
-# A paragraph is a second caller, which is a different feature and not this one.
-LONGEST_BYSTANDER = 200
-
-
 class Step(BaseModel):
     """One action in a reference solution."""
 
@@ -303,11 +297,6 @@ class Scenario(BaseModel):
     # and "full" a mailbox that cannot record at all. Only read where answered_by is "voicemail";
     # empty means personal.
     voicemail_style: str = ""
-    # One line somebody else in the room says across this call, a child from the back seat, a
-    # colleague at the next desk. Spoken over the caller's own audio partway through, so what is
-    # tested is whether the agent notices a second voice, keeps answering the person it is talking
-    # to, and does not treat the interruption as its caller's turn. Empty means nobody else speaks.
-    bystander: str = ""
 
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
     # uses one is not rejected as unfillable at write time.
@@ -424,7 +413,6 @@ def validate_scenario(
     problems.extend(answered_by_problems(scenario))
     problems.extend(voicemail_style_problems(scenario))
     problems.extend(voicemail_sub_goal_problems(scenario, catalogue))
-    problems.extend(bystander_problems(scenario))
     problems.extend(_world_credential_problems(scenario, world_state))
     problems.extend(self_sufficiency_problems(scenario))
     problems.extend(alignment_problems(scenario, world_state))
@@ -542,29 +530,6 @@ def voicemail_style_problems(scenario: Scenario) -> list[str]:
             "answers and nothing plays it. State answered_by 'voicemail', or leave the style out"
         ]
     return []
-
-
-def bystander_problems(scenario: Scenario) -> list[str]:
-    """Whether a second voice in the room is one that could be there, and is one line.
-
-    Nobody speaks across a mailbox: `answered_by` voicemail means the other end is a recording, so
-    there is no room and no caller for a bystander to talk over.
-    """
-    said = str(scenario.bystander or "").strip()
-    if not said:
-        return []
-    problems: list[str] = []
-    if str(scenario.answered_by or "").strip().lower() == VOICEMAIL:
-        problems.append(
-            "bystander is set on a scenario a mailbox answers, and a recording has no room for "
-            "somebody to speak across. Drop one of the two"
-        )
-    if len(said) > LONGEST_BYSTANDER:
-        problems.append(
-            f"bystander is {len(said)} characters, over {LONGEST_BYSTANDER}. It is one thing said "
-            "across the call, not a second conversation"
-        )
-    return problems
 
 
 def _world_credential_problems(
@@ -1067,14 +1032,6 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
         problems.append(
             f"{len(mailboxes)} of {len(scenarios)} scenarios are answered_by {VOICEMAIL!r}; keep "
             f"them to at most {allowed} here"
-        )
-    # A second voice in the room is a rare event, and a suite where it keeps happening is testing
-    # that instead of testing the agent. Same ceiling as mailboxes, for the same reason.
-    bystanders = [one for one in scenarios if str(one.bystander or "").strip()]
-    if len(bystanders) > allowed:
-        problems.append(
-            f"{len(bystanders)} of {len(scenarios)} scenarios have a bystander speaking; keep them "
-            f"to at most {allowed} here"
         )
     # And where there is more than one, they have to be different mailboxes. Distinct greetings is
     # what can be measured; the shapes worth covering are named in the voice skill.

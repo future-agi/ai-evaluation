@@ -15,7 +15,9 @@ def test_the_watchdog_clears_a_slow_first_turn_without_being_generous():
     """It only sees a turn once the session commits it, and measured agent turn latency on a real
     run was 4292ms and 3947ms, so a bound near five seconds would talk over the greeting."""
     assert livekit._OPEN_INSTEAD_AFTER_SECONDS == 8.0
-    assert livekit._OPEN_INSTEAD_AFTER_SECONDS < livekit._NO_CONVERSATION_TIMEOUT_SECONDS
+    assert (
+        livekit._OPEN_INSTEAD_AFTER_SECONDS < livekit._NO_CONVERSATION_TIMEOUT_SECONDS
+    )
 
 
 def test_a_mailbox_is_recognised_from_the_calls_own_lane(monkeypatch):
@@ -79,8 +81,8 @@ def test_the_person_still_opens_a_call_the_agent_never_starts():
     assert opened == []
 
 
-def test_a_mailbox_call_carries_no_ambience_and_no_bystander(monkeypatch):
-    """Nothing stands behind a mailbox, so a scenario asking for either must not get it: both would
+def test_a_mailbox_call_carries_no_ambience(monkeypatch):
+    """Nothing stands behind a mailbox, so a scenario asking for a room must not get one: it would
     tell the agent a person is there when the point of the scenario is that none is."""
     started: dict = {}
 
@@ -99,7 +101,6 @@ def test_a_mailbox_call_carries_no_ambience_and_no_bystander(monkeypatch):
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "voicemail")
     monkeypatch.setenv("HARNESS_VOICEMAIL_STYLE", "personal")
     monkeypatch.setenv("HARNESS_BACKGROUND_NOISE", "CITY_AMBIENCE")
-    monkeypatch.setenv("HARNESS_BYSTANDER_LINE", "Mum, are we nearly there")
     monkeypatch.delenv("HARNESS_VOICEMAIL_CLIP", raising=False)
 
     agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
@@ -107,38 +108,9 @@ def test_a_mailbox_call_carries_no_ambience_and_no_bystander(monkeypatch):
     asyncio.run(agent._maybe_start_background_audio(object(), session))
 
     assert started["ambient"] is None
-    assert getattr(agent, "_bystander_task", None) is None
     # The tone still plays: that is the one thing a mailbox does have.
     assert getattr(agent, "_voicemail_tone_task", None) is not None
     agent._voicemail_tone_task.cancel()
-
-
-def test_a_person_answering_still_gets_both(monkeypatch):
-    started: dict = {}
-
-    class _Player:
-        def __init__(self, **kwargs) -> None:
-            started["ambient"] = kwargs.get("ambient_sound")
-
-        async def start(self, **kwargs) -> None:
-            return None
-
-        def play(self, audio):
-            return object()
-
-    monkeypatch.setattr(livekit, "BackgroundAudioPlayer", _Player)
-    monkeypatch.setenv("HARNESS_ANSWERED_BY", "person")
-    monkeypatch.setenv("HARNESS_BACKGROUND_NOISE", "CITY_AMBIENCE")
-    monkeypatch.setenv("HARNESS_BYSTANDER_LINE", "Mum, are we nearly there")
-    monkeypatch.setattr(livekit, "_BYSTANDER_AFTER_SECONDS", 3600.0)
-
-    agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
-    session = type("S", (), {"history": type("H", (), {"items": []})()})()
-    asyncio.run(agent._maybe_start_background_audio(object(), session))
-
-    assert started["ambient"] is not None
-    assert agent._bystander_task is not None
-    agent._bystander_task.cancel()
 
 
 def test_a_mailbox_call_is_not_held_to_a_conversation_floor(monkeypatch):
@@ -156,18 +128,29 @@ def test_a_two_turn_mailbox_call_completes_however_it_ended(monkeypatch):
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "voicemail")
     messages = [
         {"role": "assistant", "content": "Hi. It's me. Leave a message."},
-        {"role": "user", "content": "This is Uber, we could not reach you about your booking."},
+        {
+            "role": "user",
+            "content": "This is Uber, we could not reach you about your booking.",
+        },
     ]
-    for reason in ("conversation_silence_timeout", "room_disconnected", "target_disconnected"):
+    for reason in (
+        "conversation_silence_timeout",
+        "room_disconnected",
+        "target_disconnected",
+    ):
         outcome = livekit._conversation_outcome(reason, messages, min_turn_messages=8)
         assert outcome.status == livekit.TestCaseStatus.COMPLETED, reason
         assert outcome.failure is None
 
     # A mailbox that never played is still a fault, and so is the same call answered by a person.
-    empty = livekit._conversation_outcome("no_conversation", messages, min_turn_messages=8)
+    empty = livekit._conversation_outcome(
+        "no_conversation", messages, min_turn_messages=8
+    )
     assert empty.failure.code == "no_conversation"
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "person")
-    person = livekit._conversation_outcome("room_disconnected", messages, min_turn_messages=8)
+    person = livekit._conversation_outcome(
+        "room_disconnected", messages, min_turn_messages=8
+    )
     assert person.status == livekit.TestCaseStatus.FAILED
 
 
@@ -201,7 +184,9 @@ def test_a_recorded_greeting_is_spoken_as_the_mailboxs_own_turn(monkeypatch):
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "voicemail")
     monkeypatch.setenv("HARNESS_VOICEMAIL_STYLE", "carrier")
     monkeypatch.setenv("HARNESS_VOICEMAIL_CLIP", "/tmp/greeting.wav")
-    monkeypatch.setenv("HARNESS_VOICEMAIL_CLIP_TRANSCRIPT", "No one is available to take your call.")
+    monkeypatch.setenv(
+        "HARNESS_VOICEMAIL_CLIP_TRANSCRIPT", "No one is available to take your call."
+    )
 
     agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
     asyncio.run(agent._maybe_start_background_audio(object(), _Session()))
@@ -271,7 +256,9 @@ def test_a_recorded_greeting_opens_the_call_by_itself(monkeypatch):
 
     agent = livekit._TestRunnerAgent.__new__(livekit._TestRunnerAgent)
     agent._session = _Session()
-    agent._persona = type("P", (), {"persona": {"initial_message": "Hi, this is Liam."}})()
+    agent._persona = type(
+        "P", (), {"persona": {"initial_message": "Hi, this is Liam."}}
+    )()
 
     # No recording: the persona's own greeting opens the call, as it always did.
     agent._voicemail_greeting = None
@@ -372,9 +359,9 @@ def test_a_mailbox_speaks_once_and_never_answers_the_agent(monkeypatch):
 
 
 def test_a_full_mailbox_still_gets_its_recording_timer(monkeypatch):
-    """FULL is the one style with no tone, so the early return that skips a call wanting neither
-    ambience nor a bystander used to skip the timer with it: a measured full-mailbox call ran 90
-    seconds with the agent asking "Is anyone there?" until the watchdog ended it."""
+    """FULL is the one style with no tone, so the early return that skips a call wanting no ambience
+    used to skip the timer with it: a measured full-mailbox call ran 90 seconds with the agent asking
+    "Is anyone there?" until the watchdog ended it."""
 
     class _Player:
         def __init__(self, **kwargs) -> None:
@@ -390,7 +377,6 @@ def test_a_full_mailbox_still_gets_its_recording_timer(monkeypatch):
     monkeypatch.setenv("HARNESS_ANSWERED_BY", "voicemail")
     monkeypatch.setenv("HARNESS_VOICEMAIL_STYLE", "full")
     monkeypatch.delenv("HARNESS_BACKGROUND_NOISE", raising=False)
-    monkeypatch.delenv("HARNESS_BYSTANDER_LINE", raising=False)
     monkeypatch.delenv("HARNESS_VOICEMAIL_CLIP", raising=False)
 
     # A full mailbox has no tone, which is the whole point of the style.

@@ -121,15 +121,6 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # once it is committed to the session history, and measured agent turn latency on a real run was
 # 4292ms and 3947ms, so anything near five seconds would talk over the agent's greeting.
 _OPEN_INSTEAD_AFTER_SECONDS = 8.0
-# How far into a call the second voice in the room speaks. Late enough that greetings are done and
-# the two are mid-exchange, which is where an interruption tests something, and early enough to land
-# on a call that ends after a couple of minutes.
-_BYSTANDER_AFTER_SECONDS = 20.0
-# Quieter than the caller and much louder than ambience. Measured reference points on real calls:
-# speech reaches 15000 to 23000 of 32768 and the ambience clip at volume 2.0 measures around 770, so
-# half scale puts a voice from the back seat clearly below the person on the phone and far above the
-# room behind them.
-_BYSTANDER_VOLUME = 0.5
 # The tone a mailbox plays when it starts recording, per kind of mailbox: frequency in hertz and
 # length in seconds. A mailbox that is FULL has no entry on purpose, because it never invites a
 # message, and an agent that hears a tone there would be told to speak into something that cannot
@@ -437,23 +428,18 @@ class _TestRunnerAgent(Agent):
         preferable to a dropped one.
         """
         source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
-        bystander = os.environ.get("HARNESS_BYSTANDER_LINE", "").strip()
         # A mailbox needs this method to run whatever else the scenario asked for: for its tone, and
         # for the timer that stops it recording. A FULL mailbox has no tone, so leaving on the first
-        # three conditions returned before the timer existed, and a measured full-mailbox call ran 90
+        # two conditions returned before the timer existed, and a measured full-mailbox call ran 90
         # seconds with the agent asking "Is anyone there?" until the watchdog ended it.
         tone_style = _voicemail_tone_style()
-        if _answered_by_voicemail() and (source or bystander):
+        if _answered_by_voicemail() and source:
             # Nothing stands behind a mailbox. It is a recording played back by a switch, so there
-            # is no room to overhear and nobody in it to interrupt, and either one would tell the
-            # agent it is talking to a person when the whole point is that it is not.
-            logger.info(
-                "mailbox answered, so ambience and any bystander are dropped (noise %r, bystander %s)",
-                source,
-                bool(bystander),
-            )
-            source, bystander = "", ""
-        if not source and not bystander and not tone_style and not _answered_by_voicemail():
+            # is no room to overhear, and a room behind a recording would tell the agent it is
+            # talking to a person when the whole point is that it is not.
+            logger.info("mailbox answered, so ambience is dropped (noise %r)", source)
+            source = ""
+        if not source and not tone_style and not _answered_by_voicemail():
             return
 
         try:
@@ -475,10 +461,12 @@ class _TestRunnerAgent(Agent):
                         "background audio clip %r is not one LiveKit ships", source
                     )
                     return
-            # One player carries both, because a bystander needs a published track whether or not
-            # this scenario also asked for ambience.
+            # A player is created even with no ambience clip, because a mailbox tone needs a
+            # published track whether or not this scenario also asked for a room.
             player = (
-                BackgroundAudioPlayer(ambient_sound=AudioConfig(clip_source, volume=volume))
+                BackgroundAudioPlayer(
+                    ambient_sound=AudioConfig(clip_source, volume=volume)
+                )
                 if clip_source is not None
                 else BackgroundAudioPlayer()
             )
@@ -501,7 +489,9 @@ class _TestRunnerAgent(Agent):
         if recorded and said:
             try:
                 self._voicemail_greeting = session.say(
-                    said, audio=audio_frames_from_file(recorded), allow_interruptions=False
+                    said,
+                    audio=audio_frames_from_file(recorded),
+                    allow_interruptions=False,
                 )
             except Exception:
                 logger.warning("recorded mailbox greeting not played", exc_info=True)
@@ -515,52 +505,14 @@ class _TestRunnerAgent(Agent):
                 player.play(AudioConfig(recorded, volume=1.0))
             except Exception:
                 logger.warning("recorded mailbox greeting not played", exc_info=True)
-        if bystander:
-            self._bystander_task = asyncio.create_task(self._say_bystander_line(bystander))
         if tone_style:
             self._voicemail_tone_task = asyncio.create_task(
                 self._play_voicemail_tone(tone_style, session)
             )
         if _answered_by_voicemail():
-            self._mailbox_close_task = asyncio.create_task(self._close_mailbox_after_recording())
-
-    async def _say_bystander_line(self, said: str) -> None:
-        """Have somebody else in the room speak once, over the caller's own audio.
-
-        Synthesised with the caller's own TTS and handed to the background player as a stream of
-        frames, which is what ``play`` accepts besides a file path. That is why this needs no audio
-        asset and no download: the voice already configured for this call speaks the line.
-
-        Deliberately not a second room participant. A third identity would have to be taught to the
-        transcription filter and the speaker roles, and a provider phone leg carries one audio
-        stream anyway, so mixing into the caller's side is what ports.
-        """
-        try:
-            await asyncio.sleep(_BYSTANDER_AFTER_SECONDS)
-            player = getattr(self, "_background_player", None)
-            tts = getattr(self, "tts", None)
-            if player is None or tts is None:
-                return
-            # Synthesised here rather than lazily inside the player. The player consumes the
-            # iterator from its mixer task, so a voice that fails mid-stream would raise there,
-            # where it could take the mixer down and with it the ambience this same player carries.
-            # One short line of audio held in memory buys that being impossible.
-            spoken = [
-                _frame_at_mixer_rate(event.frame) async for event in tts.synthesize(said)
-            ]
-            if not spoken:
-                return
-
-            async def frames() -> Any:
-                for frame in spoken:
-                    yield frame
-
-            player.play(AudioConfig(frames(), volume=_BYSTANDER_VOLUME))
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # A bystander that will not speak is a quieter call, never a failed one.
-            logger.warning("bystander line not spoken", exc_info=True)
+            self._mailbox_close_task = asyncio.create_task(
+                self._close_mailbox_after_recording()
+            )
 
     _voicemail_greeting: Any = None
     _voicemail_tone_task: Any = None
@@ -587,7 +539,9 @@ class _TestRunnerAgent(Agent):
                     await tone
                 except Exception:
                     # The tone failing is not a reason to record for ever.
-                    logger.warning("mailbox tone failed before the recording timer", exc_info=True)
+                    logger.warning(
+                        "mailbox tone failed before the recording timer", exc_info=True
+                    )
             await asyncio.sleep(_VOICEMAIL_RECORD_SECONDS)
             logger.info(
                 "mailbox stopped recording after %ss and cut the line",
@@ -610,8 +564,8 @@ class _TestRunnerAgent(Agent):
 
         Generated rather than fetched: a sine burst is a sine burst, and an asset would be a
         download, a licence and a catalogue for something twelve lines of arithmetic produce. Handed
-        over eagerly for the same reason the bystander is, since the player consumes the iterator
-        inside its mixer task and a failure there can take the ambience down with it.
+        over eagerly rather than lazily, since the player consumes the iterator inside its mixer
+        task and a failure there can take the ambience down with it.
         """
         shape = _VOICEMAIL_TONE_BY_STYLE.get(style)
         if shape is None:
@@ -638,7 +592,8 @@ class _TestRunnerAgent(Agent):
                     await asyncio.sleep(0.2)
                 else:
                     logger.warning(
-                        "mailbox said nothing in %ss; no tone", _VOICEMAIL_TONE_WAIT_SECONDS
+                        "mailbox said nothing in %ss; no tone",
+                        _VOICEMAIL_TONE_WAIT_SECONDS,
                     )
                     return
             await asyncio.sleep(_VOICEMAIL_TONE_GAP_SECONDS)
@@ -668,7 +623,7 @@ class _TestRunnerAgent(Agent):
         Without this the mixer task, its audio source and the published track outlive the call,
         and a suite leaks one of each (plus a temp file) per scenario.
         """
-        for name in ("_bystander_task", "_voicemail_tone_task", "_mailbox_close_task"):
+        for name in ("_voicemail_tone_task", "_mailbox_close_task"):
             pending = getattr(self, name, None)
             if pending is not None:
                 setattr(self, name, None)
@@ -2776,7 +2731,12 @@ def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
     for index in range(total):
         gain = min(1.0, index / fade, (total - index) / fade)
         samples.append(
-            int(32767 * 0.9 * gain * math.sin(2 * math.pi * hz * index / _BACKGROUND_MIXER_RATE))
+            int(
+                32767
+                * 0.9
+                * gain
+                * math.sin(2 * math.pi * hz * index / _BACKGROUND_MIXER_RATE)
+            )
         )
     return rtc.AudioFrame(
         data=samples.tobytes(),
@@ -3256,7 +3216,9 @@ def _conversation_outcome(
             retryable=True,
         )
     floor, alternation_required = _turn_requirements(min_turn_messages)
-    if len(messages) < floor or (alternation_required and not _has_role_alternation(messages)):
+    if len(messages) < floor or (
+        alternation_required and not _has_role_alternation(messages)
+    ):
         code = (
             stop_reason
             if stop_reason in {"target_disconnected", "room_disconnected"}

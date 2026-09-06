@@ -21,10 +21,25 @@ def test_a_clip_is_chosen_by_style(tmp_path, monkeypatch):
     audio.write_bytes(b"RIFF")
     monkeypatch.setenv(
         voicemail_audio.CATALOG_ENV,
-        str(_catalog(tmp_path, [
-            {"id": "A", "style": "carrier", "path": str(audio), "has_tone": True},
-            {"id": "B", "style": "personal", "path": str(audio), "has_tone": False},
-        ])),
+        str(
+            _catalog(
+                tmp_path,
+                [
+                    {
+                        "id": "A",
+                        "style": "carrier",
+                        "path": str(audio),
+                        "has_tone": True,
+                    },
+                    {
+                        "id": "B",
+                        "style": "personal",
+                        "path": str(audio),
+                        "has_tone": False,
+                    },
+                ],
+            )
+        ),
     )
     carrier = voicemail_audio.clip_for("carrier")
     personal = voicemail_audio.clip_for("personal")
@@ -46,9 +61,18 @@ def test_a_style_the_catalogue_does_not_cover_falls_back(tmp_path, monkeypatch):
 def test_an_entry_whose_file_is_missing_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setenv(
         voicemail_audio.CATALOG_ENV,
-        str(_catalog(tmp_path, [
-            {"id": "gone", "style": "personal", "path": str(tmp_path / "nope.wav")},
-        ])),
+        str(
+            _catalog(
+                tmp_path,
+                [
+                    {
+                        "id": "gone",
+                        "style": "personal",
+                        "path": str(tmp_path / "nope.wav"),
+                    },
+                ],
+            )
+        ),
     )
     assert voicemail_audio.clip_for("personal") is None
 
@@ -56,11 +80,22 @@ def test_an_entry_whose_file_is_missing_is_skipped(tmp_path, monkeypatch):
 def test_a_url_is_used_as_it_stands(tmp_path, monkeypatch):
     monkeypatch.setenv(
         voicemail_audio.CATALOG_ENV,
-        str(_catalog(tmp_path, [
-            {"id": "hosted", "style": "personal", "url": "https://example.test/vm.wav"},
-        ])),
+        str(
+            _catalog(
+                tmp_path,
+                [
+                    {
+                        "id": "hosted",
+                        "style": "personal",
+                        "url": "https://example.test/vm.wav",
+                    },
+                ],
+            )
+        ),
     )
-    assert voicemail_audio.clip_for("personal")["source"] == "https://example.test/vm.wav"
+    assert (
+        voicemail_audio.clip_for("personal")["source"] == "https://example.test/vm.wav"
+    )
 
 
 def test_an_unreadable_catalogue_is_not_an_error(tmp_path, monkeypatch):

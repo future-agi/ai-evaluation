@@ -208,7 +208,9 @@ class _MissingVoiceConfig:
         return "voice_capability_unavailable: missing " + "; ".join(parts)
 
 
-def _resolve_connector(job: HarnessJob, target_provider_secret_values: Mapping[str, str]) -> str:
+def _resolve_connector(
+    job: HarnessJob, target_provider_secret_values: Mapping[str, str]
+) -> str:
     """Pin the job's transport connector from the credentials actually present.
 
     A fresh one-shot ships ``job.json`` with ``connector="auto"``: the platform only writes the
@@ -219,9 +221,9 @@ def _resolve_connector(job: HarnessJob, target_provider_secret_values: Mapping[s
     connector = job.agent.connector.strip().lower()
     if connector != "auto":
         return connector
-    if job.agent.config.get(LIVEKIT_URL_CONFIG_KEY) or target_provider_secret_values.get(
-        LIVEKIT_URL_ALIAS
-    ):
+    if job.agent.config.get(
+        LIVEKIT_URL_CONFIG_KEY
+    ) or target_provider_secret_values.get(LIVEKIT_URL_ALIAS):
         return "livekit"
     if target_provider_secret_values.get(VAPI_API_KEY_ALIAS):
         return "vapi"
@@ -845,7 +847,9 @@ class CallRunnerImpl:
         # process but against a per-world sandboxed agent process reached over the network; no
         # other in-process worker races this job-level environment.
         target_environ = os.environ if environ is None else environ
-        connector = _resolve_connector(context.job, context.target_provider_secret_values)
+        connector = _resolve_connector(
+            context.job, context.target_provider_secret_values
+        )
         target_aliases = [VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS]
         if connector == "livekit":
             target_aliases.extend(
@@ -1066,14 +1070,6 @@ class CallRunnerImpl:
             self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
             self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
             self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
-
-        # A second voice in the room, read the same way and cleared the same way. Not tied to
-        # direction: somebody can talk across the caller whoever placed the call.
-        bystander = str(doc.get("bystander") or "").strip()
-        if bystander:
-            self._environ["HARNESS_BYSTANDER_LINE"] = bystander
-        else:
-            self._environ.pop("HARNESS_BYSTANDER_LINE", None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector

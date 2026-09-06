@@ -29,9 +29,7 @@ def test_a_person_answering_clears_a_style_left_by_the_previous_call(
     tmp_path: Path,
 ) -> None:
     """Scenarios share a process, so a stale style would give the next caller a mailbox greeting."""
-    environ = _drive(
-        tmp_path, call_direction="outbound", caller_awareness="expecting"
-    )
+    environ = _drive(tmp_path, call_direction="outbound", caller_awareness="expecting")
     assert "HARNESS_ANSWERED_BY" not in environ
     assert "HARNESS_VOICEMAIL_STYLE" not in environ
 

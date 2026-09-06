@@ -609,15 +609,6 @@ def scenario_tools(
                         "means the other three are never tested. Only read where answered_by is "
                         "voicemail.",
                     },
-                    "bystander": {
-                        "type": "string",
-                        "description": "One line somebody else in the room says across this call, in "
-                        "their words: a child from the back seat, a colleague at the next desk. It is "
-                        "spoken over the caller's own audio partway through the call, so it tests "
-                        "whether the agent notices a second voice, keeps answering the person it is "
-                        "talking to, and does not take the interruption for its caller's turn. Rare, "
-                        "one line, and never on a scenario a mailbox answers.",
-                    },
                     "instruction": {
                         "type": "string",
                         "description": "What this person is trying to achieve, written to them. "
