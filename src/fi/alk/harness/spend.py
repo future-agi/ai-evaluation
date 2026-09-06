@@ -40,17 +40,35 @@ def _destination() -> Path | None:
 
 
 def record(
-    stage: str, usd: float | None, turns: int = 0, models: set[str] | None = None
+    stage: str,
+    usd: float | None,
+    turns: int = 0,
+    models: set[str] | None = None,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
 ) -> None:
     """Add one session's reported spend. A backend that cannot price a call reports None."""
     name = (stage or "stage").strip() or "stage"
-    entry = _stages.setdefault(name, {"usd": 0.0, "turns": 0, "models": [], "priced": 0, "unpriced": 0})
+    entry = _stages.setdefault(
+        name,
+        {
+            "usd": 0.0,
+            "turns": 0,
+            "models": [],
+            "priced": 0,
+            "unpriced": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+        },
+    )
     if usd is None:
         entry["unpriced"] += 1
     else:
         entry["usd"] = round(entry["usd"] + float(usd), 6)
         entry["priced"] += 1
     entry["turns"] += int(turns or 0)
+    entry["tokens_in"] += int(tokens_in or 0)
+    entry["tokens_out"] += int(tokens_out or 0)
     for model in sorted(models or set()):
         if model not in entry["models"]:
             entry["models"].append(model)
@@ -72,7 +90,21 @@ def snapshot() -> dict[str, Any]:
         "total_usd": total_usd(),
         "unpriced_turns": unpriced_turns(),
         "stages": [
-            {"stage": name, **{key: entry[key] for key in ("usd", "turns", "models", "priced", "unpriced")}}
+            {
+                "stage": name,
+                **{
+                    key: entry[key]
+                    for key in (
+                        "usd",
+                        "turns",
+                        "models",
+                        "priced",
+                        "unpriced",
+                        "tokens_in",
+                        "tokens_out",
+                    )
+                },
+            }
             for name, entry in sorted(_stages.items())
         ],
     }

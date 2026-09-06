@@ -64,3 +64,34 @@ def test_a_session_reports_its_own_cost_without_being_asked(tmp_path):
     assert body["stages"][0]["stage"] == "write-scenarios:slice-c"
     assert body["stages"][0]["turns"] == 7
     assert body["stages"][0]["models"] == ["gemini"]
+
+
+def test_the_tokens_behind_a_price_are_kept(tmp_path):
+    """A dollar figure with no units cannot be audited, and this one is a bill."""
+    journal = _fresh(tmp_path)
+    spend.record("understand-agent", 0.02, turns=2, models={"m"}, tokens_in=5000, tokens_out=1200)
+    spend.record("understand-agent", 0.01, turns=1, models={"m"}, tokens_in=2000, tokens_out=300)
+
+    entry = json.loads(journal.read_text(encoding="utf-8"))["stages"][0]
+    assert entry["tokens_in"] == 7000
+    assert entry["tokens_out"] == 1500
+    assert entry["usd"] == 0.03
+
+
+def test_a_session_reports_its_tokens_too(tmp_path):
+    journal = _fresh(tmp_path)
+    stage = Stage(SessionSpec(system_prompt="x"), name="build-environment")
+    stage._events(
+        StageDone(
+            outcome="success",
+            turns=3,
+            cost_usd=0.5,
+            models={"gemini"},
+            tokens_in=9000,
+            tokens_out=2500,
+        ),
+        Turn(),
+    )
+
+    entry = json.loads(journal.read_text(encoding="utf-8"))["stages"][0]
+    assert (entry["tokens_in"], entry["tokens_out"]) == (9000, 2500)

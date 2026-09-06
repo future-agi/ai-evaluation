@@ -328,7 +328,12 @@ class Stage:
             # Every harness model call passes here, so the spend ledger is fed once rather than
             # per stage: a writer added later is counted without anybody remembering to.
             spend.record(
-                self.name, received.cost_usd, received.turns, received.models
+                self.name,
+                received.cost_usd,
+                received.turns,
+                received.models,
+                received.tokens_in,
+                received.tokens_out,
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id

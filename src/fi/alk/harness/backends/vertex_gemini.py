@@ -341,6 +341,8 @@ class VertexGeminiSession:
                 outcome="failed",
                 turns=turns,
                 cost_usd=self._cost(tokens_in, tokens_out),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
                 session_id=self.session_id,
                 models={self._model},
                 is_error=True,
@@ -356,6 +358,8 @@ class VertexGeminiSession:
             is_error=not settled,
             turns=turns,
             cost_usd=self._cost(tokens_in, tokens_out),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             session_id=self.session_id,
             models={self._model},
             errors=(
