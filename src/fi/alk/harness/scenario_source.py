@@ -12,7 +12,7 @@ consequences of that choice (HEAD-model drift).
 
 RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the `provision`/`begin` wire
 shapes below follow the platform's actual, live route (futureagi/simulate/serializers/services/
-views `hosted_harness.py`) rather than Karthik's Scenario Generation Contract text (PR #63), where
+views `hosted_harness.py`) rather than the Scenario Generation Contract text (PR #63), where
 the two disagree -- a single `POST .../scenarios/` discriminated by a body-level `operation` field,
 `begin` keyed on the full `scenario_keys` set, and a provision response KEYED by `scenario_key`
 (never a position-ordered array). `register_with_platform` below is the seam that builds those
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from .hosted_entrypoint import ScenariosClient
 
 # LAYOUT DECISION (contract-silent -- hosted-execution-seams.md v1.15 §2 never mentions scenario
-# documents, and §7 assigns the on-disk layout to Karthik's contract, status "in review"). Scenario
+# documents, and §7 assigns the on-disk layout to that contract, status "in review"). Scenario
 # documents live at `<bundle_dir>/<SCENARIOS_DIRNAME>/<name>/...`, matching `folder.py`'s own
 # `SCENARIOS` constant, so a write_folder destination of `<bundle_dir>` lands correctly with no
 # translation. Kept as one module-level constant so a later contract can move it in one edit.
@@ -608,7 +608,7 @@ def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> 
     `scenario_keys` is `allow_empty=False` and REQUIRED, and `begin_scenarios`
     (services/hosted_harness.py:323-329) 409s (`scenario_key_mismatch`) on anything but an EXACT
     match against the full sealed set -- there is no "subset to run" semantics on the real
-    platform (Karthik's contract text describes an optional partial-subset `scenario_ids`; the
+    platform (that contract text describes an optional partial-subset `scenario_ids`; the
     live route does not implement that -- CONTRACT NOTES). The full set is sent every time.
     """
     return {
@@ -625,7 +625,7 @@ def _scenario_ids_by_key(
     (`{"scenarios": [{"scenario_key", "scenario_id"}, ...]}`,
     futureagi/simulate/serializers/hosted_harness.py:251-260 +
     services/hosted_harness.py:487-501's `_provision_response`) back onto `submitted` BY
-    `scenario_key` -- a dict lookup, never a positional zip. A positional zip (matching Karthik's
+    `scenario_key` -- a dict lookup, never a positional zip. A positional zip (matching that contract's
     documented `scenario_ids` array shape, not what the platform actually returns) would silently
     mismatch scenario_id -> scenario the instant the response order differs from `submitted`'s
     order, which nothing on the wire guarantees. Every check below raises rather than returning a
