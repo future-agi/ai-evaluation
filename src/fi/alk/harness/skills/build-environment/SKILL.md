@@ -163,7 +163,7 @@ against them. A schema that reads perfectly and omits one column the code select
 expensive mistake available here, because nothing between the omission and the failure says so: the
 world stands up, `check_world` passes, the agent starts, and then the first tool call that runs that
 query raises inside the tool client, the job crashes, and the run reports that the target agent never
-joined the room. Seven runs were lost that way to a single column.
+joined the room. One missing column is enough to lose the whole run.
 
 So before `save_world`, reconcile the two directions:
 

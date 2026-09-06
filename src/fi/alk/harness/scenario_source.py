@@ -472,11 +472,7 @@ class BundleScenarioSource:
 
 
 def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
-    """The eval names the contract chose, the agent's own prompt, and its modality, for pre-allocation.
-
-    Read as plain JSON rather than through ``AgentContract``: neither value changes how a scenario
-    runs, so a contract this cannot parse must cost the run nothing.
-    """
+    """The contract's chosen evals, agent prompt and modality; read as plain JSON so it cannot fail a run."""
     try:
         body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - a run never fails over what it tells the platform about itself

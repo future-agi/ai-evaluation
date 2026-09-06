@@ -45,12 +45,7 @@ def _provider_import_briefing() -> str:
 
 
 def _eval_catalogue_briefing(available_evals: list[dict[str, Any]] | None) -> str:
-    """The platform's eval catalogue, grouped by the modality each eval applies to.
-
-    Grouped rather than filtered because this is written before the model has recorded
-    ``modality``, so there is nothing to filter against yet. The modality rule is enforced when the
-    contract is submitted, once the modality it claims is known.
-    """
+    """The eval catalogue grouped by modality, since the contract has not claimed one yet."""
     grouped: dict[str, list[str]] = {}
     for one in available_evals or []:
         if not isinstance(one, dict):

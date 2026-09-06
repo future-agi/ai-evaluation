@@ -1,13 +1,7 @@
-"""Which recorded mailbox greeting, if any, a voicemail scenario should be heard through.
+"""Which recorded mailbox greeting, if any, a voicemail scenario is heard through.
 
-A greeting is the one part of a mailbox that can carry a name, and the name belongs to the
-scenario's persona, so a recorded personal greeting would be wrong for every scenario but one. The
-clips this reads are chosen for saying "it's me" rather than a name, which is what makes a recording
-usable at all: it fits whoever the persona happens to be.
-
-The catalogue is a local file and is deliberately not committed, so everything here degrades to
-nothing when it is absent: no catalogue means the mailbox speaks its greeting the way it did before
-and the tone is generated.
+Clips must greet without naming anybody, so one recording fits any persona. The catalogue is a
+local file and is not committed: absent, the mailbox speaks its greeting and the tone is generated.
 """
 
 from __future__ import annotations
@@ -18,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 CATALOG = Path(__file__).with_name("data") / "voicemail" / "catalog.json"
-# A run may point somewhere else, which is how a deployment serves these from object storage
-# instead of from the tree.
+# A run may point somewhere else, so a deployment can serve these from object storage.
 CATALOG_ENV = "ALK_VOICEMAIL_CATALOG"
 
 
@@ -43,8 +36,7 @@ def _resolved(entry: dict[str, Any]) -> str:
     here = Path(raw)
     if here.is_file():
         return str(here)
-    # Catalogue paths are written relative to the repository root, so fall back to the file's own
-    # name beside this module, which is where it lives once the package is installed.
+    # Paths are relative to the repository root, so fall back to beside this module.
     beside = CATALOG.parent / Path(str(entry.get("file_name") or here.name))
     return str(beside) if beside.is_file() else ""
 

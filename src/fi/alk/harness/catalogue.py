@@ -114,16 +114,7 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
 
 
 def _presence_only_problems(sub_goal: SubGoal) -> list[str]:
-    """Whether a check settles more than that some tool was reached.
-
-    A check that only asks whether a name appears in `calls` passes for any agent that gets that far
-    and fails one that did the right thing another way. Saying so in the skill was not enough: a
-    measured suite still produced three such sub-goals, all reporting "end_call was not called" on
-    calls the agent had ended correctly, so it is refused here instead.
-
-    Touching `world` or reading `arguments` is the test, because either means the check is about what
-    happened rather than about which function was entered.
-    """
+    """Refuse a check that only asks whether a tool was reached, rather than what it did."""
     body = sub_goal.check
     if not body.strip():
         return []

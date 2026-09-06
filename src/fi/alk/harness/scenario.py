@@ -37,8 +37,7 @@ ORIGINS_THAT_CREATE = ("generated", "mixed")
 CALLER_AWARENESS = ("expecting", "partial", "unaware")
 LEAST_AWARE = "unaware"
 
-# Who picked up an outbound call. A person is the ordinary case and needs no saying, so empty means
-# a person; "voicemail" means a mailbox answered and there is nobody on the line at all.
+# Who picked up an outbound call. Empty means a person; "voicemail" means nobody is on the line.
 ANSWERED_BY = ("person", "voicemail")
 VOICEMAIL = "voicemail"
 
@@ -46,8 +45,7 @@ VOICEMAIL = "voicemail"
 VOICEMAIL_STYLES = ("personal", "carrier", "operator", "full")
 DEFAULT_VOICEMAIL_STYLE = "personal"
 
-# The share of a suite a mailbox may occupy. A ceiling with no floor, since a suite with none is
-# legitimate. One number in one place: the right value is a product judgement.
+# The share of a suite a mailbox may occupy: a ceiling with no floor, since none is legitimate.
 RARE_CONDITION_SHARE = 0.05
 
 # The switch that removes mailboxes from a run altogether, for when they are not wanted at all
@@ -57,16 +55,7 @@ _OFF = ("0", "off", "false", "no")
 
 
 def voicemail_enabled() -> bool:
-    """Whether this run may write or place a call a mailbox answers.
-
-    **On unless ``ALK_VOICEMAIL_SCENARIOS`` turns it off**, since a mailbox is a real thing that
-    happens to a real outbound agent and a suite that never meets one has not tested that path.
-
-    Off has to mean off at every layer, not just at the call: the writer is not told mailboxes exist,
-    the fields that would ask for one are not offered, a scenario that names one anyway is refused,
-    and nothing is exported to the call runtime. Anything less leaves a run that was asked not to
-    generate them generating them and failing quietly instead.
-    """
+    """Whether this run may write or place a call a mailbox answers. On unless the switch says no."""
     return os.environ.get(VOICEMAIL_SWITCH, "1").strip().lower() not in _OFF
 
 
@@ -409,13 +398,7 @@ def validate_scenario(
 
 
 def answered_by_problems(scenario: Scenario) -> list[str]:
-    """Whether what answered this call is a thing that could have answered it.
-
-    A mailbox only exists on a call the agent placed, and the direction has to be stated on the
-    scenario rather than left to the run: `call_direction` empty means defer to the contract, so a
-    voicemail scenario that stays quiet about direction is one the run may legally make inbound,
-    and then a mailbox is answering a call the person dialled.
-    """
+    """Whether what answered could have: a mailbox only exists on a call the agent placed."""
     chosen = str(scenario.answered_by or "").strip().lower()
     if not chosen:
         return []
@@ -444,14 +427,8 @@ def answered_by_problems(scenario: Scenario) -> list[str]:
 def voicemail_sub_goal_problems(scenario: Scenario, catalogue: Catalogue) -> list[str]:
     """Whether this mailbox scenario asks for something a mailbox call can produce.
 
-    A sub-goal that needs a tool call cannot hold when nobody answers: the agent reaches most of its
-    tools only once the person it called has said something, and on a mailbox nobody ever does. Such a
-    sub-goal reports a correctly handled mailbox as a failure, so the scenario is wrong, not the agent.
-
-    Read from the check rather than from the name, because the name is the writer's word for it and
-    the check is what decides. Only a check that fails when a call is *absent* is caught; one that
-    fails when a call is present is a mailbox sub-goal worth having, since talking to a machine is
-    where an agent should stop calling things.
+    A sub-goal needing a tool call cannot hold when nobody answers, so it would fail a correctly
+    handled mailbox. Read from the check rather than the name, since the check is what decides.
     """
     if str(scenario.answered_by or "").strip().lower() != VOICEMAIL:
         return []
@@ -463,8 +440,7 @@ def voicemail_sub_goal_problems(scenario: Scenario, catalogue: Catalogue) -> lis
         check = " ".join(str(sub_goal.check or "").split())
         if not check or "calls" not in check:
             continue
-        # Any negative test over a filtered call list, which is the shape writers produce. Looking
-        # only for `not any(` and `if not calls` matched neither and let two through on a live run.
+        # Any negative test over a filtered call list, which is the shape writers produce.
         needs_a_call = (
             "not any(" in check
             or "not called" in check
@@ -484,12 +460,7 @@ def voicemail_sub_goal_problems(scenario: Scenario, catalogue: Catalogue) -> lis
 
 
 def voicemail_style_problems(scenario: Scenario) -> list[str]:
-    """Whether the kind of mailbox named exists, and whether a mailbox answered at all.
-
-    A style with nobody to play it is a scenario that reads as though it varies the mailbox and does
-    not, which is worse than leaving it out, because the suite rule then counts a variation that
-    never reaches the call.
-    """
+    """Whether the named style exists, and whether a mailbox answered to play it at all."""
     chosen = str(scenario.voicemail_style or "").strip().lower()
     if not chosen:
         return []
@@ -933,12 +904,7 @@ def fixture_problems(scenario: Scenario) -> list[str]:
 
 
 def rare_event_ceiling(suite_size: int) -> int:
-    """The most scenarios in a suite of this size that may carry one rare call condition.
-
-    Rounded up, so a small suite is allowed one rather than none: a suite of ten would otherwise be
-    permitted half a mailbox, and refusing the only interesting call in a short suite is worse than
-    allowing one in ten. It grows from there, so 50 allows 3 and 200 allows 10.
-    """
+    """The most scenarios of this suite size that may carry a rare call condition, rounded up."""
     return max(1, ceil(suite_size * RARE_CONDITION_SHARE))
 
 

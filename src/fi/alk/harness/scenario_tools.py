@@ -51,11 +51,7 @@ SCENARIO_SERVER = "scenarios"
 
 
 def _mailbox_fields() -> dict[str, Any]:
-    """The scenario fields that only mean anything when a mailbox may answer.
-
-    Empty when ``ALK_VOICEMAIL_SCENARIOS`` is off: withheld rather than offered and then refused,
-    because a field in the schema is an invitation.
-    """
+    """The mailbox-only fields, withheld entirely when the switch is off: a field is an invitation."""
     if not voicemail_enabled():
         return {}
     return {

@@ -125,8 +125,7 @@ _VOICEMAIL_TONE_BY_STYLE: dict[str, tuple[float, float]] = {
     "operator": (440.0, 0.52),
 }
 _DEFAULT_VOICEMAIL_STYLE = "personal"
-# Loud enough to be unmistakable against speech that reaches 15000 to 23000 of 32768, since a tone
-# nobody can hear is the defect this fixes rather than a fix for it.
+# Loud enough to be unmistakable against speech, which reaches 15000 to 23000 of 32768.
 _VOICEMAIL_TONE_VOLUME = 0.8
 # A mailbox plays one greeting and then records, so the eight-message conversation floor is
 # unreachable however well the agent behaves, and holding it there errored every voicemail call.
@@ -415,8 +414,7 @@ class _TestRunnerAgent(Agent):
         preferable to a dropped one.
         """
         source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
-        # A mailbox needs this method for its tone and its recording timer. FULL has no tone, so
-        # returning early on the first two conditions left it running 90 seconds to the watchdog.
+        # A mailbox needs this method for its tone and its recording timer, and FULL has no tone.
         tone_style = _voicemail_tone_style()
         if _answered_by_voicemail() and source:
             # Nothing stands behind a recording, and a room behind one gives the game away.
@@ -637,16 +635,10 @@ class _TestRunnerAgent(Agent):
     _mailbox_greeted: bool = False
 
     async def llm_node(self, chat_ctx, tools, model_settings):
-        """A mailbox speaks once and then never again, and that is counted here rather than asked for.
+        """A mailbox speaks once and then never again, counted here rather than asked of the model.
 
-        The recorded-mailbox prompt asks for silence, and a model asked for a turn tends to give one
-        anyway, and a machine that answers the agent is not a machine: the scenario stops testing
-        whether the agent noticed.
-
-        One turn is allowed rather than none, because a mailbox with no recording greets through this
-        path: the persona's opening line goes through ``say``, but a scenario that omits it falls back
-        to a generated reply, and silencing that outright would leave the mailbox mute and fail the
-        call as an empty conversation. Where a recording has already greeted, no turn is allowed at all.
+        One turn is allowed, not none, because a mailbox without a recording greets through this path.
+        Where a recording has already greeted, no turn is allowed at all.
         """
         if _answered_by_voicemail():
             if self._mailbox_greeted or self._voicemail_greeting is not None:
@@ -2630,11 +2622,7 @@ async def _wait_for_conversation_never_started(
 
 
 def _voicemail_tone_style() -> str:
-    """The mailbox style whose tone this call should play, or empty for no tone at all.
-
-    Empty for every call a person answered, and empty for a full mailbox, which has no tone by
-    design rather than by omission.
-    """
+    """The style whose tone this call plays; empty for a person, and for a full mailbox by design."""
     if not _answered_by_voicemail():
         return ""
     style = (
@@ -2645,12 +2633,7 @@ def _voicemail_tone_style() -> str:
 
 
 def _downloaded_audio(source: str) -> str | None:
-    """A local copy of a remote audio file, or None when it cannot be fetched.
-
-    Both the caller's ambience and a recorded mailbox greeting are meant to be served from object
-    storage rather than shipped inside the image, and neither can be decoded from a URL in place.
-    Returning None rather than raising is deliberate: a call heard in the clear beats a dropped one.
-    """
+    """A local copy of a remote audio file, or None: a call heard in the clear beats a dropped one."""
     import tempfile
     import urllib.request
 
@@ -2667,12 +2650,7 @@ def _downloaded_audio(source: str) -> str | None:
 
 
 def _frame_at_mixer_rate(frame: "rtc.AudioFrame") -> "rtc.AudioFrame":
-    """The same audio at the rate the background player's mixer reads, so it plays at real speed.
-
-    A voice synthesised at 24000 handed straight to ``play`` comes out an octave high and twice as
-    fast, because the mixer reinterprets the samples at its own rate. Resampled with the same helper
-    the provider bridges use, keyed per rate so its interpolation state carries across frames.
-    """
+    """The same audio at the mixer's rate, which reinterprets rather than resamples what it is given."""
     if frame.sample_rate == _BACKGROUND_MIXER_RATE:
         return frame
     resampler = _MIXER_RESAMPLERS.get((frame.sample_rate, frame.num_channels))
@@ -2693,11 +2671,7 @@ def _frame_at_mixer_rate(frame: "rtc.AudioFrame") -> "rtc.AudioFrame":
 
 
 def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
-    """One frame of sine at the given pitch, faded in and out so it starts and stops cleanly.
-
-    Fades matter: a burst that begins at full amplitude clicks, and a click is what a detector keyed
-    on a tone will latch onto instead of the tone.
-    """
+    """One frame of sine, faded in and out: a burst at full amplitude clicks and a detector hears the click."""
     total = int(_BACKGROUND_MIXER_RATE * seconds)
     fade = max(1, int(_BACKGROUND_MIXER_RATE * 0.01))
     samples = array.array("h")
@@ -2720,10 +2694,7 @@ def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
 
 
 def _answered_by_voicemail() -> bool:
-    """Whether what answered this call is a mailbox rather than a person.
-
-    Set per scenario by the call runner, and absent for every other call.
-    """
+    """Whether a mailbox answered rather than a person; set per scenario by the call runner."""
     return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
 
 
@@ -3062,11 +3033,7 @@ def _recover_successful_provider_end_call(
 
 
 def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
-    """The turn floor and whether alternation is required, for the kind of call this is.
-
-    A mailbox neither converses nor takes turns, so it is held to the greeting alone and the graders
-    judge the rest. Every other call keeps the floor it was given.
-    """
+    """The turn floor and whether alternation is required: a mailbox is held to its greeting alone."""
     if _answered_by_voicemail():
         return min(min_turn_messages, _VOICEMAIL_MIN_TURN_MESSAGES), False
     return min_turn_messages, True
