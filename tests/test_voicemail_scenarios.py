@@ -286,22 +286,13 @@ def test_the_switch_refuses_a_mailbox_scenario(monkeypatch) -> None:
 
 
 def test_the_switch_withholds_the_fields_it_would_be_asked_through(monkeypatch) -> None:
-    from fi.alk.harness.scenario_tools import MAILBOX_FIELDS, _offered
-
-    offered = {
-        "name": {},
-        "background_noise": {},
-        **{one: {} for one in MAILBOX_FIELDS},
-    }
+    from fi.alk.harness.scenario_tools import _mailbox_fields
 
     monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "0")
-    withheld = _offered(offered)
-    assert not set(MAILBOX_FIELDS) & set(withheld)
-    # Only the mailbox fields go. Everything else a voice scenario varies stays.
-    assert {"name", "background_noise"} <= set(withheld)
+    assert _mailbox_fields() == {}
 
     monkeypatch.setenv("ALK_VOICEMAIL_SCENARIOS", "1")
-    assert set(MAILBOX_FIELDS) <= set(_offered(offered))
+    assert set(_mailbox_fields()) == {"answered_by", "voicemail_style"}
 
 
 def test_the_switch_stops_the_writer_being_told_mailboxes_exist(monkeypatch) -> None:

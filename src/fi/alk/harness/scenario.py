@@ -48,13 +48,8 @@ VOICEMAIL = "voicemail"
 VOICEMAIL_STYLES = ("personal", "carrier", "operator", "full")
 DEFAULT_VOICEMAIL_STYLE = "personal"
 
-# The share of a suite a rare call condition may occupy: a mailbox answering, or a second voice in
-# the room. One number, in one place, because the right value is a product judgement rather than a
-# technical one and it will be argued about.
-#
-# A ceiling and nothing else. There is deliberately no floor: a suite with no mailbox at all is a
-# legitimate suite, and requiring one would put a narrow test into every run whether it earned its
-# place or not. The previous value was a sixth, which is 17 percent and not rare by any reading.
+# The share of a suite a mailbox may occupy. A ceiling with no floor, since a suite with none is
+# legitimate. One number in one place: the right value is a product judgement.
 RARE_CONDITION_SHARE = 0.05
 
 # The switch that removes mailboxes from a run altogether, for when they are not wanted at all
@@ -292,10 +287,7 @@ class Scenario(BaseModel):
     # rather than running its interactive script at a recording. Outbound only: a mailbox cannot
     # answer a call the person placed themselves.
     answered_by: str = ""
-    # Which kind of mailbox, when one answered: "personal" is the person's own recorded greeting,
-    # "carrier" the network default that names nobody, "operator" a formal automated announcement,
-    # and "full" a mailbox that cannot record at all. Only read where answered_by is "voicemail";
-    # empty means personal.
+    # Which kind of mailbox answered. Only read where answered_by is "voicemail"; empty is personal.
     voicemail_style: str = ""
 
     # Slots the caller filled by the run rather than by the scenario. Listed so a template that
@@ -478,18 +470,8 @@ def voicemail_sub_goal_problems(scenario: Scenario, catalogue: Catalogue) -> lis
         check = " ".join(str(sub_goal.check or "").split())
         if not check or "calls" not in check:
             continue
-        # The shape writers actually produce, taken from a real run rather than imagined: filter the
-        # calls into a local, then fail when that local is empty.
-        #
-        #     checks = [c for c in calls if c.name == "get_booking_status" and c.ok]
-        #     if not checks:
-        #         return "Booking status was not retrieved"
-        #
-        # An earlier version of this looked for `not any(` and `if not calls`, matched neither, and let
-        # two mailbox scenarios through on a live run. What all these forms share is a negative test
-        # that fails when nothing was called, so that is what to look for. A check that fails when a
-        # call WAS made has no negation and stays welcome, since a mailbox is where an agent should
-        # stop calling things.
+        # Any negative test over a filtered call list, which is the shape writers produce. Looking
+        # only for `not any(` and `if not calls` matched neither and let two through on a live run.
         needs_a_call = (
             "not any(" in check
             or "not called" in check
@@ -1033,12 +1015,7 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
             f"{len(mailboxes)} of {len(scenarios)} scenarios are answered_by {VOICEMAIL!r}; keep "
             f"them to at most {allowed} here"
         )
-    # And where there is more than one, they have to be different mailboxes. Distinct greetings is
-    # what can be measured; the shapes worth covering are named in the voice skill.
-    #
-    # Two, not three. Three was written when the ceiling was a sixth of the suite and it fitted in
-    # eighteen scenarios; at a twentieth it needs forty one, which put the rule beyond every suite we
-    # run. Two mailboxes wearing the same style is the same waste the rule was written for.
+    # Two or more have to be different mailboxes. Three would need forty one scenarios at this share.
     if len(mailboxes) >= 2:
         greetings = {
             " ".join(

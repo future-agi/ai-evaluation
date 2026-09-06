@@ -49,23 +49,35 @@ logger = logging.getLogger(__name__)
 
 SCENARIO_SERVER = "scenarios"
 
-# The scenario fields that only mean anything when a mailbox may answer. Named here so the switch
-# has one list to act on rather than two call sites that can drift apart.
-MAILBOX_FIELDS = ("answered_by", "voicemail_style")
 
+def _mailbox_fields() -> dict[str, Any]:
+    """The scenario fields that only mean anything when a mailbox may answer.
 
-def _offered(properties: dict[str, Any]) -> dict[str, Any]:
-    """The scenario fields a writer is shown, minus anything this run has turned off.
-
-    Withheld rather than offered and then refused: a field in the schema is an invitation, and a
-    writer that spends a submission on one it was shown, only to be told it cannot have it, has been
-    sent somewhere for nothing. Validation still refuses these names if one arrives anyway, because a
-    model that saw the field on an earlier turn can still ask for it.
+    Empty when ``ALK_VOICEMAIL_SCENARIOS`` is off: withheld rather than offered and then refused,
+    because a field in the schema is an invitation.
     """
-    if voicemail_enabled():
-        return properties
+    if not voicemail_enabled():
+        return {}
     return {
-        name: value for name, value in properties.items() if name not in MAILBOX_FIELDS
+        "answered_by": {
+            "type": "string",
+            "enum": list(ANSWERED_BY),
+            "description": "Who picked up, and only for a scenario that states call_direction "
+            "outbound. Leave it out for the ordinary case where a person answers. 'voicemail' "
+            "replaces the person with a mailbox that plays its greeting once and then says nothing "
+            "whatever the agent asks, which tests whether the agent notices it is talking to a "
+            "machine, leaves a message that stands on its own, and stops. A mailbox can supply "
+            "nothing, so such a scenario never asks the agent to collect a value or reach agreement.",
+        },
+        "voicemail_style": {
+            "type": "string",
+            "enum": list(VOICEMAIL_STYLES),
+            "description": "Which kind of mailbox answered. 'personal' carries the person's name, "
+            "'carrier' names nobody, 'operator' is a long announcement a careless agent talks over, "
+            "'full' cannot record at all and is the only style with no tone. State one rather than "
+            "leaving it out: left out it is personal, the easiest of the four, and most suites have "
+            "room for only one mailbox.",
+        },
     }
 
 
@@ -288,8 +300,7 @@ def accept_scenario(
     return _ok(
         f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
         "is ready for it, the reference solution passes its checks, and those checks fail when "
-        f"nothing is done.{unproved}\n{len(kept)} so far: "
-        + ", ".join(one.name for one in kept)
+        f"nothing is done.{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 
@@ -541,203 +552,177 @@ def scenario_tools(
         "  3. not vacuous — the same checks run again with nothing done at all, and must fail.\n\n"
         "A scenario that clears all three is written out as its own folder of runnable files.",
         schema(
-            _offered(
-                {
-                    "name": {
-                        "type": "string",
-                        "description": "Short identifier, lower case with hyphens or underscores. "
-                        "It becomes this scenario's folder name.",
+            {
+                "name": {
+                    "type": "string",
+                    "description": "Short identifier, lower case with hyphens or underscores. "
+                    "It becomes this scenario's folder name.",
+                },
+                "use_case": {
+                    "type": "string",
+                    "description": "Which of the agent's use cases this belongs to.",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "The condition that makes this scenario different from the "
+                    "others in the same use case, in one line: what is true here that is not "
+                    "true of its siblings.",
+                },
+                "tests": {
+                    "type": "string",
+                    "description": "One line: what this scenario is trying to find out.",
+                },
+                "background_noise": {
+                    "type": "string",
+                    "description": "Where the caller is phoning from: street, transit, vehicle, "
+                    "outdoors, retail, office or home. Name it whenever the instruction implies "
+                    "somewhere, a caller leaving a hotel or standing on a street is not in a "
+                    "quiet room. Left out, it is decided from the scenario name.",
+                },
+                "call_direction": {
+                    "type": "string",
+                    "enum": list(CALL_DIRECTIONS),
+                    "description": "Who placed the call. Match the contract unless this scenario "
+                    "deliberately tests the other one. Outbound changes what the instruction has "
+                    "to be: a person who did not dial has no objective to pursue.",
+                },
+                "caller_awareness": {
+                    "type": "string",
+                    "enum": list(CALLER_AWARENESS),
+                    "description": "Outbound only, and the thing the scenario is really varying: "
+                    "whether this person was told to expect the call, half remembers arranging "
+                    "something, or has no idea why anyone is ringing. Left out it is unaware, "
+                    "which the agent has to work hardest for.",
+                },
+                **_mailbox_fields(),
+                "instruction": {
+                    "type": "string",
+                    "description": "What this person is trying to achieve, written to them. "
+                    "State the objective first, in their own terms, so they pursue it rather "
+                    "than narrate a situation: 'Get the cancellation fee refunded', not 'You "
+                    "were charged a fee'. On an OUTBOUND scenario invert that: they did not "
+                    "call anyone and have no objective, so give them their situation and what "
+                    "they would agree to if asked, never an opening request. Then give them "
+                    "everything they need to hold the "
+                    "conversation without inventing anything: the facts they know, the values "
+                    "they can be asked for, and what they will only say once asked. Every value "
+                    "real and read out of the world.\n"
+                    "Write only what this person knows before the call starts. Never write what "
+                    "the agent will do, in any phrasing: not what it will send, offer, ask for, "
+                    "disclose or decide, and no closing line about what counts as done. Those "
+                    "are the behaviours under test, and a person primed to expect them plays "
+                    "along whether or not they happen, so the check passes on a conversation "
+                    "that never earned it. Give them the value, the preference or the problem "
+                    "they arrived with, and let the agent's handling of it be what is measured.\n"
+                    "Test every sentence by asking whether this person could say it out loud. "
+                    "They have never seen the agent's design, so a parenthetical explaining "
+                    "where the agent should find a value fails that test just as much as a "
+                    "sentence predicting what it will say. Worst of all is agreeing in advance "
+                    "to something the agent has not done yet: that hands over a pass the "
+                    "conversation never earned.",
+                },
+                "persona": {
+                    "type": "object",
+                    "description": "Who the simulated person is, separate from the task. Use "
+                    "the established voice-scenario shape and only grounded, test-relevant "
+                    "details. This fills the simulator prompt's persona slot."
+                    + persona_vocabulary_note(),
+                    "properties": {
+                        "name": {"type": "string"},
+                        "gender": persona_field("gender"),
+                        "age_group": persona_field("age_group"),
+                        "occupation": persona_field("occupation"),
+                        "location": persona_field("location"),
+                        "personality": persona_field("personality"),
+                        "communication_style": persona_field("communication_style"),
+                        "initial_message": {
+                            "type": "string",
+                            "description": "The caller's natural opening request, specific to "
+                            "this scenario. Do not use a generic greeting.",
+                        },
+                        "keywords": {"type": "array", "items": {"type": "string"}},
+                        "languages": {
+                            "type": "array",
+                            "items": persona_field("languages"),
+                        },
+                        "accent": persona_field("accent"),
+                        "multilingual": {"type": "boolean"},
+                        "metadata": {"type": "object"},
                     },
-                    "use_case": {
-                        "type": "string",
-                        "description": "Which of the agent's use cases this belongs to.",
-                    },
-                    "branch": {
-                        "type": "string",
-                        "description": "The condition that makes this scenario different from the "
-                        "others in the same use case, in one line: what is true here that is not "
-                        "true of its siblings.",
-                    },
-                    "tests": {
-                        "type": "string",
-                        "description": "One line: what this scenario is trying to find out.",
-                    },
-                    "background_noise": {
-                        "type": "string",
-                        "description": "Where the caller is phoning from: street, transit, vehicle, "
-                        "outdoors, retail, office or home. Name it whenever the instruction implies "
-                        "somewhere, a caller leaving a hotel or standing on a street is not in a "
-                        "quiet room. Left out, it is decided from the scenario name.",
-                    },
-                    "call_direction": {
-                        "type": "string",
-                        "enum": list(CALL_DIRECTIONS),
-                        "description": "Who placed the call. Match the contract unless this scenario "
-                        "deliberately tests the other one. Outbound changes what the instruction has "
-                        "to be: a person who did not dial has no objective to pursue.",
-                    },
-                    "caller_awareness": {
-                        "type": "string",
-                        "enum": list(CALLER_AWARENESS),
-                        "description": "Outbound only, and the thing the scenario is really varying: "
-                        "whether this person was told to expect the call, half remembers arranging "
-                        "something, or has no idea why anyone is ringing. Left out it is unaware, "
-                        "which the agent has to work hardest for.",
-                    },
-                    "answered_by": {
-                        "type": "string",
-                        "enum": list(ANSWERED_BY),
-                        "description": "Who picked up, and only for a scenario that states "
-                        "call_direction outbound. Leave it out for the ordinary case where a person "
-                        "answers. 'voicemail' replaces the person with a mailbox that plays its "
-                        "greeting once and then says nothing whatever the agent asks, which tests "
-                        "whether the agent notices it is talking to a machine, leaves a message that "
-                        "stands on its own, and stops. A mailbox can supply nothing, so such a "
-                        "scenario never asks the agent to collect a value or reach agreement.",
-                    },
-                    "voicemail_style": {
-                        "type": "string",
-                        "enum": list(VOICEMAIL_STYLES),
-                        "description": "Which kind of mailbox answered, where one did. 'personal' is "
-                        "the person's own recorded greeting and carries their name. 'carrier' is the "
-                        "network default, which names nobody. 'operator' is a long formal announcement, "
-                        "which is the one a careless agent starts talking over. 'full' cannot record at "
-                        "all, so the right behaviour is to give up and try later rather than leave a "
-                        "message into nothing, and it is the only style with no tone. State one "
-                        "rather than leaving it out: left out it is personal, which is the easiest "
-                        "of the four, and most suites have room for only one mailbox, so a default "
-                        "means the other three are never tested. Only read where answered_by is "
-                        "voicemail.",
-                    },
-                    "instruction": {
-                        "type": "string",
-                        "description": "What this person is trying to achieve, written to them. "
-                        "State the objective first, in their own terms, so they pursue it rather "
-                        "than narrate a situation: 'Get the cancellation fee refunded', not 'You "
-                        "were charged a fee'. On an OUTBOUND scenario invert that: they did not "
-                        "call anyone and have no objective, so give them their situation and what "
-                        "they would agree to if asked, never an opening request. Then give them "
-                        "everything they need to hold the "
-                        "conversation without inventing anything: the facts they know, the values "
-                        "they can be asked for, and what they will only say once asked. Every value "
-                        "real and read out of the world.\n"
-                        "Write only what this person knows before the call starts. Never write what "
-                        "the agent will do, in any phrasing: not what it will send, offer, ask for, "
-                        "disclose or decide, and no closing line about what counts as done. Those "
-                        "are the behaviours under test, and a person primed to expect them plays "
-                        "along whether or not they happen, so the check passes on a conversation "
-                        "that never earned it. Give them the value, the preference or the problem "
-                        "they arrived with, and let the agent's handling of it be what is measured.\n"
-                        "Test every sentence by asking whether this person could say it out loud. "
-                        "They have never seen the agent's design, so a parenthetical explaining "
-                        "where the agent should find a value fails that test just as much as a "
-                        "sentence predicting what it will say. Worst of all is agreeing in advance "
-                        "to something the agent has not done yet: that hands over a pass the "
-                        "conversation never earned.",
-                    },
-                    "persona": {
+                    "required": [
+                        "name",
+                        "personality",
+                        "communication_style",
+                        "initial_message",
+                        "languages",
+                        "accent",
+                        "keywords",
+                    ],
+                },
+                "variables": {
+                    "type": "object",
+                    "description": "Any other slot the simulator prompt asks for, by name. Do "
+                    "not put persona here; use the structured persona field.",
+                },
+                "fixture": {
+                    "type": "object",
+                    "description": "Readable manifest of the concrete data behind this test. "
+                    "Include origin (seed/generated/mixed) and the identity, credentials, "
+                    "location, account state or other facts the instruction/setup depends on. "
+                    "Never put hidden pass/fail checks here.",
+                },
+                "setup_code": {
+                    "type": "string",
+                    "description": "Python defining setup(world): the changes this scenario "
+                    "makes to the environment before the run. Leave empty to run on the base "
+                    "world unchanged. Use world.call(tool, args) to act through the agent's own "
+                    "tools, or world.put, world.change and world.drop for what no tool can produce. This is code and not a list of "
+                    "rows because a scenario may need more than a table changed.",
+                },
+                "ready_code": {
+                    "type": "string",
+                    "description": "Python defining ready(world): return None when the world "
+                    "holds what this scenario presumes, or a sentence naming what is missing. "
+                    "This is the precondition. If the scenario is about the last five items, "
+                    "check there are five. A scenario whose world was never right tests us, not "
+                    "the agent.",
+                },
+                "solution": {
+                    "type": "array",
+                    "description": "What a correct agent would do: the reference trajectory. "
+                    "Never run against the agent under test; it exists to prove the scenario "
+                    "can be passed at all.",
+                    "items": {
                         "type": "object",
-                        "description": "Who the simulated person is, separate from the task. Use "
-                        "the established voice-scenario shape and only grounded, test-relevant "
-                        "details. This fills the simulator prompt's persona slot."
-                        + persona_vocabulary_note(),
                         "properties": {
-                            "name": {"type": "string"},
-                            "gender": persona_field("gender"),
-                            "age_group": persona_field("age_group"),
-                            "occupation": persona_field("occupation"),
-                            "location": persona_field("location"),
-                            "personality": persona_field("personality"),
-                            "communication_style": persona_field("communication_style"),
-                            "initial_message": {
-                                "type": "string",
-                                "description": "The caller's natural opening request, specific to "
-                                "this scenario. Do not use a generic greeting.",
+                            "tool": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "description": "Exactly the model-facing arguments defined by "
+                                "the agent's tool schema. Never include hidden session state.",
                             },
-                            "keywords": {"type": "array", "items": {"type": "string"}},
-                            "languages": {
-                                "type": "array",
-                                "items": persona_field("languages"),
+                            "environment_arguments": {
+                                "type": "object",
+                                "description": "Only for a source-provisioned tool whose raw "
+                                "dependency needs fields the worker injects: the complete raw "
+                                "dependency payload used to prove the real state effect. This "
+                                "is never shown to or credited to the agent. Omit for local "
+                                "tools and when the two payloads are identical. A value like "
+                                "`$call.book_ride.booking_ref` resolves that field from the "
+                                "most recent successful earlier reference call.",
                             },
-                            "accent": persona_field("accent"),
-                            "multilingual": {"type": "boolean"},
-                            "metadata": {"type": "object"},
                         },
-                        "required": [
-                            "name",
-                            "personality",
-                            "communication_style",
-                            "initial_message",
-                            "languages",
-                            "accent",
-                            "keywords",
-                        ],
+                        "required": ["tool", "arguments"],
                     },
-                    "variables": {
-                        "type": "object",
-                        "description": "Any other slot the simulator prompt asks for, by name. Do "
-                        "not put persona here; use the structured persona field.",
-                    },
-                    "fixture": {
-                        "type": "object",
-                        "description": "Readable manifest of the concrete data behind this test. "
-                        "Include origin (seed/generated/mixed) and the identity, credentials, "
-                        "location, account state or other facts the instruction/setup depends on. "
-                        "Never put hidden pass/fail checks here.",
-                    },
-                    "setup_code": {
-                        "type": "string",
-                        "description": "Python defining setup(world): the changes this scenario "
-                        "makes to the environment before the run. Leave empty to run on the base "
-                        "world unchanged. Use world.call(tool, args) to act through the agent's own "
-                        "tools, or world.put, world.change and world.drop for what no tool can produce. This is code and not a list of "
-                        "rows because a scenario may need more than a table changed.",
-                    },
-                    "ready_code": {
-                        "type": "string",
-                        "description": "Python defining ready(world): return None when the world "
-                        "holds what this scenario presumes, or a sentence naming what is missing. "
-                        "This is the precondition. If the scenario is about the last five items, "
-                        "check there are five. A scenario whose world was never right tests us, not "
-                        "the agent.",
-                    },
-                    "solution": {
-                        "type": "array",
-                        "description": "What a correct agent would do: the reference trajectory. "
-                        "Never run against the agent under test; it exists to prove the scenario "
-                        "can be passed at all.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "tool": {"type": "string"},
-                                "arguments": {
-                                    "type": "object",
-                                    "description": "Exactly the model-facing arguments defined by "
-                                    "the agent's tool schema. Never include hidden session state.",
-                                },
-                                "environment_arguments": {
-                                    "type": "object",
-                                    "description": "Only for a source-provisioned tool whose raw "
-                                    "dependency needs fields the worker injects: the complete raw "
-                                    "dependency payload used to prove the real state effect. This "
-                                    "is never shown to or credited to the agent. Omit for local "
-                                    "tools and when the two payloads are identical. A value like "
-                                    "`$call.book_ride.booking_ref` resolves that field from the "
-                                    "most recent successful earlier reference call.",
-                                },
-                            },
-                            "required": ["tool", "arguments"],
-                        },
-                    },
-                    "sub_goals": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Names from the shared catalogue that must hold. Use the "
-                        "existing names wherever one fits, so results add up across the suite.",
-                    },
-                    "max_turns": {"type": "integer"},
-                }
-            ),
+                },
+                "sub_goals": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Names from the shared catalogue that must hold. Use the "
+                    "existing names wherever one fits, so results add up across the suite.",
+                },
+                "max_turns": {"type": "integer"},
+            },
             scenario_required,
         ),
     )

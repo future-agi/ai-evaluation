@@ -121,11 +121,9 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # once it is committed to the session history, and measured agent turn latency on a real run was
 # 4292ms and 3947ms, so anything near five seconds would talk over the agent's greeting.
 _OPEN_INSTEAD_AFTER_SECONDS = 8.0
-# The tone a mailbox plays when it starts recording, per kind of mailbox: frequency in hertz and
-# length in seconds. A mailbox that is FULL has no entry on purpose, because it never invites a
-# message, and an agent that hears a tone there would be told to speak into something that cannot
-# record. Personal mailboxes beep high and short, network defaults higher and shorter, and the
-# formal operator systems use a longer low tone, which is the one a careless agent talks over.
+# Frequency in hertz and length in seconds, per kind of mailbox. FULL has no entry on purpose: it
+# never invites a message, so a tone there would tell the agent to speak into something that cannot
+# record.
 _VOICEMAIL_TONE_BY_STYLE: dict[str, tuple[float, float]] = {
     "personal": (1000.0, 0.40),
     "carrier": (1400.0, 0.33),
@@ -135,17 +133,11 @@ _DEFAULT_VOICEMAIL_STYLE = "personal"
 # Loud enough to be unmistakable against speech that reaches 15000 to 23000 of 32768, since a tone
 # nobody can hear is the defect this fixes rather than a fix for it.
 _VOICEMAIL_TONE_VOLUME = 0.8
-# The least a mailbox call can be and still be gradeable: the greeting, and whatever the agent said
-# into it. A conversation's floor is eight alternating messages, which a mailbox cannot reach however
-# well the agent behaves, because it plays one greeting and then records. Holding a mailbox to the
-# conversation floor reported every correct voicemail call as an infrastructure failure, retried it,
-# and errored the scenario. Whether the agent should have left a message is for the graders.
+# A mailbox plays one greeting and then records, so the eight-message conversation floor is
+# unreachable however well the agent behaves, and holding it there errored every voicemail call.
 _VOICEMAIL_MIN_TURN_MESSAGES = 1
-# How long a mailbox records before it stops and cuts the line, measured from the end of the tone or
-# of the greeting where there is none. Real systems bound the recording, and without a bound the call
-# ran until the silence watchdog fired: on a measured carrier call the agent left its message and
-# then talked into a machine for another minute and a half. Long enough for an agent that pauses to
-# think and then leaves a full message, and shorter than any watchdog.
+# How long a mailbox records before cutting the line, from the end of the tone or greeting. Without
+# a bound a measured call had the agent talking into a machine for a further minute and a half.
 _VOICEMAIL_RECORD_SECONDS = 40.0
 # Resamplers into the mixer's rate, one per source rate, kept because ``ratecv`` is stateful.
 _MIXER_RESAMPLERS: dict[tuple[int, int], PCMResampler] = {}
@@ -154,11 +146,8 @@ _VOICEMAIL_TONE_GAP_SECONDS = 0.7
 # How long to wait for the mailbox to say anything before giving up on the tone. Bounded so a
 # mailbox that never speaks cannot leave this task pending for the length of the call.
 _VOICEMAIL_TONE_WAIT_SECONDS = 40.0
-# The rate the background player's mixer runs at. Frames handed to ``play`` are read at this rate
-# whatever rate they declare, because the mixer reinterprets the samples rather than resampling
-# them, so anything published through it has to be produced at this rate or it plays at the wrong
-# pitch and the wrong length. Measured: a 1000Hz tone built at 24000 came out of a real room at
-# 2000Hz and half its length.
+# The mixer reinterprets frames at this rate rather than resampling them, so anything published
+# through it must be produced here. Measured: a 1000Hz tone built at 24000 came out at 2000Hz.
 _BACKGROUND_MIXER_RATE = 48000
 # Each web case drives a full voice pipeline (STT/LLM/TTS + LiveKit conns) in one
 # child; too many starve the pod's CPU. This is an OPS CEILING on the
@@ -428,10 +417,8 @@ class _TestRunnerAgent(Agent):
         preferable to a dropped one.
         """
         source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
-        # A mailbox needs this method to run whatever else the scenario asked for: for its tone, and
-        # for the timer that stops it recording. A FULL mailbox has no tone, so leaving on the first
-        # two conditions returned before the timer existed, and a measured full-mailbox call ran 90
-        # seconds with the agent asking "Is anyone there?" until the watchdog ended it.
+        # A mailbox needs this method for its tone and its recording timer. FULL has no tone, so
+        # returning early on the first two conditions left it running 90 seconds to the watchdog.
         tone_style = _voicemail_tone_style()
         if _answered_by_voicemail() and source:
             # Nothing stands behind a mailbox. It is a recording played back by a switch, so there
@@ -475,11 +462,9 @@ class _TestRunnerAgent(Agent):
         except Exception:
             logger.warning("background audio not started", exc_info=True)
             return
-        # A recorded mailbox greeting, where the catalogue offered one. Spoken as the mailbox's own
-        # turn rather than mixed underneath: ``say`` publishes the clip on the caller's own track and
-        # commits its words to history, so the transcript shows what the agent actually heard. Played
-        # through the player instead, the greeting was audible and invisible, and a call where only
-        # the agent ever spoke was classified as no conversation at all.
+        # Spoken as the mailbox's own turn rather than mixed underneath, so the transcript shows
+        # what the agent heard. Played underneath, a call only the agent spoke on read as no
+        # conversation at all.
         recorded = os.environ.get("HARNESS_VOICEMAIL_CLIP", "").strip()
         if recorded.startswith(("http://", "https://")):
             # Catalogue clips are meant to be served from object storage rather than shipped in the
@@ -496,10 +481,8 @@ class _TestRunnerAgent(Agent):
             except Exception:
                 logger.warning("recorded mailbox greeting not played", exc_info=True)
         elif recorded:
-            # No words for it, so it cannot be a turn: inventing a line would put words in the
-            # transcript that the audio never says, and an eval would then judge those words. Heard
-            # but not transcribed is the lesser wrong, and it is what a catalogue missing a
-            # transcript deserves rather than a fabricated one.
+            # No words for it, so it cannot be a turn: an invented line would put words in the
+            # transcript that the audio never says, and an eval would judge those words.
             logger.warning("mailbox clip has no transcript; playing it without a turn")
             try:
                 player.play(AudioConfig(recorded, volume=1.0))

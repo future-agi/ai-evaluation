@@ -1015,13 +1015,9 @@ class CallRunnerImpl:
                 self._environ["HARNESS_CALLER_AWARENESS"] = awareness
             else:
                 self._environ.pop("HARNESS_CALLER_AWARENESS", None)
-            # A mailbox rather than a person answering. Only meaningful outbound, and cleared
-            # otherwise like the two above, so one voicemail scenario cannot silence the next
-            # caller.
-            #
-            # The switch is read here as well as at authoring, because a suite written when
-            # mailboxes were allowed can be replayed on a run that has turned them off, and a
-            # scenario on disk would otherwise still silence its call.
+            # Cleared otherwise, so one voicemail scenario cannot silence the next caller. The
+            # switch is read here too: a suite written when mailboxes were allowed can be replayed
+            # on a run that has turned them off.
             if (
                 voicemail_enabled()
                 and str(doc.get("answered_by") or "").strip().lower() == "voicemail"
@@ -1033,11 +1029,8 @@ class CallRunnerImpl:
                     self._environ["HARNESS_VOICEMAIL_STYLE"] = style
                 else:
                     self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
-                # A recorded greeting, where the catalogue offers one for this style. It replaces
-                # the spoken greeting rather than joining it, and a clip that already ends with its
-                # own tone must not be given a second one.
-                # A recording is only usable where it speaks the scenario's language, so the
-                # language decides as much as the style does.
+                # A recorded greeting where the catalogue has one for this style AND language. It
+                # replaces the spoken greeting rather than joining it.
                 languages = doc.get("languages") or []
                 chosen = clip_for(
                     style or DEFAULT_VOICEMAIL_STYLE,
