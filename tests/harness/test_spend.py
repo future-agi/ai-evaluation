@@ -124,3 +124,18 @@ def test_a_price_that_has_run_out_refuses_instead_of_billing_it(monkeypatch):
     monkeypatch.setattr(vertex_gemini, "date", _After)
     assert vertex_gemini.priced("gemini-3.7-flash", 1_000_000, 1_000_000) is None
     assert vertex_gemini.priced("a-model-nobody-listed", 1_000, 1_000) is None
+
+
+def test_both_backends_report_the_same_units():
+    """One backend giving auditable tokens and the other not is a ledger you cannot reconcile."""
+    from fi.alk.harness.backends.claude import _tokens
+
+    assert _tokens({"m": {"inputTokens": 900, "outputTokens": 120}}) == {
+        "tokens_in": 900,
+        "tokens_out": 120,
+    }
+    assert _tokens(
+        {"a": {"input_tokens": 5, "output_tokens": 6}, "b": {"input_tokens": 7, "output_tokens": 8}}
+    ) == {"tokens_in": 12, "tokens_out": 14}
+    assert _tokens(None) == {"tokens_in": 0, "tokens_out": 0}
+    assert _tokens({"m": object()}) == {"tokens_in": 0, "tokens_out": 0}
