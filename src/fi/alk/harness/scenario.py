@@ -42,9 +42,7 @@ LEAST_AWARE = "unaware"
 ANSWERED_BY = ("person", "voicemail")
 VOICEMAIL = "voicemail"
 
-# Which kind of mailbox answered. The style settles two things and nothing else: what the greeting
-# says, and whether a tone follows it. Empty means a person's own greeting, which is the ordinary
-# case and the one that carries the persona's name.
+# Which kind of mailbox answered: what the greeting says, and whether a tone follows it.
 VOICEMAIL_STYLES = ("personal", "carrier", "operator", "full")
 DEFAULT_VOICEMAIL_STYLE = "personal"
 
@@ -282,10 +280,7 @@ class Scenario(BaseModel):
     # "expecting", "partial" or "unaware". Unset means unaware, the case the agent must work
     # hardest for.
     caller_awareness: str = ""
-    # Who answered. Empty or "person" is somebody picking up; "voicemail" is a mailbox answering,
-    # which tests whether the agent notices it is talking to a machine and leaves a usable message
-    # rather than running its interactive script at a recording. Outbound only: a mailbox cannot
-    # answer a call the person placed themselves.
+    # Who answered. Outbound only: a mailbox cannot answer a call the person placed themselves.
     answered_by: str = ""
     # Which kind of mailbox answered. Only read where answered_by is "voicemail"; empty is personal.
     voicemail_style: str = ""
@@ -1003,9 +998,7 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
                 f"no outbound scenario has caller_awareness {LEAST_AWARE!r}, the one that tests whether "
                 "the agent says who it is and why it called before asking for anything"
             )
-    # A mailbox tests one narrow thing: that the agent notices nobody is listening. It is worth a
-    # few scenarios and never a theme, because a suite of mailboxes learns nothing about the agent
-    # talking to people.
+    # A mailbox tests one narrow thing, so it is worth a few scenarios and never a theme.
     mailboxes = [one for one in scenarios if one.answered_by == VOICEMAIL]
     allowed = rare_event_ceiling(len(scenarios))
     if len(mailboxes) > allowed:
@@ -1027,9 +1020,7 @@ def suite_diversity_problems(scenarios: list[Scenario]) -> list[str]:
                 "named personal mailbox, a carrier mailbox with no name, a full mailbox and a long "
                 "greeting are four different tests of the agent"
             )
-        # The style is the stronger axis, because it also decides whether a tone follows the
-        # greeting, and a suite of one style never tests the agent against a mailbox it cannot
-        # leave a message on.
+        # Style is the stronger axis: it also decides whether a tone follows the greeting.
         styles = {
             str(one.voicemail_style or DEFAULT_VOICEMAIL_STYLE).strip().lower()
             for one in mailboxes

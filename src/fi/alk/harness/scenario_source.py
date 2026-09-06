@@ -489,9 +489,7 @@ def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
         if isinstance(chosen, list)
         else []
     )
-    # The modality decides how the platform binds every eval's inputs: a spoken conversation is the
-    # recording, a written one is the transcript. Provisioning defaults to text when nobody says, so
-    # a voice run that stays quiet here has its evals judge a transcript instead of the call.
+    # Provisioning defaults to text, which would bind a voice run's evals to the transcript.
     modality = str(body.get("modality") or "").strip().lower()
     return (
         names,

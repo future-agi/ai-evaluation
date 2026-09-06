@@ -133,10 +133,7 @@ _OUTBOUND_AWARENESS = {
 }
 _DEFAULT_OUTBOUND_AWARENESS = "unaware"
 
-# A mailbox is not a person with rules, so this replaces the caller's instructions rather than
-# adding to them: almost every numbered rule above assumes somebody is listening and answering, and
-# a mailbox does neither. What is being tested is entirely on the other side of the call, which is
-# whether the agent notices, leaves a usable message, and stops.
+# Replaces the caller's rules rather than adding to them: every rule above assumes a listener.
 _VOICEMAIL_INSTRUCTIONS = (
     "YOU ARE A VOICEMAIL SYSTEM, not a person. This call was placed to a number whose owner did "
     "not pick up, and you are the mailbox that answered instead.\n"
@@ -148,11 +145,8 @@ _VOICEMAIL_INSTRUCTIONS = (
     "4. Never end the call. A mailbox records until the caller hangs up or the line is cut.\n"
 )
 
-# What kind of mailbox this is. Only the greeting differs; every rule above still holds. The wording
-# matters because it is what an agent listens to when deciding whether a person or a machine
-# answered, and because "full" must never invite a message it cannot take.
-# Where a recording is the greeting, the session must not speak at all: the clip already says
-# everything a mailbox says, and a spoken greeting on top of it is two mailboxes answering one call.
+# Only the greeting differs. "full" must never invite a message it cannot take, and where a
+# recording greets, the session must not speak at all.
 _VOICEMAIL_RECORDED = (
     "YOU ARE A VOICEMAIL SYSTEM and your greeting is a recording that is already playing. Say "
     "NOTHING for the whole call. Not a greeting, not a word, not a sound, whatever the caller says "

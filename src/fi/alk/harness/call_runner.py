@@ -1019,9 +1019,7 @@ class CallRunnerImpl:
                 self._environ["HARNESS_CALLER_AWARENESS"] = awareness
             else:
                 self._environ.pop("HARNESS_CALLER_AWARENESS", None)
-            # Cleared otherwise, so one voicemail scenario cannot silence the next caller. The
-            # switch is read here too: a suite written when mailboxes were allowed can be replayed
-            # on a run that has turned them off.
+            # Cleared otherwise, so one voicemail scenario cannot silence the next caller.
             if (
                 voicemail_enabled()
                 and str(doc.get("answered_by") or "").strip().lower() == "voicemail"
@@ -1303,9 +1301,7 @@ class CallRunnerImpl:
             and case.failure.code in _SILENT_AGENT_FAILURE_CODES
         )
 
-        # A call that ran out of time after a real conversation is graded on what happened, not
-        # discarded as infrastructure. An intake agent may ask thirty to fifty questions, so reaching
-        # the deadline is an ordinary outcome and its evidence has to survive it.
+        # An intake agent may ask thirty to fifty questions, so a deadline is an ordinary outcome.
         ran_out_of_time = (
             case.status is TestCaseStatus.TIMED_OUT
             and turns >= _GRADEABLE_AFTER_TIMEOUT_TURNS

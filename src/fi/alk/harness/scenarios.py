@@ -90,9 +90,7 @@ def open_stage(
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
-            # `voicemail` gates the mailbox skill the same way `modality` gates this one, so a
-            # run with mailboxes turned off is never told they exist rather than being told and
-            # then refused.
+            # `voicemail` gates the mailbox skill the way `modality` gates this one.
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",
@@ -562,9 +560,7 @@ async def _write_slice(
             # Whatever this kind of agent adds on top. A file under skills/kinds/ that
             # declares `applies_to: modality=<kind>` is appended here, so supporting a
             # new kind of agent is adding that file and nothing else.
-            # `voicemail` gates the mailbox skill the same way `modality` gates this one, so a
-            # run with mailboxes turned off is never told they exist rather than being told and
-            # then refused.
+            # `voicemail` gates the mailbox skill the way `modality` gates this one.
             + discovered_skills(
                 modality=contract.modality,
                 voicemail="on" if voicemail_enabled() else "off",

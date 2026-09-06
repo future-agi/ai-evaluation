@@ -116,14 +116,9 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # says nothing the call is silence until a deadline discards it, and nothing was learned about
 # either side. Kept well under the timeout above, which is what abandons a call nobody started.
 #
-# Eight seconds, not twenty five: a person hearing nothing says "hello" long before twenty five, and
-# eight is the smallest bound that cannot pre-empt a slow first turn. The watchdog only sees a turn
-# once it is committed to the session history, and measured agent turn latency on a real run was
-# 4292ms and 3947ms, so anything near five seconds would talk over the agent's greeting.
+# Eight seconds: the smallest bound that cannot pre-empt a slow first turn.
 _OPEN_INSTEAD_AFTER_SECONDS = 8.0
-# Frequency in hertz and length in seconds, per kind of mailbox. FULL has no entry on purpose: it
-# never invites a message, so a tone there would tell the agent to speak into something that cannot
-# record.
+# Frequency and length per kind of mailbox. FULL has no entry: it invites no message.
 _VOICEMAIL_TONE_BY_STYLE: dict[str, tuple[float, float]] = {
     "personal": (1000.0, 0.40),
     "carrier": (1400.0, 0.33),
@@ -424,9 +419,7 @@ class _TestRunnerAgent(Agent):
         # returning early on the first two conditions left it running 90 seconds to the watchdog.
         tone_style = _voicemail_tone_style()
         if _answered_by_voicemail() and source:
-            # Nothing stands behind a mailbox. It is a recording played back by a switch, so there
-            # is no room to overhear, and a room behind a recording would tell the agent it is
-            # talking to a person when the whole point is that it is not.
+            # Nothing stands behind a recording, and a room behind one gives the game away.
             logger.info("mailbox answered, so ambience is dropped (noise %r)", source)
             source = ""
         if not source and not tone_style and not _answered_by_voicemail():
@@ -465,9 +458,7 @@ class _TestRunnerAgent(Agent):
         except Exception:
             logger.warning("background audio not started", exc_info=True)
             return
-        # Spoken as the mailbox's own turn rather than mixed underneath, so the transcript shows
-        # what the agent heard. Played underneath, a call only the agent spoke on read as no
-        # conversation at all.
+        # Spoken as its own turn, so the transcript shows what the agent heard.
         recorded = os.environ.get("HARNESS_VOICEMAIL_CLIP", "").strip()
         if recorded.startswith(("http://", "https://")):
             # Catalogue clips are meant to be served from object storage rather than shipped in the
@@ -1685,9 +1676,7 @@ class LiveKitEngine(BaseEngine):
 
             opener: asyncio.Task[None] | None = None
             if conversation_direction == "simulator_first" or _answered_by_voicemail():
-                # A mailbox answers the instant the line opens and then says nothing, so it speaks
-                # first and needs no watchdog: the watchdog exists to break a mutual silence, and a
-                # mailbox is never waiting to be addressed.
+                # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
             else:
                 # The agent placed this call and should speak first. If it does not, the person
@@ -3170,9 +3159,7 @@ def _conversation_outcome(
         "monitor_failed",
     }
     if _answered_by_voicemail():
-        # Silence after a mailbox has played its greeting is the call's natural end, not a stall:
-        # nothing is ever going to answer. The other three still fail, because a session that closed
-        # or a mailbox that never played is a fault whoever answered.
+        # Silence after a mailbox greeting is the call's natural end, not a stall.
         stalled.discard("conversation_silence_timeout")
     if stop_reason in stalled:
         code = stop_reason

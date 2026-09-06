@@ -164,10 +164,7 @@ def _without_nulls(value: Any) -> Any:
     return value
 
 
-# How many platform evals one run may choose. Each one is an LLM judge per call, so six across a
-# two-hundred-scenario suite is already about twelve hundred judge calls; the conduct dimensions a
-# transcript can actually settle number about ten and overlap heavily, so a cap this size costs
-# little coverage and forces the choice to be made rather than taken wholesale.
+# Each selected eval is one judge call per call in the suite.
 MOST_CHOSEN_EVALS = 6
 
 
@@ -179,9 +176,7 @@ def contract_tools(
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
     """
-    # Name -> the modality it applies to, empty or "any" meaning it applies to all of them. The
-    # platform refuses a cross-modality choice, so it is refused here too, where the model can still
-    # fix it for free.
+    # Name to modality, empty or "any" for all. Refused here too, where it is still free to fix.
     offered_modality = {
         str(one.get("name") or "").strip(): str(one.get("modality") or "").strip().lower()
         for one in (available_evals or [])
@@ -773,9 +768,7 @@ def contract_tools(
                 ]
             )
 
-        # Eval names, checked against what the platform actually offered. A name that is not in the
-        # catalogue is refused rather than dropped: dropping it silently means the run is judged by
-        # fewer evals than the contract claims, and nothing downstream can tell.
+        # Refused rather than dropped: dropping leaves the run judged by fewer evals than claimed.
         asked_evals = payload.get("chosen_evals")
         if isinstance(asked_evals, str):
             asked_evals = [asked_evals]

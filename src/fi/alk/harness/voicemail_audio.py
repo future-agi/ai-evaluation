@@ -76,9 +76,7 @@ def clip_for(style: str, language: str = "") -> dict[str, Any] | None:
             # A clip that ends with its own tone must not be given a second one.
             "has_tone": bool(entry.get("has_tone")),
             "id": str(entry.get("id") or ""),
-            # What the clip says. The greeting has to reach the transcript as the mailbox's turn or
-            # the call reads as the agent talking to nobody, and the evals that judge how it handled
-            # a mailbox have nothing to read.
+            # The greeting must reach the transcript, or the call reads as the agent talking to nobody.
             "transcript": str(entry.get("transcript") or "").strip(),
         }
     return None
