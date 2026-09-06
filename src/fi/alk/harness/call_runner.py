@@ -141,6 +141,10 @@ _TOOL_TRACE_TABLE = "_alk_tool_trace"
 
 _RESULT_TRUNCATE_CHARS = 2000
 
+# Turns a timed-out call needs before it is worth grading rather than aborting. Low on purpose: the
+# question is only whether a conversation happened at all.
+_GRADEABLE_AFTER_TIMEOUT_TURNS = 4
+
 # The real engine's zero-turn "agent joined but never spoke" failure codes (engines/livekit.py::
 # _conversation_outcome) -- see `_translate_report`'s `is_silent_agent` gate for why these two, and
 # only at zero turns, get mapped to a normal CallOutcome instead of a CallAborted.
@@ -1299,7 +1303,20 @@ class CallRunnerImpl:
             and case.failure.code in _SILENT_AGENT_FAILURE_CODES
         )
 
-        if case.status is not TestCaseStatus.COMPLETED and not is_silent_agent:
+        # A call that ran out of time after a real conversation is graded on what happened, not
+        # discarded as infrastructure. An intake agent may ask thirty to fifty questions, so reaching
+        # the deadline is an ordinary outcome; a measured 51-turn call lost all three of its sub-goals
+        # to `held: null` because the timeout made it an abort.
+        ran_out_of_time = (
+            case.status is TestCaseStatus.TIMED_OUT
+            and turns >= _GRADEABLE_AFTER_TIMEOUT_TURNS
+        )
+
+        if (
+            case.status is not TestCaseStatus.COMPLETED
+            and not is_silent_agent
+            and not ran_out_of_time
+        ):
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )
