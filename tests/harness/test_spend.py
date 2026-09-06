@@ -95,3 +95,32 @@ def test_a_session_reports_its_tokens_too(tmp_path):
 
     entry = json.loads(journal.read_text(encoding="utf-8"))["stages"][0]
     assert (entry["tokens_in"], entry["tokens_out"]) == (9000, 2500)
+
+
+def test_a_price_that_has_run_out_refuses_instead_of_billing_it(monkeypatch):
+    """gemini-3.7-flash is introductory pricing that doubles on 2027-01-01.
+
+    A hardcoded table cannot know that, so the table carries the last day it is good for and a
+    figure past that day is withheld: `unpriced_turns` shows a gap, which somebody notices, where a
+    stale price bills confidently and nobody does.
+    """
+    from datetime import date
+
+    from fi.alk.harness.backends import vertex_gemini
+
+    class _Before(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 12, 31)
+
+    class _After(date):
+        @classmethod
+        def today(cls):
+            return date(2027, 1, 1)
+
+    monkeypatch.setattr(vertex_gemini, "date", _Before)
+    assert vertex_gemini.priced("gemini-3.7-flash", 1_000_000, 1_000_000) == 4.5
+
+    monkeypatch.setattr(vertex_gemini, "date", _After)
+    assert vertex_gemini.priced("gemini-3.7-flash", 1_000_000, 1_000_000) is None
+    assert vertex_gemini.priced("a-model-nobody-listed", 1_000, 1_000) is None
