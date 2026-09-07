@@ -292,6 +292,8 @@ def _contract_column_declarations(
         return {}
     declarations: dict[tuple[str, str], str] = {}
     for table, raw_columns in schema.items():
+        if isinstance(raw_columns, str):
+            raw_columns = _columns_from_ddl(raw_columns)
         if not isinstance(raw_columns, dict):
             continue
         # A table may be written either as {column: declaration} or wrapped as
@@ -306,6 +308,58 @@ def _contract_column_declarations(
             if str(declaration).strip():
                 declarations[(str(table), str(column))] = str(declaration).strip()
     return declarations
+
+
+# Table-level constraints share the comma-separated list with the columns and are not columns.
+_NOT_A_COLUMN = ("primary", "unique", "foreign", "check", "constraint", "exclude", "like")
+
+
+def _columns_from_ddl(statement: str) -> dict[str, str]:
+    """Split one `CREATE TABLE` statement into per-column declarations.
+
+    A third shape the authoring model writes: the whole statement as one string per table rather
+    than a mapping. Read as nothing, it costs every type and default hint the statement carries.
+    """
+    opened = statement.find("(")
+    if opened < 0:
+        return {}
+    depth = 0
+    body: list[str] = []
+    for index in range(opened, len(statement)):
+        character = statement[index]
+        if character == "(":
+            depth += 1
+            if depth == 1:
+                continue
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        body.append(character)
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for character in body:
+        if character == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        current.append(character)
+    parts.append("".join(current))
+    columns: dict[str, str] = {}
+    for part in parts:
+        cleaned = " ".join(part.split())
+        if not cleaned:
+            continue
+        name, _, rest = cleaned.partition(" ")
+        if not rest or name.lower() in _NOT_A_COLUMN:
+            continue
+        columns[name.strip('"')] = rest
+    return columns
 
 
 def _contract_sql_type(declaration: str) -> str | None:
