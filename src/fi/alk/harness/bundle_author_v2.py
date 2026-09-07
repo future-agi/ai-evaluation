@@ -290,13 +290,22 @@ def _contract_column_declarations(
     schema = contract.get("data_schema")
     if not isinstance(schema, dict):
         return {}
-    return {
-        (str(table), str(column)): str(declaration).strip()
-        for table, raw_columns in schema.items()
-        if isinstance(raw_columns, dict)
-        for column, declaration in raw_columns.items()
-        if str(declaration).strip()
-    }
+    declarations: dict[tuple[str, str], str] = {}
+    for table, raw_columns in schema.items():
+        if not isinstance(raw_columns, dict):
+            continue
+        # A table may be written either as {column: declaration} or wrapped as
+        # {"columns": {column: declaration}}. Reading only the first shape turns the second into a
+        # single entry named "columns", so every type and default hint is dropped and the compiler
+        # falls back to SQLite affinity: BOOLEAN arrives as bigint, TIMESTAMPTZ as text, and a
+        # column the source defaults becomes NOT NULL with nothing to write.
+        wrapped = raw_columns.get("columns")
+        if isinstance(wrapped, dict):
+            raw_columns = wrapped
+        for column, declaration in raw_columns.items():
+            if str(declaration).strip():
+                declarations[(str(table), str(column))] = str(declaration).strip()
+    return declarations
 
 
 def _contract_sql_type(declaration: str) -> str | None:

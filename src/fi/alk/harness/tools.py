@@ -305,8 +305,11 @@ def contract_tools(
                 },
                 "data_schema": {
                     "type": "object",
-                    "description": "The shape of the records the agent works on: which fields "
-                    "each kind of record has.",
+                    "description": "The shape of the records the agent works on, one entry per "
+                    "table or collection. Where the source declares its columns, copy each "
+                    "declaration verbatim, keeping NOT NULL, CHECK and DEFAULT: the world's own "
+                    "schema is generated from these strings, so a dropped DEFAULT becomes a NOT "
+                    "NULL column the agent's own INSERT cannot satisfy.",
                 },
                 "base_environment": {
                     "type": "object",
