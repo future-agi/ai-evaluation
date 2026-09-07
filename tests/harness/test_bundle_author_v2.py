@@ -1207,3 +1207,34 @@ def test_a_whole_create_table_string_still_yields_declarations() -> None:
     # The table-level constraint is not a column.
     assert ("intake_sessions", "UNIQUE") not in declarations
     assert len(declarations) == 5
+
+
+def test_a_bare_column_list_still_yields_declarations() -> None:
+    """The fourth shape, taken verbatim from a real contract.
+
+    No CREATE TABLE around it, and the first parenthesis belongs to a REFERENCES clause, so
+    finding the body by the first "(" parses from the wrong place and yields almost nothing.
+    """
+    declarations = _contract_column_declarations(
+        {
+            "data_schema": {
+                "callback_requests": (
+                    "callback_id TEXT PRIMARY KEY, "
+                    "lead_id TEXT NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE, "
+                    "window_label TEXT NOT NULL DEFAULT 'no_preference', "
+                    "requested_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                )
+            }
+        }
+    )
+    assert declarations[("callback_requests", "window_label")] == (
+        "TEXT NOT NULL DEFAULT 'no_preference'"
+    )
+    assert declarations[("callback_requests", "requested_at")] == (
+        "TIMESTAMPTZ NOT NULL DEFAULT now()"
+    )
+    # The REFERENCES clause keeps its own parentheses and does not split the column.
+    assert declarations[("callback_requests", "lead_id")] == (
+        "TEXT NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE"
+    )
+    assert len(declarations) == 4

@@ -315,27 +315,33 @@ _NOT_A_COLUMN = ("primary", "unique", "foreign", "check", "constraint", "exclude
 
 
 def _columns_from_ddl(statement: str) -> dict[str, str]:
-    """Split one `CREATE TABLE` statement into per-column declarations.
+    """Split a table written as one string into per-column declarations.
 
-    A third shape the authoring model writes: the whole statement as one string per table rather
-    than a mapping. Read as nothing, it costs every type and default hint the statement carries.
+    The authoring model writes a table's columns as a string in more than one way, and reading
+    none of them costs every type and default the string carries. Two forms are handled: a whole
+    `CREATE TABLE name (...)` statement, and a bare comma-separated column list with no statement
+    around it. The bare form cannot be found by looking for the first parenthesis, because the
+    first one is usually inside a `REFERENCES other(column)` clause.
     """
-    opened = statement.find("(")
-    if opened < 0:
-        return {}
-    depth = 0
-    body: list[str] = []
-    for index in range(opened, len(statement)):
-        character = statement[index]
-        if character == "(":
-            depth += 1
-            if depth == 1:
-                continue
-        elif character == ")":
-            depth -= 1
-            if depth == 0:
-                break
-        body.append(character)
+    if re.search(r"\bCREATE\s+TABLE\b", statement, flags=re.IGNORECASE):
+        opened = statement.find("(")
+        if opened < 0:
+            return {}
+        depth = 0
+        body: list[str] = []
+        for index in range(opened, len(statement)):
+            character = statement[index]
+            if character == "(":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            body.append(character)
+    else:
+        body = list(statement)
     parts: list[str] = []
     depth = 0
     current: list[str] = []
