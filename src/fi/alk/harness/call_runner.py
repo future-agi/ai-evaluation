@@ -56,6 +56,8 @@ from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, HarnessJob, ProviderExecutionMode
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
+from .scenario import DEFAULT_VOICEMAIL_STYLE, voicemail_enabled
+from .voicemail_audio import clip_for
 from .simulator_voice import (
     CLEANUP_TIMEOUT_SECONDS,
     CONNECT_TIMEOUT_SECONDS,
@@ -96,6 +98,9 @@ BACKGROUND_NOISE_ALIAS = "ALK_BACKGROUND_NOISE"
 BACKGROUND_NOISE_CATALOG_ALIAS = "ALK_BACKGROUND_NOISE_CATALOG"
 BACKGROUND_NOISE_VOLUME_ALIAS = "HARNESS_BACKGROUND_NOISE_VOLUME"
 CALL_DIRECTION_ALIAS = "ALK_CALL_DIRECTION"
+VOICEMAIL_CLIP_ALIAS = "HARNESS_VOICEMAIL_CLIP"
+VOICEMAIL_CLIP_TONE_ALIAS = "HARNESS_VOICEMAIL_CLIP_HAS_TONE"
+VOICEMAIL_CLIP_TEXT_ALIAS = "HARNESS_VOICEMAIL_CLIP_TRANSCRIPT"
 LIVEKIT_URL_CONFIG_KEY = "livekit_url"
 CALL_TIMEOUT_CONFIG_KEY = "voice_call_timeout_seconds"
 
@@ -135,6 +140,10 @@ _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
 
 _RESULT_TRUNCATE_CHARS = 2000
+
+# Turns a timed-out call needs before it is worth grading rather than aborting. Low on purpose: the
+# question is only whether a conversation happened at all.
+_GRADEABLE_AFTER_TIMEOUT_TURNS = 4
 
 # The real engine's zero-turn "agent joined but never spoke" failure codes (engines/livekit.py::
 # _conversation_outcome) -- see `_translate_report`'s `is_silent_agent` gate for why these two, and
@@ -203,7 +212,9 @@ class _MissingVoiceConfig:
         return "voice_capability_unavailable: missing " + "; ".join(parts)
 
 
-def _resolve_connector(job: HarnessJob, target_provider_secret_values: Mapping[str, str]) -> str:
+def _resolve_connector(
+    job: HarnessJob, target_provider_secret_values: Mapping[str, str]
+) -> str:
     """Pin the job's transport connector from the credentials actually present.
 
     A fresh one-shot ships ``job.json`` with ``connector="auto"``: the platform only writes the
@@ -214,9 +225,9 @@ def _resolve_connector(job: HarnessJob, target_provider_secret_values: Mapping[s
     connector = job.agent.connector.strip().lower()
     if connector != "auto":
         return connector
-    if job.agent.config.get(LIVEKIT_URL_CONFIG_KEY) or target_provider_secret_values.get(
-        LIVEKIT_URL_ALIAS
-    ):
+    if job.agent.config.get(
+        LIVEKIT_URL_CONFIG_KEY
+    ) or target_provider_secret_values.get(LIVEKIT_URL_ALIAS):
         return "livekit"
     if target_provider_secret_values.get(VAPI_API_KEY_ALIAS):
         return "vapi"
@@ -840,7 +851,9 @@ class CallRunnerImpl:
         # process but against a per-world sandboxed agent process reached over the network; no
         # other in-process worker races this job-level environment.
         target_environ = os.environ if environ is None else environ
-        connector = _resolve_connector(context.job, context.target_provider_secret_values)
+        connector = _resolve_connector(
+            context.job, context.target_provider_secret_values
+        )
         target_aliases = [VAPI_API_KEY_ALIAS, RETELL_API_KEY_ALIAS]
         if connector == "livekit":
             target_aliases.extend(
@@ -1006,9 +1019,52 @@ class CallRunnerImpl:
                 self._environ["HARNESS_CALLER_AWARENESS"] = awareness
             else:
                 self._environ.pop("HARNESS_CALLER_AWARENESS", None)
+            # Cleared otherwise, so one voicemail scenario cannot silence the next caller.
+            if (
+                voicemail_enabled()
+                and str(doc.get("answered_by") or "").strip().lower() == "voicemail"
+            ):
+                self._environ["HARNESS_ANSWERED_BY"] = "voicemail"
+                # Which kind of mailbox, which decides the greeting and whether a tone follows it.
+                style = str(doc.get("voicemail_style") or "").strip().lower()
+                if style:
+                    self._environ["HARNESS_VOICEMAIL_STYLE"] = style
+                else:
+                    self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+                # A recorded greeting where the catalogue has one for this style AND language. It
+                # replaces the spoken greeting rather than joining it.
+                languages = doc.get("languages") or []
+                chosen = clip_for(
+                    style or DEFAULT_VOICEMAIL_STYLE,
+                    str(languages[0]) if languages else "",
+                )
+                if chosen:
+                    self._environ[VOICEMAIL_CLIP_ALIAS] = chosen["source"]
+                    self._environ[VOICEMAIL_CLIP_TONE_ALIAS] = (
+                        "1" if chosen["has_tone"] else "0"
+                    )
+                    if chosen.get("transcript"):
+                        self._environ[VOICEMAIL_CLIP_TEXT_ALIAS] = chosen["transcript"]
+                    else:
+                        self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+                else:
+                    self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+                    self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+                    self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
+            else:
+                self._environ.pop("HARNESS_ANSWERED_BY", None)
+                self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+                self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+                self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+                self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
         else:
             self._environ.pop("HARNESS_CALL_DIRECTION", None)
             self._environ.pop("HARNESS_CALLER_AWARENESS", None)
+            self._environ.pop("HARNESS_ANSWERED_BY", None)
+            self._environ.pop("HARNESS_VOICEMAIL_STYLE", None)
+            self._environ.pop(VOICEMAIL_CLIP_ALIAS, None)
+            self._environ.pop(VOICEMAIL_CLIP_TONE_ALIAS, None)
+            self._environ.pop(VOICEMAIL_CLIP_TEXT_ALIAS, None)
 
         provider_target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
             connector
@@ -1245,7 +1301,17 @@ class CallRunnerImpl:
             and case.failure.code in _SILENT_AGENT_FAILURE_CODES
         )
 
-        if case.status is not TestCaseStatus.COMPLETED and not is_silent_agent:
+        # An intake agent may ask thirty to fifty questions, so a deadline is an ordinary outcome.
+        ran_out_of_time = (
+            case.status is TestCaseStatus.TIMED_OUT
+            and turns >= _GRADEABLE_AFTER_TIMEOUT_TURNS
+        )
+
+        if (
+            case.status is not TestCaseStatus.COMPLETED
+            and not is_silent_agent
+            and not ran_out_of_time
+        ):
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )

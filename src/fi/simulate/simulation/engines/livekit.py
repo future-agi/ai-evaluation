@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import array
 import asyncio
 import json
+import math
 import logging
 import os
 import re
@@ -25,6 +27,7 @@ try:
         function_tool,
         metrics,
     )
+    from livekit.agents.utils.audio import audio_frames_from_file
     from livekit.agents.voice.background_audio import BuiltinAudioClip
     from livekit.agents.types import (
         ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
@@ -78,6 +81,7 @@ from fi.simulate.endpoints.originators import (
     finalize_originator,
 )
 from fi.simulate.simulation.bridge import LiveKitAudioBridge
+from fi.simulate.simulation.bridge.audio import PCMResampler
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
 from fi.simulate.recording.room_recorder import (
     RoomRecorder,
@@ -110,10 +114,35 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # How long the side that was meant to speak first is given before the simulated person speaks
 # instead. Both sides are voice agents waiting to be addressed, so when the one that placed the call
 # says nothing the call is silence until a deadline discards it, and nothing was learned about
-# either side. A person hearing nothing says "hello" long before this; the wait is generous because
-# a slow first turn is common and must not be pre-empted. Kept well under the timeout above, which
-# is what abandons a call nobody started.
-_OPEN_INSTEAD_AFTER_SECONDS = 25.0
+# either side. Kept well under the timeout above, which is what abandons a call nobody started.
+#
+# Eight seconds: the smallest bound that cannot pre-empt a slow first turn.
+_OPEN_INSTEAD_AFTER_SECONDS = 8.0
+# Frequency and length per kind of mailbox. FULL has no entry: it invites no message.
+_VOICEMAIL_TONE_BY_STYLE: dict[str, tuple[float, float]] = {
+    "personal": (1000.0, 0.40),
+    "carrier": (1400.0, 0.33),
+    "operator": (440.0, 0.52),
+}
+_DEFAULT_VOICEMAIL_STYLE = "personal"
+# Loud enough to be unmistakable against speech, which reaches 15000 to 23000 of 32768.
+_VOICEMAIL_TONE_VOLUME = 0.8
+# A mailbox plays one greeting and then records, so the eight-message conversation floor is
+# unreachable however well the agent behaves, and holding it there errored every voicemail call.
+_VOICEMAIL_MIN_TURN_MESSAGES = 1
+# How long a mailbox records before cutting the line, from the end of the tone or greeting. Without a
+# bound the call runs to the silence watchdog with the agent still talking into a machine.
+_VOICEMAIL_RECORD_SECONDS = 40.0
+# Resamplers into the mixer's rate, one per source rate, kept because ``ratecv`` is stateful.
+_MIXER_RESAMPLERS: dict[tuple[int, int], PCMResampler] = {}
+# How long after the mailbox stops speaking the tone comes. A real system leaves a beat.
+_VOICEMAIL_TONE_GAP_SECONDS = 0.7
+# How long to wait for the mailbox to say anything before giving up on the tone. Bounded so a
+# mailbox that never speaks cannot leave this task pending for the length of the call.
+_VOICEMAIL_TONE_WAIT_SECONDS = 40.0
+# The mixer reinterprets frames at this rate rather than resampling them, so anything published
+# through it must be produced here or it plays at the wrong pitch and length.
+_BACKGROUND_MIXER_RATE = 48000
 # Each web case drives a full voice pipeline (STT/LLM/TTS + LiveKit conns) in one
 # child; too many starve the pod's CPU. This is an OPS CEILING on the
 # config-driven ``max_parallel_cases`` (not a replacement for it) — tune
@@ -222,15 +251,18 @@ def _simulator_turn_handling(
 ) -> dict[str, object]:
     return {
         "turn_detection": "vad" if vad is not None else "stt",
+        # A short delay fires inside a sentence, on a comma or a breath, so the caller treats a pause
+        # as the end of the turn, talks over the agent and then repeats itself for want of an answer.
         "endpointing": {
             "mode": "fixed",
-            "min_delay": min_endpointing_delay or 0.4,
-            "max_delay": max_endpointing_delay or 2.2,
+            "min_delay": min_endpointing_delay or 0.9,
+            "max_delay": max_endpointing_delay or 3.0,
         },
+        # A real caller interrupts, but only over something long enough to be worth interrupting.
         "interruption": {
             "enabled": (True if allow_interruptions is None else allow_interruptions),
             "discard_audio_if_uninterruptible": True,
-            "min_duration": 0.3,
+            "min_duration": 0.6,
         },
         "preemptive_generation": {"enabled": True},
     }
@@ -269,20 +301,21 @@ class _TestRunnerAgent(Agent):
             logger.warning("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
-        if len(messages) < self._min_turn_messages or not _has_role_alternation(
-            messages
+        floor, alternation_required = _turn_requirements(self._min_turn_messages)
+        if len(messages) < floor or (
+            alternation_required and not _has_role_alternation(messages)
         ):
             # Whether the caller ever reached for this tool, and why it was turned away, is the
             # difference between a simulator that will not hang up and one that was not allowed to.
             logger.warning(
                 "endCall refused: %d messages, floor %d, alternating=%s",
                 len(messages),
-                self._min_turn_messages,
+                floor,
                 _has_role_alternation(messages),
             )
             return (
                 "Continue the conversation until both speakers have participated "
-                f"and at least {self._min_turn_messages} messages are complete."
+                f"and at least {floor} messages are complete."
             )
         logger.warning("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
@@ -381,29 +414,14 @@ class _TestRunnerAgent(Agent):
         preferable to a dropped one.
         """
         source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
-        if not source:
+        # A mailbox needs this method for its tone and its recording timer, and FULL has no tone.
+        tone_style = _voicemail_tone_style()
+        if _answered_by_voicemail() and source:
+            # Nothing stands behind a recording, and a room behind one gives the game away.
+            logger.info("mailbox answered, so ambience is dropped (noise %r)", source)
+            source = ""
+        if not source and not tone_style and not _answered_by_voicemail():
             return
-
-        def _download() -> str | None:
-            import tempfile
-            import urllib.request
-
-            try:
-                suffix = (
-                    ".mp3"
-                    if ".mp3" in source
-                    else ".ogg"
-                    if ".ogg" in source
-                    else ".wav"
-                )
-                with urllib.request.urlopen(source, timeout=15) as response:
-                    data = response.read()
-                handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-                handle.write(data)
-                handle.close()
-                return handle.name
-            except Exception:
-                return None
 
         try:
             # 2.0, not the 0.3 this used to default to. Measured in an isolated two-participant
@@ -411,25 +429,168 @@ class _TestRunnerAgent(Agent):
             # speech near 15000: the ambience played and nobody could hear it. At 2.0 the same clip
             # measures 752 to 789 on real calls, which is audible under a voice without masking it.
             volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "2.0"))
+            clip_source: Any = None
             if source.startswith(("http://", "https://")):
-                clip_source: Any = await asyncio.to_thread(_download)
+                clip_source = await asyncio.to_thread(_downloaded_audio, source)
                 if not clip_source:
                     return
                 self._background_noise_file = clip_source
-            else:
+            elif source:
                 clip_source = getattr(BuiltinAudioClip, source, None)
                 if clip_source is None:
                     logger.warning(
                         "background audio clip %r is not one LiveKit ships", source
                     )
                     return
-            player = BackgroundAudioPlayer(
-                ambient_sound=AudioConfig(clip_source, volume=volume)
+            # A player is created even with no ambience clip, because a mailbox tone needs a
+            # published track whether or not this scenario also asked for a room.
+            player = (
+                BackgroundAudioPlayer(
+                    ambient_sound=AudioConfig(clip_source, volume=volume)
+                )
+                if clip_source is not None
+                else BackgroundAudioPlayer()
             )
             await player.start(room=room, agent_session=session)
             self._background_player = player
         except Exception:
             logger.warning("background audio not started", exc_info=True)
+            return
+        # Spoken as its own turn, so the transcript shows what the agent heard.
+        recorded = os.environ.get("HARNESS_VOICEMAIL_CLIP", "").strip()
+        if recorded.startswith(("http://", "https://")):
+            # Catalogue clips are meant to be served from object storage rather than shipped in the
+            # image, and a URL cannot be decoded in place.
+            recorded = await asyncio.to_thread(_downloaded_audio, recorded) or ""
+        said = os.environ.get("HARNESS_VOICEMAIL_CLIP_TRANSCRIPT", "").strip()
+        if recorded and said:
+            try:
+                self._voicemail_greeting = session.say(
+                    said,
+                    audio=audio_frames_from_file(recorded),
+                    allow_interruptions=False,
+                )
+            except Exception:
+                logger.warning("recorded mailbox greeting not played", exc_info=True)
+        elif recorded:
+            # No words for it, so it cannot be a turn: an invented line would put words in the
+            # transcript that the audio never says, and an eval would judge those words.
+            logger.warning("mailbox clip has no transcript; playing it without a turn")
+            try:
+                player.play(AudioConfig(recorded, volume=1.0))
+            except Exception:
+                logger.warning("recorded mailbox greeting not played", exc_info=True)
+        if tone_style:
+            self._voicemail_tone_task = asyncio.create_task(
+                self._play_voicemail_tone(tone_style, session)
+            )
+        if _answered_by_voicemail():
+            self._mailbox_close_task = asyncio.create_task(
+                self._close_mailbox_after_recording()
+            )
+
+    _voicemail_greeting: Any = None
+    _voicemail_tone_task: Any = None
+    _mailbox_close_task: Any = None
+
+    async def _close_mailbox_after_recording(self) -> None:
+        """Stop recording and cut the line, the way a mailbox does.
+
+        A mailbox is not a party to the call. It never says goodbye, it never asks whether anybody is
+        there, and it does not wait: it records for as long as it records and then hangs up. Nothing
+        here was ending these calls, so they ran to the silence watchdog with the agent talking into
+        a machine long after it had left its message.
+
+        The clock starts once the greeting and the tone are done where there are either, and at call
+        start otherwise, which is the FULL mailbox: it invites no message, so the window it gets is
+        generous rather than precise.
+        """
+        try:
+            if self._voicemail_greeting is not None:
+                await self._voicemail_greeting
+            tone = self._voicemail_tone_task
+            if tone is not None:
+                try:
+                    await tone
+                except Exception:
+                    # The tone failing is not a reason to record for ever.
+                    logger.warning(
+                        "mailbox tone failed before the recording timer", exc_info=True
+                    )
+            await asyncio.sleep(_VOICEMAIL_RECORD_SECONDS)
+            logger.info(
+                "mailbox stopped recording after %ss and cut the line",
+                _VOICEMAIL_RECORD_SECONDS,
+            )
+            self._end_requested.set()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A mailbox that fails to hang up leaves the watchdog to end the call, which is the
+            # behaviour this replaces rather than a new failure.
+            logger.warning("mailbox recording timer failed", exc_info=True)
+
+    async def _play_voicemail_tone(self, style: str, session: "AgentSession") -> None:
+        """Play the tone a mailbox plays once its greeting has finished.
+
+        The greeting comes either from a catalogue recording or from this session speaking the
+        persona's opening line. The tone is the part neither can carry, and without it a greeting that
+        says "leave a message after the tone" asks the agent to wait for something that never comes.
+
+        Generated rather than fetched: a sine burst is a sine burst, and an asset would be a
+        download, a licence and a catalogue for something twelve lines of arithmetic produce. Handed
+        over eagerly rather than lazily, since the player consumes the iterator inside its mixer
+        task and a failure there can take the ambience down with it.
+        """
+        shape = _VOICEMAIL_TONE_BY_STYLE.get(style)
+        if shape is None:
+            return
+        hz, seconds = shape
+        try:
+            # After the greeting, not at a guessed offset: wait for the mailbox's own first
+            # committed turn, which is this session's assistant role, then leave a beat.
+            recorded = os.environ.get("HARNESS_VOICEMAIL_CLIP", "").strip()
+            if recorded:
+                # Awaiting the greeting's own handle is exact where a duration would be a guess.
+                if self._voicemail_greeting is not None:
+                    await self._voicemail_greeting
+            else:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + _VOICEMAIL_TONE_WAIT_SECONDS
+                while loop.time() < deadline:
+                    if any(
+                        message["content"]
+                        for message in _session_messages(session)
+                        if message["role"] == "assistant"
+                    ):
+                        break
+                    await asyncio.sleep(0.2)
+                else:
+                    logger.warning(
+                        "mailbox said nothing in %ss; no tone",
+                        _VOICEMAIL_TONE_WAIT_SECONDS,
+                    )
+                    return
+            await asyncio.sleep(_VOICEMAIL_TONE_GAP_SECONDS)
+            player = getattr(self, "_background_player", None)
+            if player is None:
+                return
+            # A recording that ends with its own tone replaces this one rather than preceding it.
+            # Two beeps is worse than one, and the catalogue records which clips carry theirs.
+            if os.environ.get("HARNESS_VOICEMAIL_CLIP_HAS_TONE", "").strip() == "1":
+                return
+            spoken = [_tone_frame(hz, seconds)]
+
+            async def frames() -> Any:
+                for frame in spoken:
+                    yield frame
+
+            player.play(AudioConfig(frames(), volume=_VOICEMAIL_TONE_VOLUME))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A mailbox without its tone is a weaker test, never a failed call.
+            logger.warning("voicemail tone not played", exc_info=True)
 
     async def _stop_background_audio(self) -> None:
         """Close the ambience player and remove any clip downloaded for it.
@@ -437,6 +598,12 @@ class _TestRunnerAgent(Agent):
         Without this the mixer task, its audio source and the published track outlive the call,
         and a suite leaks one of each (plus a temp file) per scenario.
         """
+        for name in ("_voicemail_tone_task", "_mailbox_close_task"):
+            pending = getattr(self, name, None)
+            if pending is not None:
+                setattr(self, name, None)
+                if not pending.done():
+                    pending.cancel()
         player = getattr(self, "_background_player", None)
         if player is not None:
             self._background_player = None
@@ -455,11 +622,30 @@ class _TestRunnerAgent(Agent):
     def open_conversation(self) -> None:
         if self._session is None:
             raise RuntimeError("simulator_session_not_started")
+        if self._voicemail_greeting is not None:
+            # A recording has already greeted, and a mailbox does not greet twice: a spoken line on
+            # top of the clip is one mailbox answering in two voices.
+            return
         initial_message = self._persona.persona.get("initial_message")
         if isinstance(initial_message, str) and initial_message.strip():
             self._session.say(initial_message.strip())
             return
         self._session.generate_reply()
+
+    _mailbox_greeted: bool = False
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        """A mailbox speaks once and then never again, counted here rather than asked of the model.
+
+        One turn is allowed, not none, because a mailbox without a recording greets through this path.
+        Where a recording has already greeted, no turn is allowed at all.
+        """
+        if _answered_by_voicemail():
+            if self._mailbox_greeted or self._voicemail_greeting is not None:
+                return
+            self._mailbox_greeted = True
+        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+            yield chunk
 
     async def transcription_node(
         self,
@@ -1481,7 +1667,8 @@ class LiveKitEngine(BaseEngine):
                 on_target_transcription(buffered_reader, buffered_identity)
 
             opener: asyncio.Task[None] | None = None
-            if conversation_direction == "simulator_first":
+            if conversation_direction == "simulator_first" or _answered_by_voicemail():
+                # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
             else:
                 # The agent placed this call and should speak first. If it does not, the person
@@ -2434,6 +2621,83 @@ async def _wait_for_conversation_never_started(
         await asyncio.sleep(0.5)
 
 
+def _voicemail_tone_style() -> str:
+    """The style whose tone this call plays; empty for a person, and for a full mailbox by design."""
+    if not _answered_by_voicemail():
+        return ""
+    style = (
+        os.environ.get("HARNESS_VOICEMAIL_STYLE", "").strip().lower()
+        or _DEFAULT_VOICEMAIL_STYLE
+    )
+    return style if style in _VOICEMAIL_TONE_BY_STYLE else ""
+
+
+def _downloaded_audio(source: str) -> str | None:
+    """A local copy of a remote audio file, or None: a call heard in the clear beats a dropped one."""
+    import tempfile
+    import urllib.request
+
+    try:
+        suffix = ".mp3" if ".mp3" in source else ".ogg" if ".ogg" in source else ".wav"
+        with urllib.request.urlopen(source, timeout=15) as response:
+            data = response.read()
+        handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        handle.write(data)
+        handle.close()
+        return handle.name
+    except Exception:
+        return None
+
+
+def _frame_at_mixer_rate(frame: "rtc.AudioFrame") -> "rtc.AudioFrame":
+    """The same audio at the mixer's rate, which reinterprets rather than resamples what it is given."""
+    if frame.sample_rate == _BACKGROUND_MIXER_RATE:
+        return frame
+    resampler = _MIXER_RESAMPLERS.get((frame.sample_rate, frame.num_channels))
+    if resampler is None:
+        resampler = PCMResampler(
+            from_rate=frame.sample_rate,
+            to_rate=_BACKGROUND_MIXER_RATE,
+            channels=frame.num_channels,
+        )
+        _MIXER_RESAMPLERS[(frame.sample_rate, frame.num_channels)] = resampler
+    converted = resampler.convert(bytes(frame.data))
+    return rtc.AudioFrame(
+        data=converted,
+        sample_rate=_BACKGROUND_MIXER_RATE,
+        num_channels=frame.num_channels,
+        samples_per_channel=len(converted) // (2 * frame.num_channels),
+    )
+
+
+def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
+    """One frame of sine, faded in and out: a burst at full amplitude clicks and a detector hears the click."""
+    total = int(_BACKGROUND_MIXER_RATE * seconds)
+    fade = max(1, int(_BACKGROUND_MIXER_RATE * 0.01))
+    samples = array.array("h")
+    for index in range(total):
+        gain = min(1.0, index / fade, (total - index) / fade)
+        samples.append(
+            int(
+                32767
+                * 0.9
+                * gain
+                * math.sin(2 * math.pi * hz * index / _BACKGROUND_MIXER_RATE)
+            )
+        )
+    return rtc.AudioFrame(
+        data=samples.tobytes(),
+        sample_rate=_BACKGROUND_MIXER_RATE,
+        num_channels=1,
+        samples_per_channel=total,
+    )
+
+
+def _answered_by_voicemail() -> bool:
+    """Whether a mailbox answered rather than a person; set per scenario by the call runner."""
+    return os.environ.get("HARNESS_ANSWERED_BY", "").strip().lower() == "voicemail"
+
+
 async def _open_if_nobody_speaks_first(
     session: AgentSession,
     customer_agent: Any,
@@ -2768,6 +3032,13 @@ def _recover_successful_provider_end_call(
     outcome.metadata["provider_end_call_recovered"] = True
 
 
+def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
+    """The turn floor and whether alternation is required: a mailbox is held to its greeting alone."""
+    if _answered_by_voicemail():
+        return min(min_turn_messages, _VOICEMAIL_MIN_TURN_MESSAGES), False
+    return min_turn_messages, True
+
+
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
@@ -2848,12 +3119,16 @@ def _conversation_outcome(
             retryable=False,
             details={"stop_reason": stop_reason, "turn_count": str(len(messages))},
         )
-    if stop_reason in {
+    stalled = {
         "conversation_silence_timeout",
         "session_closed",
         "no_conversation",
         "monitor_failed",
-    }:
+    }
+    if _answered_by_voicemail():
+        # Silence after a mailbox greeting is the call's natural end, not a stall.
+        stalled.discard("conversation_silence_timeout")
+    if stop_reason in stalled:
         code = stop_reason
         message = {
             "conversation_silence_timeout": (
@@ -2878,7 +3153,10 @@ def _conversation_outcome(
             messages=messages,
             retryable=True,
         )
-    if len(messages) < min_turn_messages or not _has_role_alternation(messages):
+    floor, alternation_required = _turn_requirements(min_turn_messages)
+    if len(messages) < floor or (
+        alternation_required and not _has_role_alternation(messages)
+    ):
         code = (
             stop_reason
             if stop_reason in {"target_disconnected", "room_disconnected"}
@@ -2896,7 +3174,7 @@ def _conversation_outcome(
             details={
                 "stop_reason": stop_reason,
                 "turn_count": str(len(messages)),
-                "minimum_turn_count": str(min_turn_messages),
+                "minimum_turn_count": str(floor),
             },
         )
     return _CaseOutcome(

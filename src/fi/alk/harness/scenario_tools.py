@@ -31,12 +31,15 @@ from .contract import CALL_DIRECTIONS, AgentContract
 from .folder import INDEX, SCENARIOS, apply_setup, read_all, write_folder, write_index
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
+    ANSWERED_BY,
     CALLER_AWARENESS,
+    VOICEMAIL_STYLES,
     Scenario,
     Step,
     contract_sequence_problems,
     suite_diversity_problems,
     validate_scenario,
+    voicemail_enabled,
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
@@ -45,6 +48,33 @@ from .world.snapshot import restore
 logger = logging.getLogger(__name__)
 
 SCENARIO_SERVER = "scenarios"
+
+
+def _mailbox_fields() -> dict[str, Any]:
+    """The mailbox-only fields, withheld entirely when the switch is off: a field is an invitation."""
+    if not voicemail_enabled():
+        return {}
+    return {
+        "answered_by": {
+            "type": "string",
+            "enum": list(ANSWERED_BY),
+            "description": "Who picked up, and only for a scenario that states call_direction "
+            "outbound. Leave it out for the ordinary case where a person answers. 'voicemail' "
+            "replaces the person with a mailbox that plays its greeting once and then says nothing "
+            "whatever the agent asks, which tests whether the agent notices it is talking to a "
+            "machine, leaves a message that stands on its own, and stops. A mailbox can supply "
+            "nothing, so such a scenario never asks the agent to collect a value or reach agreement.",
+        },
+        "voicemail_style": {
+            "type": "string",
+            "enum": list(VOICEMAIL_STYLES),
+            "description": "Which kind of mailbox answered. 'personal' carries the person's name, "
+            "'carrier' names nobody, 'operator' is a long announcement a careless agent talks over, "
+            "'full' cannot record at all and is the only style with no tone. State one rather than "
+            "leaving it out: left out it is personal, the easiest of the four, and most suites have "
+            "room for only one mailbox.",
+        },
+    }
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -560,6 +590,7 @@ def scenario_tools(
                     "something, or has no idea why anyone is ringing. Left out it is unaware, "
                     "which the agent has to work hardest for.",
                 },
+                **_mailbox_fields(),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "

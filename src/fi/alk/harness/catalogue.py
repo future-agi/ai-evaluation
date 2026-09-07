@@ -109,7 +109,26 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
             f"{sub_goal.name}: a check must define check(world, calls) and return a problem as "
             "a string, or None when the sub-goal held"
         )
+    problems.extend(_presence_only_problems(sub_goal))
     return problems
+
+
+def _presence_only_problems(sub_goal: SubGoal) -> list[str]:
+    """Refuse a check that only asks whether a tool was reached, rather than what it did."""
+    body = sub_goal.check
+    if not body.strip():
+        return []
+    # The signature always names `world`, so judge only what comes after it.
+    _, _, after = body.partition("def check(")
+    _, _, after = after.partition(")")
+    if "world" in after or "arguments" in after or ".args" in after:
+        return []
+    return [
+        f"{sub_goal.name}: the check only asks whether a tool was called, which any agent reaching "
+        "it passes and any agent doing the right thing another way fails. Assert the arguments it "
+        "was given, or the state the world was left in. Whether a call was ended is never a "
+        "sub-goal; what the agent did before stopping is"
+    ]
 
 
 def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:

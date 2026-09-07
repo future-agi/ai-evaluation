@@ -164,8 +164,25 @@ def _without_nulls(value: Any) -> Any:
     return value
 
 
-def contract_tools(destination: Path) -> Any:
-    """A server exposing ``submit_contract``, writing to ``destination`` on acceptance."""
+# Each selected eval is one judge call per call in the suite.
+MOST_CHOSEN_EVALS = 6
+
+
+def contract_tools(
+    destination: Path, available_evals: list[dict[str, Any]] | None = None
+) -> Any:
+    """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
+
+    ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
+    contract simply chooses none, which is what every job did before the catalogue existed.
+    """
+    # Name to modality, empty or "any" for all. Refused here too, where it is still free to fix.
+    offered_modality = {
+        str(one.get("name") or "").strip(): str(one.get("modality") or "").strip().lower()
+        for one in (available_evals or [])
+        if isinstance(one, dict) and str(one.get("name") or "").strip()
+    }
+    offered = set(offered_modality)
     # Each of these is a nudge, not a wall: the first submission missing something that is
     # nearly always there gets sent back with directions, and a second submission is accepted.
     # A gate with no way through would permanently block the rare agent that genuinely lacks it,
@@ -361,6 +378,18 @@ def contract_tools(destination: Path) -> Any:
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "What the source did not settle and you could not ask about.",
+                },
+                "chosen_evals": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Names of platform evals this agent should be judged by, "
+                    f"at most {MOST_CHOSEN_EVALS}, taken only from the catalogue in your "
+                    "briefing. Choose the ones that judge how the agent conducted the "
+                    "conversation, which its scenarios' own checks cannot see, and only from "
+                    "the section matching the modality you record here. Leave it out where the "
+                    "catalogue offers nothing this agent can be judged by; an eval whose inputs "
+                    "this agent never produces scores it against nothing, and an eval for spoken "
+                    "calls means nothing for a chat agent.",
                 },
                 "implementation": {
                     "type": "string",
@@ -738,6 +767,58 @@ def contract_tools(destination: Path) -> Any:
                     "target's source loader does not contain."
                 ]
             )
+
+        # Refused rather than dropped: dropping leaves the run judged by fewer evals than claimed.
+        asked_evals = payload.get("chosen_evals")
+        if isinstance(asked_evals, str):
+            asked_evals = [asked_evals]
+        if isinstance(asked_evals, list):
+            wanted: list[str] = []
+            for one in asked_evals:
+                name = str(one).strip()
+                if name and name not in wanted:
+                    wanted.append(name)
+            unknown = [name for name in wanted if offered and name not in offered]
+            if unknown:
+                return _problems(
+                    [
+                        "chosen_evals names evals the platform did not offer: "
+                        + ", ".join(unknown)
+                        + ". Choose only from the catalogue in your briefing, by exact name."
+                    ]
+                )
+            if not offered and wanted:
+                return _problems(
+                    [
+                        "chosen_evals was given but this job carries no eval catalogue, so there "
+                        "is nothing to choose from. Leave it out."
+                    ]
+                )
+            claimed = str(payload.get("modality") or "").strip().lower()
+            mismatched = [
+                f"{name} (applies to {offered_modality[name]})"
+                for name in wanted
+                if offered_modality.get(name)
+                and offered_modality[name] not in ("any", claimed)
+            ]
+            if mismatched:
+                return _problems(
+                    [
+                        f"chosen_evals names evals belonging to another modality than {claimed!r}: "
+                        + ", ".join(mismatched)
+                        + ". The platform refuses those, so choose only from the section of the "
+                        "catalogue matching the modality you recorded."
+                    ]
+                )
+            if len(wanted) > MOST_CHOSEN_EVALS:
+                return _problems(
+                    [
+                        f"chosen_evals has {len(wanted)} evals and at most {MOST_CHOSEN_EVALS} may "
+                        "be chosen. Keep the ones that judge conduct this agent's own checks "
+                        "cannot see, and drop the rest."
+                    ]
+                )
+            payload["chosen_evals"] = wanted
 
         thin = [
             (

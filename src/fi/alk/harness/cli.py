@@ -141,12 +141,15 @@ def _missing_scenario_adjustments(
 
 async def _understand(args: argparse.Namespace) -> int:
     source = resolve(args.kind, name=args.name, root=args.path)
+    job = getattr(args, "job", None)
+    offered = (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
         # Unattended, there is nobody to answer, so the model records what it could not
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
+        available_evals=offered if isinstance(offered, list) else None,
     )
 
     print(f"agent: {source.name}  ({source.kind})")
@@ -771,6 +774,7 @@ async def _auto(args: argparse.Namespace) -> int:
                 interactive=False,
                 model=args.model,
                 guidance=[],
+                job=job,
             ),
         ),
         (

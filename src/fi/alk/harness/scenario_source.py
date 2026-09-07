@@ -12,7 +12,7 @@ consequences of that choice (HEAD-model drift).
 
 RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the `provision`/`begin` wire
 shapes below follow the platform's actual, live route (futureagi/simulate/serializers/services/
-views `hosted_harness.py`) rather than Karthik's Scenario Generation Contract text (PR #63), where
+views `hosted_harness.py`) rather than the Scenario Generation Contract text (PR #63), where
 the two disagree -- a single `POST .../scenarios/` discriminated by a body-level `operation` field,
 `begin` keyed on the full `scenario_keys` set, and a provision response KEYED by `scenario_key`
 (never a position-ordered array). `register_with_platform` below is the seam that builds those
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from .hosted_entrypoint import ScenariosClient
 
 # LAYOUT DECISION (contract-silent -- hosted-execution-seams.md v1.15 §2 never mentions scenario
-# documents, and §7 assigns the on-disk layout to Karthik's contract, status "in review"). Scenario
+# documents, and §7 assigns the on-disk layout to that contract, status "in review"). Scenario
 # documents live at `<bundle_dir>/<SCENARIOS_DIRNAME>/<name>/...`, matching `folder.py`'s own
 # `SCENARIOS` constant, so a write_folder destination of `<bundle_dir>` lands correctly with no
 # translation. Kept as one module-level constant so a later contract can move it in one edit.
@@ -456,13 +456,42 @@ class BundleScenarioSource:
         # against the full set by design (`_begin_payload` sends every key and the platform 409s on a
         # subset), so the suite is what gets registered and the sample is only what gets called. The
         # rows that are not called stay unstarted, which is a truthful state rather than a broken job.
+        chosen_evals, agent_prompt, modality = _chosen_evals_and_prompt(bundle_dir)
         run_name = _derive_run_name(job, bundle_dir)
         agent_name = _derive_agent_name(job, bundle_dir)
         registered = await register_with_platform(
-            scenarios_client, scenarios, run_name=run_name,
+            scenarios_client,
+            scenarios,
+            run_name=run_name,
             agent_name=agent_name,
+            chosen_evals=chosen_evals,
+            agent_prompt=agent_prompt,
+            modality=modality,
         )
         return sampled_for_calling(registered)
+
+
+def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
+    """The contract's chosen evals, agent prompt and modality; read as plain JSON so it cannot fail a run."""
+    try:
+        body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a run never fails over what it tells the platform about itself
+        return [], "", ""
+    if not isinstance(body, dict):
+        return [], "", ""
+    chosen = body.get("chosen_evals")
+    names = (
+        [str(one).strip() for one in chosen if str(one).strip()]
+        if isinstance(chosen, list)
+        else []
+    )
+    # Provisioning defaults to text, which would bind a voice run's evals to the transcript.
+    modality = str(body.get("modality") or "").strip().lower()
+    return (
+        names,
+        str(body.get("system_prompt_excerpt") or "").strip(),
+        modality if modality in ("voice", "text") else "",
+    )
 
 
 def _preallocation_error(code: str, message: str) -> Exception:
@@ -528,7 +557,15 @@ def _derive_agent_name(job: Any, bundle_dir: Path) -> str:
     return "alk-agent"
 
 
-def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario], *, agent_name: str = "") -> dict[str, Any]:
+def _provision_payload(
+    run_name: str,
+    scenarios: Sequence[_CompiledScenario],
+    chosen_evals: Sequence[str] = (),
+    agent_prompt: str = "",
+    modality: str = "",
+    *,
+    agent_name: str = "",
+) -> dict[str, Any]:
     """`HarnessScenarioProvisionSerializer`/`HarnessProvisionPersonaSerializer`
     (futureagi/simulate/serializers/hosted_harness.py): `operation`, `name` and `personas` are
     required; each persona's `name`, `role`, `situation`, `outcome` and `persona` are optional and
@@ -536,7 +573,7 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario], *,
     `scenario.json` for scheduler-facing fields only, and the cost was a platform that could show a
     call but not who was on it or what they came for.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "operation": "provision",
         "name": run_name,
         # Everything the serializer accepts, where the document had it: name, role, situation,
@@ -549,6 +586,14 @@ def _provision_payload(run_name: str, scenarios: Sequence[_CompiledScenario], *,
     }
     if agent_name:
         payload["agent_name"] = agent_name
+    # Each omitted rather than sent empty, so an older platform is unaffected. Modality matters
+    # because provisioning defaults to text, which binds every eval to the transcript.
+    if chosen_evals:
+        payload["chosen_evals"] = list(chosen_evals)
+    if agent_prompt:
+        payload["agent_prompt"] = agent_prompt
+    if modality:
+        payload["modality"] = modality
     return payload
 
 
@@ -557,7 +602,7 @@ def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> 
     `scenario_keys` is `allow_empty=False` and REQUIRED, and `begin_scenarios`
     (services/hosted_harness.py:323-329) 409s (`scenario_key_mismatch`) on anything but an EXACT
     match against the full sealed set -- there is no "subset to run" semantics on the real
-    platform (Karthik's contract text describes an optional partial-subset `scenario_ids`; the
+    platform (that contract text describes an optional partial-subset `scenario_ids`; the
     live route does not implement that -- CONTRACT NOTES). The full set is sent every time.
     """
     return {
@@ -574,7 +619,7 @@ def _scenario_ids_by_key(
     (`{"scenarios": [{"scenario_key", "scenario_id"}, ...]}`,
     futureagi/simulate/serializers/hosted_harness.py:251-260 +
     services/hosted_harness.py:487-501's `_provision_response`) back onto `submitted` BY
-    `scenario_key` -- a dict lookup, never a positional zip. A positional zip (matching Karthik's
+    `scenario_key` -- a dict lookup, never a positional zip. A positional zip (matching that contract's
     documented `scenario_ids` array shape, not what the platform actually returns) would silently
     mismatch scenario_id -> scenario the instant the response order differs from `submitted`'s
     order, which nothing on the wire guarantees. Every check below raises rather than returning a
@@ -633,6 +678,9 @@ async def register_with_platform(
     *,
     run_name: str,
     agent_name: str = "",
+    chosen_evals: Sequence[str] = (),
+    agent_prompt: str = "",
+    modality: str = "",
 ) -> Sequence[_CompiledScenario]:
     """The scenario pre-allocation SEAM, now wired against the platform's real route (a single
     `POST .../scenarios/`, discriminated by a body-level `operation` field -- see
@@ -648,7 +696,9 @@ async def register_with_platform(
     """
     provision_result = await asyncio.to_thread(
         scenarios_client.provision,
-        _provision_payload(run_name, scenarios, agent_name=agent_name),
+        _provision_payload(
+            run_name, scenarios, chosen_evals, agent_prompt, modality, agent_name=agent_name
+        ),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:

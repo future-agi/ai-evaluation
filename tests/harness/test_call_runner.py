@@ -1394,3 +1394,46 @@ def test_auto_connector_resolves_to_vapi_and_retell_from_target_secrets() -> Non
 def test_explicit_connector_is_never_overridden() -> None:
     job = _job(connector="retell")
     assert cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x"}) == "retell"
+
+
+def _timed_out_runner(tmp_path: Path, turns: int):
+    """A runner whose call comes back TIMED_OUT after `turns` messages."""
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+    messages = [{"role": "user", "content": f"turn {i}"} for i in range(turns)]
+
+    async def place_call(spec):
+        return _report(
+            status=RunStatus.TIMED_OUT,
+            case_status=CaseStatus.TIMED_OUT,
+            messages=messages,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_deadline",
+                message="Conversation exceeded its deadline",
+            ),
+        )
+
+    return cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+
+
+def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(tmp_path: Path) -> None:
+    """An intake agent may ask thirty to fifty questions, so reaching the deadline is an ordinary
+    outcome. A measured 51-turn call lost all three sub-goals to `held: null` because the timeout was
+    treated as infrastructure."""
+    outcome = _run(
+        _timed_out_runner(tmp_path, 8),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "a-w0"}),
+    )
+    assert outcome is not None, "a timed-out call that held a conversation must still be graded"
+
+
+def test_a_timed_out_call_that_never_got_going_still_aborts(tmp_path: Path) -> None:
+    """The carve-out salvages evidence; it does not excuse a call that produced none."""
+    aborted = _run_expect_abort(
+        _timed_out_runner(tmp_path, 1),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "a-w0"}),
+    )
+    assert "voice_call_not_completed" in str(aborted)

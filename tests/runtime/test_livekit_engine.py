@@ -3294,3 +3294,19 @@ def test_dispatch_failure_is_typed_preparing_failure(monkeypatch) -> None:
     assert metadata["failure"]["code"] == "livekit_dispatch_failed"
     assert metadata["failure"]["stage"] == "preparing"
     assert "delete_room" in calls
+
+
+def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
+    """A short delay fires inside a sentence, so the caller treats a pause as the end of the turn,
+    talks over the agent and then repeats itself for want of an answer."""
+    from fi.simulate.simulation.engines.livekit import _simulator_turn_handling
+
+    handling = _simulator_turn_handling(vad=object())
+    assert handling["endpointing"]["min_delay"] == 0.9
+    assert handling["endpointing"]["max_delay"] == 3.0
+    # Still interruptible, but only over something worth interrupting.
+    assert handling["interruption"]["enabled"] is True
+    assert handling["interruption"]["min_duration"] == 0.6
+    # An explicit value from the scenario still wins.
+    explicit = _simulator_turn_handling(vad=object(), min_endpointing_delay=0.5)
+    assert explicit["endpointing"]["min_delay"] == 0.5

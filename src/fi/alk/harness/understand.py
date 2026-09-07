@@ -44,12 +44,55 @@ def _provider_import_briefing() -> str:
     )
 
 
+def _eval_catalogue_briefing(available_evals: list[dict[str, Any]] | None) -> str:
+    """The eval catalogue grouped by modality, since the contract has not claimed one yet."""
+    grouped: dict[str, list[str]] = {}
+    for one in available_evals or []:
+        if not isinstance(one, dict):
+            continue
+        name = str(one.get("name") or "").strip()
+        if not name:
+            continue
+        keys = ", ".join(str(key) for key in one.get("required_keys") or [])
+        grouped.setdefault(str(one.get("modality") or "any").strip().lower(), []).append(
+            "- {name}: {description}{keys}".format(
+                name=name,
+                description=str(one.get("description") or "").strip()[:240],
+                keys=f" [needs: {keys}]" if keys else "",
+            )
+        )
+    if not grouped:
+        return ""
+    sections = [
+        f"### Applies to {kind}\n\n" + "\n".join(sorted(lines))
+        for kind, lines in sorted(grouped.items())
+    ]
+    return (
+        "\n\n## Evals this platform can run on the finished calls\n\n"
+        "Record the ones this agent should be judged by in `chosen_evals`, by exact name. Each one "
+        "runs as a judge on every call of every scenario, so choose the few that tell you "
+        "something the scenarios' own deterministic checks cannot, and choose none rather than "
+        "padding.\n\n"
+        "Choose only from the section matching the `modality` you are about to record. The "
+        "platform refuses an eval belonging to another modality, so an eval for spoken calls "
+        "recorded against a chat agent costs the whole submission.\n\n"
+        "Two ways to choose wrongly, both common. An eval whose subject only exists in speech, "
+        "dead air, voicemail detection, voicemail handling, is meaningless for a chat agent and "
+        "worth having for a voice one. An eval named for a domain, misselling, advice authority, "
+        "lead qualification, claim intake, intake field accuracy, is only worth choosing when this "
+        "agent's own tools and constraints show it doing that work; choose it from the evidence in "
+        "front of you, never because its name sounds close to the agent's industry.\n\n"
+        + "\n\n".join(sections)
+    )
+
+
 def open_stage(
     source: AgentSource,
     *,
     out: Path | None = None,
     ask: Callable[..., Any] | None = None,
     max_turns: int = 70,
+    available_evals: list[dict[str, Any]] | None = None,
 ) -> tuple[Stage, Path]:
     """A live understand-the-agent stage, and where it will write."""
     destination = out or artifact_dir(source.name)
@@ -57,9 +100,13 @@ def open_stage(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{source.briefing()}"
             f"{_provider_import_briefing()}"
+            f"{_eval_catalogue_briefing(available_evals)}"
         ),
         cwd=source.workdir(),
-        servers={**source.servers(), CONTRACT_SERVER: contract_tools(destination)},
+        servers={
+            **source.servers(),
+            CONTRACT_SERVER: contract_tools(destination, available_evals),
+        },
         extra_builtins=source.builtin_tools(),
         max_turns=max_turns,
     )

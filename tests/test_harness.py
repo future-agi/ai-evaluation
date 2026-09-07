@@ -2233,7 +2233,9 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
     settled = SubGoal(
         name="order-placed",
         what="the order reached the system",
-        check="def check(world, calls):\n    return None\n",
+        # Asserts the world rather than returning None unconditionally, which settles nothing and is
+        # now refused in its own right.
+        check="def check(world, calls):\n    if not world['orders']:\n        return 'no order'\n",
     )
     assert validate_sub_goal(settled) == []
     assert settled.deterministic()
@@ -7128,3 +7130,184 @@ def test_platform_call_start_uses_existing_ongoing_status_flow():
     api = Recording()
     platform.mark_ongoing(platform.Reported(), "ce-started", platform=api)
     assert api.calls == ["ce-started"]
+
+
+def _submit_to(server):
+    """Call `submit_contract` on a contract server and return the text it answered with."""
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    instance = _instance(server)
+    handler = _request_handler(instance, "tools/call")
+
+    def call(payload):
+        answer = asyncio.run(
+            handler.handler(
+                None, CallToolRequestParams(name="submit_contract", arguments=payload)
+            )
+        )
+        return answer.content[0].text
+
+    return call
+
+
+_CATALOGUE = [
+    {
+        "name": "customer_agent_loop_detection",
+        "description": "Did the agent loop.",
+        "required_keys": ["conversation"],
+        "modality": "voice",
+    },
+    {
+        "name": "dead_air_detection",
+        "description": "Silence the caller had to fill.",
+        "required_keys": ["conversation"],
+        "modality": "voice",
+    },
+    {
+        "name": "customer_agent_query_handling",
+        "description": "Were questions answered.",
+        "required_keys": ["conversation"],
+        "modality": "any",
+    },
+    {
+        "name": "chat_only_thing",
+        "description": "A chat concern.",
+        "required_keys": ["conversation"],
+        "modality": "chat",
+    },
+]
+
+
+def _voice_contract(**extra):
+    payload = {
+        "agent": "ride",
+        "modality": "voice",
+        "tools": [{"name": "book_ride", "args": ["place_id"]}],
+        "real_use_cases": ["book a ride"],
+        "hard_constraints": ["never double book"],
+        "system_prompt_excerpt": "you book rides",
+        "data_schema": {"bookings": {"booking_ref": "TEXT"}},
+        "base_environment": {"bookings": [{"booking_ref": "bk_1"}]},
+    }
+    payload.update(extra)
+    return payload
+
+
+def test_a_job_with_no_eval_catalogue_behaves_exactly_as_before(tmp_path):
+    """The catalogue is new, so its absence must change nothing about accepting a contract."""
+    from fi.alk.harness.tools import contract_tools
+
+    call = _submit_to(contract_tools(tmp_path))
+    assert "Accepted" in call(_voice_contract())
+    saved = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+    assert saved["chosen_evals"] == []
+
+
+def test_chosen_evals_are_kept_when_the_catalogue_offers_them(tmp_path):
+    from fi.alk.harness.tools import contract_tools
+
+    call = _submit_to(contract_tools(tmp_path, _CATALOGUE))
+    said = call(
+        _voice_contract(
+            chosen_evals=[
+                "customer_agent_loop_detection",
+                "customer_agent_loop_detection",
+                "customer_agent_query_handling",
+            ]
+        )
+    )
+    assert "Accepted" in said
+    saved = json.loads((tmp_path / "contract.json").read_text(encoding="utf-8"))
+    # Deduplicated, order preserved.
+    assert saved["chosen_evals"] == [
+        "customer_agent_loop_detection",
+        "customer_agent_query_handling",
+    ]
+
+
+def test_an_eval_the_catalogue_never_offered_is_refused(tmp_path):
+    """Dropping it silently would judge the run by fewer evals than the contract claims."""
+    from fi.alk.harness.tools import contract_tools
+
+    call = _submit_to(contract_tools(tmp_path, _CATALOGUE))
+    said = call(_voice_contract(chosen_evals=["invented_eval"]))
+    assert "invented_eval" in said and "did not offer" in said
+    assert not (tmp_path / "contract.json").exists()
+
+
+def test_an_eval_belonging_to_another_modality_is_refused(tmp_path):
+    from fi.alk.harness.tools import contract_tools
+
+    call = _submit_to(contract_tools(tmp_path, _CATALOGUE))
+    said = call(_voice_contract(chosen_evals=["chat_only_thing"]))
+    assert "chat_only_thing" in said and "modality" in said
+    assert not (tmp_path / "contract.json").exists()
+
+
+def test_more_evals_than_the_cap_is_refused(tmp_path):
+    from fi.alk.harness.tools import MOST_CHOSEN_EVALS, contract_tools
+
+    catalogue = [
+        {"name": f"eval_{index}", "description": "x", "modality": "any"}
+        for index in range(MOST_CHOSEN_EVALS + 1)
+    ]
+    call = _submit_to(contract_tools(tmp_path, catalogue))
+    said = call(_voice_contract(chosen_evals=[one["name"] for one in catalogue]))
+    assert str(MOST_CHOSEN_EVALS) in said
+    assert not (tmp_path / "contract.json").exists()
+
+
+def test_choosing_no_evals_stays_legal(tmp_path):
+    from fi.alk.harness.tools import contract_tools
+
+    call = _submit_to(contract_tools(tmp_path, _CATALOGUE))
+    assert "Accepted" in call(_voice_contract(chosen_evals=[]))
+
+
+def test_the_catalogue_reaches_the_model_grouped_by_modality():
+    from fi.alk.harness.understand import _eval_catalogue_briefing
+
+    said = _eval_catalogue_briefing(_CATALOGUE)
+    assert "Applies to voice" in said and "Applies to chat" in said
+    assert "dead_air_detection" in said and "[needs: conversation]" in said
+    assert _eval_catalogue_briefing(None) == ""
+
+
+def test_choosing_evals_when_the_job_carries_no_catalogue_is_refused(tmp_path):
+    """Names with nothing to check them against would be forwarded to a platform that refuses them."""
+    from fi.alk.harness.tools import contract_tools
+
+    call = _submit_to(contract_tools(tmp_path))
+    said = call(_voice_contract(chosen_evals=["customer_agent_loop_detection"]))
+    assert "no eval catalogue" in said
+    assert not (tmp_path / "contract.json").exists()
+
+
+def test_a_check_that_only_asks_whether_a_tool_was_called_is_refused():
+    """Saying so in the skill was not enough: a measured suite produced three such sub-goals, all
+    reporting "end_call was not called" on calls the agent had ended correctly."""
+    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+
+    presence = SubGoal(
+        name="end_call_gracefully",
+        what="the agent ended the call",
+        check=(
+            "def check(world, calls):\n"
+            "    if not any(c.name == 'end_call' for c in calls):\n"
+            "        return 'end_call was not called'\n"
+        ),
+    )
+    said = " ".join(validate_sub_goal(presence))
+    assert "only asks whether a tool was called" in said
+
+    # A check about the world, or about the arguments a call was given, is what is wanted.
+    for body in (
+        "def check(world, calls):\n    if not world['answers']:\n        return 'nothing recorded'\n",
+        "def check(world, calls):\n"
+        "    booked = [c for c in calls if c.name == 'book']\n"
+        "    if booked and booked[0].arguments.get('date') != '2026-02-01':\n"
+        "        return 'wrong date'\n",
+    ):
+        assert not validate_sub_goal(SubGoal(name="ok", what="w", check=body))

@@ -954,8 +954,8 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
         # p13: `build()` now calls `register_with_platform` after load -- this test is about the
         # R1-5 timeout BUDGET specifically, not registration, so registration is stubbed to a
         # passthrough (registration's own behavior is covered separately, below).
-        async def _passthrough(scenarios_client, scenarios, *, run_name):
-            del scenarios_client, run_name
+        async def _passthrough(scenarios_client, scenarios, *, run_name, **rest):
+            del scenarios_client, run_name, rest
             return scenarios
 
         with mock.patch.object(ss, "register_with_platform", _passthrough):
@@ -1065,7 +1065,7 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
 # =================================================================================================
 # p13 -- scenario pre-allocation (`register_with_platform`), wired against the platform's actual
 # route (a single `POST .../scenarios/`, discriminated by a body-level `operation` field, keyed
-# provision response, full-set `begin`) rather than Karthik's documented two-path/position-ordered
+# provision response, full-set `begin`) rather than the documented two-path/position-ordered
 # shape -- see `ScenariosClient`'s and `register_with_platform`'s own docstrings for the file:line
 # evidence, and reports/p13-worker-r2.md CONTRACT NOTES for where the two disagree.
 # =================================================================================================
@@ -1328,7 +1328,7 @@ def test_register_with_platform_missing_run_test_id_is_a_typed_failure_before_be
 
 
 def test_mutation_positional_zip_matching_is_killed() -> None:
-    # Mutant: `_scenario_ids_by_key` replaced with a positional zip (Karthik's documented shape --
+    # Mutant: `_scenario_ids_by_key` replaced with a positional zip (the documented shape --
     # not what the platform actually returns). A reordered response must silently mismatch ids
     # under the mutant; the real (key-matching) implementation must not.
     submitted = (_scenario("a"), _scenario("b"))
@@ -1413,3 +1413,72 @@ def test_mutation_id_assignment_skipped_is_killed() -> None:
         assert restored[0].scenario_id == "platform-a"  # confirms the patch was fully undone
 
     asyncio.run(scenario())
+
+
+# -------------------------------------------------------------------------------------------------
+# Harness-chosen platform evals. The guest sends names only; the platform owns the mapping.
+# -------------------------------------------------------------------------------------------------
+
+
+def test_provision_payload_omits_chosen_evals_and_prompt_when_there_are_none() -> None:
+    # Omitted rather than empty, so a platform that predates these fields is unaffected.
+    payload = ss._provision_payload("run-1", (_scenario("book_a_ride"),))
+    assert "chosen_evals" not in payload and "agent_prompt" not in payload
+
+
+def test_provision_payload_carries_the_chosen_names_and_the_agent_prompt() -> None:
+    payload = ss._provision_payload(
+        "run-1",
+        (_scenario("book_a_ride"),),
+        ["customer_agent_loop_detection", "dead_air_detection"],
+        "You are a ride booking agent.",
+    )
+    assert payload["chosen_evals"] == [
+        "customer_agent_loop_detection",
+        "dead_air_detection",
+    ]
+    assert payload["agent_prompt"] == "You are a ride booking agent."
+
+
+def test_chosen_evals_and_prompt_are_read_off_the_bundle_contract(tmp_path) -> None:
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "ride",
+                "system_prompt_excerpt": "  You book rides.  ",
+                "chosen_evals": ["customer_agent_conversation_quality", " ", ""],
+            }
+        ),
+        encoding="utf-8",
+    )
+    names, prompt, modality = ss._chosen_evals_and_prompt(tmp_path)
+    assert names == ["customer_agent_conversation_quality"]
+    assert prompt == "You book rides."
+
+
+def test_a_bundle_without_a_readable_contract_costs_the_run_nothing(tmp_path) -> None:
+    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "", "")
+    (tmp_path / "contract.json").write_text("{not json", encoding="utf-8")
+    assert ss._chosen_evals_and_prompt(tmp_path) == ([], "", "")
+
+
+def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_input(tmp_path) -> None:
+    """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a transcript.
+
+    Measured on run 0734ab2e: four eval configs were created with `conversation -> transcript` on a
+    voice run, because the guest never sent `modality` and `_resolve_scenario_modality` fell back to
+    text. For a spoken call the conversation is the recording.
+    """
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"modality": "voice", "chosen_evals": ["customer_agent_context_retention"]}),
+        encoding="utf-8",
+    )
+    names, _prompt, modality = ss._chosen_evals_and_prompt(tmp_path)
+    assert modality == "voice"
+
+    payload = ss._provision_payload("run", [], names, "", modality)
+    assert payload["modality"] == "voice"
+    assert payload["chosen_evals"] == ["customer_agent_context_retention"]
+
+    # Omitted rather than empty, so an older platform is unaffected.
+    assert "modality" not in ss._provision_payload("run", [], [], "", "")
