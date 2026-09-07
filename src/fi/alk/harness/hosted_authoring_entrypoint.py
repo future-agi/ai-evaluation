@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from .authoring_entrypoint import main as authoring_main
@@ -92,7 +93,15 @@ def main(argv: list[str] | None = None) -> int:
     values = _platform_simulator_values(_load_values(_SECRETS_PATH))
     _configure_generation_environment(values)
     try:
-        return authoring_main(argv)
+        from .authoring_runtime_validation import RuntimeValidationError
+        from .outbound import redact_outbound_text
+
+        try:
+            return authoring_main(argv, validate_runtime=True)
+        except RuntimeValidationError as exc:
+            print(redact_outbound_text(str(exc)), file=sys.stderr)
+            # EX_CONFIG: deterministic generated-environment failure, not retryable infra.
+            return 78
     finally:
         try:
             _ADC_PATH.unlink(missing_ok=True)

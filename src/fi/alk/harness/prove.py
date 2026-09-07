@@ -27,7 +27,7 @@ Only a scenario that clears all three is kept. That is the green light.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .catalogue import Catalogue
@@ -51,6 +51,7 @@ class Proof:
     # itself as held for an agent that did nothing at all. Named rather than refused: on a
     # scenario about a refusal, "no order was placed" holding on an untouched world is correct.
     weak: list[str] = field(default_factory=list)
+    failed_attempts: list[str] = field(default_factory=list)
     with_solution: list[Outcome] = field(default_factory=list)
     with_nothing: list[Outcome] = field(default_factory=list)
     refused: list[str] = field(default_factory=list)
@@ -71,6 +72,7 @@ class Proof:
             and self.solvable
             and not self.vacuous
             and not self.weak
+            and not self.failed_attempts
             and not self.broken
         )
 
@@ -79,7 +81,7 @@ class Proof:
         return {
             "ready": self.ready,
             "solvable": self.solvable,
-            "not_vacuous": not self.vacuous,
+            "not_vacuous": not self.vacuous and not self.failed_attempts,
         }
 
     def why(self) -> str:
@@ -124,6 +126,15 @@ class Proof:
                 "        if not tried: return 'never attempted it'\n"
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
+            )
+        if self.failed_attempts:
+            return (
+                "these checks award credit when every tool attempt crashes without changing "
+                "the world or returning a result:\n  - "
+                + "\n  - ".join(self.failed_attempts)
+                + "\n\nArguments and a tool name are not evidence of success. Require a "
+                "successful outcome or the corresponding world effect. For a refusal, require "
+                "evidence of the intended refusal, not an arbitrary execution error."
             )
         if self.weak:
             return (
@@ -321,7 +332,9 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
         # nothing claims to have been settled by code.
         world, applied, ready = prepared(scenario, world_root)
         world.close()
-        proof.why_not_ready = "" if applied.ok and ready.ok else (applied.said or ready.said)
+        proof.why_not_ready = (
+            "" if applied.ok and ready.ok else (applied.said or ready.said)
+        )
         proof.ready = applied.ok and ready.ok
         proof.solvable = proof.ready
         proof.vacuous = False
@@ -364,6 +377,22 @@ def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
         proof.with_nothing = [
             run_check(source, untouched, nothing, name=name) for name, source in checks
         ]
+        # A call-presence check can pass the no-op gate yet credit failed operations.
+        # Keep the arguments, remove all results/effects, and inject an execution failure.
+        # This is not a business refusal: a timeout does not prove correct refusal either.
+        crashed = [
+            replace(
+                call, ok=False, result=None, error="execution failed", refused=False
+            )
+            for call in calls
+        ]
+        if crashed:
+            proof.failed_attempts = [
+                name
+                for name, source in checks
+                if not any(one.name == name and one.held for one in proof.with_nothing)
+                and run_check(source, untouched, crashed, name=name).held
+            ]
     finally:
         untouched.close()
     # Record every check that passes without an action. Even when another checkpoint makes the

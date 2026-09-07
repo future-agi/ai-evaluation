@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from fi.alk.bench._docker import docker_available
+from fi.alk.harness.bundle_author_v2 import _constraint_checked_seed_sql
 from fi.alk.harness.world.stores import (
     PostgresStore,
     Snapshot,
@@ -76,6 +77,10 @@ CREATE TABLE boolean_rows (
     id             text PRIMARY KEY,
     phone_verified boolean NOT NULL
 );
+CREATE TABLE array_rows (
+    id   text PRIMARY KEY,
+    tags text[] NOT NULL
+);
 """
 
 SEED = """
@@ -109,9 +114,33 @@ def seeded(store):
 
 
 @pg
+def test_generated_seed_loads_child_before_parent_without_disabling_constraints(seeded):
+    seeded.apply(_constraint_checked_seed_sql([
+        "INSERT INTO orders (customer_id, item, quantity) VALUES (99, 'test', 1)",
+        "INSERT INTO customers (id, name) VALUES (99, 'parent')",
+    ]))
+    assert any(row["customer_id"] == 99 for row in seeded.state()["orders"])
+
+
+@pg
+def test_generated_seed_rejects_orphans_and_rolls_back_partial_load(seeded):
+    with pytest.raises(Exception, match="seed_dependency_unresolved"):
+        seeded.apply(_constraint_checked_seed_sql([
+            "INSERT INTO customers (id, name) VALUES (98, 'must rollback')",
+            "INSERT INTO orders (customer_id, item, quantity) VALUES (9999, 'orphan', 1)",
+        ]))
+    assert not any(row["id"] == 98 for row in seeded.state()["customers"])
+
+
+@pg
 def test_the_schema_is_the_one_that_was_applied(seeded) -> None:
     """The harness never invents tables. What is here is what the migration created."""
-    assert sorted(seeded.state()) == ["boolean_rows", "customers", "orders"]
+    assert sorted(seeded.state()) == [
+        "array_rows",
+        "boolean_rows",
+        "customers",
+        "orders",
+    ]
 
 
 @pg
@@ -132,7 +161,9 @@ def test_rows_come_back_in_a_stable_order(seeded) -> None:
 @pg
 def test_restore_puts_the_rows_back_exactly(seeded) -> None:
     baseline = seeded.freeze()
-    seeded.apply("INSERT INTO orders (customer_id, item, quantity) VALUES (2, 'ham', 5)")
+    seeded.apply(
+        "INSERT INTO orders (customer_id, item, quantity) VALUES (2, 'ham', 5)"
+    )
     seeded.apply("DELETE FROM orders WHERE customer_id = 2")
     seeded.apply("DELETE FROM customers WHERE name = 'bo'")
     assert seeded.state() != baseline.rows
@@ -146,10 +177,14 @@ def test_restore_puts_the_counters_back_too(seeded) -> None:
     """Without this the next scenario's first insert gets an id continuing from the last one,
     and a check naming a specific id fails for a reason that is not the agent's doing."""
     baseline = seeded.freeze()
-    seeded.apply("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'ham', 1)")
+    seeded.apply(
+        "INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'ham', 1)"
+    )
     seeded.restore(baseline)
 
-    seeded.apply("INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'swiss', 1)")
+    seeded.apply(
+        "INSERT INTO orders (customer_id, item, quantity) VALUES (1, 'swiss', 1)"
+    )
     fresh = [row for row in seeded.state()["orders"] if row["item"] == "swiss"]
     assert [row["id"] for row in fresh] == [2]
 
@@ -228,6 +263,72 @@ def test_postgres_normalizes_unambiguous_boolean_equivalents(value, expected) ->
 
     adapted = _adapt(value, "BOOLEAN")
     assert adapted is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("[]", []),
+        ('["uberx", "comfort"]', ["uberx", "comfort"]),
+        (("black", "xl"), ["black", "xl"]),
+    ],
+)
+def test_postgres_normalizes_json_encoded_array_values(value, expected) -> None:
+    from fi.alk.harness.world.stores.postgres import _adapt
+
+    assert _adapt(value, "ARRAY") == expected
+
+
+def test_postgres_array_adaptation_rejects_malformed_json_list() -> None:
+    from fi.alk.harness.world.stores.postgres import _adapt
+
+    with pytest.raises(StoreError, match="malformed JSON array text"):
+        _adapt('["uberx",]', "ARRAY")
+
+
+@pytest.mark.parametrize(
+    "value", [{"enabled": True}, ["a", "b"], "plain text", 7, False]
+)
+def test_postgres_adapts_every_json_value_through_the_json_codec(value) -> None:
+    from psycopg.types.json import Jsonb
+
+    from fi.alk.harness.world.stores.postgres import _adapt
+
+    adapted = _adapt(value, "jsonb")
+    assert isinstance(adapted, Jsonb)
+    assert adapted.obj == value
+
+
+def test_postgres_decodes_catalogue_types_from_a_sql_ascii_database() -> None:
+    class Result:
+        def fetchall(self):
+            return [(b"enabled", b"boolean"), (b"tags", b"ARRAY")]
+
+    class Connection:
+        def execute(self, _statement, _params):
+            return Result()
+
+    assert PostgresStore()._column_types(Connection(), "records") == {
+        "enabled": "boolean",
+        "tags": "ARRAY",
+    }
+
+
+@pg
+def test_json_encoded_arrays_work_for_scenario_insert_update_and_restore(
+    seeded,
+) -> None:
+    """Every generated setup write path accepts the JSON representation of a SQL array."""
+    inserted = seeded.add("array_rows", {"id": "inserted", "tags": '["uberx"]'})
+    assert inserted["tags"] == ["uberx"]
+
+    assert seeded.amend("array_rows", "inserted", {"tags": "[]"}, by="id") == 1
+    assert seeded.state()["array_rows"] == [{"id": "inserted", "tags": []}]
+
+    seeded.restore(
+        Snapshot(rows={"array_rows": [{"id": "restored", "tags": '["black", "xl"]'}]})
+    )
+    assert seeded.state()["array_rows"] == [{"id": "restored", "tags": ["black", "xl"]}]
 
 
 @pg

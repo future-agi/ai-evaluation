@@ -146,7 +146,43 @@ def _json_type(values: list[Any]) -> str:
     return "text"
 
 
-def _collections_sql(path: Path) -> str:
+def _constraint_checked_seed_sql(statements: list[str]) -> str:
+    """Load generated rows in dependency order without disabling source constraints.
+
+    Retry only foreign-key failures after other rows have been inserted. Each failed
+    insert rolls back in its PL/pgSQL subtransaction. A pass with no progress rejects
+    missing references/cycles instead of silently producing an invalid world.
+    """
+    if not statements:
+        return ""
+    commands = ",\n".join(_sql_literal(statement) for statement in statements)
+    body = (
+        "DECLARE\n"
+        f" pending text[] := ARRAY[{commands}];\n"
+        " remaining text[]; command text; progress boolean; failure_detail text;\n"
+        "BEGIN\n"
+        " WHILE cardinality(pending) > 0 LOOP\n"
+        "  remaining := ARRAY[]::text[]; progress := false;\n"
+        "  FOREACH command IN ARRAY pending LOOP\n"
+        "   BEGIN\n"
+        "    EXECUTE command; progress := true;\n"
+        "   EXCEPTION WHEN foreign_key_violation THEN\n"
+        "    GET STACKED DIAGNOSTICS failure_detail = MESSAGE_TEXT;\n"
+        "    remaining := array_append(remaining, command);\n"
+        "   END;\n"
+        "  END LOOP;\n"
+        "  IF cardinality(remaining) > 0 AND NOT progress THEN\n"
+        "   RAISE EXCEPTION 'seed_dependency_unresolved: % statements; %', "
+        "cardinality(remaining), failure_detail USING ERRCODE = '23503';\n"
+        "  END IF;\n"
+        "  pending := remaining;\n"
+        " END LOOP;\n"
+        "END"
+    )
+    return "DO " + _sql_literal(body) + ";\n"
+
+
+def _collections_sql(path: Path, *, include_schema: bool = True) -> str:
     body = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(body, dict):
         raise BundleAuthorError("collections_invalid: expected an object")
@@ -161,15 +197,19 @@ def _collections_sql(path: Path) -> str:
             f"{_identifier(column)} {_json_type([row.get(column) for row in records])}"
             for column in columns
         ]
-        statements.append(
-            f"CREATE TABLE IF NOT EXISTS {_identifier(str(table))} ({', '.join(definitions)});"
-        )
+        if include_schema:
+            statements.append(
+                f"CREATE TABLE IF NOT EXISTS {_identifier(str(table))} "
+                f"({', '.join(definitions)});"
+            )
         for row in records:
             values = ", ".join(_sql_literal(row.get(column)) for column in columns)
             names = ", ".join(_identifier(column) for column in columns)
             statements.append(
                 f"INSERT INTO {_identifier(str(table))} ({names}) VALUES ({values});"
             )
+    if not include_schema:
+        return _constraint_checked_seed_sql(statements)
     return "\n".join(statements) + "\n"
 
 
@@ -315,7 +355,10 @@ def _contract_default(declaration: str, *, sql_type: str) -> str | None:
 
 
 def _sqlite_sql(
-    path: Path, *, contract_declarations: dict[tuple[str, str], str] | None = None
+    path: Path,
+    *,
+    contract_declarations: dict[tuple[str, str], str] | None = None,
+    include_schema: bool = True,
 ) -> str:
     statements: list[str] = []
     contract_declarations = contract_declarations or {}
@@ -399,9 +442,11 @@ def _sqlite_sql(
                         + ", ".join(_identifier(column) for column in index_columns)
                         + ")"
                     )
-            statements.append(
-                f"CREATE TABLE IF NOT EXISTS {_identifier(table)} ({', '.join(definitions)});"
-            )
+            if include_schema:
+                statements.append(
+                    f"CREATE TABLE IF NOT EXISTS {_identifier(table)} "
+                    f"({', '.join(definitions)});"
+                )
             for record in selected:
                 names = ", ".join(_identifier(column) for column in columns)
                 values = ", ".join(
@@ -413,6 +458,8 @@ def _sqlite_sql(
                 )
     finally:
         connection.close()
+    if not include_schema:
+        return _constraint_checked_seed_sql(statements)
     return "\n".join(statements) + "\n"
 
 
@@ -448,19 +495,149 @@ def _store_json_seed_sql(path: Path) -> str:
         )
     if not statements:
         return ""
-    # A frozen snapshot is already internally consistent, but alphabetical table order is not
-    # necessarily foreign-key order (for example payment_methods sorts before users).  Restore it
-    # like pg_restore does: suppress constraint triggers for the bulk load, then re-enable them.
-    return (
-        "SET session_replication_role = replica;\n"
-        + "\n".join(statements)
-        + "\nSET session_replication_role = origin;\n"
+    return _constraint_checked_seed_sql(statements)
+
+
+def _contained_source_path(source: Path, raw_path: str) -> Path | None:
+    """Resolve a submitted path without ever following it outside the checkout."""
+
+    try:
+        candidate = (source / raw_path).resolve()
+        root = source.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not candidate.is_relative_to(root) or not candidate.exists():
+        return None
+    return candidate
+
+
+def _schema_like(path: Path) -> bool:
+    name = path.name.lower()
+    return path.suffix.lower() == ".sql" and any(
+        marker in name for marker in ("schema", "migration", "migrate", "ddl")
     )
 
 
+def _compose_source_schema_paths(source: Path) -> list[Path]:
+    """Discover repository-owned DDL mounted into a database init directory.
+
+    Compose is only evidence here; it is never executed by the hosted guest. Restricting this
+    to schema/migration-named SQL files avoids adopting fixture/seed data, which must come from
+    the freshly authored scenario world instead.
+    """
+
+    compose_path = _compose_path(source)
+    if compose_path is None:
+        return []
+    compose = _load_compose(compose_path)
+    discovered: list[Path] = []
+    for service in compose["services"].values():
+        if not isinstance(service, dict):
+            continue
+        for volume in service.get("volumes") or []:
+            raw_source = ""
+            target = ""
+            if isinstance(volume, str):
+                pieces = volume.split(":")
+                if len(pieces) >= 2:
+                    raw_source, target = pieces[0], pieces[1]
+            elif isinstance(volume, dict):
+                raw_source = str(volume.get("source") or "")
+                target = str(volume.get("target") or "")
+            if "docker-entrypoint-initdb.d" not in target or not raw_source:
+                continue
+            path = _contained_source_path(source, raw_source)
+            if path is None:
+                continue
+            if path.is_file() and _schema_like(path):
+                discovered.append(path)
+            elif path.is_dir():
+                discovered.extend(
+                    candidate
+                    for candidate in sorted(path.rglob("*.sql"))
+                    if candidate.is_file() and _schema_like(candidate)
+                )
+    return discovered
+
+
+def _source_schema_paths(
+    source: Path, *, contract: dict[str, Any] | None = None
+) -> list[Path]:
+    """Return deterministic source-owned schema artifacts in precedence order.
+
+    Executable repository evidence is authoritative. The generated contract may point at that
+    evidence, but it cannot replace or truncate it. This is intentionally independent of model
+    output so two fresh authoring runs compile the same source schema.
+    """
+
+    candidates = _compose_source_schema_paths(source)
+    for conventional in ("db/schema.sql", "schema.sql"):
+        path = _contained_source_path(source, conventional)
+        if path is not None and path.is_file():
+            candidates.append(path)
+
+    store = (contract or {}).get("data_store")
+    declared = (
+        str(store.get("schema_from") or "").strip() if isinstance(store, dict) else ""
+    )
+    if declared:
+        path = _contained_source_path(source, declared)
+        if path is not None:
+            if path.is_file() and path.suffix.lower() == ".sql":
+                candidates.append(path)
+            elif path.is_dir():
+                candidates.extend(
+                    candidate
+                    for candidate in sorted(path.rglob("*.sql"))
+                    if candidate.is_file() and _schema_like(candidate)
+                )
+        elif declared.lower().endswith(".sql") and not candidates:
+            raise BundleAuthorError(f"source_schema_missing: {declared}")
+
+    unique: dict[str, Path] = {}
+    for path in candidates:
+        relative = path.relative_to(source.resolve()).as_posix()
+        unique.setdefault(relative, path)
+    return [unique[key] for key in sorted(unique)]
+
+
 def _adopted_seed_sql(
-    authoring: Path, *, contract: dict[str, Any] | None = None
+    authoring: Path,
+    *,
+    source: Path | None = None,
+    contract: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
+    source_schemas = (
+        _source_schema_paths(source, contract=contract) if source is not None else []
+    )
+    if source_schemas:
+        schema_sql = "\n".join(
+            path.read_text(encoding="utf-8") for path in source_schemas
+        )
+        adopted = [
+            f"source/{path.relative_to(source.resolve()).as_posix()}"
+            for path in source_schemas
+        ]
+        store = authoring / "store.json"
+        if store.is_file():
+            return (
+                schema_sql + "\n" + _store_json_seed_sql(store),
+                adopted + ["store.json"],
+            )
+        sqlite = authoring / "world.sqlite"
+        if sqlite.is_file():
+            rows = _sqlite_sql(
+                sqlite,
+                contract_declarations=_contract_column_declarations(contract or {}),
+                include_schema=False,
+            )
+            return schema_sql + "\n" + rows, adopted + ["world.sqlite"]
+        collections = authoring / "collections.json"
+        if collections.is_file():
+            rows = _collections_sql(collections, include_schema=False)
+            return schema_sql + "\n" + rows, adopted + ["collections.json"]
+        return schema_sql, adopted
+
     schema = authoring / "schema.sql"
     if schema.is_file():
         sql = schema.read_text(encoding="utf-8")
@@ -1285,7 +1462,11 @@ def author_bundle_v2(
             "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
             "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
         )
-        schema, adopted_seed = _adopted_seed_sql(authoring_root, contract=contract_body)
+        schema, adopted_seed = _adopted_seed_sql(
+            authoring_root,
+            source=source_root,
+            contract=contract_body,
+        )
         seed_path.write_text(prefix + schema, encoding="utf-8")
         migrations = ["seed/world.sql"]
         store = StoreEntry(

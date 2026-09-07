@@ -52,3 +52,17 @@ def test_explicit_claude_vertex_region_wins(tmp_path, monkeypatch) -> None:
         }
     )
     assert entrypoint.os.environ["CLOUD_ML_REGION"] == "europe-west1"
+
+
+def test_exhausted_runtime_repair_returns_nonretryable_exit(tmp_path, monkeypatch):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+
+    monkeypatch.setattr(entrypoint, "_load_values", lambda path: {})
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+
+    def failed(argv, *, validate_runtime):
+        assert validate_runtime is True
+        raise RuntimeValidationError("environment", "seed_dependency_unresolved")
+
+    monkeypatch.setattr(entrypoint, "authoring_main", failed)
+    assert entrypoint.main([]) == 78

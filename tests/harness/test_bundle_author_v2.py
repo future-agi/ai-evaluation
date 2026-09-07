@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
+    BundleAuthorError,
     _contract_column_declarations,
     _sqlite_sql,
     author_bundle_v2,
@@ -872,7 +873,139 @@ def test_bundle_combines_schema_with_frozen_store_rows(tmp_path: Path) -> None:
     assert 'INSERT INTO public."users"' in seed_sql
     assert 'jsonb_populate_recordset(NULL::public."users"' in seed_sql
     assert '"priority"' in seed_sql
-    assert "SET session_replication_role = replica;" in seed_sql
-    assert "SET session_replication_role = origin;" in seed_sql
+    assert "session_replication_role" not in seed_sql
+    assert "EXCEPTION WHEN foreign_key_violation" in seed_sql
+    assert "seed_dependency_unresolved" in seed_sql
     assert "schema.sql" in manifest.provenance.adopted_files
     assert "store.json" in manifest.provenance.adopted_files
+
+
+def test_bundle_uses_source_schema_when_fresh_contract_omits_a_column(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE bookings ("
+        "booking_ref TEXT PRIMARY KEY, rider_id TEXT, phone_verified BOOLEAN);\n",
+        encoding="utf-8",
+    )
+    # The model-authored representation is deliberately lossy: this reproduces the dev failure
+    # where a fresh contract omitted booking_ref even though the submitted repository required it.
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "voice",
+                "data_store": {"schema_from": "db/schema.sql"},
+                "data_schema": {
+                    "bookings": {
+                        "rider_id": "TEXT",
+                        "phone_verified": "BOOLEAN",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute(
+            "CREATE TABLE bookings (rider_id TEXT, phone_verified INTEGER)"
+        )
+        database.execute("INSERT INTO bookings VALUES (?, ?)", ("rider-1", 1))
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert "booking_ref TEXT PRIMARY KEY" in seed_sql
+    assert 'CREATE TABLE IF NOT EXISTS "bookings"' not in seed_sql
+    assert (
+        'INSERT INTO "bookings" ("rider_id", "phone_verified") '
+        "VALUES (''''rider-1'''', TRUE);" in seed_sql
+    )
+    assert "source/db/schema.sql" in manifest.provenance.adopted_files
+    assert "world.sqlite" in manifest.provenance.adopted_files
+
+
+def test_bundle_discovers_compose_mounted_schema_without_model_hint(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "database").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "database" / "001-ddl.sql").write_text(
+        "CREATE TABLE accounts (id TEXT PRIMARY KEY, status TEXT NOT NULL);\n",
+        encoding="utf-8",
+    )
+    (source / "database" / "002-seed.sql").write_text(
+        "INSERT INTO accounts VALUES ('stale', 'stale');\n",
+        encoding="utf-8",
+    )
+    (source / "compose.yml").write_text(
+        "services:\n"
+        "  postgres:\n"
+        "    image: postgres:16\n"
+        "    volumes:\n"
+        "      - ./database/001-ddl.sql:/docker-entrypoint-initdb.d/01.sql:ro\n"
+        "      - ./database/002-seed.sql:/docker-entrypoint-initdb.d/02.sql:ro\n"
+        "  agent:\n"
+        "    build: .\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute("CREATE TABLE accounts (id TEXT PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO accounts VALUES (?, ?)", ("fresh", "active"))
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE accounts" in seed_sql
+    assert "''''fresh'''', ''''active''''" in seed_sql
+    assert "'stale', 'stale'" not in seed_sql
+    assert "source/database/001-ddl.sql" in manifest.provenance.adopted_files
+
+
+def test_bundle_rejects_missing_declared_source_schema(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "voice",
+                "data_store": {"schema_from": "db/missing-schema.sql"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BundleAuthorError, match="source_schema_missing"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http"),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )

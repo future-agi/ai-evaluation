@@ -500,7 +500,22 @@ def select_process_secrets(
 # allowlist of the interpreter/locale plumbing a process cannot run without, rather than
 # `os.environ` wholesale — nothing here exports a secret today, but the entrypoint that will
 # (a bearer token, a `FUTUREAGI_*` marker) is exactly the next thing wired on top of this module.
-_INHERITED_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "TZ", "TMPDIR")
+_INHERITED_ENV_ALLOWLIST = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "TZ",
+    "TMPDIR",
+    # Daytona's restricted egress supplies a public trust anchor through these
+    # paths. Dropping them breaks TLS for child builds and services. These are
+    # trust-store paths, not provider credentials or authenticated proxy URLs.
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "PIP_CERT",
+    "NODE_EXTRA_CA_CERTS",
+)
 _GOOGLE_ADC_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
 _GOOGLE_ADC_PATH_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
 
@@ -1185,7 +1200,9 @@ def _agent_name_source_default(source_root: Path) -> str:
             return ""
         for path in source_root.rglob("*.py"):
             try:
-                match = _AGENT_NAME_SOURCE_DEFAULT.search(path.read_text(encoding="utf-8"))
+                match = _AGENT_NAME_SOURCE_DEFAULT.search(
+                    path.read_text(encoding="utf-8")
+                )
             except (OSError, UnicodeDecodeError):
                 continue
             if match:
@@ -1243,6 +1260,13 @@ def postgres_bootstrap_argv(
         str(pwfile),
         "-A",
         "scram-sha-256",
+        # The sandbox intentionally carries a minimal ambient environment. Without an explicit
+        # locale/encoding, initdb can select SQL_ASCII; psycopg then returns catalogue names and
+        # ordinary text as bytes. Besides making runs host-dependent, that bypasses the store's
+        # schema-driven value adaptation because b"boolean" is not "boolean". Fix the cluster
+        # representation at its source so every fresh world has the same text semantics.
+        "--encoding=UTF8",
+        "--locale=C.UTF-8",
     ]
 
 
@@ -4856,9 +4880,7 @@ class ProcessRuntimeProvider:
             # build tree. The world scratch directory contains only writable runtime state, so
             # using it as cwd makes a repository command such as `python provider_target.py`
             # fail before it can contact the provider.
-            source_directory=build_tree_dir(
-                self._context.work_directory, process_name
-            ),
+            source_directory=build_tree_dir(self._context.work_directory, process_name),
             lifecycle_directory=lifecycle_directory,
             context_path=context_path,
             context=context,
@@ -4980,9 +5002,7 @@ class ProcessRuntimeProvider:
         )
         invocation = build_lifecycle_invocation(
             command=spec.destroy,
-            source_directory=build_tree_dir(
-                self._context.work_directory, process_name
-            ),
+            source_directory=build_tree_dir(self._context.work_directory, process_name),
             lifecycle_directory=lifecycle_directory,
             context_path=lifecycle_directory / "context.json",
             context=context,

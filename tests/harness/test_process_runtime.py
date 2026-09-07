@@ -749,6 +749,31 @@ def test_allowlisted_ambient_env_keeps_only_the_fixed_set() -> None:
     }
 
 
+def test_ambient_env_preserves_egress_trust_without_provider_secrets():
+    trust = {
+        name: "/etc/daytona/netleash/ca.crt"
+        for name in (
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
+            "PIP_CERT",
+            "NODE_EXTRA_CA_CERTS",
+        )
+    }
+    assert (
+        pr._allowlisted_ambient_env(
+            {
+                **trust,
+                "GOOGLE_APPLICATION_CREDENTIALS": "/private/adc.json",
+                "SIMULATOR_API_KEY": "private",
+                "HTTPS_PROXY": "https://user:password@proxy",
+            }
+        )
+        == trust
+    )
+
+
 def test_spawn_source_process_env_does_not_inherit_an_arbitrary_ambient_var(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1757,6 +1782,8 @@ def test_spawn_managed_process_bootstraps_postgres_once_via_sync_run(
     )
     assert len(bootstrap_calls) == 1
     assert bootstrap_calls[0][0] == "initdb"
+    assert "--encoding=UTF8" in bootstrap_calls[0]
+    assert "--locale=C.UTF-8" in bootstrap_calls[0]
     assert run_calls[0][0] == "postgres"
     # No pwfile left behind after bootstrap.
     assert not any(p.name.endswith(".pwfile") for p in data_dir.parent.glob(".*"))

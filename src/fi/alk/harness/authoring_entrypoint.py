@@ -83,7 +83,7 @@ def _load_provider_import_profile(
     return profile
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("job", type=Path)
     parser.add_argument("--source", type=Path, required=True)
@@ -136,6 +136,20 @@ def main(argv: list[str] | None = None) -> int:
             os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = str(profile_path)
         try:
             status = asyncio.run(_auto(namespace))
+            if status == 0 and validate_runtime:
+                from .authoring_runtime_validation import validate_and_repair
+
+                _persist_authored_scenario_count(args.job, job, args.output.resolve())
+                runtime_job = HarnessJob.model_validate_json(args.job.read_text())
+                if profile is not None:
+                    (args.output / "provider-import-profile.json").write_text(
+                        json.dumps(profile) + "\n", encoding="utf-8"
+                    )
+                asyncio.run(
+                    validate_and_repair(
+                        runtime_job, args.source.resolve(), args.output.resolve()
+                    )
+                )
         finally:
             if previous_profile_path is None:
                 os.environ.pop(PROVIDER_IMPORT_PROFILE_PATH_ENV, None)

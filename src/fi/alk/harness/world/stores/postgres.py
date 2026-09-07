@@ -17,6 +17,7 @@ the guess.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -151,7 +152,13 @@ class PostgresStore(ContainerStore):
         return [row[0] for row in rows]
 
     def _column_types(self, connection: Any, table: str) -> dict[str, str]:
-        """Return declared column types so arrays are not coerced into JSON."""
+        """Return declared column types so writes use the source schema's representation.
+
+        New managed clusters are always UTF-8, but an externally attached or older SQL_ASCII
+        database can return even information-schema text as ``bytes``. Decode the catalogue
+        defensively: silently missing every lookup would disable all type adaptation and turn one
+        environment detail into a sequence of misleading per-column database failures.
+        """
         rows = connection.execute(
             """
             SELECT column_name, data_type
@@ -160,7 +167,11 @@ class PostgresStore(ContainerStore):
             """,
             (table,),
         ).fetchall()
-        return {row[0]: row[1] for row in rows}
+
+        def text(value: Any) -> str:
+            return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+        return {text(row[0]): text(row[1]) for row in rows}
 
     def _select_ordered(self, connection: Any, table: str) -> list[dict[str, Any]]:
         """Every row of one table, ordered by its primary key where it has one.
@@ -182,7 +193,9 @@ class PostgresStore(ContainerStore):
         columns = [description[0] for description in cursor.description or []]
         return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
-    def state(self, only: Sequence[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+    def state(
+        self, only: Sequence[str] | None = None
+    ) -> dict[str, list[dict[str, Any]]]:
         """Every table and its rows, in the shape the checks already expect.
 
         ``only`` narrows the read to the named tables, still inside the one connection — a
@@ -415,11 +428,17 @@ def _adapt(value: Any, data_type: str = "") -> Any:
     """Hand back a value in the form psycopg will write.
 
     A list in a JSON column must be wrapped, while a list in an ARRAY column must remain a list
-    so psycopg emits a native Postgres array. Scenario setup is JSON/Python authored and may
-    therefore represent a boolean as ``0``/``1`` even though PostgreSQL deliberately does not
-    implicitly cast a bound smallint to boolean. Normalize only the finite, unambiguous boolean
-    vocabulary; using ``bool(value)`` here would silently turn values such as ``2`` or
-    ``"disabled"`` into true.
+    so psycopg emits a native Postgres array. The authored setup crosses JSON boundaries before
+    it reaches a store, and some producers consequently leave a structured array as the JSON
+    string ``"[]"``. PostgreSQL interprets a bound string as its own array-literal syntax, where
+    square brackets mean dimensions rather than values, and rejects it. Decode only an actual
+    JSON list for an ARRAY column; arbitrary strings remain arbitrary strings and PostgreSQL can
+    enforce the declared element type.
+
+    Scenario setup may likewise represent a boolean as ``0``/``1`` even though PostgreSQL
+    deliberately does not implicitly cast a bound smallint to boolean. Normalize only the
+    finite, unambiguous boolean vocabulary; using ``bool(value)`` here would silently turn values
+    such as ``2`` or ``"disabled"`` into true.
     """
     normalized_type = data_type.strip().lower()
     if value is not None and normalized_type == "boolean":
@@ -437,9 +456,25 @@ def _adapt(value: Any, data_type: str = "") -> Any:
             "a PostgreSQL boolean column received "
             f"{value!r}; expected true/false or the equivalent 1/0"
         )
-    if isinstance(value, dict) or (
-        isinstance(value, list) and normalized_type in ("json", "jsonb")
-    ):
+    if value is not None and normalized_type == "array":
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        if isinstance(value, str) and value.strip().startswith("["):
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise StoreError(
+                    "a PostgreSQL array column received malformed JSON array text "
+                    f"{value!r}"
+                ) from exc
+            if not isinstance(decoded, list):  # pragma: no cover - guarded by '['
+                raise StoreError(
+                    f"a PostgreSQL array column received {value!r}; expected a JSON list"
+                )
+            return decoded
+    if value is not None and normalized_type in ("json", "jsonb"):
         from psycopg.types.json import Jsonb
 
         return Jsonb(value)
