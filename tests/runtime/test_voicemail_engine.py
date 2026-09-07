@@ -406,3 +406,37 @@ def test_the_mailbox_timer_is_cancelled_with_the_call(monkeypatch):
         assert agent._mailbox_close_task is None
 
     asyncio.run(drive())
+
+
+def _said(role: str, content: str = "something") -> dict[str, str]:
+    return {"role": role, "content": content}
+
+
+def test_caller_may_hang_up_once_the_target_stops_replying() -> None:
+    """The floor counts messages, and the caller's own filler counts toward it.
+
+    A caller refused the tool talks to fill the silence and eventually buys its own permission,
+    which is the opposite of what the floor is for. Measured on a real call: the agent finished,
+    the caller said goodbye five times over thirty-seven seconds.
+    """
+    # One unanswered turn is the caller finishing a thought; the agent may still be about to reply.
+    one_unanswered_turn = [
+        _said("assistant"),
+        _said("user"),
+        _said("assistant"),
+        _said("user"),
+    ]
+    assert livekit._target_has_gone_quiet(one_unanswered_turn) is False
+
+    # Two in a row means nobody is replying.
+    agent_gone_quiet = one_unanswered_turn + [_said("user")]
+    assert livekit._target_has_gone_quiet(agent_gone_quiet) is True
+
+    # And replying resets it.
+    assert livekit._target_has_gone_quiet(agent_gone_quiet + [_said("assistant")]) is False
+
+
+def test_a_caller_that_has_never_heard_the_agent_may_not_hang_up() -> None:
+    """A call where only the caller ever spoke is a failed call, not a finished one."""
+    assert livekit._target_has_gone_quiet([_said("user"), _said("user")]) is False
+    assert livekit._target_has_gone_quiet([]) is False

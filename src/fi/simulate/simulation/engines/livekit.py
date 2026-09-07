@@ -302,9 +302,17 @@ class _TestRunnerAgent(Agent):
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
         floor, alternation_required = _turn_requirements(self._min_turn_messages)
-        if len(messages) < floor or (
+        below_floor = len(messages) < floor or (
             alternation_required and not _has_role_alternation(messages)
-        ):
+        )
+        if below_floor and _target_has_gone_quiet(messages):
+            logger.warning(
+                "endCall allowed below the floor: %d messages, floor %d, target silent",
+                len(messages),
+                floor,
+            )
+            below_floor = False
+        if below_floor:
             # Whether the caller ever reached for this tool, and why it was turned away, is the
             # difference between a simulator that will not hang up and one that was not allowed to.
             logger.warning(
@@ -3042,6 +3050,29 @@ def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
+
+
+# Two unanswered turns: one can be the caller finishing a thought, two means nobody is replying.
+_QUIET_AFTER_UNANSWERED_TURNS = 2
+
+
+def _target_has_gone_quiet(messages: list[dict[str, Any]]) -> bool:
+    """Whether the agent has stopped replying, so the floor can never be reached honestly.
+
+    The floor counts messages, and the caller's own turns count toward it, so a caller that is
+    refused the tool talks to fill the silence and eventually buys its own permission. That is the
+    opposite of what the floor is for. When the agent has spoken and then stopped, the caller is
+    allowed to hang up instead.
+    """
+    spoken = [message for message in messages if message.get("content")]
+    if not any(message.get("role") == "assistant" for message in spoken):
+        return False
+    trailing = 0
+    for message in reversed(spoken):
+        if message.get("role") != "user":
+            break
+        trailing += 1
+    return trailing >= _QUIET_AFTER_UNANSWERED_TURNS
 
 
 def _conversation_outcome(
