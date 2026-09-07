@@ -447,6 +447,8 @@ class AgentContract(BaseModel):
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
     dependencies: list[Dependency] = Field(default_factory=list)
+    # Transport/model connections are configuration, not business services to reconstruct.
+    runtime_dependencies: list[Dependency] = Field(default_factory=list)
     # Whether the agent ships code for its tools: present, absent, or partial. Missing code is a
     # build blocker: the harness never supplies replacement agent behavior.
     implementation: str = ""
@@ -493,9 +495,7 @@ class AgentContract(BaseModel):
             )
             # Preconditions belong on the tool line or they are not read. A writer that cannot see
             # what a tool refuses until another has run replays the agent's whole flow to reach it.
-            needs = (
-                f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
-            )
+            needs = f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
             lines.append(
                 f"  - {tool.name}({signature}){values}{needs} : {tool.description[:140]}"
             )
@@ -565,6 +565,14 @@ class AgentContract(BaseModel):
                     for one in self.tool_entrypoints
                 )
             )
+        if self.runtime_dependencies:
+            parts.append(
+                "RUNTIME CONNECTIONS (not business-world state; do not rebuild):\n"
+                + "\n".join(
+                    f"  {one.name}: {one.what} {_reached(one)}"
+                    for one in self.runtime_dependencies
+                )
+            )
         if self.refusal_signature:
             parts.append(
                 "HOW THIS AGENT REFUSES, in a value rather than by raising:\n  "
@@ -623,6 +631,31 @@ class AgentContract(BaseModel):
         return bool(found and found.mode in ("import", "construct", "service"))
 
 
+def is_data_free_conversation(contract: AgentContract) -> bool:
+    """Whether the contract claims conversation without custom tools or business state.
+
+    Callers must also inspect the actual world; this claim alone is not a runtime exemption.
+    """
+    store = (
+        contract.data_store.model_dump(exclude_defaults=True)
+        if contract.data_store
+        else {}
+    )
+    if store.get("kind") in {"", "none", "in_process"}:
+        store.pop("kind", None)
+    return bool(
+        contract.conversational
+        and not (
+            contract.tools
+            or contract.tool_entrypoints
+            or contract.dependencies
+            or contract.data_schema
+            or contract.base_environment
+            or store
+        )
+    )
+
+
 def validate_contract(contract: AgentContract) -> list[str]:
     """Structural problems that make a contract unusable downstream.
 
@@ -633,8 +666,22 @@ def validate_contract(contract: AgentContract) -> list[str]:
     problems: list[str] = []
     if not contract.agent.strip():
         problems.append("empty:agent")
-    if not contract.tools:
-        problems.append("no-tools")
+    for dependency in contract.dependencies:
+        if dependency.reached.dsn_env in {"LIVEKIT_URL", "LIVEKIT_INFERENCE_URL"}:
+            problems.append(
+                f"dependency[{dependency.name}]:runtime-connection-in-world — "
+                "LiveKit RTC/Inference is a runtime connection, not business-world data. "
+                "Move it to runtime_dependencies. Do not generate tables or tool sequences for it."
+            )
+    for dependency in contract.runtime_dependencies:
+        if (
+            dependency.kind.lower() in {"datastore", "database", "file", "queue"}
+            or dependency.reached.database
+        ):
+            problems.append(
+                f"dependency[{dependency.name}]:business-data-in-runtime — "
+                "Business data belongs in dependencies, not runtime_dependencies."
+            )
     for index, tool in enumerate(contract.tools):
         if not tool.name.strip():
             problems.append(f"tool[{index}]:no-name")
@@ -644,13 +691,8 @@ def validate_contract(contract: AgentContract) -> list[str]:
             problems.append(
                 f"tool[{tool.name}]:types-for-unknown-args:{','.join(unknown)}"
             )
-    # A tool genuinely taking no arguments is ordinary; every tool taking none is not. It means
-    # the arguments were read and then not recorded, and since the world, the probes and the
-    # checkpoints are all built from these names, nothing downstream can detect their absence.
-    if contract.tools and not any(tool.args for tool in contract.tools):
-        problems.append(
-            "no-arguments-on-any-tool: list each tool's exact parameter names in args"
-        )
+    # Conversational agents may expose no tools. Zero-argument tools are also legitimate;
+    # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:
         problems.append("no-use-cases")
     # Iterate the tools, not tool_names(): that returns a set, so duplicates collapse before

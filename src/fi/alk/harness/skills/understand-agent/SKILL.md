@@ -5,6 +5,17 @@ description: Read an AI agent's source and write down what is verifiably true ab
 
 # Understand the agent
 
+Record executable capabilities, not commented examples, docstrings or suggested future features.
+An agent can legitimately have no custom tools: submit `tools: []` and `tool_entrypoints: []`.
+Do not invent a tool or database to make a contract look complete. Zero-argument tools are also
+valid when their actual signatures take no arguments. Follow registrations into executable code;
+a commented `@function_tool` or commented function definition does not register a tool.
+
+Separate business-world `dependencies` (databases, files, queues, tool backends to recreate)
+from `runtime_dependencies` (RTC transport and model-provider connections using supplied config).
+LiveKit RTC/Inference is a runtime connection, not a business datastore. A conversational agent
+can require transport/inference credentials and still have no tools and an empty business world.
+
 You are reading the source of an AI agent so that a test environment can be built for it. Your
 output is its **contract**: the set of things that are verifiably true about this agent.
 

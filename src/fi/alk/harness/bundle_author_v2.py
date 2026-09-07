@@ -1201,6 +1201,19 @@ def resolve_environment_plan(
                     "component_ambiguous: expected exactly one agent.py"
                 )
             component = candidates[0].parent
+            # An entrypoint directory is not necessarily its Python project root. Preserve
+            # the nearest enclosing manifest and its sibling packages instead of flattening
+            # src/ and silently running without the repository's dependencies.
+            for parent in (component, *component.parents):
+                if not parent.is_relative_to(root):
+                    break
+                if any(
+                    (parent / name).is_file()
+                    for name in ("pyproject.toml", "requirements.txt")
+                ):
+                    component = parent
+                    break
+            entry = candidates[0].relative_to(component).as_posix()
         else:
             component = root
         control_name = "agent"

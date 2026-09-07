@@ -5,6 +5,12 @@ description: Build the world an agent is tested in, and everything every scenari
 
 # Build the environment
 
+For a tool-free conversational agent with no source-backed business data, an empty world is
+correct. Do not create sample domain tables, handlers, fixtures, stateful tool sequences or tool
+sub-goals just to satisfy a checklist below. Preserve and provision the real worker and its model
+connections; write the simulator prompt and conversational evaluation criteria. Save the empty
+world normally. Internal harness bookkeeping is not agent business data.
+
 You are building the world an AI agent will be tested in. Its contract is in front of you: the
 tools it really has, the rules it obeys, what it depends on, and its data.
 

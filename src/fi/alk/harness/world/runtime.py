@@ -14,6 +14,7 @@ one.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import sqlite3
@@ -180,6 +181,12 @@ class GeneratedWorld(EnvironmentAdapter):
     ) -> None:
         from .stores import open_store
 
+        # Generated subclasses declare these as class-level templates. Every world must own
+        # its copies: binding and probing mutate them, and sharing the template lets one
+        # agent's tools leak into a later agent authored by the same worker process.
+        self.tools = copy.deepcopy(type(self).tools)
+        self.handlers = dict(type(self).handlers)
+        self.state_object = copy.deepcopy(type(self).state_object)
         self.database = str(database)
         # Where this agent's records live. Given rather than assumed, because the harness
         # writes statements in whatever the agent's own store speaks and they have to reach

@@ -26,7 +26,7 @@ from ..backends import tool, tool_server
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
 from ..checks import run_check, run_world_check
-from ..contract import AgentContract
+from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -341,8 +341,6 @@ def _ok(text: str) -> dict[str, Any]:
 
 def _err(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-
 
 
 def world_tools(
@@ -1174,6 +1172,17 @@ def world_tools(
         schema({"name": str, "code": str, "what": str}, ["name", "code"]),
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
+        if (
+            is_data_free_conversation(contract)
+            and not world.state()
+            and not world.handlers
+        ):
+            return _ok(
+                "World-data checks are not applicable: this conversational agent has no "
+                "business state or custom tools. Do not invent data or empty-world checks. "
+                "Write conversational sub-goals and the simulator prompt, then save_world. "
+                "The hosted runtime must still pass readiness and live conversation tests."
+            )
         name = str(args["name"])
         source = str(args["code"])
         outcome = run_world_check(source, world, name=name)
@@ -1231,7 +1240,13 @@ def world_tools(
                     "it, so this is ours to fix rather than yours."
                 )
         else:
-            own = "\nNo world checks of your own yet. Add them with add_world_check."
+            own = (
+                "\nWorld-data checks are not applicable to this empty conversational world."
+                if is_data_free_conversation(contract)
+                and not world.state()
+                and not world.handlers
+                else "\nNo world checks of your own yet. Add them with add_world_check."
+            )
         return _ok(f"{report.summary()}\nscore {report.score:.2f}{own}{stuck}")
 
     @tool(
@@ -1240,8 +1255,13 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
+        data_free = (
+            is_data_free_conversation(contract)
+            and not world.state()
+            and not world.handlers
+        )
         report = probe(world, contract, sequences=sequences, kind=kind)
-        if report.score < ACCEPTABLE:
+        if report.score < ACCEPTABLE and not data_free:
             return _err(
                 f"Not saved, the world does not hold up yet.\n{report.summary()}\n"
                 f"score {report.score:.2f}, needs {ACCEPTABLE:.2f}"
@@ -1250,7 +1270,7 @@ def world_tools(
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
-        if not sequences and not runtime_only:
+        if not sequences and not runtime_only and not data_free:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
@@ -1267,7 +1287,7 @@ def world_tools(
         # The world has to prove itself, and the proof has to be capable of failing. Both halves
         # matter: checks nobody wrote verify nothing, and checks that pass a world with no data
         # and no working tools verify nothing either.
-        if not world_checks:
+        if not world_checks and not data_free:
             return _err(
                 "Not saved. This world has no checks of its own yet. Add them with "
                 "add_world_check: what has to be true for this world to be worth testing "
@@ -1299,7 +1319,7 @@ def world_tools(
                 "Add them with add_sub_goal."
             )
         settled = [one for one in catalogue.sub_goals if one.deterministic()]
-        if not settled:
+        if not settled and not data_free:
             return _err(
                 "Not saved. Every sub-goal is judged by a model. Most of what this agent does "
                 "leaves a trace in the world or in its calls, and those should be settled by "
@@ -1362,7 +1382,11 @@ def world_tools(
             f"{len(world.handlers)} tools, {len(tables)} collections, "
             f"{sum(_size(held) for held in tables.values())} records, "
             f"{len(world_checks)} world checks.\n"
-            f"score {report.score:.2f}"
+            + (
+                "Tool/data probes not applicable; conversational runtime proof remains required."
+                if data_free
+                else f"score {report.score:.2f}"
+            )
         )
 
     server = tool_server(

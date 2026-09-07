@@ -29,12 +29,8 @@ def _ok(text: str) -> dict[str, Any]:
 _GUIDANCE = {
     "empty:agent": "the `agent` field is empty. A short lower-case name; it is only the "
     "artifact folder's label",
-    "no-tools": "the `tools` field is empty. List the agent's real tools; nothing downstream "
-    "can be built without them",
     "no-use-cases": "the `real_use_cases` field is empty — note the name, it is not "
     "`use_cases`. List the concrete situations this agent handles, from its tools and data",
-    "no-arguments-on-any-tool": "every tool was recorded with no arguments, which means they "
-    "were read and not written down. Put each tool's exact parameter names in args",
     "duplicate-tool-names": "the same tool is listed twice; keep one entry per tool",
     "types-for-unknown-args": "arg_types names an argument that is not in args. The names must "
     "match the source exactly",
@@ -121,7 +117,9 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def accept_contract(payload: dict[str, Any], destination: Path) -> dict[str, Any]:
+def accept_contract(
+    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
     A plain function rather than only a tool body, so the rule that decides whether a contract
@@ -135,6 +133,10 @@ def accept_contract(payload: dict[str, Any], destination: Path) -> dict[str, Any
         return _problems([f"schema:{invalid}"[:600]], arrived)
 
     problems = validate_contract(contract)
+    if source_root is not None:
+        from .source_tool_evidence import tool_evidence_problems
+
+        problems.extend(tool_evidence_problems(contract, source_root))
     if problems:
         return _problems(problems, arrived)
 
@@ -169,7 +171,10 @@ MOST_CHOSEN_EVALS = 6
 
 
 def contract_tools(
-    destination: Path, available_evals: list[dict[str, Any]] | None = None
+    destination: Path,
+    available_evals: list[dict[str, Any]] | None = None,
+    *,
+    source_root: Path | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -178,7 +183,9 @@ def contract_tools(
     """
     # Name to modality, empty or "any" for all. Refused here too, where it is still free to fix.
     offered_modality = {
-        str(one.get("name") or "").strip(): str(one.get("modality") or "").strip().lower()
+        str(one.get("name") or "").strip(): str(one.get("modality") or "")
+        .strip()
+        .lower()
         for one in (available_evals or [])
         if isinstance(one, dict) and str(one.get("name") or "").strip()
     }
@@ -228,8 +235,8 @@ def contract_tools(
                     "enum": list(CALL_DIRECTIONS),
                     "description": "Voice only, and read from the agent's own instructions rather "
                     "than guessed. Outbound if it places the call and the person is not expecting "
-                    "it (\"you placed this call\", \"this is us calling about\"); inbound if "
-                    "people dial in to it (\"callers dial in\", \"thanks for calling\"). "
+                    'it ("you placed this call", "this is us calling about"); inbound if '
+                    'people dial in to it ("callers dial in", "thanks for calling"). '
                     "Leave unset for chat, which a person always starts. This decides how the "
                     "simulated person is briefed: someone who did not dial has no opening request "
                     "to make.",
@@ -307,9 +314,39 @@ def contract_tools(
                     "anything that looks like a mistake. The world is a replica, not a "
                     "corrected version.",
                 },
+                "runtime_dependencies": {
+                    "type": "array",
+                    "description": "External runtime connections such as RTC transport and model "
+                    "inference providers. These use the supplied configuration/credentials; "
+                    "they are not business-world stores or services to recreate. Never put "
+                    "business databases, files, queues or tools backends here.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "description": "transport or inference",
+                            },
+                            "what": {"type": "string"},
+                            "engine": {"type": "string"},
+                            "reached": {
+                                "type": "object",
+                                "properties": {
+                                    "dsn_env": {
+                                        "type": "string",
+                                        "description": "Environment variable NAME, never its secret value",
+                                    },
+                                },
+                            },
+                        },
+                        "required": ["name"],
+                    },
+                },
                 "dependencies": {
                     "type": "array",
-                    "description": "Everything this agent reaches for that has to exist before "
+                    "description": "Business-world dependencies only. Put RTC transport and model "
+                    "provider connections in runtime_dependencies instead. Everything this agent reaches for that has to exist before "
                     "it can work, so the next stage knows what to build. A datastore, a service "
                     "it calls over HTTP, a file it reads, a queue it publishes to. The world is "
                     "a sandbox and nothing reaches outside it, so each of these is built inside "
@@ -877,11 +914,9 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination)
+        return accept_contract(payload, destination, source_root=source_root)
 
-    return tool_server(
-        name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract]
-    )
+    return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 
 
 _JSON_TYPES = {
@@ -959,8 +994,6 @@ def _typed(kind: str, *, optional: bool) -> dict[str, Any]:
     even say which field was at fault: "None is not of type 'string'" is the entire message.
     """
     return {"type": [kind, "null"]} if optional else {"type": kind}
-
-
 
 
 def brief(value: Any, limit: int = 1800) -> str:

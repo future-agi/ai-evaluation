@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .backends import SessionSpec, tool, tool_server
 from .config import chosen_model
+from .contract import AgentContract, is_data_free_conversation
 from .session import Stage
 
 ARTIFACT = "source-data-invariants.json"
@@ -131,6 +132,37 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
+    # Do not manufacture business data merely to satisfy a SQL-review gate. This exemption
+    # requires both the accepted contract and the actual runtime store to be data-free.
+    contract_path = authoring / "contract.json"
+    if contract_path.is_file():
+        contract = AgentContract.model_validate_json(contract_path.read_text())
+        if is_data_free_conversation(contract):
+            state = await asyncio.to_thread(world.state)
+            business_tables = set(state) - {
+                "harness_seed_sentinel",
+                "_alk_tool_trace",
+            }
+            if not business_tables:
+                evidence = {
+                    "status": "not_applicable",
+                    "reason": "No custom tools, data-store seam, dependencies or runtime business tables",
+                    "checks": [],
+                    "tool_execution_proven": False,
+                    "contract_sha256": hashlib.sha256(
+                        contract_path.read_bytes()
+                    ).hexdigest(),
+                    "source_sha256": {
+                        name: hashlib.sha256(path.read_bytes()).hexdigest()
+                        for name, path in files.items()
+                    },
+                }
+                if artifact.exists() and json.loads(artifact.read_text()) != evidence:
+                    raise ValueError(
+                        "Source or contract changed after data-free review"
+                    )
+                artifact.write_text(json.dumps(evidence, indent=2) + "\n")
+                return []
     if artifact.exists():
         checks = json.loads(artifact.read_text())["checks"]
         if not isinstance(checks, list) or not checks:

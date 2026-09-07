@@ -2,6 +2,7 @@ FROM node:20-bookworm-slim AS node20
 FROM node:22-bookworm-slim AS node22
 FROM python:3.11-slim-bookworm AS python311
 FROM python:3.13-slim-bookworm AS python313
+FROM python:3.14-slim-bookworm AS python314
 FROM rabbitmq:3.13.7-management AS rabbitmq313
 FROM ghcr.io/astral-sh/uv:latest AS uvbin
 
@@ -29,6 +30,9 @@ COPY --from=python311 /usr/local/lib/ /usr/local/lib/
 COPY --from=python313 /usr/local/bin/python3.13 /usr/local/bin/python3.13
 COPY --from=python313 /usr/local/include/python3.13 /usr/local/include/python3.13
 COPY --from=python313 /usr/local/lib/ /usr/local/lib/
+COPY --from=python314 /usr/local/bin/python3.14 /usr/local/bin/python3.14
+COPY --from=python314 /usr/local/include/python3.14 /usr/local/include/python3.14
+COPY --from=python314 /usr/local/lib/ /usr/local/lib/
 COPY --from=rabbitmq313 /opt/rabbitmq /opt/rabbitmq
 RUN rm -f /opt/rabbitmq/etc/rabbitmq/enabled_plugins /etc/rabbitmq/enabled_plugins || true
 COPY --from=rabbitmq313 /opt/erlang /opt/erlang
@@ -52,7 +56,9 @@ RUN python3.11 -m venv /tmp/python311-smoke \
     && /tmp/python311-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 11)' \
     && python3.13 -m venv /tmp/python313-smoke \
     && /tmp/python313-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 13)' \
-    && rm -rf /tmp/python311-smoke /tmp/python313-smoke
+    && python3.14 -m venv /tmp/python314-smoke \
+    && /tmp/python314-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 14)' \
+    && rm -rf /tmp/python311-smoke /tmp/python313-smoke /tmp/python314-smoke
 
 RUN groupadd --gid 2000 svc-control \
     && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
@@ -72,7 +78,7 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260907-runtime-authoring-validation-r39
+ARG ALK_HOSTED_SOURCE_REVISION=20260907-network-retry-r46
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src

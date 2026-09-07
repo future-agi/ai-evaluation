@@ -55,7 +55,6 @@ def test_valid_contract_has_no_problems():
     "overrides,expected",
     [
         ({"agent": " "}, "empty:agent"),
-        ({"tools": []}, "no-tools"),
         ({"real_use_cases": []}, "no-use-cases"),
     ],
 )
@@ -1354,7 +1353,7 @@ def test_submit_returns_problems_and_writes_nothing_when_invalid(tmp_path):
     )
     assert result.get("is_error")
     text = result["content"][0]["text"]
-    assert "no-tools" in text and "no-use-cases" in text
+    assert "no-use-cases" in text
     assert not (tmp_path / "contract.json").exists()
 
 
@@ -4241,10 +4240,10 @@ def test_every_problem_is_reported_at_once_with_what_to_do(tmp_path):
     result = accept_contract({"agent": "", "tools": [], "real_use_cases": []}, tmp_path)
     said = result["content"][0]["text"]
     assert result["is_error"]
-    # all three, in one answer
-    assert "empty:agent" in said and "no-tools" in said and "no-use-cases" in said
+    # All actual structural problems, in one answer. Tool-free agents are legitimate.
+    assert "empty:agent" in said and "no-use-cases" in said
     # and each carries what to do about it, not only its code
-    assert "artifact folder" in said and "real tools" in said
+    assert "artifact folder" in said and "concrete situations" in said
     assert not (tmp_path / "contract.json").exists()
 
 
@@ -4761,7 +4760,7 @@ def test_the_gate_names_the_field_it_wants(tmp_path):
     said = accept_contract({"agent": "x", "tools": [], "real_use_cases": []}, tmp_path)
     text = said["content"][0]["text"]
     assert "`real_use_cases`" in text and "not `use_cases`" in text
-    assert "`tools`" in text
+    assert "no-tools" not in text
 
 
 # --- scenario folders and the ready gate ---------------------------------------------

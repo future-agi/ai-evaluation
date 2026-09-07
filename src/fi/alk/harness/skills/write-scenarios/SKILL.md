@@ -5,6 +5,12 @@ description: Write the scenarios an agent is tested with, each proved against th
 
 # Write the scenarios
 
+When the accepted agent has no custom tools or business data, test its actual conversational
+behavior. Leave reference tool actions and data setup empty; do not invent tool calls, database
+records or capabilities from commented examples. Keep meaningful conduct/evaluation checks and
+exercise the real agent over multiple turns. A lack of tool calls is expected for such an agent,
+not evidence of failure. Runtime readiness and conversation proof still apply.
+
 You are writing tests for an AI agent. The environment already exists: a world its tools really act
 on, a prompt for the person it talks to, and a shared catalogue of the named things this agent can be
 checked on. Your job is to write the individual tests, prove each one, and keep it.

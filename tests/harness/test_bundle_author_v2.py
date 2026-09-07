@@ -181,6 +181,50 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     assert "target_http" not in bundle.capabilities
 
 
+@pytest.mark.parametrize(
+    "project_dir,manifest",
+    [(".", "pyproject.toml"), ("service", "pyproject.toml"), (".", "requirements.txt")],
+)
+def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manifest):
+    source = tmp_path / "source"
+    project = source / project_dir
+    (project / "src").mkdir(parents=True)
+    (project / "src/agent.py").write_text("print('registered worker')\n")
+    (project / manifest).write_text(
+        "[project]\nname='agent'\nversion='1'\n"
+        if manifest.endswith("toml")
+        else "some-plugin\n"
+    )
+    (project / "Dockerfile").write_text(
+        'FROM python:3.14-slim\nCMD ["uv", "run", "src/agent.py", "start"]\n'
+        if manifest.endswith("toml")
+        else 'FROM python:3.12\nCMD ["python", "src/agent.py", "start"]\n'
+    )
+    if project_dir != ".":
+        # A monorepo's parent manifest must not replace the component's own environment.
+        (source / "pyproject.toml").write_text(
+            "[project]\nname='parent'\nversion='1'\n"
+        )
+    plan = resolve_environment_plan(
+        source, _job(connector="livekit", with_secrets=True)
+    )
+    agent = next(p for p in plan.processes if p.name == "agent")
+    assert agent.working_directory == project_dir
+    assert "src/agent.py" in agent.run_command
+    assert agent.run_command[-1] == "start"
+    if manifest.endswith("toml"):
+        assert agent.build_commands[0] == [
+            "uv",
+            "sync",
+            "--no-cache",
+            "--python",
+            "python3.14",
+        ]
+        assert any("download-files" in command for command in agent.build_commands)
+    else:
+        assert any("requirements.txt" in command for command in agent.build_commands)
+
+
 def test_repository_runtime_environment_is_sealed_into_control_process(
     tmp_path: Path,
 ) -> None:

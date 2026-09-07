@@ -60,6 +60,69 @@ class ReadWorld:
         return [dict(row) for row in self.db.execute(sql).fetchall()]
 
 
+def test_data_free_review_is_explicit_and_bound_to_source_and_contract(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    code = source / "agent.py"
+    code.write_text("class Assistant: pass\n")
+    out = tmp_path / "authoring"
+    out.mkdir()
+    contract = out / "contract.json"
+    contract.write_text(
+        json.dumps({"agent": "starter", "tools": [], "real_use_cases": ["Chat"]})
+    )
+    from fi.alk.harness.world.handle import ReadOnlyWorld
+
+    world = ReadOnlyWorld(
+        SimpleNamespace(
+            world_index=0,
+            rng=None,
+            state=lambda table=None: {
+                "harness_seed_sentinel": [{"id": "ready"}],
+                "_alk_tool_trace": [],
+            },
+        )
+    )
+    assert asyncio.run(subject.author_invariants(source, out, world)) == []
+    review = json.loads((out / subject.ARTIFACT).read_text())
+    assert review["status"] == "not_applicable"
+    assert not review["tool_execution_proven"]
+    assert review["source_sha256"]["agent.py"]
+    assert asyncio.run(subject.author_invariants(source, out, world)) == []
+    code.write_text("class Assistant: changed = True\n")
+    with pytest.raises(ValueError, match="changed"):
+        asyncio.run(subject.author_invariants(source, out, world))
+
+
+@pytest.mark.parametrize(
+    "contract_patch,tables",
+    [
+        ({}, ["orders"]),
+        ({"data_store": {"kind": "postgres"}}, []),
+        ({"data_schema": {"orders": {}}}, []),
+        ({"tools": [{"name": "order"}]}, []),
+    ],
+)
+def test_empty_checks_never_exempt_data_bearing_worlds(
+    tmp_path, contract_patch, tables
+):
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {"agent": "starter", "tools": [], "real_use_cases": ["Chat"]}
+            | contract_patch
+        )
+    )
+    (tmp_path / subject.ARTIFACT).write_text('{"checks": []}')
+    with pytest.raises(ValueError, match="no executable checks"):
+        asyncio.run(
+            subject.author_invariants(
+                tmp_path,
+                tmp_path,
+                SimpleNamespace(state=lambda: dict.fromkeys(tables, [])),
+            )
+        )
+
+
 def declaration():
     return {
         "name": "aliases resolve to source records",

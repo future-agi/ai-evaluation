@@ -785,6 +785,29 @@ def _copytree_preserving_symlinks(src: Path, dst: Path) -> None:
 
 
 _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS = 600.0
+_DEFAULT_BUILD_STEP_NETWORK_RETRIES = 2
+_TRANSIENT_BUILD_NETWORK_MARKERS = (
+    "failed to fetch",
+    "request failed after",
+    "client error (connect)",
+    "operation timed out",
+    "connection timed out",
+    "connection reset",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "tls handshake timeout",
+    "too many requests",
+    "status code 429",
+    "status code 500",
+    "status code 502",
+    "status code 503",
+    "status code 504",
+)
+
+
+def _is_transient_build_network_failure(result: subprocess.CompletedProcess) -> bool:
+    output = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+    return any(marker in output for marker in _TRANSIENT_BUILD_NETWORK_MARKERS)
 
 
 def build_process_tree(
@@ -798,14 +821,17 @@ def build_process_tree(
     require_declared_user: bool = False,
     chown: Callable[[Path, int, int], None] = _default_chown,
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
+    build_step_network_retries: int = _DEFAULT_BUILD_STEP_NETWORK_RETRIES,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Path:
     """§2b: copy `source_root/<working_directory>` to `build_root/<name>/`, chowned to the
     process's `user` (F1), then argv-exec each `build_commands` step there under that same user —
     no shell, so `&&`/`$VAR`/globs/pipes do not work, which is why the model layer
-    (`bundle_v2.SourceProcess._shape`) already rejects an empty step. Runs once; the caller is
-    responsible for calling this exactly once per job, per process — this function itself has no
-    per-job memory. Raises on the first failing step (`ProcessRuntimeError`, stage="build"); never
-    partially succeeds silently past a failure.
+    (`bundle_v2.SourceProcess._shape`) already rejects an empty step. The build phase runs once per
+    job and process. A command may be retried in place only when its output proves a transient
+    package-network failure; deterministic command failures still fail immediately. This keeps
+    infrastructure flakiness out of model-authored environment repair without hiding source
+    defects. Never partially succeeds silently past a failure.
     """
     build_dir = build_root / process.name
     _ensure_within(build_dir, build_root, process_name=process.name, stage="build")
@@ -882,58 +908,79 @@ def build_process_tree(
 
     env = _base_process_env(build_dir, process.build_environment)
     for step in process.build_commands:
-        try:
-            result = run(
-                step,
-                cwd=build_dir,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=build_step_timeout_seconds,
-                user=spawn_uid,
-                group=spawn_gid,
-            )
-        except subprocess.TimeoutExpired as exc:
-            # F15, p5-round1-review: an install step wedged on a private registry with no DNS
-            # answer used to block the provisioner forever — the only backstop was the gateway's
-            # whole-job TTL, which arrives as SIGTERM to the entrypoint while this call is still
-            # inside an uninterruptible `subprocess.run`.
-            raise ProcessRuntimeError(
-                "build",
-                "build_failed",
-                f"{step!r} exceeded the {build_step_timeout_seconds}s build-step timeout",
-                process=process.name,
-                domain=FailureDomain.AGENT,
-            ) from exc
-        except FileNotFoundError as exc:
-            if not build_dir.is_dir():
-                # JC1 ruling (p5-round1-review): a vanished build tree plus a `python*`/`node*`
-                # step raises the exact same `FileNotFoundError` as a missing interpreter — this
-                # disambiguates a filesystem fault from an interpreter-availability one before the
-                # argv[0] heuristic below ever gets a say.
+        result = None
+        for network_attempt in range(max(0, build_step_network_retries) + 1):
+            try:
+                result = run(
+                    step,
+                    cwd=build_dir,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=build_step_timeout_seconds,
+                    user=spawn_uid,
+                    group=spawn_gid,
+                )
+            except subprocess.TimeoutExpired as exc:
+                # F15, p5-round1-review: an install step wedged on a private registry with no DNS
+                # answer used to block the provisioner forever — the only backstop was the gateway's
+                # whole-job TTL, which arrives as SIGTERM to the entrypoint while this call is still
+                # inside an uninterruptible `subprocess.run`.
                 raise ProcessRuntimeError(
                     "build",
-                    "source_tree_unavailable",
-                    f"{build_dir} vanished before {step!r} could run",
+                    "build_failed",
+                    f"{step!r} exceeded the {build_step_timeout_seconds}s build-step timeout",
                     process=process.name,
-                    domain=FailureDomain.ENVIRONMENT,
+                    domain=FailureDomain.AGENT,
                 ) from exc
-            if _looks_like_missing_interpreter(step[0]):
+            except FileNotFoundError as exc:
+                if not build_dir.is_dir():
+                    # JC1 ruling (p5-round1-review): a vanished build tree plus a `python*`/`node*`
+                    # step raises the exact same `FileNotFoundError` as a missing interpreter — this
+                    # disambiguates a filesystem fault from an interpreter-availability one before the
+                    # argv[0] heuristic below ever gets a say.
+                    raise ProcessRuntimeError(
+                        "build",
+                        "source_tree_unavailable",
+                        f"{build_dir} vanished before {step!r} could run",
+                        process=process.name,
+                        domain=FailureDomain.ENVIRONMENT,
+                    ) from exc
+                if _looks_like_missing_interpreter(step[0]):
+                    raise ProcessRuntimeError(
+                        "build",
+                        "runtime_unsupported",
+                        f"{step[0]!r} is not on the snapshot's PATH; the snapshot ships python "
+                        "3.11/3.12/3.13/3.14 and node 20/22 only",
+                        process=process.name,
+                        domain=FailureDomain.ENVIRONMENT,
+                    ) from exc
                 raise ProcessRuntimeError(
                     "build",
-                    "runtime_unsupported",
-                    f"{step[0]!r} is not on the snapshot's PATH; the snapshot ships python "
-                    "3.11/3.12/3.13 and node 20/22 only",
+                    "build_failed",
+                    f"{step!r}: {exc}",
                     process=process.name,
-                    domain=FailureDomain.ENVIRONMENT,
+                    domain=FailureDomain.AGENT,
                 ) from exc
-            raise ProcessRuntimeError(
-                "build",
-                "build_failed",
-                f"{step!r}: {exc}",
-                process=process.name,
-                domain=FailureDomain.AGENT,
-            ) from exc
+            if result.returncode == 0:
+                break
+            if network_attempt < max(
+                0, build_step_network_retries
+            ) and _is_transient_build_network_failure(result):
+                delay = min(8.0, 2.0**network_attempt)
+                logger.warning(
+                    "transient package-network failure building %s; retrying %r in %.1fs "
+                    "(%d/%d)",
+                    process.name,
+                    step,
+                    delay,
+                    network_attempt + 1,
+                    build_step_network_retries,
+                )
+                sleep(delay)
+                continue
+            break
+        assert result is not None
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()[:2000]
             raise ProcessRuntimeError(

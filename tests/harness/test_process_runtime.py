@@ -956,6 +956,63 @@ def test_a_nonzero_build_step_is_build_failed(tmp_path: Path) -> None:
     assert "boom" in str(excinfo.value)
 
 
+def test_transient_package_network_failure_is_retried_in_place(tmp_path: Path) -> None:
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    calls: list[list[str]] = []
+    delays: list[float] = []
+
+    def fake_run(step, *, cwd, env, **kwargs):
+        calls.append(step)
+        if len(calls) < 3:
+            return subprocess.CompletedProcess(
+                step,
+                2,
+                stdout="",
+                stderr="Failed to fetch package: client error (Connect): operation timed out",
+            )
+        return subprocess.CompletedProcess(step, 0, stdout="", stderr="")
+
+    process = _source_process(
+        working_directory="svc", build_commands=[["uv", "sync", "--no-cache"]]
+    )
+    pr.build_process_tree(
+        process,
+        source_root=tmp_path / "source",
+        build_root=tmp_path / "build",
+        run=fake_run,
+        sleep=delays.append,
+    )
+
+    assert calls == [
+        ["uv", "sync", "--no-cache"],
+        ["uv", "sync", "--no-cache"],
+        ["uv", "sync", "--no-cache"],
+    ]
+    assert delays == [1.0, 2.0]
+
+
+def test_deterministic_build_failure_is_not_retried(tmp_path: Path) -> None:
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    calls = 0
+
+    def fake_run(step, *, cwd, env, **kwargs):
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(step, 1, stdout="", stderr="syntax error")
+
+    process = _source_process(working_directory="svc", build_commands=[["npm", "ci"]])
+    with pytest.raises(pr.ProcessRuntimeError):
+        pr.build_process_tree(
+            process,
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            run=fake_run,
+            sleep=lambda _: None,
+        )
+
+    assert calls == 1
+
+
 def test_a_missing_interpreter_is_runtime_unsupported(tmp_path: Path) -> None:
     """§0 (v1.8): "a repo needing an interpreter the snapshot lacks fails at BUILD time... the
     build step's failure is reported `runtime_unsupported`.\""""

@@ -54,7 +54,9 @@ def _eval_catalogue_briefing(available_evals: list[dict[str, Any]] | None) -> st
         if not name:
             continue
         keys = ", ".join(str(key) for key in one.get("required_keys") or [])
-        grouped.setdefault(str(one.get("modality") or "any").strip().lower(), []).append(
+        grouped.setdefault(
+            str(one.get("modality") or "any").strip().lower(), []
+        ).append(
             "- {name}: {description}{keys}".format(
                 name=name,
                 description=str(one.get("description") or "").strip()[:240],
@@ -105,7 +107,11 @@ def open_stage(
         cwd=source.workdir(),
         servers={
             **source.servers(),
-            CONTRACT_SERVER: contract_tools(destination, available_evals),
+            CONTRACT_SERVER: contract_tools(
+                destination,
+                available_evals,
+                source_root=source.workdir() if source.kind == "repo" else None,
+            ),
         },
         extra_builtins=source.builtin_tools(),
         max_turns=max_turns,
