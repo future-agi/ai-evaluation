@@ -1820,3 +1820,58 @@ def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_i
 
     # Omitted rather than empty, so an older platform is unaffected.
     assert "modality" not in ss._provision_payload("run", [], [], "", "")
+
+
+def test_a_suite_with_no_mailbox_does_not_ask_for_mailbox_evals(tmp_path):
+    """The contract picks evals before any scenario exists, so an outbound agent is handed the
+    mailbox evals whether or not the writer ever wrote one. Judging twenty person-answered calls on
+    voicemail handling costs a judge call each, answers "not applicable" every time, and an
+    optimiser reading those verdicts recommends fixing something the agent was never asked to do."""
+    import json as _json
+
+    from fi.alk.harness.scenario_source import _chosen_evals_and_prompt
+
+    (tmp_path / "contract.json").write_text(
+        _json.dumps(
+            {
+                "modality": "voice",
+                "system_prompt_excerpt": "you are avery",
+                "chosen_evals": [
+                    "advice_authority_boundary",
+                    "voicemail_handling",
+                    "voice_mail_detection",
+                    "intake_field_accuracy",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    folder = tmp_path / "scenarios" / "one"
+    folder.mkdir(parents=True)
+    (folder / "scenario.json").write_text(
+        _json.dumps({"scenario_key": "one", "call_direction": "outbound"}), encoding="utf-8"
+    )
+
+    names, prompt, modality = _chosen_evals_and_prompt(tmp_path)
+    assert names == ["advice_authority_boundary", "intake_field_accuracy"]
+    assert prompt == "you are avery"
+    assert modality == "voice"
+
+
+def test_a_mailbox_in_the_suite_keeps_the_mailbox_evals(tmp_path):
+    import json as _json
+
+    from fi.alk.harness.scenario_source import _chosen_evals_and_prompt
+
+    (tmp_path / "contract.json").write_text(
+        _json.dumps({"modality": "voice", "chosen_evals": ["voicemail_handling"]}),
+        encoding="utf-8",
+    )
+    folder = tmp_path / "scenarios" / "mailbox"
+    folder.mkdir(parents=True)
+    (folder / "scenario.json").write_text(
+        _json.dumps({"scenario_key": "mailbox", "answered_by": "voicemail"}), encoding="utf-8"
+    )
+
+    names, _, _ = _chosen_evals_and_prompt(tmp_path)
+    assert names == ["voicemail_handling"]
