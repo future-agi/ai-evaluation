@@ -324,10 +324,13 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
 - **How they end it, which is where a caller stops sounding human.** When what they came for is
   settled, they end the call. At most a few words if the character would say them, once, and some
   people simply stop talking. Do not write a closing ritual: no thanking the agent repeatedly, no
-  "have a good day", no restating what was agreed, no second goodbye. Measured on a real call, a
-  caller told to say a polite closing said one five times over thirty-seven seconds, inventing
-  demands to fill the gap, because saying goodbye is not the same as hanging up. Say plainly that
-  once they are done they stop speaking and end the call.
+  "have a good day", no restating what was agreed, no second goodbye.
+
+  **Name the tool.** Write that they end the call by calling `endCall`, in those words. Telling a
+  caller to "end the call" without naming the mechanism is not enough: measured on a real run whose
+  prompt said exactly that, the caller said goodbye seven times over twenty seconds and then sat
+  through thirty-six seconds of silence, because saying goodbye is not the same as hanging up and
+  nothing told it which action ends a call.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
   look it up instead?" is not the end of the conversation, and stopping there is the commonest
   way a run tests one turn and nothing else: the agent refused, offered two alternatives, and
