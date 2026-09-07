@@ -1195,6 +1195,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="run unattended instead of staying open for corrections",
     )
+    scenarios.add_argument(
+        "--guidance",
+        action="append",
+        default=None,
+        metavar="TEXT",
+        help=(
+            "a natural-language requirement the saved suite must satisfy; repeatable. "
+            "Non-interactive extend/adjust runs pass these to steer the added scenarios "
+            "while preserving existing validated work"
+        ),
+    )
     scenarios.set_defaults(run=_scenarios, interactive=True)
 
     live = sub.add_parser(
