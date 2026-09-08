@@ -383,3 +383,45 @@ def test_a_target_we_cannot_see_into_may_be_judged_throughout():
 
     assert catalogue_problems([judged, judged], world_is_observable=False) == []
     assert catalogue_problems([judged, judged], world_is_observable=True)
+
+
+def test_a_coded_sub_goal_also_carries_its_description():
+    """A check says nothing when it holds, so `what` is the only thing a reader has to tell a real
+    pass from one nobody wrote a check for. Measured on run 42875830: every passing sub-goal read
+    "Held. The check found nothing wrong." because `what` was restored for judged ones only."""
+    from dataclasses import replace
+
+    from fi.alk.harness.scenario_source import _CompiledSubGoal, _with_claims
+
+    coded = _CompiledSubGoal(name="schedules_callback", judged="", check=lambda w, c: None)
+    judged = _CompiledSubGoal(name="protocol", judged="x", check=lambda w, c: None)
+
+    class Scenario:
+        sub_goals = (coded, judged)
+
+    import types
+
+    scenario = types.SimpleNamespace(sub_goals=(coded, judged))
+    claims = {
+        "schedules_callback": {"what": "a callback was written for the time agreed", "judged": ""},
+        "protocol": {"what": "the agent stayed on protocol", "judged": "whether it stayed civil"},
+    }
+
+    # _with_claims uses dataclasses.replace on the scenario, so give it a real dataclass field set.
+    from fi.alk.harness.scenario_source import _CompiledScenario
+
+    real = _CompiledScenario(
+        scenario_key="k",
+        scenario_id="",
+        sub_goals=(coded, judged),
+        requires_tool_evidence=False,
+        setup=lambda w: None,
+        ready=lambda w: None,
+    )
+    out = _with_claims(real, claims)
+
+    by_name = {g.name: g for g in out.sub_goals}
+    assert by_name["schedules_callback"].what == "a callback was written for the time agreed"
+    assert by_name["schedules_callback"].judged == "", "a coded sub-goal must not become judged"
+    assert by_name["protocol"].what == "the agent stayed on protocol"
+    assert by_name["protocol"].judged == "whether it stayed civil"

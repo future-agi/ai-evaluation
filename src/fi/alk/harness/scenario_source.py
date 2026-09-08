@@ -462,21 +462,29 @@ def _load_one(
 def _with_claims(
     scenario: _CompiledScenario, claims: dict[str, dict[str, str]]
 ) -> _CompiledScenario:
-    """Restore each judged sub-goal's real claim from the catalogue.
+    """Restore each sub-goal's real claim from the catalogue.
 
     `_load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
     `folder.py` writes no file for one. Without this the platform judge gets a name and a
     placeholder, which is not something a verdict can be reached from.
+
+    `what` is restored for CODED sub-goals too, not only judged ones. A check says nothing when it
+    holds, so `what` is the only thing a reader has to tell a real pass from one nobody wrote a
+    check for; withholding it left every passing sub-goal explaining itself as "the check found
+    nothing wrong". `judged` stays restricted to judged sub-goals, since a coded one has no claim
+    for a model to decide.
     """
     if not claims:
         return scenario
     restored = tuple(
         replace(
             goal,
-            judged=claims[goal.name].get("judged") or goal.judged,
-            what=claims[goal.name].get("what", ""),
+            judged=(claims[goal.name].get("judged") or goal.judged)
+            if goal.judged
+            else goal.judged,
+            what=claims[goal.name].get("what", "") or goal.what,
         )
-        if goal.judged and goal.name in claims
+        if goal.name in claims
         else goal
         for goal in scenario.sub_goals
     )
