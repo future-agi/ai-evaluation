@@ -188,6 +188,11 @@ def _cartesia_tts(
         if config.voice not in {"alloy", ""}
         else "f786b574-daa5-4673-aa0c-cbe3e8534c02"
     )
+    # `emotion` is deliberately not passed. It rides on Cartesia's __experimental_controls, which
+    # is documented for the sonic-2 era and carries no sonic-3 guarantee, and an unsupported
+    # control failing mid-call is worse than a caller with no emotion tag. `speed` IS documented
+    # for sonic-3 (0.6 to 2.0), so that is the one we set.
+    speed = getattr(config, "speed", None)
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
         http_session=http_session,
@@ -197,6 +202,7 @@ def _cartesia_tts(
             replacement="sonic-3",
         ),
         voice=voice,
+        **({"speed": float(speed)} if isinstance(speed, (int, float)) else {}),
     )
 
 

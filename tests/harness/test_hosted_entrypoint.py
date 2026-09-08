@@ -3852,3 +3852,83 @@ def test_receipt_without_evidence_uploads_nothing_extra() -> None:
         assert transport.artifacts == {}
 
     asyncio.run(scenario())
+
+
+def test_every_runner_log_line_carries_the_job_id(capsys):
+    """Concurrent runs are collected into one log stream, so a line with no job id cannot be
+    attributed to a run at all."""
+    import logging
+
+    from fi.alk.harness.hosted_entrypoint import configure_runner_logging
+
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    saved_level = root.level
+    try:
+        root.handlers = []
+        configure_runner_logging("job-abc123")
+        logging.getLogger("livekit.agents").warning("target disconnected")
+        logging.getLogger("fi.alk.harness.hosted_entrypoint").info("stage finished")
+        for handler in root.handlers:
+            handler.flush()
+    finally:
+        root.handlers = saved
+        root.setLevel(saved_level)
+
+    err = capsys.readouterr().err
+    assert "job=job-abc123 livekit.agents: target disconnected" in err
+    assert "job=job-abc123" in err.splitlines()[-1]
+
+
+def test_runner_logging_falls_back_when_the_job_id_is_unknown(capsys):
+    """A boot that fails before the id is known must still produce readable lines."""
+    import logging
+
+    from fi.alk.harness.hosted_entrypoint import configure_runner_logging
+
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    saved_level = root.level
+    try:
+        root.handlers = []
+        configure_runner_logging(None)
+        logging.getLogger("boot").error("capabilities load failed")
+        for handler in root.handlers:
+            handler.flush()
+    finally:
+        root.handlers = saved
+        root.setLevel(saved_level)
+
+    assert "job=-" in capsys.readouterr().err
+
+
+def test_two_callers_do_not_read_the_same_words_at_the_same_pace():
+    """Delivery, not content. Cartesia documents speed for sonic-3, so that is the control we set;
+    emotion rides on __experimental_controls with no sonic-3 guarantee and is deliberately unset."""
+    from fi.alk.harness.simulator_voice import persona_speech_rate
+
+    marcus = persona_speech_rate({"name": "Marcus Thorne"})
+    priya = persona_speech_rate({"name": "Priya Sundaram"})
+
+    assert 0.6 <= marcus <= 2.0
+    assert 0.6 <= priya <= 2.0
+    assert marcus != priya, "every caller would sound identical"
+
+
+def test_a_persona_keeps_its_pace_across_reruns():
+    """A rate that moves between runs makes two recordings of one scenario incomparable."""
+    from fi.alk.harness.simulator_voice import persona_speech_rate
+
+    assert persona_speech_rate({"name": "Marcus Thorne"}) == persona_speech_rate(
+        {"name": "Marcus Thorne"}
+    )
+    assert persona_speech_rate({}) == 1.0
+    assert persona_speech_rate(None) == 1.0
+
+
+def test_the_simulator_definition_carries_the_persona_s_pace():
+    from fi.alk.harness.simulator_voice import persona_speech_rate, simulator_definition
+
+    definition = simulator_definition(lambda key: "", persona={"name": "Marcus Thorne"})
+
+    assert definition.tts.speed == persona_speech_rate({"name": "Marcus Thorne"})

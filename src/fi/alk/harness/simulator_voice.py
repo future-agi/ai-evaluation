@@ -79,14 +79,27 @@ SIMULATOR_INSTRUCTIONS = (
     "8. Follow sequence words literally. If the scenario says to do something after an earlier "
     "action is completed, do not reveal or request the later action in the same reply that "
     "confirms the earlier one. Wait until the agent explicitly confirms the earlier action.\n"
-    "9. Once the outcome is confirmed, thank the agent once and end the call.\n"
-    "10. Do not apologise, and do not thank the agent more than once. Do not trade thanks back and "
-    "forth, and do not answer a goodbye with another goodbye.\n"
+    "9. Once the outcome is confirmed, close in ONE turn and end the call. Any thanks belongs "
+    "inside that same turn, not in a turn of its own: 'Great, thanks, bye' is one closing, "
+    "'Fine. Goodbye.' followed by 'Thanks.' is two and the second one is the tell.\n"
+    "10. After your closing turn you say nothing further, whatever the agent says next. Do not "
+    "apologise, do not thank the agent more than once, do not trade thanks back and forth, and "
+    "do not answer a goodbye with another goodbye.\n"
     "11. Say where you are or what you are doing only if the agent asks or it genuinely matters. It "
     "is background, not something to announce.\n"
     "12. You are a person with something to get done, not a customer service exercise. Perfect "
     "politeness through a call that is going badly is how a machine talks, and it makes the test "
-    "worthless: nobody learns anything from an agent that was never pushed.\n"
+    "worthless: nobody learns anything from an agent that was never pushed. This applies just as "
+    "much when the call is going FINE, which is most of the time: a person who is being helped "
+    "competently still reacts, still wonders, still gets tired of question fifteen of twenty.\n"
+    "12a. React to what you are told, not only to what you are asked. A figure that sounds high, a "
+    "wait that sounds long, a step that sounds pointless, a question you have already answered: "
+    "say so the first time you hear it, in your own words, once. Ask why something is needed where "
+    "a person would genuinely wonder.\n"
+    "12b. Gratitude is not punctuation. Do not open a turn with thanks, do not use 'please' as "
+    "filler on a plain answer, and never say 'thank you so much', 'I really appreciate it' or "
+    "'sorry to bother you'. Answering a question is not a favour done to you, and a stream of "
+    "courtesies is the clearest sign in a transcript that nobody real was on the line.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -560,6 +573,27 @@ def cartesia_voice_for(persona: dict) -> str:
     return voices[index]
 
 
+# How fast this person talks. Derived from the persona rather than randomised, so a rerun of the
+# same scenario sounds the same -- a rate that moves between runs makes two recordings of one
+# scenario incomparable. Cartesia documents 0.6 to 2.0 for sonic-3; this stays close to natural
+# because the point is that callers differ from each other, not that any of them sounds odd.
+_SPEECH_RATES = (0.9, 0.95, 1.0, 1.05, 1.12)
+
+
+def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
+    """A stable speech rate for this person.
+
+    Keyed on the same field as the voice, so the two move together: a persona keeps one voice and
+    one pace for as long as its name is the same.
+    """
+    if not isinstance(persona, Mapping):
+        return 1.0
+    name = str(persona.get("name") or "").strip()
+    if not name:
+        return 1.0
+    return _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)]
+
+
 _AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
     "american": {
         "female": ["aura-asteria-en", "aura-luna-en", "aura-hera-en", "aura-stella-en"],
@@ -647,6 +681,7 @@ def simulator_definition(
             "provider": tts_provider,
             "model": model("tts", tts_provider),
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
+            "speed": persona_speech_rate(persona),
         },
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
@@ -827,6 +862,7 @@ def simulation_spec(
 
 __all__ = [
     "CARTESIA_DEFAULT_VOICE",
+    "persona_speech_rate",
     "CLEANUP_TIMEOUT_SECONDS",
     "CONNECT_TIMEOUT_SECONDS",
     "READINESS_TIMEOUT_SECONDS",

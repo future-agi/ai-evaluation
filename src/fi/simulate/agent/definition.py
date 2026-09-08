@@ -307,6 +307,12 @@ class TTSConfig(BaseModel):
     provider: str = Field("openai", description="The LiveKit TTS provider.")
     model: str = Field("gpt-4o-mini-tts", description="The TTS model to use.")
     voice: str = Field("alloy", description="The voice or voice ID to use.")
+    # Delivery, not content. Two callers reading the same words at the same pace is the tell that
+    # one generator wrote both. Cartesia documents 0.6 to 2.0 for sonic-3; None leaves the
+    # provider default so a provider without the control is unaffected.
+    speed: Optional[float] = Field(
+        None, description="Speech rate, where the provider supports one."
+    )
 
 
 class STTConfig(BaseModel):
