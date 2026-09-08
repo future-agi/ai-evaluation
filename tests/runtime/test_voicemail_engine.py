@@ -461,3 +461,34 @@ def test_the_simulator_prompt_is_dumped_only_when_a_directory_is_named(tmp_path,
     # A dump failure must never take a call down.
     monkeypatch.setenv("ALK_PROMPT_DUMP_DIR", "/proc/cannot/write/here")
     livekit._dump_simulator_prompt("still fine")
+
+
+def test_an_outbound_agent_makes_the_caller_the_one_receiving(monkeypatch) -> None:
+    """call_type is the AGENT's direction and it picks which half of the role block is written.
+
+    Hardcoded to inbound, an outbound run told the caller "You are MAKING this call" and then
+    contradicted itself further down with the harness's own instructions.
+    """
+    from fi.simulate.simulation.voice_prompt import build_voice_simulator_prompt
+    from fi.simulate.simulation.models import Persona
+
+    persona = Persona(persona={"name": "Marcus"}, situation="You are expecting a call.", outcome="")
+    receiving = build_voice_simulator_prompt(persona, call_type="outbound")
+    assert "You are RECEIVING this call" in receiving
+    assert "You are MAKING this call" not in receiving
+
+    placing = build_voice_simulator_prompt(persona, call_type="inbound")
+    assert "You are MAKING this call" in placing
+
+
+def test_the_closing_rule_supplies_no_words_to_say() -> None:
+    """Whatever the prompt quotes is spoken back verbatim, and in English."""
+    from fi.simulate.simulation.voice_prompt import build_voice_simulator_prompt
+    from fi.simulate.simulation.models import Persona
+
+    text = build_voice_simulator_prompt(
+        Persona(persona={"name": "Marcus"}, situation="You want a refund.", outcome=""),
+        call_type="outbound",
+    )
+    assert "Alright, thanks, bye" not in text
+    assert "endCall" in text

@@ -1300,9 +1300,16 @@ class LiveKitEngine(BaseEngine):
             customer_agent, models = await self._create_customer_agent(
                 persona,
                 simulator,
-                # Who dialled and who speaks first are separate axes. The caller always places
-                # the call; conversation_direction only decides who opens once connected.
-                call_type="inbound",
+                # `call_type` is the AGENT's direction, and it decides which half of the role
+                # block the caller is given. Hardcoding inbound told the caller it had placed the
+                # call even when the agent under test was the one dialling, so an outbound run
+                # composed a prompt that said "You are MAKING this call" and then contradicted
+                # itself further down. Read it from the same signal the opening turn uses.
+                call_type=(
+                    "outbound"
+                    if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower() == "outbound"
+                    else "inbound"
+                ),
                 # `name` is an identity for dispatch, not a label for the caller to hear.
                 agent_name=agent_definition.description,
                 min_turn_messages=min_turn_messages,
