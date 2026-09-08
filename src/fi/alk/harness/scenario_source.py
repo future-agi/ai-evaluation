@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
 # documents live at `<bundle_dir>/<SCENARIOS_DIRNAME>/<name>/...`, matching `folder.py`'s own
 # `SCENARIOS` constant, so a write_folder destination of `<bundle_dir>` lands correctly with no
 # translation. Kept as one module-level constant so a later contract can move it in one edit.
+logger = logging.getLogger(__name__)
+
 SCENARIOS_DIRNAME = "scenarios"
 
 _CHECKS_DIRNAME = "checks"
@@ -324,6 +327,14 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
     """
     path = bundle_dir / _CATALOGUE_JSON
     if not path.is_file():
+        # Without this every sub-goal reaches the platform with no description, so a pass explains
+        # itself as "the check found nothing wrong" and a judged one arrives with nothing to
+        # decide. Said out loud because the symptom shows up two systems away from the cause.
+        logger.warning(
+            "no %s beside the scenarios in %s: sub-goals will carry no description or claim",
+            _CATALOGUE_JSON,
+            bundle_dir,
+        )
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
