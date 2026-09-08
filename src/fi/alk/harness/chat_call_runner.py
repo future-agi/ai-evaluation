@@ -19,7 +19,7 @@ from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .run.conversation import Transcript, converse
+from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
@@ -37,7 +37,11 @@ def _chat_target_timeout_seconds() -> float:
         configured = float(raw)
     except ValueError:
         return DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
-    return configured if 1.0 <= configured <= 600.0 else DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+    return (
+        configured
+        if 1.0 <= configured <= 600.0
+        else DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS
+    )
 
 
 def _duration_ms(started: datetime, ended: datetime) -> int:
@@ -196,7 +200,11 @@ def _record_completed_tool_call(
     error = str(error_value) if error_value not in (None, "") else ""
     refused = bool(response.get("refused", False))
     declared_success = response.get("success", response.get("ok"))
-    ok = bool(declared_success) if declared_success is not None else not error and not refused
+    ok = (
+        bool(declared_success)
+        if declared_success is not None
+        else not error and not refused
+    )
     world.calls.append(
         Call(
             name=name,
@@ -265,9 +273,14 @@ class _HostedChatTarget:
                 raise RuntimeError(
                     str(trace.get("error") or "submitted endpoint request failed")
                 )
+            conversation_ended = bool(
+                (response.metadata or {}).get("conversation_ended")
+            )
             returned = list(response.tool_calls or [])
             if not returned:
                 answer = response.content.strip()
+                if conversation_ended:
+                    raise TargetConversationEnded(answer)
                 self._messages.append({"role": "assistant", "content": answer})
                 self._turn += 1
                 return answer
@@ -324,10 +337,14 @@ class _HostedChatTarget:
             provided_ids = set(response_by_id)
             if returned_ids and returned_ids.issubset(provided_ids):
                 answer = response.content.strip()
+                if conversation_ended:
+                    raise TargetConversationEnded(answer)
                 self._messages.append({"role": "assistant", "content": answer})
                 self._turn += 1
                 return answer
-        raise RuntimeError("submitted chat agent exceeded 8 tool continuations in one turn")
+        raise RuntimeError(
+            "submitted chat agent exceeded 8 tool continuations in one turn"
+        )
 
     async def close(self) -> None:
         return
@@ -445,7 +462,9 @@ class HostedChatCallRunner:
         except CallAborted:
             raise
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
-            raise CallAborted(f"chat_target_failed: {type(exc).__name__}: {exc}") from exc
+            raise CallAborted(
+                f"chat_target_failed: {type(exc).__name__}: {exc}"
+            ) from exc
 
         ended = datetime.now(timezone.utc)
         rendered_transcript = transcript.spoken() + "\n"

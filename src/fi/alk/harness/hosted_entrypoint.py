@@ -591,6 +591,10 @@ def _default_build_call_runner(
     the contract itself calls it "a follow-up, not shipped with this text")."""
     connector = context.job.agent.connector.lower()
     modality = _bundle_contract_modality(context.bundle_dir)
+    if connector == "retell_chat":
+        from .retell_chat_call_runner import RetellChatCallRunner
+
+        return RetellChatCallRunner(adapter, context)
     if connector in _VOICE_CONNECTORS or (connector == "auto" and modality == "voice"):
         # The understand stage read this off the agent's own instructions, so the contract is the
         # only source. Carried through the process environment because `CallRunnerImpl` is handed a

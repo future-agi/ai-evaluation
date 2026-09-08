@@ -3737,6 +3737,62 @@ def test_a_scenario_with_no_solution_cannot_be_proved(tmp_path):
     assert said["is_error"] and "no solution" in said["content"][0]["text"]
 
 
+def test_a_tool_free_conversation_can_use_an_empty_judged_solution_with_state(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenario_tools import accept_scenario
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "accounts"
+        tools = []
+        handlers = {}
+
+    world = W(":memory:")
+    world.connection.executescript(
+        "CREATE TABLE accounts(account_reference TEXT);"
+        "INSERT INTO accounts VALUES ('3841');"
+    )
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    world.close()
+
+    catalogue = Catalogue(
+        sub_goals=[
+            SubGoal(
+                name="handled_payment_conversation",
+                what="The agent handled the payment conversation correctly.",
+                judged="Judge this from the complete transcript.",
+            )
+        ]
+    )
+    payload = {
+        "name": "arrange_payment",
+        "use_case": "payment collection",
+        "branch": "customer requests an installment plan",
+        "instruction": "Verify the account and ask for an installment plan.",
+        "fixture": {"origin": "seed"},
+        "solution": [],
+        "sub_goals": ["handled_payment_conversation"],
+    }
+
+    refused = accept_scenario(
+        payload, world_root=tmp_path, catalogue=catalogue, kept=[]
+    )
+    assert refused["is_error"] and "no solution" in refused["content"][0]["text"]
+
+    kept: list = []
+    accepted = accept_scenario(
+        payload,
+        world_root=tmp_path,
+        catalogue=catalogue,
+        kept=kept,
+        allow_empty_solution=True,
+    )
+    assert not accepted.get("is_error"), accepted
+    assert len(kept) == 1
+
+
 def test_a_suite_where_no_sub_goal_is_shared_does_not_roll_up(tmp_path):
     """If a payment step appears in 50 scenarios, the results should say where payment fails."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal

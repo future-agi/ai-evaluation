@@ -87,8 +87,11 @@ class AgentConnection(BaseModel):
     @model_validator(mode="after")
     def _provider_mode_is_explicit_and_safe(self) -> "AgentConnection":
         connector = self.connector.strip().lower()
+        provider_connector = "retell" if connector == "retell_chat" else connector
         if self.mode is ProviderExecutionMode.ENVIRONMENT_BACKED:
-            if connector not in {"vapi", "retell"}:
+            if connector == "retell_chat":
+                raise ValueError("retell_chat_environment_backed_not_supported")
+            if provider_connector not in {"vapi", "retell"}:
                 raise ValueError("environment_backed_requires_vapi_or_retell")
             manifest = str(self.config.get("lifecycle_manifest") or "alk.yaml")
             if manifest.startswith("/") or ".." in manifest.split("/"):
@@ -100,9 +103,11 @@ class AgentConnection(BaseModel):
                     + ", ".join(sorted(forbidden))
                 )
         elif self.mode is ProviderExecutionMode.PROVIDER_IMPORT:
-            if connector not in {"vapi", "retell"}:
+            if provider_connector not in {"vapi", "retell"}:
                 raise ValueError("provider_import_requires_vapi_or_retell")
-            target_key = {"vapi": "assistant_id", "retell": "agent_id"}[connector]
+            target_key = {"vapi": "assistant_id", "retell": "agent_id"}[
+                provider_connector
+            ]
             if not str(self.config.get(target_key) or "").strip():
                 raise ValueError(f"provider_import_requires_{target_key}")
             for path_key in ("event_path", "tool_path"):
@@ -114,10 +119,12 @@ class AgentConnection(BaseModel):
                 ):
                     raise ValueError(f"provider_import_{path_key}_invalid")
         elif self.mode is ProviderExecutionMode.CONNECT_ONLY:
-            target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(connector)
+            target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
+                provider_connector
+            )
             if target_key and not str(self.config.get(target_key) or "").strip():
                 raise ValueError(f"connect_only_requires_{target_key}")
-        elif self.mode is not None and connector not in {"vapi", "retell"}:
+        elif self.mode is not None and provider_connector not in {"vapi", "retell"}:
             raise ValueError("provider_mode_only_supported_for_vapi_or_retell")
         return self
 

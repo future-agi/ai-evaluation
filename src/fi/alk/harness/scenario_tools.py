@@ -225,6 +225,7 @@ def accept_scenario(
     kept: list[Scenario],
     simulator_prompt: str = "",
     hard_constraints: list[str] | None = None,
+    allow_empty_solution: bool = False,
     persist: bool = True,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
@@ -243,7 +244,11 @@ def accept_scenario(
     trial, _applied, _ready = prepared(scenario, world_root)
     try:
         problems = validate_scenario(
-            scenario, catalogue, trial.state(), simulator_prompt
+            scenario,
+            catalogue,
+            trial.state(),
+            simulator_prompt,
+            allow_empty_solution=allow_empty_solution,
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
     finally:
@@ -254,7 +259,12 @@ def accept_scenario(
             "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
         )
 
-    proof = prove(scenario, catalogue, world_root)
+    proof = prove(
+        scenario,
+        catalogue,
+        world_root,
+        allow_judged_only_with_state=allow_empty_solution,
+    )
     if not proof.holds:
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
@@ -293,10 +303,16 @@ def accept_scenario(
         if proof.assumed
         else ""
     )
+    proof_summary = (
+        "The fixture is ready and its behavioral sub-goals will be judged from the transcript; "
+        "this target has no environment tool trajectory to replay."
+        if proof.judged_only
+        else "All three gates pass: the world is ready for it, the reference solution passes "
+        "its checks, and those checks fail when nothing is done."
+    )
     return _ok(
-        f"{scenario.name} {'replaced' if replaced else 'kept'}. All three gates pass: the world "
-        "is ready for it, the reference solution passes its checks, and those checks fail when "
-        f"nothing is done.{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
+        f"{scenario.name} {'replaced' if replaced else 'kept'}. {proof_summary}"
+        f"{unproved}\n{len(kept)} so far: " + ", ".join(one.name for one in kept)
     )
 
 
@@ -376,6 +392,7 @@ def scenario_tools(
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     exploration = {"since_submit": 0}
+    tool_free_target = not bool(contract.tools)
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -744,6 +761,7 @@ def scenario_tools(
             kept=kept,
             simulator_prompt=simulator_prompt,
             hard_constraints=contract.hard_constraints,
+            allow_empty_solution=tool_free_target,
             persist=can_save,
         )
         if not result.get("is_error"):

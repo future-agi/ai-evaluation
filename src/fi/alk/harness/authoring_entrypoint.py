@@ -50,7 +50,14 @@ def _load_provider_import_profile(
     secrets_path: Path | None,
     profile_cache_path: Path | None = None,
 ) -> dict[str, object] | None:
-    if job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT:
+    inspect_connect_only_chat = (
+        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and job.agent.connector.strip().lower() == "retell_chat"
+    )
+    if (
+        job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT
+        and not inspect_connect_only_chat
+    ):
         return None
     if profile_cache_path is not None and profile_cache_path.is_file():
         cached = json.loads(profile_cache_path.read_text(encoding="utf-8"))
@@ -68,13 +75,15 @@ def _load_provider_import_profile(
     if not isinstance(values, dict):
         raise RuntimeError("provider_import_authoring_secrets_invalid")
     connector = job.agent.connector.strip().lower()
-    secret_name = "VAPI_API_KEY" if connector == "vapi" else "RETELL_API_KEY"
-    target_key = "assistant_id" if connector == "vapi" else "agent_id"
+    provider = "retell" if connector == "retell_chat" else connector
+    secret_name = "VAPI_API_KEY" if provider == "vapi" else "RETELL_API_KEY"
+    target_key = "assistant_id" if provider == "vapi" else "agent_id"
     profile = inspect_provider_target(
-        connector,
+        provider,
         source_target_id=str(job.agent.config.get(target_key) or ""),
         api_key=str(values.get(secret_name) or ""),
         api_base_url=str(job.agent.config.get("provider_api_base_url") or "") or None,
+        target_modality="chat" if connector == "retell_chat" else "voice",
     )
     if profile_cache_path is not None:
         profile_cache_path.write_text(

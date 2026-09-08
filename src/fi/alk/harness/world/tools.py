@@ -1270,7 +1270,14 @@ def world_tools(
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
-        if not sequences and not runtime_only and not data_free:
+        # Sequences prove that a stateful tool surface remains coherent across multiple calls.
+        # A conversational agent with no executable tools has no legal sequence to declare: an
+        # empty sequence proves nothing, and every named call is necessarily fabricated.  Such
+        # agents can still have baseline data (for example provider dynamic variables), so
+        # ``data_free`` alone is not enough to identify them.  Keep requiring world checks for
+        # that data, but do not deadlock authoring on a proof that cannot exist.
+        requires_sequence = bool(contract.tools) and not runtime_only
+        if not sequences and requires_sequence and not data_free:
             return _err(
                 "Not saved. Declare at least one sequence first: a world whose calls each work "
                 "alone can still forget what the previous one did."
