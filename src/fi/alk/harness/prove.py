@@ -314,11 +314,21 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
-def prove(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> Proof:
+def prove(
+    scenario: Scenario,
+    catalogue: Catalogue,
+    world_root: Path,
+    *,
+    allow_judged_only_with_state: bool = False,
+) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
-    if not checks and _something_to_check(world_root):
+    if (
+        not checks
+        and _something_to_check(world_root)
+        and not allow_judged_only_with_state
+    ):
         proof.broken = [
             "none of this sub-goal's checks is in code, and this world has state a check could "
             "read, so settle what happened by reading it rather than by asking a model"

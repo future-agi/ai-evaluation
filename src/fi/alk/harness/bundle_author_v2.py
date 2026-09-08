@@ -1494,8 +1494,7 @@ def author_bundle_v2(
     provided_environment.update(_declared_runtime_environment(source_root))
     for process in plan.processes:
         provided_environment.update(
-            str(name).upper()
-            for name in (getattr(process, "environment", None) or {})
+            str(name).upper() for name in (getattr(process, "environment", None) or {})
         )
     credential_manifest = discover_credentials(
         source_root,
@@ -1595,7 +1594,8 @@ def author_bundle_v2(
                 )
         elif job.agent.mode is ProviderExecutionMode.PROVIDER_IMPORT:
             connector = job.agent.connector.strip().lower()
-            secret_name = "VAPI_API_KEY" if connector == "vapi" else "RETELL_API_KEY"
+            provider = "retell" if connector == "retell_chat" else connector
+            secret_name = "VAPI_API_KEY" if provider == "vapi" else "RETELL_API_KEY"
             if secret_name not in job.agent.secret_refs:
                 raise BundleAuthorError(
                     f"provider_import_secret_missing: {secret_name}"
@@ -1622,9 +1622,9 @@ def author_bundle_v2(
                     "provider_import_public_capability_ambiguous: configure public_capability; "
                     f"found {http_capabilities}"
                 )
-            target_key = "assistant_id" if connector == "vapi" else "agent_id"
+            target_key = "assistant_id" if provider == "vapi" else "agent_id"
             provider_import = ProviderImportSpec(
-                type=connector,
+                type=provider,
                 source_target_id=str(job.agent.config[target_key]),
                 public_capability=public_capability,
                 environment_tools=sorted(
@@ -1641,6 +1641,7 @@ def author_bundle_v2(
                 tool_path=str(job.agent.config.get("tool_path") or "/provider/tools"),
                 api_base_url=str(job.agent.config.get("provider_api_base_url") or "")
                 or None,
+                target_modality="chat" if connector == "retell_chat" else "voice",
             )
 
         manifest = EnvironmentBundleV2(

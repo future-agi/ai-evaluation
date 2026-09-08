@@ -437,6 +437,89 @@ def test_retell_conversation_flow_profile_includes_graph_and_tools() -> None:
     )
 
 
+def test_retell_chat_profile_uses_chat_agent_endpoint() -> None:
+    requested: list[str] = []
+
+    def request(method, url, api_key, body):
+        assert method == "GET"
+        assert api_key == "retell-secret"
+        assert body is None
+        requested.append(url)
+        if "/get-chat-agent/" in url:
+            return {
+                "agent_name": "Collections chat",
+                "response_engine": {"type": "retell-llm", "llm_id": "llm-1"},
+            }
+        return {"llm_id": "llm-1", "general_prompt": "Verify identity first."}
+
+    profile = inspect_provider_target(
+        "retell",
+        source_target_id="chat-agent-1",
+        api_key="retell-secret",
+        target_modality="chat",
+        request=request,
+    )
+
+    assert profile["modality"] == "chat"
+    assert profile["general_prompt"] == "Verify identity first."
+    assert requested[0].endswith("/get-chat-agent/chat-agent-1")
+
+
+def test_retell_chat_import_clones_and_deletes_chat_agent() -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def request(method, url, api_key, body):
+        assert api_key == "retell-secret"
+        calls.append((method, url, body))
+        if method == "GET" and "/get-chat-agent/" in url:
+            return {
+                "agent_id": "source-chat",
+                "version": 2,
+                "agent_name": "Collections",
+                "response_engine": {"type": "retell-llm", "llm_id": "source-llm"},
+                "webhook_url": "https://prod.example/events",
+            }
+        if method == "GET" and "/get-retell-llm/" in url:
+            return {"llm_id": "source-llm", "general_prompt": "Collect safely."}
+        if method == "POST" and url.endswith("/create-retell-llm"):
+            return {"llm_id": "cloned-llm"}
+        if method == "POST" and url.endswith("/create-chat-agent"):
+            return {"agent_id": "cloned-chat"}
+        return {}
+
+    spec = ProviderImportSpec(
+        type="retell",
+        target_modality="chat",
+        source_target_id="source-chat",
+        public_capability="tools",
+        environment_tools=[],
+    )
+    receipt = clone_provider_target(
+        spec, context=_context("retell"), api_key="retell-secret", request=request
+    )
+
+    assert receipt.target.kind == "chat_agent"
+    assert receipt.target.id == "cloned-chat"
+    assert [resource.kind for resource in receipt.resources] == [
+        "retell_llm",
+        "chat_agent",
+    ]
+    assert any(
+        url.endswith("/create-chat-agent")
+        for method, url, _ in calls
+        if method == "POST"
+    )
+
+    destroy_imported_target(
+        spec, receipt=receipt, api_key="retell-secret", request=request
+    )
+    deletes = [(method, url) for method, url, _ in calls if method == "DELETE"]
+    assert deletes == [
+        ("DELETE", "https://api.retellai.com/delete-chat-agent/cloned-chat"),
+        ("DELETE", "https://api.retellai.com/delete-retell-llm/cloned-llm"),
+    ]
+
+
 def test_retell_import_clones_conversation_flow_rewires_all_nested_tools() -> None:
     calls: list[tuple[str, str, object]] = []
 

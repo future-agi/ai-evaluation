@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -42,6 +42,7 @@ class ProviderImportSpec(BaseModel):
     event_path: str = "/provider/events"
     tool_path: str = "/provider/tools"
     api_base_url: str | None = None
+    target_modality: Literal["voice", "chat"] = "voice"
 
     @model_validator(mode="after")
     def _provider_api_origin_is_fixed(self) -> "ProviderImportSpec":
@@ -120,6 +121,7 @@ def inspect_provider_target(
     source_target_id: str,
     api_key: str,
     api_base_url: str | None = None,
+    target_modality: Literal["voice", "chat"] = "voice",
     request: JsonRequest | None = None,
 ) -> dict[str, Any]:
     """Fetch a sanitized, read-only behavioral profile for hosted authoring.
@@ -161,7 +163,8 @@ def inspect_provider_target(
         }
     else:
         base = (api_base_url or "https://api.retellai.com").rstrip("/")
-        agent = request("GET", f"{base}/get-agent/{source_target_id}", api_key, None)
+        agent_path = "get-chat-agent" if target_modality == "chat" else "get-agent"
+        agent = request("GET", f"{base}/{agent_path}/{source_target_id}", api_key, None)
         engine = agent.get("response_engine")
         if not isinstance(engine, Mapping):
             raise ProviderImportError(
@@ -170,6 +173,7 @@ def inspect_provider_target(
         engine_type = str(engine.get("type") or "").strip()
         profile: dict[str, Any] = {
             "provider": "retell",
+            "modality": target_modality,
             "source_target_id": source_target_id,
             "name": agent.get("agent_name"),
             "voice_id": agent.get("voice_id"),
@@ -486,8 +490,9 @@ def _clone_retell(
     request: JsonRequest,
 ) -> _CloneResult:
     base = (spec.api_base_url or "https://api.retellai.com").rstrip("/")
+    agent_path = "get-chat-agent" if spec.target_modality == "chat" else "get-agent"
     original = request(
-        "GET", f"{base}/get-agent/{spec.source_target_id}", api_key, None
+        "GET", f"{base}/{agent_path}/{spec.source_target_id}", api_key, None
     )
     engine = original.get("response_engine")
     if not isinstance(engine, Mapping):
@@ -568,8 +573,11 @@ def _clone_retell(
     agent_create["agent_name"] = context.provider_resource_prefix
     agent_create["response_engine"] = cloned_engine
     agent_create["webhook_url"] = context.event_url
+    create_path = (
+        "create-chat-agent" if spec.target_modality == "chat" else "create-agent"
+    )
     try:
-        created_agent = request("POST", f"{base}/create-agent", api_key, agent_create)
+        created_agent = request("POST", f"{base}/{create_path}", api_key, agent_create)
     except ProviderImportError:
         try:
             request("DELETE", delete_engine_url, api_key, None)
@@ -585,15 +593,20 @@ def _clone_retell(
         raise ProviderImportError("retell_agent_create_missing_id")
     return _CloneResult(
         target_id=target_id,
-        target_kind="voice_agent",
+        target_kind="chat_agent" if spec.target_modality == "chat" else "voice_agent",
         resources=(
             engine_resource,
-            ProviderResource(kind="voice_agent", id=target_id, owned=True),
+            ProviderResource(
+                kind="chat_agent" if spec.target_modality == "chat" else "voice_agent",
+                id=target_id,
+                owned=True,
+            ),
         ),
         metadata={
             "source_target_id": spec.source_target_id,
             "source_response_engine_id": source_engine_id,
             "source_response_engine_type": engine_type,
+            "target_modality": spec.target_modality,
             "clone_kind": "provider_import",
         },
     )
@@ -651,9 +664,12 @@ def destroy_imported_target(
             except ProviderImportError as exc:
                 if "HTTP 404" not in str(exc):
                     raise
-        elif resource.kind == "voice_agent":
+        elif resource.kind in {"voice_agent", "chat_agent"}:
+            delete_path = (
+                "delete-chat-agent" if resource.kind == "chat_agent" else "delete-agent"
+            )
             try:
-                request("DELETE", f"{base}/delete-agent/{resource.id}", api_key, None)
+                request("DELETE", f"{base}/{delete_path}/{resource.id}", api_key, None)
             except ProviderImportError as exc:
                 if "HTTP 404" not in str(exc):
                     raise

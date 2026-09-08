@@ -169,7 +169,7 @@ class ProviderContext(BaseModel):
 class ProviderTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["assistant", "voice_agent"]
+    kind: Literal["assistant", "voice_agent", "chat_agent"]
     id: str = Field(min_length=1)
     version: str | None = None
 
@@ -204,12 +204,13 @@ class ProviderProvisionReceipt(BaseModel):
     @model_validator(mode="after")
     def _provider_target_kind(self) -> "ProviderProvisionReceipt":
         expected = {
-            ProviderType.VAPI: "assistant",
-            ProviderType.RETELL: "voice_agent",
+            ProviderType.VAPI: {"assistant"},
+            ProviderType.RETELL: {"voice_agent", "chat_agent"},
         }[self.provider]
-        if self.target.kind != expected:
+        if self.target.kind not in expected:
             raise ValueError(
-                f"provider_target_kind_invalid: {self.provider.value} requires {expected}"
+                "provider_target_kind_invalid: "
+                f"{self.provider.value} requires one of {', '.join(sorted(expected))}"
             )
         if not any(
             resource.owned

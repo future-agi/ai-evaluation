@@ -31,6 +31,14 @@ GAVE_UP = "gave-up"
 RAN_OUT = "ran-out-of-turns"
 
 
+class TargetConversationEnded(Exception):
+    """The target ended normally before producing another conversational turn."""
+
+    def __init__(self, final_message: str = "") -> None:
+        super().__init__(final_message)
+        self.final_message = final_message.strip()
+
+
 @dataclass
 class Exchange:
     speaker: str
@@ -190,7 +198,13 @@ async def converse(
             said = scenario.instruction
         record("customer", said)
         for _turn in range(max(1, scenario.max_turns)):
-            reply = await target.say(said)
+            try:
+                reply = await target.say(said)
+            except TargetConversationEnded as ended:
+                if ended.final_message:
+                    record("agent", ended.final_message)
+                transcript.ended = FINISHED
+                break
             record("agent", reply or "(said nothing)")
 
             turn = await customer.say(reply or "(no response)")

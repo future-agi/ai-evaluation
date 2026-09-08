@@ -148,6 +148,12 @@ The order for one scenario:
 A scenario is written to disk the moment it is kept, so proved work survives a stopped turn. Submit
 as you go rather than composing a whole suite before the first call.
 
+If `REAL TOOLS` says `(none)`, this is a conversation-only target. Do not invent a tool or try to
+call a chat endpoint as though it were an agent tool. Use `solution: []`, choose judged sub-goals,
+and use setup/ready only to give the caller a private, valid fixture. In that lane the transcript is
+the outcome evidence; the ready gate still proves the fixture, while tool-solution and no-op gates
+do not pretend there was an environment action to replay.
+
 ## The three gates
 
 Every scenario is put through these when you submit it. Failing any one means it is not kept, and you
@@ -163,6 +169,9 @@ something you got wrong and it reads as the agent's fault. `ready_code` makes th
 **2. Solvable.** Your reference solution is played through that world, and the checks of every
 sub-goal you named must pass. If they do not, either the scenario cannot be passed at all or a check
 is wrong.
+
+For a conversation-only target with no real tools, `solution: []` is intentional and behavioral
+sub-goals are judged from the transcript. Never fabricate a tool call merely to satisfy this gate.
 
 **3. Not vacuous.** The same checks run again with nothing done, and must fail. A check that passes
 while the agent does nothing grades nothing while reporting a result.

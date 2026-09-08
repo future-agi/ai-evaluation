@@ -303,6 +303,8 @@ def validate_scenario(
     catalogue: Catalogue,
     world_state: dict[str, list[dict[str, Any]]],
     simulator_prompt: str = "",
+    *,
+    allow_empty_solution: bool = False,
 ) -> list[str]:
     """Problems that make a scenario unusable, found without running anything.
 
@@ -380,7 +382,7 @@ def validate_scenario(
                 "not supply. An unfilled slot reaches the caller verbatim"
             )
 
-    if not scenario.solution:
+    if not scenario.solution and not allow_empty_solution:
         problems.append(
             "no solution: without the actions a correct agent would take, there is no way to "
             "show this scenario can be passed at all"

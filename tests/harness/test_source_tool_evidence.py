@@ -125,6 +125,80 @@ def test_tool_free_world_saves_without_fabricated_state_checks(tmp_path):
     assert world.state() == {}
 
 
+def test_tool_free_world_with_baseline_data_does_not_require_tool_sequence(tmp_path):
+    """Provider chat agents may have seed variables but no callable tools.
+
+    Requiring a sequence in that shape is impossible to satisfy: empty sequences are invalid and
+    every named call would invent a tool the target does not expose.
+    """
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="provider_chat",
+        modality="chat",
+        conversational=True,
+        tools=[],
+        real_use_cases=["Discuss an account using provider-supplied context"],
+        base_environment={"dynamic_variables": {"customer_name": "Customer 4821"}},
+    )
+    save_catalogue(
+        Catalogue(
+            sub_goals=[
+                SubGoal(
+                    name="uses_customer_context",
+                    what="Uses the supplied customer context",
+                    check=(
+                        "def check(world, calls):\n"
+                        "    rows = world.get('dynamic_variables', [])\n"
+                        "    return None if rows and rows[0].get('customer_name') else "
+                        "'customer context missing'\n"
+                    ),
+                )
+            ]
+        ),
+        tmp_path,
+    )
+    save_simulator_prompt(
+        "You are a caller with persona {{ persona }}. Follow {{ instruction }} and respond "
+        "naturally without inventing the assistant's messages.",
+        tmp_path,
+    )
+    server, _world = world_tools(contract, tmp_path)
+    tools = {one.name: one.handler for one in server.tools}
+    assert not asyncio.run(
+        tools["create_schema"](
+            {"sql": "CREATE TABLE dynamic_variables (customer_name TEXT NOT NULL);"}
+        )
+    ).get("is_error")
+    assert not asyncio.run(
+        tools["seed"](
+            {
+                "table": "dynamic_variables",
+                "rows": [{"customer_name": "Customer 4821"}],
+            }
+        )
+    ).get("is_error")
+    assert not asyncio.run(
+        tools["add_world_check"](
+            {
+                "name": "customer_context_exists",
+                "code": (
+                    "def check(world):\n"
+                    "    rows = world.state().get('dynamic_variables', [])\n"
+                    "    return None if rows and rows[0].get('customer_name') else "
+                    "'customer context missing'\n"
+                ),
+            }
+        )
+    ).get("is_error")
+
+    result = asyncio.run(tools["save_world"]({}))
+    assert not result.get("is_error"), result
+    assert "0 tools" in result["content"][0]["text"]
+
+
 def test_generated_world_mutations_do_not_leak_between_agents():
     from fi.alk.harness.world.runtime import GeneratedWorld
 
