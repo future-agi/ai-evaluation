@@ -3547,3 +3547,34 @@ def test_a_caller_goodbye_before_the_agent_ever_spoke_does_not_end_the_call() ->
         return done
 
     assert asyncio.run(run()) is False
+
+
+def test_a_farewell_is_recognised_by_what_it_carries_not_by_its_length() -> None:
+    """A six-word cap classified "Sounds great, thanks. Talk tomorrow. Bye." as a farewell and
+    "Sounds good, talk to you then. Bye." as conversation, purely on one extra word. Measured on
+    live call 23fe40b8: the caller closed correctly, was not recognised, and was asked for two
+    more turns, giving "Talk soon. Bye-bye." and "Take care."."""
+    closings = [
+        "Sounds good, talk to you then. Bye.",
+        "Talk soon. Bye-bye.",
+        "Take care.",
+        "Sounds great, thanks. Talk tomorrow. Bye.",
+        "Alright, thanks, bye!",
+        "Fine. Goodbye.",
+        "Thanks, bye.",
+    ]
+    for text in closings:
+        assert livekit._is_closing_only(text), text
+
+    # A turn that closes AND carries something is still conversation; ending on it truncates a
+    # live call and the transcript then reads as the caller giving up.
+    conversation = [
+        "Yes, it is. Bye.",
+        "No, that is not my number. Bye.",
+        "Bye, but first, what is the premium?",
+        "Hello, this is Desmond.",
+        "The address is six six four Harlow Street.",
+        "Yes, that is correct.",
+    ]
+    for text in conversation:
+        assert not livekit._is_closing_only(text), text

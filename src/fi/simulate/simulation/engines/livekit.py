@@ -2612,20 +2612,38 @@ _CLOSING_PHRASES = (
 _CLOSING_EXCHANGE_LIMIT = 4
 
 
+# Words a farewell is allowed to be made of. Anything outside this set is substance, whatever the
+# turn's length: "yes it is, bye" is an answer and ending on it would cut a live call short.
+_CLOSING_FILLER = frozenset(
+    """
+    a again alright and bye byebye care cheers day drive evening fine good goodbye great
+    have later lovely morning much nice night ok okay perfect right safe see so soon sounds
+    speak sure take talk thank thanks then to tomorrow too well wonderful you your
+    """.split()
+)
+
+
 def _is_closing_only(text: str) -> bool:
     """Whether a turn is nothing but a farewell.
 
     Deliberately narrow: a turn that closes AND carries anything else (a question, a fact, a
     correction) is still conversation, and ending on it would cut a live call short.
+
+    Decided on whether every word is farewell filler rather than on a word count. A cap of six
+    words classified "Sounds great, thanks. Talk tomorrow. Bye." as a farewell and "Sounds good,
+    talk to you then. Bye." as conversation, purely because the second has one more word, and the
+    engine then asked the caller for two further turns and got two more goodbyes.
     """
     stripped = "".join(
         character.lower() if character.isalnum() or character.isspace() else " "
         for character in (text or "")
     ).split()
-    if not stripped or len(stripped) > 6:
+    if not stripped or len(stripped) > 12:
         return False
     joined = " ".join(stripped)
-    return any(phrase in joined for phrase in _CLOSING_PHRASES)
+    if not any(phrase in joined for phrase in _CLOSING_PHRASES):
+        return False
+    return not (set(stripped) - _CLOSING_FILLER)
 
 
 async def _wait_for_closing_loop(
