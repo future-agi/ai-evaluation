@@ -512,3 +512,56 @@ def test_the_writer_and_the_reader_agree_on_where_the_catalogue_lives(tmp_path):
     assert by_name["schedules_callback"].judged == ""
     assert by_name["stayed_within_licence"].what == "no premium figure was given"
     assert by_name["stayed_within_licence"].judged.startswith("Whether a premium")
+
+
+def test_the_bundle_carries_the_catalogue_the_scenarios_reference(tmp_path):
+    """The gap that made run 7b62c314 report every passing sub-goal as "the check found nothing
+    wrong". bundle_author_v2 copied authoring/scenarios into the bundle and nothing copied
+    sub_goals.json beside it, so the reader found the scenarios and not the catalogue they name."""
+    from fi.alk.harness.bundle_author_v2 import _copy_scenarios, _copy_sub_goal_catalogue
+    from fi.alk.harness.catalogue import CATALOGUE, Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.folder import write_folder
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_source import load_scenarios
+
+    authoring = tmp_path / "authoring"
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+
+    coded = SubGoal(
+        name="schedules_callback",
+        what="a callback was written for the time the caller agreed",
+        check=(
+            "def check(world, calls):\n"
+            '    done = [x for x in calls if x.name == "schedule" and x.ok]\n'
+            '    if not done:\n        return "not scheduled"\n'
+            '    if done[0].arguments.get("when") != "10:00":\n        return "wrong time"\n'
+            "    return None\n"
+        ),
+    )
+    catalogue = Catalogue(sub_goals=[coded])
+    write_folder(Scenario(name="callback", sub_goals=["schedules_callback"]), catalogue, authoring)
+    save_catalogue(catalogue, authoring)
+
+    _copy_scenarios(authoring, bundle, count=1)
+    adopted = _copy_sub_goal_catalogue(authoring, bundle)
+
+    assert adopted == [CATALOGUE], "the catalogue has to be declared as adopted"
+    assert (bundle / CATALOGUE).is_file(), "the bundle must carry the catalogue"
+
+    # And the reader, given only the bundle, gets the description back.
+    goal = load_scenarios(bundle)[0].sub_goals[0]
+    assert goal.what == "a callback was written for the time the caller agreed"
+
+
+def test_a_bundle_with_no_catalogue_is_a_warning_not_a_failure(tmp_path):
+    """A bundle whose scenarios are all judged has nothing to lose, and failing the run here would
+    be worse than the degraded reporting it replaces."""
+    from fi.alk.harness.bundle_author_v2 import _copy_sub_goal_catalogue
+
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+
+    assert _copy_sub_goal_catalogue(authoring, bundle) == []
