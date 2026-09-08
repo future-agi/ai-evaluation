@@ -62,6 +62,7 @@ from .bundle_v2 import (
     StoreEntry,
 )
 from .job import FailureDomain
+from .livekit_source import infer_livekit_agent_name_from_source
 from .provider_import import (
     ProviderImportError,
     ProviderImportSpec,
@@ -1231,32 +1232,12 @@ class SpawnedWorldProcess:
     dispatch_agent_name: str | None = None
 
 
-_AGENT_NAME_SOURCE_DEFAULT = re.compile(
-    r"agent_name\s*=\s*os\.(?:environ\.get|getenv)\(\s*"
-    r"[\"']LIVEKIT_AGENT_NAME[\"']\s*,\s*[\"'](?P<default>[^\"']+)[\"']"
-)
-
-
 def _agent_name_source_default(source_root: Path) -> str:
     """Recover the agent's source-declared LIVEKIT_AGENT_NAME default when the bundle process
     env does not render one (agent reads os.environ.get("LIVEKIT_AGENT_NAME", "<default>")).
     Mirrors provision._AGENT_NAME_SETTING so a freshly authored bundle carries the dispatch
     identity the same way a cached bundle does."""
-    try:
-        if not source_root.is_dir():
-            return ""
-        for path in source_root.rglob("*.py"):
-            try:
-                match = _AGENT_NAME_SOURCE_DEFAULT.search(
-                    path.read_text(encoding="utf-8")
-                )
-            except (OSError, UnicodeDecodeError):
-                continue
-            if match:
-                return match.group("default").strip()
-    except OSError:
-        pass
-    return ""
+    return infer_livekit_agent_name_from_source(source_root)
 
 
 def _dispatch_metadata(
@@ -1765,7 +1746,10 @@ def spawn_source_process(
         world_index=world_index,
         uid=resolved_user.pw_uid if resolved_user is not None else None,
         gid=resolved_user.pw_gid if resolved_user is not None else None,
-        dispatch_agent_name=rendered.get("LIVEKIT_AGENT_NAME") or None,
+        # Dispatch must target the identity the worker actually received.  A caller-supplied
+        # target-provider value can intentionally override the bundle's rendered default; using
+        # ``rendered`` here sent the simulator to one name while the worker registered another.
+        dispatch_agent_name=env.get("LIVEKIT_AGENT_NAME") or None,
     )
 
 

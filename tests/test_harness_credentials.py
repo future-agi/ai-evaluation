@@ -59,7 +59,8 @@ def test_livekit_sdk_implicit_credentials_are_discovered_without_getenv_calls(
         "from livekit.agents import AgentServer, cli\ncli.run_app(AgentServer())\n",
     )
 
-    missing = _requirements(discover_credentials(tmp_path))
+    missing_manifest = discover_credentials(tmp_path)
+    missing = _requirements(missing_manifest)
     configured = discover_credentials(
         tmp_path,
         provided_environment=["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"],
@@ -70,6 +71,62 @@ def test_livekit_sdk_implicit_credentials_are_discovered_without_getenv_calls(
     assert missing["LIVEKIT_API_KEY"].kind is RequirementKind.SECRET
     assert missing["LIVEKIT_API_SECRET"].kind is RequirementKind.SECRET
     assert configured.ready
+
+
+def test_livekit_provider_sdk_credentials_are_discovered_from_constructor_use(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        """
+from livekit.plugins import deepgram, google
+stt = deepgram.STT(model="nova-3")
+llm = google.LLM(model="gemini-2.5-flash", vertexai=True,
+                 project=os.environ["GOOGLE_CLOUD_PROJECT"])
+""",
+    )
+
+    missing_manifest = discover_credentials(tmp_path)
+    missing = _requirements(missing_manifest)
+    configured = discover_credentials(
+        tmp_path,
+        provided_environment=[
+            "LIVEKIT_URL",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET",
+            "DEEPGRAM_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+            "GOOGLE_CLOUD_PROJECT",
+        ],
+    )
+
+    assert missing["DEEPGRAM_API_KEY"].status is RequirementStatus.MISSING
+    assert missing["GOOGLE_APPLICATION_CREDENTIALS_JSON"].status is RequirementStatus.MISSING
+    assert missing["GOOGLE_CLOUD_PROJECT"].status is RequirementStatus.MISSING
+    assert missing_manifest.credential_choices[0].options == [
+        ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+        ["GOOGLE_APPLICATION_CREDENTIALS_JSON", "GOOGLE_CLOUD_PROJECT"],
+    ]
+    assert configured.ready
+
+
+def test_uploaded_google_json_satisfies_conventional_adc_path(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        'credentials = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]\n',
+    )
+
+    manifest = discover_credentials(
+        tmp_path, provided_environment=["GOOGLE_APPLICATION_CREDENTIALS_JSON"]
+    )
+
+    assert manifest.ready
+    assert (
+        _requirements(manifest)["GOOGLE_APPLICATION_CREDENTIALS"].status
+        is RequirementStatus.CONFIGURED
+    )
 
 
 def test_discovers_typescript_vapi_agent_and_marks_secret_reference_configured(
@@ -246,6 +303,88 @@ def test_guarded_indexed_environment_access_is_optional(tmp_path: Path) -> None:
 
     assert not requirement.required
     assert requirement.status is RequirementStatus.OPTIONAL
+
+
+def test_blank_template_configuration_is_not_a_runtime_requirement(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        ".env.example",
+        "TEMPERATURE=\nPROMPT_LABEL=\nOPENAI_API_KEY=\n",
+    )
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert requirements["TEMPERATURE"].status is RequirementStatus.OPTIONAL
+    assert requirements["PROMPT_LABEL"].status is RequirementStatus.OPTIONAL
+    assert requirements["OPENAI_API_KEY"].status is RequirementStatus.MISSING
+
+
+def test_dependency_environment_directories_are_not_scanned(tmp_path: Path) -> None:
+    _write(tmp_path, "agent.py", 'TOKEN = "not a credential"\n')
+    for directory in ("venv", ".tox", ".nox"):
+        _write(
+            tmp_path,
+            f"{directory}/lib/python/site-packages/vendor.py",
+            'import os\nkey = os.environ["VENDOR_INTERNAL_API_KEY"]\n',
+        )
+
+    manifest = discover_credentials(tmp_path)
+
+    assert "VENDOR_INTERNAL_API_KEY" not in _requirements(manifest)
+
+
+def test_alk_runtime_namespace_is_platform_owned(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "provider.py",
+        """
+import os
+context = os.environ["ALK_PROVIDER_CONTEXT"]
+events = os.environ["ALK_EVENT_URL"]
+tools = os.environ["ALK_TOOL_BASE_URL"]
+output = os.environ["ALK_PROVIDER_OUTPUT"]
+receipt = os.environ["ALK_PROVIDER_RECEIPT"]
+""",
+    )
+
+    manifest = discover_credentials(tmp_path)
+
+    assert manifest.ready
+    assert not manifest.requirements
+
+
+def test_explicit_llm_provider_makes_model_credentials_alternatives(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        """
+import os
+provider = os.getenv("LLM_PROVIDER") or "vertex"
+project = os.getenv("GOOGLE_CLOUD_PROJECT")
+credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if provider == "agentcc":
+    key = os.environ["AGENTCC_API_KEY"]
+""",
+    )
+
+    manifest = discover_credentials(
+        tmp_path,
+        provided_environment=[
+            "LLM_PROVIDER",
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+            "GOOGLE_CLOUD_PROJECT",
+        ],
+    )
+
+    assert manifest.ready
+    assert manifest.credential_choices[0].options == [
+        ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+        ["AGENTCC_API_KEY"],
+    ]
 
 
 def test_google_model_auth_is_one_explicit_credential_choice(tmp_path: Path) -> None:

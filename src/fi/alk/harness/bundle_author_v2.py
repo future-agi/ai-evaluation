@@ -50,6 +50,7 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .contract import ToolEntry
+from .credentials import discover_credentials
 from .job import HarnessJob
 from .job import ProviderExecutionMode
 from .process_preflight import preflight_bundle
@@ -1442,12 +1443,64 @@ def author_bundle_v2(
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
+        elif (
+            contract_modality == "chat"
+            and _discover_callback_entrypoint(source_root) is not None
+        ):
+            # The callback is a deterministic source property.  Do not let a stochastic
+            # authoring omission make the compiled adapter unreachable at call time: the
+            # environment plan already discovers and exposes this same callback, so seal the
+            # matching interface into the bundle's contract as part of compilation.
+            runtime = dict(runtime) if isinstance(runtime, dict) else {}
+            runtime["interface"] = {
+                "kind": "callable",
+                "protocol": "fi.alk",
+                "path": "",
+                "health_path": "",
+                "include_tools": True,
+            }
+            contract_body = {**contract_body, "runtime": runtime}
+            contract_interface_kind = "callable"
     plan = resolve_environment_plan(
         source_root,
         job,
         contract_modality=contract_modality,
         contract_interface_kind=contract_interface_kind,
     )
+    provided_environment = {
+        str(name).upper()
+        for name in (job.metadata.get("environment_value_names", []) or [])
+    }
+    provided_environment.update(_declared_runtime_environment(source_root))
+    for process in plan.processes:
+        provided_environment.update(
+            str(name).upper()
+            for name in (getattr(process, "environment", None) or {})
+        )
+    credential_manifest = discover_credentials(
+        source_root,
+        secret_refs=job.agent.secret_refs,
+        provided_environment=provided_environment,
+        scan_paths={
+            str(getattr(process, "working_directory", ".") or ".")
+            for process in plan.processes
+            if isinstance(process, SourceProcess)
+        },
+    )
+    if not credential_manifest.ready:
+        missing = sorted(
+            item.environment_name for item in credential_manifest.missing_required
+        )
+        unsatisfied = sorted(
+            choice.id
+            for choice in credential_manifest.credential_choices
+            if not choice.satisfied
+        )
+        details = [*(f"environment:{name}" for name in missing)]
+        details.extend(f"credential_choice:{name}" for name in unsatisfied)
+        raise BundleAuthorError(
+            "target_runtime_configuration_missing: " + ", ".join(details)
+        )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent)
@@ -1455,6 +1508,11 @@ def author_bundle_v2(
     try:
         _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
         adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)
+        if "contract.json" in adopted_chat_files and contract_body:
+            (temporary / "contract.json").write_text(
+                json.dumps(contract_body, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         adopted_chat_files.extend(
             _compile_source_tool_handlers(contract_body, temporary)
         )

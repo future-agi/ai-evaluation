@@ -48,6 +48,7 @@ from fi.alk.harness.bundle_v2 import (
     CapabilityV2,
     EnvironmentBundleV2,
     ProcessUser,
+    SecretPurpose,
     SourceProcess,
 )
 from fi.alk.harness import process_runtime as pr
@@ -6821,6 +6822,38 @@ def test_spawn_source_process_carries_rendered_dispatch_agent_name(
         runner=fake_runner,
     )
     assert without.dispatch_agent_name is None
+
+
+def test_spawn_source_process_dispatches_to_effective_injected_agent_name(
+    tmp_path: Path,
+) -> None:
+    """A target override must update both the worker env and the simulator dispatch identity."""
+    build_dir = tmp_path / "build" / "svc"
+    build_dir.mkdir(parents=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(env)
+        return FakeHandle()
+
+    process = _source_process(
+        environment={"LIVEKIT_AGENT_NAME": "generated-w{{WORLD_INDEX}}"},
+        secret_purposes=[SecretPurpose.TARGET_PROVIDER],
+    )
+    spawned = pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=tmp_path / "worlds" / "w0" / "svc",
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={"LIVEKIT_AGENT_NAME": "customer-agent"},
+        secret_purposes={"LIVEKIT_AGENT_NAME": "target_provider"},
+        runner=fake_runner,
+    )
+
+    assert captured["LIVEKIT_AGENT_NAME"] == "customer-agent"
+    assert spawned.dispatch_agent_name == "customer-agent"
 
 
 def test_spawn_source_process_injects_child_safe_livekit_tool_trace(

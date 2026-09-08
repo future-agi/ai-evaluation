@@ -154,6 +154,18 @@ def test_generic_relationship_without_database_fk_is_rejected_then_passes():
     asyncio.run(subject.check_invariants(world, [declaration()]))
 
 
+def test_all_failing_relationships_are_reported_in_one_repair_set():
+    world = ReadWorld()
+    second = {
+        **declaration(),
+        "name": "every alias has a corresponding label",
+    }
+    with pytest.raises(ValueError) as failed:
+        asyncio.run(subject.check_invariants(world, [declaration(), second]))
+    assert "aliases resolve to source records" in str(failed.value)
+    assert "every alias has a corresponding label" in str(failed.value)
+
+
 def test_validation_queries_cannot_change_the_database():
     world = ReadWorld()
     check = {**declaration(), "violations_sql": "DELETE FROM aliases"}

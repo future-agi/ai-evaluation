@@ -70,6 +70,7 @@ def validate_evidence(check: dict, files: dict[str, Path]) -> dict:
 async def check_invariants(
     world, checks: list[dict], *, scenario_key: str | None = None
 ) -> None:
+    failures: list[str] = []
     for check in checks:
         if check.get("scenarios") and scenario_key not in check["scenarios"]:
             continue
@@ -78,11 +79,16 @@ async def check_invariants(
         )
         if rows:
             # Data can include personal values; report the check and affected count, not rows.
-            raise ValueError(
-                f"Source data invariant {check['name']!r} failed ({len(rows)} violating rows). "
+            failures.append(
+                f"{check['name']!r} failed ({len(rows)} violating rows). "
                 f"Query: {check['violations_sql']}. Evidence: "
                 + ", ".join(item["path"] for item in check["evidence"])
             )
+    if failures:
+        # Report the complete repair set in one pass. Raising on the first violation made the
+        # model fix one relationship per runtime attempt, so a valid world with three missing
+        # companion relationships exhausted the bounded repair budget deterministically.
+        raise ValueError("Source data invariants failed:\n- " + "\n- ".join(failures))
 
 
 def local_services(endpoints) -> dict[str, str]:

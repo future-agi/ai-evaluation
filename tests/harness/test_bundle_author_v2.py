@@ -181,6 +181,52 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     assert "target_http" not in bundle.capabilities
 
 
+def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        'import os\nproject = os.environ["GOOGLE_CLOUD_PROJECT"]\n',
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+
+    with pytest.raises(
+        BundleAuthorError,
+        match="target_runtime_configuration_missing: environment:GOOGLE_CLOUD_PROJECT",
+    ):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto", with_secrets=True),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
+def test_bundle_accepts_post_checkout_runtime_configuration_names(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        'import os\nproject = os.environ["GOOGLE_CLOUD_PROJECT"]\n',
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(connector="auto", with_secrets=True).model_copy(
+        update={"metadata": {"environment_value_names": ["GOOGLE_CLOUD_PROJECT"]}}
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    assert bundle.digest
+
+
 @pytest.mark.parametrize(
     "project_dir,manifest",
     [(".", "pyproject.toml"), ("service", "pyproject.toml"), (".", "requirements.txt")],
@@ -358,6 +404,16 @@ def test_repository_callback_is_discovered_when_contract_omits_interface(
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert bundle.capabilities["target_http"].service == "agent"
+    sealed_contract = json.loads(
+        (tmp_path / "bundle" / "contract.json").read_text(encoding="utf-8")
+    )
+    assert sealed_contract["runtime"]["interface"] == {
+        "health_path": "",
+        "include_tools": True,
+        "kind": "callable",
+        "path": "",
+        "protocol": "fi.alk",
+    }
 
 
 def test_callable_contract_rejects_missing_callback(tmp_path: Path) -> None:

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -57,12 +56,14 @@ _READY_PY = "ready.py"
 # terminal event today is strictly better than none ever.
 _LOAD_TIMEOUT_SECONDS = 60.0
 
+
 # Every scenario a job asked for is called. A job that wrote two hundred is asking for two hundred
 # calls: that is the product, and calling fewer would quietly deliver a fraction of what somebody
 # paid for. There is deliberately no setting here; a smaller run is a smaller `scenario_count`.
 def sampled_for_calling(scenarios: Sequence[Any]) -> list[Any]:
     """Which scenarios this job calls, which is all of them."""
     return list(scenarios)
+
 
 # The TEXT of a judged sub-goal's check is never persisted by `folder.py`'s `write_folder` (only
 # `SubGoal.deterministic()` entries get a `checks/<name>.py` file) -- this fixed marker stands in
@@ -102,7 +103,9 @@ def bundle_has_scenarios(bundle_dir: Path) -> bool:
         children = list(root.iterdir())
     except OSError:
         return False
-    return any((child / _SCENARIO_JSON).is_file() for child in children if child.is_dir())
+    return any(
+        (child / _SCENARIO_JSON).is_file() for child in children if child.is_dir()
+    )
 
 
 def _judged_placeholder_check(world: Any, calls: Any) -> None:
@@ -191,6 +194,7 @@ class _CompiledScenario:
     sub_goals: tuple[_CompiledSubGoal, ...]
     setup: Callable[[Any], object]
     ready: Callable[[Any], object]
+    requires_tool_evidence: bool = True
     # Who this person is and what they came for, as the platform's own persona record. Read off the
     # same document and sent at pre-allocation, so a call can be read on the platform without the
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
@@ -209,7 +213,9 @@ def _read_text(path: Path, *, label: str) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise ScenarioDocumentInvalid(f"{label}: cannot read {path.name}: {exc}") from exc
+        raise ScenarioDocumentInvalid(
+            f"{label}: cannot read {path.name}: {exc}"
+        ) from exc
 
 
 def _validate_subgoal_name(name: str, *, folder_name: str) -> None:
@@ -284,7 +290,38 @@ def _deterministic_names(bundle_dir: Path) -> set[str]:
         return set()
 
 
-def _load_one(folder: Path, *, settled_in_code: set[str] | None = None) -> _CompiledScenario:
+def _declared_tool_names(bundle_dir: Path) -> set[str]:
+    """Return the target tools declared by the authored contract.
+
+    The solution format intentionally permits semantic steps that are not executable tools.  The
+    contract's tool inventory is therefore the only stable way to decide whether a runtime tool
+    trace is required.  A malformed or absent inventory is treated as empty here; contract
+    validation owns reporting malformed contract content, while this reader must not invent tool
+    requirements that the target itself never declared.
+    """
+    path = bundle_dir / "contract.json"
+    if not path.is_file():
+        return set()
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+        tools = body.get("tools") if isinstance(body, dict) else None
+        if not isinstance(tools, list):
+            return set()
+        return {
+            str(tool.get("name") or "").strip()
+            for tool in tools
+            if isinstance(tool, dict)
+        } - {""}
+    except Exception:  # noqa: BLE001 - contract validation reports the content defect
+        return set()
+
+
+def _load_one(
+    folder: Path,
+    *,
+    settled_in_code: set[str] | None = None,
+    declared_tools: set[str] | None = None,
+) -> _CompiledScenario:
     """One scenario folder -> a `Scenario`-protocol object. Mirrors `folder.py`'s documented
     layout (`scenario.json` + `setup.py` + `ready.py` + `checks/<goal>.py`) but reads
     `scenario.json` itself as a plain dict rather than through `fi.alk.harness.scenario.Scenario`
@@ -308,7 +345,9 @@ def _load_one(folder: Path, *, settled_in_code: set[str] | None = None) -> _Comp
             f"{folder.name}: {_SCENARIO_JSON} is not valid JSON: {exc}"
         ) from exc
     if not isinstance(body, dict):
-        raise ScenarioDocumentInvalid(f"{folder.name}: {_SCENARIO_JSON} is not a JSON object")
+        raise ScenarioDocumentInvalid(
+            f"{folder.name}: {_SCENARIO_JSON} is not a JSON object"
+        )
 
     scenario_key = body.get("scenario_key", "")
     if not isinstance(scenario_key, str):
@@ -320,14 +359,39 @@ def _load_one(folder: Path, *, settled_in_code: set[str] | None = None) -> _Comp
     if not isinstance(sub_goal_names, list) or not all(
         isinstance(name, str) for name in sub_goal_names
     ):
-        raise ScenarioDocumentInvalid(f"{folder.name}: sub_goals is not a list of strings")
+        raise ScenarioDocumentInvalid(
+            f"{folder.name}: sub_goals is not a list of strings"
+        )
     for name in sub_goal_names:
         _validate_subgoal_name(name, folder_name=folder.name)
 
+    solution = body.get("solution", [])
+    if not isinstance(solution, list) or not all(
+        isinstance(step, dict) for step in solution
+    ):
+        raise ScenarioDocumentInvalid(
+            f"{folder.name}: solution is not a list of objects"
+        )
+    solution_tools = [step.get("tool") for step in solution]
+    if not all(isinstance(tool, str) and tool.strip() for tool in solution_tools):
+        raise ScenarioDocumentInvalid(
+            f"{folder.name}: every solution step must name a non-empty tool"
+        )
+    # A solution may contain semantic narration steps (for example ``listen`` and ``respond``)
+    # alongside real agent tool calls.  The contract is the authoritative inventory of tools the
+    # target can actually emit, so evidence is required exactly when a solution references one of
+    # those declared tools.  Inferring this from arbitrary step names creates false infrastructure
+    # failures for conversational agents and requires an ever-growing pseudo-tool denylist.
+    requires_tool_evidence = bool(set(solution_tools) & (declared_tools or set()))
+
     setup_code = _read_text(folder / _SETUP_PY, label=folder.name)
     ready_code = _read_text(folder / _READY_PY, label=folder.name)
-    setup = _compile_entry(setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup")
-    ready = _compile_entry(ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready")
+    setup = _compile_entry(
+        setup_code, label=f"{folder.name}/{_SETUP_PY}", entry="setup"
+    )
+    ready = _compile_entry(
+        ready_code, label=f"{folder.name}/{_READY_PY}", entry="ready"
+    )
 
     sub_goals: list[_CompiledSubGoal] = []
     for name in sub_goal_names:
@@ -335,9 +399,11 @@ def _load_one(folder: Path, *, settled_in_code: set[str] | None = None) -> _Comp
         if check_path.is_file():
             check_code = _read_text(check_path, label=folder.name)
             check = _compile_entry(
-                check_code, label=f"{folder.name}/{_CHECKS_DIRNAME}/{name}.py", entry="check",
+                check_code,
+                label=f"{folder.name}/{_CHECKS_DIRNAME}/{name}.py",
+                entry="check",
                 allow_empty=False,  # R1-2: an existing-but-empty check file is invalid, never a
-                                    # vacuous pass -- absence of the file is what means "judged".
+                # vacuous pass -- absence of the file is what means "judged".
             )
             judged = ""
         elif name in (settled_in_code or set()):
@@ -359,6 +425,7 @@ def _load_one(folder: Path, *, settled_in_code: set[str] | None = None) -> _Comp
         scenario_key=scenario_key,
         scenario_id=scenario_id,
         sub_goals=tuple(sub_goals),
+        requires_tool_evidence=requires_tool_evidence,
         setup=setup,
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
@@ -381,13 +448,22 @@ def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
         # An unreadable `scenarios/` directory is the same typed failure as any other malformed
         # document (R1-1) -- this is inside `run_job`'s `try`/`except ScenarioDocumentInvalid`
         # (unlike `bundle_has_scenarios`'s own guard above), so raising here is the safe direction.
-        raise ScenarioDocumentInvalid(f"{root}: cannot list scenario folders: {exc}") from exc
+        raise ScenarioDocumentInvalid(
+            f"{root}: cannot list scenario folders: {exc}"
+        ) from exc
     settled_in_code = _deterministic_names(bundle_dir)
+    declared_tools = _declared_tool_names(bundle_dir)
     scenarios: list[_CompiledScenario] = []
     for folder in entries:
         if not folder.is_dir():
             continue
-        scenarios.append(_load_one(folder, settled_in_code=settled_in_code))
+        scenarios.append(
+            _load_one(
+                folder,
+                settled_in_code=settled_in_code,
+                declared_tools=declared_tools,
+            )
+        )
     if not scenarios:
         raise ScenarioDocumentInvalid(f"{root} contains no scenario folders")
     return scenarios
@@ -417,7 +493,8 @@ class BundleScenarioSource:
         # `preflight_bundle`, rather than stalling every other in-flight scenario behind it.
         try:
             scenarios = await asyncio.wait_for(
-                asyncio.to_thread(load_scenarios, bundle_dir), timeout=_LOAD_TIMEOUT_SECONDS
+                asyncio.to_thread(load_scenarios, bundle_dir),
+                timeout=_LOAD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError as exc:
             # R1-5: the underlying thread cannot actually be canceled/killed -- it is left running
@@ -505,7 +582,9 @@ def _preallocation_error(code: str, message: str) -> Exception:
     from .hosted_entrypoint import ScenarioPreallocationError
 
     return ScenarioPreallocationError(
-        ob.ChannelError(ob.ChannelOutcome.PERMANENT_ITEM, FailureDomain.PLATFORM_SYNC, code, message)
+        ob.ChannelError(
+            ob.ChannelOutcome.PERMANENT_ITEM, FailureDomain.PLATFORM_SYNC, code, message
+        )
     )
 
 
@@ -597,7 +676,9 @@ def _provision_payload(
     return payload
 
 
-def _begin_payload(run_test_id: str, scenarios: Sequence[_CompiledScenario]) -> dict[str, Any]:
+def _begin_payload(
+    run_test_id: str, scenarios: Sequence[_CompiledScenario]
+) -> dict[str, Any]:
     """`HarnessScenarioBeginSerializer` (futureagi/simulate/serializers/hosted_harness.py:193-198):
     `scenario_keys` is `allow_empty=False` and REQUIRED, and `begin_scenarios`
     (services/hosted_harness.py:323-329) 409s (`scenario_key_mismatch`) on anything but an EXACT
@@ -635,7 +716,8 @@ def _scenario_ids_by_key(
     for entry in raw_scenarios:
         if not isinstance(entry, dict):
             raise _preallocation_error(
-                "scenarios_provision_response_invalid", "a 'scenarios' entry is not an object"
+                "scenarios_provision_response_invalid",
+                "a 'scenarios' entry is not an object",
             )
         key = entry.get("scenario_key")
         scenario_id = entry.get("scenario_id")
@@ -697,18 +779,27 @@ async def register_with_platform(
     provision_result = await asyncio.to_thread(
         scenarios_client.provision,
         _provision_payload(
-            run_name, scenarios, chosen_evals, agent_prompt, modality, agent_name=agent_name
+            run_name,
+            scenarios,
+            chosen_evals,
+            agent_prompt,
+            modality,
+            agent_name=agent_name,
         ),
     )
     run_test_id = provision_result.get("run_test_id")
     if not isinstance(run_test_id, str) or not run_test_id:
         raise _preallocation_error(
-            "scenarios_provision_response_invalid", "provision response has no run_test_id"
+            "scenarios_provision_response_invalid",
+            "provision response has no run_test_id",
         )
     id_by_key = _scenario_ids_by_key(scenarios, provision_result.get("scenarios"))
 
-    await asyncio.to_thread(scenarios_client.begin, _begin_payload(run_test_id, scenarios))
+    await asyncio.to_thread(
+        scenarios_client.begin, _begin_payload(run_test_id, scenarios)
+    )
 
     return tuple(
-        replace(scenario, scenario_id=id_by_key[scenario.scenario_key]) for scenario in scenarios
+        replace(scenario, scenario_id=id_by_key[scenario.scenario_key])
+        for scenario in scenarios
     )

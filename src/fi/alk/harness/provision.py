@@ -37,6 +37,7 @@ from .generated_runtime import (
     can_generate_runtime,
     prepare_generated_runtime,
 )
+from .livekit_source import infer_livekit_agent_name_from_source
 from .service_catalog import address, profile_for
 from .secrets import runtime_configuration_value
 
@@ -71,10 +72,6 @@ _DOTENV_URL_SETTING = re.compile(
 _ENV_NAME = re.compile(
     r"(?:os\.(?:environ\.get|getenv)\(\s*|os\.environ\[\s*|process\.env\.)"
     r"[\"']?(?P<name>[A-Z][A-Z0-9_]{2,})"
-)
-_AGENT_NAME_SETTING = re.compile(
-    r"agent_name\s*=\s*os\.(?:environ\.get|getenv)\(\s*"
-    r"[\"']LIVEKIT_AGENT_NAME[\"']\s*,\s*[\"'](?P<default>[^\"']+)[\"']"
 )
 
 
@@ -1169,7 +1166,11 @@ def _contract_runtime_configuration_names(contract: Any | None) -> list[str]:
             names.update(
                 _configuration_names(str(getattr(store, field_name, "") or ""))
             )
-    for dependency in list(getattr(contract, "dependencies", None) or []):
+    dependencies = [
+        *list(getattr(contract, "dependencies", None) or []),
+        *list(getattr(contract, "runtime_dependencies", None) or []),
+    ]
+    for dependency in dependencies:
         reached = getattr(dependency, "reached", None)
         if reached is None:
             continue
@@ -2801,17 +2802,9 @@ def infer_livekit_agent_name(destination: str | Path) -> str:
     environment = ProvisionedEnvironment.load(Path(destination))
     if environment is None:
         return ""
-    source = Path(environment.source)
-    for path in source.rglob("*.py"):
-        if any(part in _FINGERPRINT_IGNORED for part in path.relative_to(source).parts):
-            continue
-        try:
-            match = _AGENT_NAME_SETTING.search(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
-            continue
-        if match:
-            return match.group("default").strip()
-    return ""
+    return infer_livekit_agent_name_from_source(
+        Path(environment.source), ignored_parts=_FINGERPRINT_IGNORED
+    )
 
 
 def activate_voice_environment(

@@ -23,7 +23,11 @@ from fi.alk.harness.outbound import (
     HostedChannelFailedError,
     HostedFencedError,
 )
-from fi.alk.harness.process_runtime import EnvironmentRuntime, ProcessRuntimeError, RuntimeState
+from fi.alk.harness.process_runtime import (
+    EnvironmentRuntime,
+    ProcessRuntimeError,
+    RuntimeState,
+)
 from fi.alk.harness.world.errors import (
     WorldReadOnly,
     WorldStateTooLarge,
@@ -34,9 +38,14 @@ from fi.alk.harness.world.errors import (
 # --- fakes ---------------------------------------------------------------------------------
 
 
-def _runtime(index: int, state: RuntimeState = RuntimeState.READY) -> EnvironmentRuntime:
+def _runtime(
+    index: int, state: RuntimeState = RuntimeState.READY
+) -> EnvironmentRuntime:
     return EnvironmentRuntime(
-        runtime_id=f"digest:w{index}", world_index=index, bundle_digest="digest", state=state
+        runtime_id=f"digest:w{index}",
+        world_index=index,
+        bundle_digest="digest",
+        state=state,
     )
 
 
@@ -56,7 +65,10 @@ class FakeProvisioner:
     is what actually makes a `_provider_lock` regression observable."""
 
     def __init__(
-        self, instances: int, *, reset_scripts: dict[int, list[RuntimeState]] | None = None
+        self,
+        instances: int,
+        *,
+        reset_scripts: dict[int, list[RuntimeState]] | None = None,
     ) -> None:
         self.instances = instances
         self.reset_scripts = reset_scripts or {}
@@ -81,17 +93,28 @@ class FakeProvisioner:
             self._in_flight.remove(label)
 
     async def provision(
-        self, bundle: Any, *, source: Path, bundle_dir: Path, work_directory: Path,
-        contract: Any | None = None, instances: int = 1,
+        self,
+        bundle: Any,
+        *,
+        source: Path,
+        bundle_dir: Path,
+        work_directory: Path,
+        contract: Any | None = None,
+        instances: int = 1,
     ) -> list[EnvironmentRuntime]:
         async with self._serialized("provision"):
             self.provision_calls += 1
             for index in range(instances):
                 if index not in self._runtimes or self._runtimes[index].state in (
-                    RuntimeState.STOPPED, RuntimeState.UNHEALTHY,
+                    RuntimeState.STOPPED,
+                    RuntimeState.UNHEALTHY,
                 ):
                     self._runtimes[index] = _runtime(index, RuntimeState.READY)
-            return [self._runtimes[index] for index in range(instances) if index in self._runtimes]
+            return [
+                self._runtimes[index]
+                for index in range(instances)
+                if index in self._runtimes
+            ]
 
     async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
         async with self._serialized(f"reset(w{runtime.world_index})"):
@@ -99,7 +122,9 @@ class FakeProvisioner:
             script = self.reset_scripts.get(runtime.world_index)
             runtime.state = script.pop(0) if script else RuntimeState.READY
 
-    async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+    async def healthy(
+        self, runtime: EnvironmentRuntime, *, work_directory: Path
+    ) -> bool:
         async with self._serialized(f"healthy(w{runtime.world_index})"):
             self.healthy_calls += 1
             return runtime.state is RuntimeState.READY
@@ -113,22 +138,32 @@ class InMemoryWorld:
     """The six-verb surface, backed by a plain dict instead of postgres — enough to exercise the
     scheduler's own control flow without a `PostgresStore`."""
 
-    def __init__(self, world_index: int, rng: random.Random, *, read_only: bool = False) -> None:
+    def __init__(
+        self, world_index: int, rng: random.Random, *, read_only: bool = False
+    ) -> None:
         self.world_index = world_index
         self.rng = rng
         self._read_only = read_only
         self.rows: dict[str, list[dict[str, Any]]] = {}
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
-        return dict(self.rows) if table is None else {table: list(self.rows.get(table, []))}
+        return (
+            dict(self.rows)
+            if table is None
+            else {table: list(self.rows.get(table, []))}
+        )
 
-    def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> dict[str, Any]:
+    def put(
+        self, collection: str, record: dict[str, Any], *, key: str = ""
+    ) -> dict[str, Any]:
         if self._read_only:
             raise WorldReadOnly("read-only world")
         self.rows.setdefault(collection, []).append(record)
         return record
 
-    def change(self, collection: str, key: str, changes: dict[str, Any], *, by: str = "") -> int:
+    def change(
+        self, collection: str, key: str, changes: dict[str, Any], *, by: str = ""
+    ) -> int:
         if self._read_only:
             raise WorldReadOnly("read-only world")
         return 0
@@ -151,7 +186,9 @@ class InMemoryWorld:
 
 
 class FakeWorldFactory:
-    async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
+    async def create(
+        self, runtime: EnvironmentRuntime, *, rng: random.Random
+    ) -> InMemoryWorld:
         return InMemoryWorld(runtime.world_index, rng)
 
 
@@ -172,6 +209,7 @@ class FakeScenario:
     sub_goals: list[FakeSubGoal] = field(default_factory=list)
     setup_fn: Any = lambda world: None
     ready_fn: Any = lambda world: None
+    requires_tool_evidence: bool = True
 
     def setup(self, world: Any) -> object:
         return self.setup_fn(world)
@@ -185,7 +223,9 @@ class FakeCallRunner:
         self.outcomes = outcomes
         self.calls: list[tuple[str, int]] = []
 
-    async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+    async def run(
+        self, scenario: FakeScenario, runtime: EnvironmentRuntime
+    ) -> hs.CallOutcome:
         self.calls.append((scenario.scenario_key, runtime.world_index))
         outcome = self.outcomes[scenario.scenario_key]
         if isinstance(outcome, Exception):
@@ -198,14 +238,38 @@ class FakeOutbound:
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.receipts: list[hs.ResultReceipt] = []
 
-    async def scenario_started(self, *, scenario_key: str, world_index: int, scenario_attempt: int) -> None:
-        self.events.append(("scenario_started", {"scenario_key": scenario_key, "world_index": world_index, "scenario_attempt": scenario_attempt}))
+    async def scenario_started(
+        self, *, scenario_key: str, world_index: int, scenario_attempt: int
+    ) -> None:
+        self.events.append(
+            (
+                "scenario_started",
+                {
+                    "scenario_key": scenario_key,
+                    "world_index": world_index,
+                    "scenario_attempt": scenario_attempt,
+                },
+            )
+        )
 
-    async def scenario_retried(self, *, scenario_key: str, from_world: int, to_world: int) -> None:
-        self.events.append(("scenario_retried", {"scenario_key": scenario_key, "from_world": from_world, "to_world": to_world}))
+    async def scenario_retried(
+        self, *, scenario_key: str, from_world: int, to_world: int
+    ) -> None:
+        self.events.append(
+            (
+                "scenario_retried",
+                {
+                    "scenario_key": scenario_key,
+                    "from_world": from_world,
+                    "to_world": to_world,
+                },
+            )
+        )
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
-        self.events.append(("world_unhealthy", {"world_index": world_index, "cause": cause}))
+        self.events.append(
+            ("world_unhealthy", {"world_index": world_index, "cause": cause})
+        )
 
     async def log(self, *, level: str, message: str) -> None:
         self.events.append(("log", {"level": level, "message": message}))
@@ -234,20 +298,30 @@ class FailingOutbound(FakeOutbound):
 
 def _call_outcome(turns: int = 1, calls: tuple[hs.Call, ...] = ()) -> hs.CallOutcome:
     return hs.CallOutcome(
-        calls=calls, turns=turns, started_at="2026-08-25T00:00:00.000Z",
-        ended_at="2026-08-25T00:00:05.000Z", duration_ms=5000,
+        calls=calls,
+        turns=turns,
+        started_at="2026-08-25T00:00:00.000Z",
+        ended_at="2026-08-25T00:00:05.000Z",
+        duration_ms=5000,
     )
 
 
 def _pool(
-    instances: int, *, provisioner: Any | None = None,
+    instances: int,
+    *,
+    provisioner: Any | None = None,
     reset_scripts: dict[int, list[RuntimeState]] | None = None,
     outbound: Any | None = None,
 ) -> tuple[hs.WorldPool, FakeProvisioner]:
     fake = provisioner or FakeProvisioner(instances, reset_scripts=reset_scripts)
     pool = hs.WorldPool(
-        fake, bundle=object(), source=Path("/work/source"), bundle_dir=Path("/work/bundle"),
-        work_directory=Path("/work"), instances=instances, outbound=outbound,
+        fake,
+        bundle=object(),
+        source=Path("/work/source"),
+        bundle_dir=Path("/work/bundle"),
+        work_directory=Path("/work"),
+        instances=instances,
+        outbound=outbound,
     )
     return pool, fake
 
@@ -255,7 +329,9 @@ def _pool(
 # --- WorldPool -------------------------------------------------------------------------------
 
 
-def test_lease_skips_reset_for_a_freshly_provisioned_world_but_not_the_next_lease() -> None:
+def test_lease_skips_reset_for_a_freshly_provisioned_world_but_not_the_next_lease() -> (
+    None
+):
     # m9: a world just handed back by `provision()` is already at the sealed baseline — the
     # first lease must not pay for a redundant reset, but a world that has already been used
     # once resets normally on its next lease.
@@ -282,18 +358,24 @@ def test_a_world_left_unhealthy_by_reset_is_not_handed_out() -> None:
         assert first == 0  # freshly provisioned -- m9 skips this lease's reset
         await pool.release(0)
         world_index, _ = await pool.lease()
-        assert world_index == 1  # world 0's (now real) reset hit the scripted UNHEALTHY outcome
+        assert (
+            world_index == 1
+        )  # world 0's (now real) reset hit the scripted UNHEALTHY outcome
         await pool.close()
 
     asyncio.run(scenario())
 
 
-def test_a_freshly_provisioned_world_failing_its_health_probe_is_not_handed_out() -> None:
+def test_a_freshly_provisioned_world_failing_its_health_probe_is_not_handed_out() -> (
+    None
+):
     # M2: `healthy()` is called unconditionally after reset — including on the m9 fast path,
     # which only skips the (expensive) reset call, never the readiness check.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     return runtime.world_index != 0
 
@@ -333,7 +415,9 @@ def test_lease_excluding_the_only_world_raises_rather_than_hanging() -> None:
         world_index, _ = await pool.lease()
         await pool.release(world_index)
         try:
-            await asyncio.wait_for(pool.lease(exclude=frozenset({world_index})), timeout=1.0)
+            await asyncio.wait_for(
+                pool.lease(exclude=frozenset({world_index})), timeout=1.0
+            )
         except hs.NoWorldsAvailable:
             pass
         else:
@@ -348,14 +432,32 @@ def test_reconcile_can_drop_a_world_that_never_recovers() -> None:
         calls = {"n": 0}
 
         class Provisioner:
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 calls["n"] += 1
                 if calls["n"] == 1:
-                    return [_runtime(0, RuntimeState.READY), _runtime(1, RuntimeState.READY)]
-                return [_runtime(1, RuntimeState.READY)]  # world 0 degraded away, every time
+                    return [
+                        _runtime(0, RuntimeState.READY),
+                        _runtime(1, RuntimeState.READY),
+                    ]
+                return [
+                    _runtime(1, RuntimeState.READY)
+                ]  # world 0 degraded away, every time
 
             async def reset(self, runtime, *, work_directory):
-                runtime.state = RuntimeState.UNHEALTHY if runtime.world_index == 0 else RuntimeState.READY
+                runtime.state = (
+                    RuntimeState.UNHEALTHY
+                    if runtime.world_index == 0
+                    else RuntimeState.READY
+                )
 
             async def healthy(self, runtime, *, work_directory):
                 return runtime.state is RuntimeState.READY
@@ -371,7 +473,9 @@ def test_reconcile_can_drop_a_world_that_never_recovers() -> None:
         world_index, _ = await pool.lease()
         assert world_index == 1  # world 0's (now real) reset marked it unhealthy
         await asyncio.sleep(0.2)
-        assert pool.size == 1  # the reconcile's own `provision()` never brings world 0 back
+        assert (
+            pool.size == 1
+        )  # the reconcile's own `provision()` never brings world 0 back
         await pool.close()
 
     asyncio.run(scenario())
@@ -388,7 +492,8 @@ def test_concurrent_mark_unhealthy_never_calls_provision_reentrantly() -> None:
         w0, _ = await pool.lease()
         w1, _ = await pool.lease()
         await asyncio.gather(
-            pool.mark_unhealthy(w0, cause="boom0"), pool.mark_unhealthy(w1, cause="boom1")
+            pool.mark_unhealthy(w0, cause="boom0"),
+            pool.mark_unhealthy(w1, cause="boom1"),
         )
         await asyncio.sleep(0.1)
         assert pool.size == 2
@@ -424,8 +529,12 @@ def test_lease_reset_and_a_background_reconcile_never_overlap_on_the_provider() 
         assert w0 == 0
 
         results = await asyncio.gather(
-            pool.mark_unhealthy(0, cause="boom"),  # schedules a background reconcile provision()
-            pool.lease(exclude=frozenset({0})),  # world 1's reset()+healthy() run concurrently
+            pool.mark_unhealthy(
+                0, cause="boom"
+            ),  # schedules a background reconcile provision()
+            pool.lease(
+                exclude=frozenset({0})
+            ),  # world 1's reset()+healthy() run concurrently
         )
         leased = results[1]
         assert leased is not None and leased[0] == 1
@@ -438,7 +547,9 @@ def test_lease_reset_and_a_background_reconcile_never_overlap_on_the_provider() 
     asyncio.run(scenario())
 
 
-def test_lease_recovers_the_world_index_when_the_provider_call_races_a_replaced_runtime_object() -> None:
+def test_lease_recovers_the_world_index_when_the_provider_call_races_a_replaced_runtime_object() -> (
+    None
+):
     # The R14 discard branch used to drop a replaced-object's index from `_leased` without
     # putting it back anywhere -- not `_available`, not `_down`. Every later candidate set then
     # stays empty forever and `lease()` hangs. Dead in production today (the real provider
@@ -450,10 +561,14 @@ def test_lease_recovers_the_world_index_when_the_provider_call_races_a_replaced_
         class SwapOnce(FakeProvisioner):
             def __init__(self, instances: int) -> None:
                 super().__init__(instances)
-                self.armed = False  # only swap once the test's OWN lease call is under way
+                self.armed = (
+                    False  # only swap once the test's OWN lease call is under way
+                )
                 self._swapped = False
 
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
                     if self.armed and not self._swapped:
@@ -471,14 +586,18 @@ def test_lease_recovers_the_world_index_when_the_provider_call_races_a_replaced_
         holder["pool"] = pool
         await pool.start()
         first, _ = await pool.lease()
-        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+        await pool.release(
+            first
+        )  # consume the m9 fresh flag -- the next lease pays for reset()
 
         provisioner.armed = True
         before = provisioner.healthy_calls
         world_index, runtime = await asyncio.wait_for(pool.lease(), timeout=1.0)
         assert world_index == 0
         assert runtime.state is RuntimeState.READY
-        assert provisioner.healthy_calls - before == 2  # the swapped attempt, then the retry that succeeded
+        assert (
+            provisioner.healthy_calls - before == 2
+        )  # the swapped attempt, then the retry that succeeded
         await pool.close()
 
     asyncio.run(scenario())
@@ -501,7 +620,16 @@ def test_close_waits_for_an_in_flight_reconcile_before_closing_the_provider() ->
             return [_runtime(i, RuntimeState.READY) for i in range(instances)]
 
         class Provisioner:
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 return await asyncio.to_thread(provision_sync, instances)
 
             async def reset(self, runtime, *, work_directory):
@@ -520,12 +648,16 @@ def test_close_waits_for_an_in_flight_reconcile_before_closing_the_provider() ->
         events.clear()  # drop start()'s own provision-start/-end
 
         await pool.mark_unhealthy(0, cause="boom")  # schedules a reconcile mid-flight
-        await asyncio.sleep(0.05)  # let the reconcile's provision() actually begin on its thread
+        await asyncio.sleep(
+            0.05
+        )  # let the reconcile's provision() actually begin on its thread
         assert events == ["provision-start"]
 
         close_task = asyncio.create_task(pool.close())
         await asyncio.sleep(0.05)
-        assert events == ["provision-start"], "close() ran the provider's own close() too early"
+        assert events == ["provision-start"], (
+            "close() ran the provider's own close() too early"
+        )
 
         release_provision.set()  # let the thread-backed provision() finish on its own
         await asyncio.wait_for(close_task, timeout=5.0)
@@ -534,7 +666,9 @@ def test_close_waits_for_an_in_flight_reconcile_before_closing_the_provider() ->
     asyncio.run(scenario())
 
 
-def test_close_during_an_in_flight_reconcile_never_overlaps_the_providers_close_call() -> None:
+def test_close_during_an_in_flight_reconcile_never_overlaps_the_providers_close_call() -> (
+    None
+):
     # §4.5b: the old bounded-wait-then-cancel let close() run `provisioner.close()` CONCURRENTLY
     # with a still-live `provision()` once the internal 30s bound expired -- cancelling the
     # awaiting coroutine cannot stop underlying thread-backed work. Real `asyncio.to_thread`
@@ -546,13 +680,24 @@ def test_close_during_an_in_flight_reconcile_never_overlaps_the_providers_close_
         release_provision = threading.Event()
 
         class SlowThreadedProvisioner(FakeProvisioner):
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 async with self._serialized("provision"):
                     self.provision_calls += 1
 
                     def _blocking() -> list[EnvironmentRuntime]:
                         release_provision.wait(timeout=5.0)
-                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                        return [
+                            _runtime(i, RuntimeState.READY) for i in range(instances)
+                        ]
 
                     runtimes = await asyncio.to_thread(_blocking)
                     for runtime in runtimes:
@@ -566,12 +711,18 @@ def test_close_during_an_in_flight_reconcile_never_overlaps_the_providers_close_
         release_provision.clear()
 
         world_index, _ = await pool.lease()
-        await pool.mark_unhealthy(world_index, cause="boom")  # schedules a reconcile mid-flight
-        await asyncio.sleep(0.05)  # let the reconcile's provision() actually begin on its thread
+        await pool.mark_unhealthy(
+            world_index, cause="boom"
+        )  # schedules a reconcile mid-flight
+        await asyncio.sleep(
+            0.05
+        )  # let the reconcile's provision() actually begin on its thread
 
         close_task = asyncio.create_task(pool.close())
         await asyncio.sleep(0.05)
-        assert not provisioner.closed, "close() ran the provider's own close() before provision() returned"
+        assert not provisioner.closed, (
+            "close() ran the provider's own close() before provision() returned"
+        )
 
         release_provision.set()  # let the thread-backed provision() finish on its own
         await asyncio.wait_for(close_task, timeout=5.0)
@@ -610,7 +761,9 @@ def test_mark_unhealthy_and_lease_after_close_are_blocked() -> None:
     asyncio.run(scenario())
 
 
-def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner() -> None:
+def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner() -> (
+    None
+):
     # A caller wrapping the WHOLE close() call in its own timeout (the entrypoint's
     # `_bounded_close`) used to cancel close() after `_closed` had already latched --
     # a retry then hit the old `if self._closed: return` idempotency check and returned
@@ -646,7 +799,9 @@ def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner(
         except asyncio.TimeoutError:
             pass
         else:
-            raise AssertionError("expected the first close() to time out while provisioner.close() blocks")
+            raise AssertionError(
+                "expected the first close() to time out while provisioner.close() blocks"
+            )
         events.append("first-close-timed-out")
         assert provisioner.closed is False  # still mid-teardown, not abandoned
 
@@ -655,7 +810,9 @@ def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner(
         # independently-cancelled teardown to a coincidentally-correct result.
         retry_task = asyncio.create_task(pool.close())
         await asyncio.sleep(0.05)
-        assert not retry_task.done(), "retry close() returned before teardown actually finished"
+        assert not retry_task.done(), (
+            "retry close() returned before teardown actually finished"
+        )
         events.append("retry-still-waiting")
 
         release_close.set()
@@ -663,7 +820,10 @@ def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner(
         events.append("retry-close-returned")
 
         assert events == [
-            "first-close-timed-out", "retry-still-waiting", "provider-close-done", "retry-close-returned",
+            "first-close-timed-out",
+            "retry-still-waiting",
+            "provider-close-done",
+            "retry-close-returned",
         ]
         assert provisioner.closed is True
         assert provisioner.overlaps == []
@@ -671,7 +831,9 @@ def test_close_retried_after_a_callers_own_timeout_still_closes_the_provisioner(
     asyncio.run(scenario())
 
 
-def test_close_blocks_a_reset_that_wins_the_provider_lock_race_after_close_has_latched() -> None:
+def test_close_blocks_a_reset_that_wins_the_provider_lock_race_after_close_has_latched() -> (
+    None
+):
     # `_closed` is set (under `_state_lock`, no `_provider_lock` needed) the moment close()
     # starts -- but a lease already past the top-of-loop `_closed` check can still
     # win the `_provider_lock` FIFO queue race and call reset() against a provider close() is
@@ -681,13 +843,21 @@ def test_close_blocks_a_reset_that_wins_the_provider_lock_race_after_close_has_l
         pool, provisioner = _pool(1)
         await pool.start()
         first, _ = await pool.lease()
-        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+        await pool.release(
+            first
+        )  # consume the m9 fresh flag -- the next lease pays for reset()
 
-        await pool._provider_lock.acquire()  # stand in for "some provider call already in flight"
+        await (
+            pool._provider_lock.acquire()
+        )  # stand in for "some provider call already in flight"
         lease_task = asyncio.create_task(pool.lease())
-        await asyncio.sleep(0.05)  # let lease() clear the top `_closed` check and queue on the lock
+        await asyncio.sleep(
+            0.05
+        )  # let lease() clear the top `_closed` check and queue on the lock
         close_task = asyncio.create_task(pool.close())
-        await asyncio.sleep(0.05)  # close() latches `_closed` (no lock needed) and also queues
+        await asyncio.sleep(
+            0.05
+        )  # close() latches `_closed` (no lock needed) and also queues
         pool._provider_lock.release()  # FIFO: lease() was queued first, so it goes first
 
         try:
@@ -696,20 +866,26 @@ def test_close_blocks_a_reset_that_wins_the_provider_lock_race_after_close_has_l
             assert exc.reason == "closed"
         else:
             raise AssertionError("expected NoWorldsAvailable(reason='closed')")
-        assert provisioner.reset_calls == 0  # never touched the provider once closed had latched
+        assert (
+            provisioner.reset_calls == 0
+        )  # never touched the provider once closed had latched
 
         await asyncio.wait_for(close_task, timeout=1.0)
 
     asyncio.run(scenario())
 
 
-def test_close_blocks_a_healthy_probe_that_wins_the_provider_lock_race_after_close_has_latched() -> None:
+def test_close_blocks_a_healthy_probe_that_wins_the_provider_lock_race_after_close_has_latched() -> (
+    None
+):
     # The healthy() block specifically: a freshly-provisioned world skips reset() (m9) and
     # goes straight to healthy() -- that site needs the same re-check as the reset block above,
     # not just the reset block.
     async def scenario() -> None:
         pool, provisioner = _pool(1)
-        await pool.start()  # world 0 is "fresh" -- its first lease skips reset(), pays for healthy()
+        await (
+            pool.start()
+        )  # world 0 is "fresh" -- its first lease skips reset(), pays for healthy()
 
         await pool._provider_lock.acquire()
         lease_task = asyncio.create_task(pool.lease())
@@ -737,7 +913,16 @@ def test_start_degrades_when_provision_returns_fewer_worlds_than_instances() -> 
     # Loud, never silent," not a `RuntimeError` from this pool.
     async def scenario() -> None:
         class Provisioner:
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 return [_runtime(0)]  # only 1 of the 3 requested
 
             async def reset(self, runtime, *, work_directory):
@@ -769,11 +954,24 @@ def test_effective_size_tracks_a_reconcile_not_just_start() -> None:
         calls = {"n": 0}
 
         class Provisioner:
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 calls["n"] += 1
                 if calls["n"] == 1:
-                    return [_runtime(0, RuntimeState.READY)]  # degraded: 1 of 3 requested
-                return [_runtime(i, RuntimeState.READY) for i in range(instances)]  # fully recovered
+                    return [
+                        _runtime(0, RuntimeState.READY)
+                    ]  # degraded: 1 of 3 requested
+                return [
+                    _runtime(i, RuntimeState.READY) for i in range(instances)
+                ]  # fully recovered
 
             async def reset(self, runtime, *, work_directory):
                 pass
@@ -801,7 +999,16 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
     # R2: the degrade allowance is not a blanket exemption — zero worlds and a non-contiguous
     # index set are still rejected as malformed.
     class ZeroWorldsProvisioner:
-        async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+        async def provision(
+            self,
+            bundle,
+            *,
+            source,
+            bundle_dir,
+            work_directory,
+            contract=None,
+            instances=1,
+        ):
             return []
 
         async def reset(self, runtime, *, work_directory):
@@ -814,7 +1021,16 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
             pass
 
     class GapProvisioner:
-        async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+        async def provision(
+            self,
+            bundle,
+            *,
+            source,
+            bundle_dir,
+            work_directory,
+            contract=None,
+            instances=1,
+        ):
             return [_runtime(0), _runtime(2)]  # world_index 1 missing -- not contiguous
 
         async def reset(self, runtime, *, work_directory):
@@ -848,7 +1064,9 @@ def test_start_rejects_a_genuinely_malformed_provision_result() -> None:
     asyncio.run(gap())
 
 
-def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_lease() -> None:
+def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_lease() -> (
+    None
+):
     # hosted-execution-seams.md v1.13 §5.4: a deterministic §2f fault (domain environment/agent,
     # never retried) used to be discarded at the reset()/reconcile seam and re-reported as
     # retryable `world_pool_exhausted`/infrastructure -- burning every whole-job retry on a fault
@@ -862,23 +1080,37 @@ def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_l
     # same code independently.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+            async def reset(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> None:
                 async with self._serialized(f"reset(w{runtime.world_index})"):
                     self.reset_calls += 1
-                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+                    raise ProcessRuntimeError(
+                        "reset", "seed_failed", "db/seed.sql: exited 1"
+                    )
 
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
-                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+                    raise ProcessRuntimeError(
+                        "reset", "seed_failed", "db/seed.sql: exited 1"
+                    )
 
         outbound = FakeOutbound()
         pool, _ = _pool(1, provisioner=Provisioner(1), outbound=outbound)
         await pool.start()
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1,
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({}),
+            outbound=outbound,
+            job_seed=1,
         )
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.aborted is not None
         assert result.aborted.code == "seed_failed"
@@ -888,28 +1120,49 @@ def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_l
     asyncio.run(scenario())
 
 
-def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_reconcile() -> None:
+def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_reconcile() -> (
+    None
+):
     # The OTHER extraction site, isolated the same way in reverse -- `reset()` fails UNTYPED
     # (so `lease()`'s own extraction always yields `None` and cannot backfill), and only the
     # reconcile's give-up path ever sees a typed `ProcessRuntimeError`.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+            async def reset(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> None:
                 async with self._serialized(f"reset(w{runtime.world_index})"):
                     self.reset_calls += 1
-                    raise RuntimeError("generic reset failure")  # untyped -- lease()'s own code is None
+                    raise RuntimeError(
+                        "generic reset failure"
+                    )  # untyped -- lease()'s own code is None
 
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 async with self._serialized("provision"):
                     self.provision_calls += 1
                     if self.provision_calls == 1:
-                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
-                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+                        return [
+                            _runtime(i, RuntimeState.READY) for i in range(instances)
+                        ]
+                    raise ProcessRuntimeError(
+                        "reset", "seed_failed", "db/seed.sql: exited 1"
+                    )
 
         pool, _ = _pool(1, provisioner=Provisioner(1))
         await pool.start()
         first, _ = await pool.lease()
-        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+        await pool.release(
+            first
+        )  # consume the m9 fresh flag -- the next lease pays for reset()
         try:
             await asyncio.wait_for(pool.lease(), timeout=3.0)
         except hs.NoWorldsAvailable as exc:
@@ -922,28 +1175,53 @@ def test_pool_exhaustion_surfaces_a_uniform_never_retried_section_2f_code_from_r
     asyncio.run(scenario())
 
 
-def test_pool_exhaustion_with_mixed_section_2f_codes_stays_world_pool_exhausted() -> None:
+def test_pool_exhaustion_with_mixed_section_2f_codes_stays_world_pool_exhausted() -> (
+    None
+):
     # Mixed codes across the unhealthy worlds must NOT surface either one -- v1.13 only
     # promotes a code that is UNIFORM across every currently-unhealthy world.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+            async def reset(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> None:
                 async with self._serialized(f"reset(w{runtime.world_index})"):
                     self.reset_calls += 1
-                    code = "seed_failed" if runtime.world_index == 0 else "store_statement_failed"
+                    code = (
+                        "seed_failed"
+                        if runtime.world_index == 0
+                        else "store_statement_failed"
+                    )
                     raise ProcessRuntimeError("reset", code, "boom")
 
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
-                    code = "seed_failed" if runtime.world_index == 0 else "store_statement_failed"
+                    code = (
+                        "seed_failed"
+                        if runtime.world_index == 0
+                        else "store_statement_failed"
+                    )
                     raise ProcessRuntimeError("reset", code, "boom")
 
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 async with self._serialized("provision"):
                     self.provision_calls += 1
                     if self.provision_calls == 1:
-                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                        return [
+                            _runtime(i, RuntimeState.READY) for i in range(instances)
+                        ]
                     # Untyped -- must not overwrite `_down_codes` with a uniform code.
                     raise RuntimeError("provider is generically down")
 
@@ -961,27 +1239,44 @@ def test_pool_exhaustion_with_mixed_section_2f_codes_stays_world_pool_exhausted(
     asyncio.run(scenario())
 
 
-def test_pool_exhaustion_with_a_uniform_infrastructure_domain_code_stays_world_pool_exhausted() -> None:
+def test_pool_exhaustion_with_a_uniform_infrastructure_domain_code_stays_world_pool_exhausted() -> (
+    None
+):
     # `store_statement_failed` IS §2f-typed and uniform here, but its domain is
     # infrastructure (retryable) -- v1.13 only promotes `environment`/`agent`, so this must still
     # fall back to the generic exhaustion abort.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+            async def reset(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> None:
                 async with self._serialized(f"reset(w{runtime.world_index})"):
                     self.reset_calls += 1
                     raise ProcessRuntimeError("reset", "store_statement_failed", "boom")
 
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
                     raise ProcessRuntimeError("reset", "store_statement_failed", "boom")
 
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 async with self._serialized("provision"):
                     self.provision_calls += 1
                     if self.provision_calls == 1:
-                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                        return [
+                            _runtime(i, RuntimeState.READY) for i in range(instances)
+                        ]
                     raise ProcessRuntimeError("reset", "store_statement_failed", "boom")
 
         pool, _ = _pool(1, provisioner=Provisioner(1))
@@ -1009,19 +1304,27 @@ def test_pool_exhaustion_uses_the_carried_domain_not_the_fallback_map() -> None:
     # stay the generic `world_pool_exhausted` instead.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+            async def reset(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> None:
                 async with self._serialized(f"reset(w{runtime.world_index})"):
                     self.reset_calls += 1
                     raise ProcessRuntimeError(
-                        "reset", "spawn_failed", "agent process exec failed",
+                        "reset",
+                        "spawn_failed",
+                        "agent process exec failed",
                         domain=hs.FailureDomain.AGENT,
                     )
 
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
                     raise ProcessRuntimeError(
-                        "reset", "spawn_failed", "agent process exec failed",
+                        "reset",
+                        "spawn_failed",
+                        "agent process exec failed",
                         domain=hs.FailureDomain.AGENT,
                     )
 
@@ -1039,7 +1342,9 @@ def test_pool_exhaustion_uses_the_carried_domain_not_the_fallback_map() -> None:
     asyncio.run(scenario())
 
 
-def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_code() -> None:
+def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_code() -> (
+    None
+):
     # A world demoted by a typed `seed_failed` reset failure used to keep that code in
     # `_down_codes` forever if the reconcile that follows gives up UNTYPED (a bare `OSError`, or
     # any non-§2f exception) -- the give-up path only overwrote when its OWN failure was typed,
@@ -1047,16 +1352,31 @@ def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_co
     # declaration read it as if it were current.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
+            async def reset(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> None:
                 async with self._serialized(f"reset(w{runtime.world_index})"):
                     self.reset_calls += 1
-                    raise ProcessRuntimeError("reset", "seed_failed", "db/seed.sql: exited 1")
+                    raise ProcessRuntimeError(
+                        "reset", "seed_failed", "db/seed.sql: exited 1"
+                    )
 
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 async with self._serialized("provision"):
                     self.provision_calls += 1
                     if self.provision_calls == 1:
-                        return [_runtime(i, RuntimeState.READY) for i in range(instances)]
+                        return [
+                            _runtime(i, RuntimeState.READY) for i in range(instances)
+                        ]
                     # Every reconcile attempt after the initial `start()` fails UNTYPED -- the
                     # give-up path must clear the `seed_failed` code the reset() failure recorded,
                     # not leave it standing.
@@ -1065,7 +1385,9 @@ def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_co
         pool, _ = _pool(1, provisioner=Provisioner(1))
         await pool.start()
         first, _ = await pool.lease()
-        await pool.release(first)  # consume the m9 fresh flag -- the next lease pays for reset()
+        await pool.release(
+            first
+        )  # consume the m9 fresh flag -- the next lease pays for reset()
         try:
             await asyncio.wait_for(pool.lease(), timeout=3.0)
         except hs.NoWorldsAvailable as exc:
@@ -1078,7 +1400,9 @@ def test_reconcile_give_up_with_an_untyped_final_attempt_clears_a_stale_typed_co
     asyncio.run(scenario())
 
 
-def test_lease_exhaustion_considers_every_down_world_not_just_the_exclude_narrowed_subset() -> None:
+def test_lease_exhaustion_considers_every_down_world_not_just_the_exclude_narrowed_subset() -> (
+    None
+):
     # A retry lease's `exclude` set narrows `usable` to the runtimes NOT being avoided -- using
     # `usable` (rather than every currently-unhealthy world) as the uniformity set let the
     # excluded world's own failure escape the check entirely, so a lone untyped down world
@@ -1090,15 +1414,21 @@ def test_lease_exhaustion_considers_every_down_world_not_just_the_exclude_narrow
     # only the two codes this test sets directly via `mark_unhealthy()` are ever in play.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
                     return False
 
         pool, _ = _pool(2, provisioner=Provisioner(2))
         await pool.start()
-        await pool.mark_unhealthy(0, cause="generic reset failure", code=None)  # untyped
-        await pool.mark_unhealthy(1, cause="seed_failed", code="seed_failed")  # typed, environment
+        await pool.mark_unhealthy(
+            0, cause="generic reset failure", code=None
+        )  # untyped
+        await pool.mark_unhealthy(
+            1, cause="seed_failed", code="seed_failed"
+        )  # typed, environment
         try:
             # Excludes world 0 -- a scenario retrying away from the world it just failed on. The
             # only OTHER down world (1) carries a uniform typed code on its own, but world 0's own
@@ -1114,7 +1444,9 @@ def test_lease_exhaustion_considers_every_down_world_not_just_the_exclude_narrow
     asyncio.run(scenario())
 
 
-def test_reconcile_success_with_a_failed_health_probe_clears_a_stale_typed_code() -> None:
+def test_reconcile_success_with_a_failed_health_probe_clears_a_stale_typed_code() -> (
+    None
+):
     # A world demoted with a typed code can be re-provisioned successfully and still fail its
     # post-provision health probe -- that probe returning `False` (not raising) is untyped, and
     # the give-up path above never runs on this branch because `provision()` itself succeeded. The
@@ -1123,14 +1455,18 @@ def test_reconcile_success_with_a_failed_health_probe_clears_a_stale_typed_code(
     # superseded demotion happened to record.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
                     return False  # untyped -- provision() itself always succeeds
 
         pool, provisioner = _pool(1, provisioner=Provisioner(1))
         await pool.start()
-        await pool.mark_unhealthy(0, cause="seed reset failed", code="seed_failed")  # stale typed code
+        await pool.mark_unhealthy(
+            0, cause="seed reset failed", code="seed_failed"
+        )  # stale typed code
         try:
             await asyncio.wait_for(pool.lease(), timeout=3.0)
         except hs.NoWorldsAvailable as exc:
@@ -1144,20 +1480,28 @@ def test_reconcile_success_with_a_failed_health_probe_clears_a_stale_typed_code(
     asyncio.run(scenario())
 
 
-def test_reconcile_success_with_a_typed_health_probe_failure_surfaces_that_codes_own_domain() -> None:
+def test_reconcile_success_with_a_typed_health_probe_failure_surfaces_that_codes_own_domain() -> (
+    None
+):
     # The other direction of the same probe: when the post-provision health check itself raises a
     # typed §2f error, that is the round's own result and must replace whatever an earlier,
     # superseded demotion recorded -- not merely clear it to `None`.
     async def scenario() -> None:
         class Provisioner(FakeProvisioner):
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
                     self.healthy_calls += 1
-                    raise ProcessRuntimeError("healthy", "build_failed", "container image missing on retry")
+                    raise ProcessRuntimeError(
+                        "healthy", "build_failed", "container image missing on retry"
+                    )
 
         pool, _ = _pool(1, provisioner=Provisioner(1))
         await pool.start()
-        await pool.mark_unhealthy(0, cause="seed reset failed", code="seed_failed")  # different, stale code
+        await pool.mark_unhealthy(
+            0, cause="seed reset failed", code="seed_failed"
+        )  # different, stale code
         try:
             await asyncio.wait_for(pool.lease(), timeout=3.0)
         except hs.NoWorldsAvailable as exc:
@@ -1179,14 +1523,22 @@ def test_world_unhealthy_emitted_exactly_once_per_demotion_path() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1,
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
         )
         scenarios = [FakeScenario("s1", "id-1", setup_fn=setup_fn, sub_goals=sub_goals)]
         await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         await pool.close()
-        return [kwargs for event, kwargs in outbound.events if event == "world_unhealthy"]
+        return [
+            kwargs for event, kwargs in outbound.events if event == "world_unhealthy"
+        ]
 
     async def m13_discard_branch() -> None:
         # the M13 discard branch: a plain `setup_crashed` fault.
@@ -1210,13 +1562,17 @@ def test_world_unhealthy_emitted_exactly_once_per_demotion_path() -> None:
     async def lease_reset_failure_demotion() -> None:
         # `WorldPool.lease()`'s own reset/health-probe demotion — pool-level, no scheduler.
         outbound = FakeOutbound()
-        pool, _ = _pool(2, reset_scripts={0: [RuntimeState.UNHEALTHY]}, outbound=outbound)
+        pool, _ = _pool(
+            2, reset_scripts={0: [RuntimeState.UNHEALTHY]}, outbound=outbound
+        )
         await pool.start()
         first, _ = await pool.lease()
         assert first == 0
         await pool.release(0)
         await pool.lease()  # world 0's real reset hits the scripted UNHEALTHY outcome
-        events = [kwargs for event, kwargs in outbound.events if event == "world_unhealthy"]
+        events = [
+            kwargs for event, kwargs in outbound.events if event == "world_unhealthy"
+        ]
         assert len(events) == 1
         assert events[0]["world_index"] == 0
         await pool.close()
@@ -1232,17 +1588,34 @@ def test_bundle_dir_is_threaded_through_to_every_provision_call() -> None:
         seen: list[Path] = []
 
         class Provisioner(FakeProvisioner):
-            async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+            async def provision(
+                self,
+                bundle,
+                *,
+                source,
+                bundle_dir,
+                work_directory,
+                contract=None,
+                instances=1,
+            ):
                 seen.append(bundle_dir)
                 return await super().provision(
-                    bundle, source=source, bundle_dir=bundle_dir, work_directory=work_directory,
-                    contract=contract, instances=instances,
+                    bundle,
+                    source=source,
+                    bundle_dir=bundle_dir,
+                    work_directory=work_directory,
+                    contract=contract,
+                    instances=instances,
                 )
 
         bundle_dir = Path("/work/bundle-xyz")
         pool = hs.WorldPool(
-            Provisioner(1), bundle=object(), source=Path("/work/source"), bundle_dir=bundle_dir,
-            work_directory=Path("/work"), instances=1,
+            Provisioner(1),
+            bundle=object(),
+            source=Path("/work/source"),
+            bundle_dir=bundle_dir,
+            work_directory=Path("/work"),
+            instances=1,
         )
         await pool.start()
         world_index, _ = await pool.lease()
@@ -1263,13 +1636,23 @@ def test_two_scenarios_pass_over_two_worlds() -> None:
         pool, provisioner = _pool(2, outbound=outbound)
         await pool.start()
         call = hs.Call(name="book", arguments={}, ok=True)
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(call,)), "s2": _call_outcome(calls=(call,))})
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(call,)), "s2": _call_outcome(calls=(call,))}
+        )
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=100,
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=100,
         )
         scenarios = [
-            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]),
-            FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]),
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            ),
+            FakeScenario(
+                "s2", "id-2", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            ),
         ]
         result = await scheduler.run(scenarios)
         assert result.aborted is None
@@ -1287,13 +1670,31 @@ def test_a_not_held_check_is_failed_not_errored() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: "the combo was never ordered")])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("goal", lambda w, c: "the combo was never ordered")
+                ],
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "failed"
-        assert receipt.sub_goals[0] == hs.SubGoalResult(name="goal", held=False, reason="the combo was never ordered", judged=False)
+        assert receipt.sub_goals[0] == hs.SubGoalResult(
+            name="goal", held=False, reason="the combo was never ordered", judged=False
+        )
         assert receipt.failure is None
         await pool.close()
 
@@ -1306,12 +1707,30 @@ def test_ready_not_ready_errors_without_retrying() -> None:
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
         runner = FakeCallRunner({})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", ready_fn=lambda w: "precondition missing", sub_goals=[FakeSubGoal("goal", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                ready_fn=lambda w: "precondition missing",
+                sub_goals=[FakeSubGoal("goal", lambda w, c: None)],
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
-        assert receipt.failure == hs.ReceiptFailure(domain="simulator", stage="running", code="ready_not_ready", message="precondition missing")
+        assert receipt.failure == hs.ReceiptFailure(
+            domain="simulator",
+            stage="running",
+            code="ready_not_ready",
+            message="precondition missing",
+        )
         assert receipt.scenario_attempt == 1
         assert receipt.sub_goals[0].held is None
         assert runner.calls == []  # never reached the call step
@@ -1333,8 +1752,21 @@ def test_setup_crash_errors_without_retrying() -> None:
         def boom(world: Any) -> None:
             raise ValueError("scenario code bug")
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", setup_fn=boom, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=boom,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -1357,8 +1789,21 @@ def test_world_usage_misuse_in_ready_maps_to_world_usage() -> None:
         def misuse(world: Any) -> None:
             raise WorldUsageError("cannot invent a table")
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", ready_fn=misuse, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=FakeCallRunner({}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                ready_fn=misuse,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.failure.code == "world_usage"
@@ -1375,13 +1820,23 @@ def test_state_too_large_from_check_errors_without_retrying() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
 
         def blow_up(world: Any, calls: Any) -> None:
             raise WorldStateTooLarge("table 'events' exceeds the baseline cap")
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", blow_up)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", blow_up)])
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -1405,11 +1860,25 @@ def test_a_phase_over_its_budget_times_out() -> None:
         original = hs.SETUP_TIMEOUT_SECONDS
         hs.SETUP_TIMEOUT_SECONDS = 0.05
         try:
+
             def slow(world: Any) -> None:
                 time.sleep(1.0)
 
-            scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
-            scenarios = [FakeScenario("s1", "id-1", setup_fn=slow, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+            scheduler = hs.HostedScheduler(
+                pool=pool,
+                world_factory=FakeWorldFactory(),
+                call_runner=FakeCallRunner({}),
+                outbound=outbound,
+                job_seed=1,
+            )
+            scenarios = [
+                FakeScenario(
+                    "s1",
+                    "id-1",
+                    setup_fn=slow,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                )
+            ]
             result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
             assert result.receipts[0].failure.code == "setup_timeout"
         finally:
@@ -1429,11 +1898,25 @@ def test_an_async_phase_over_its_budget_still_times_out() -> None:
         original = hs.SETUP_TIMEOUT_SECONDS
         hs.SETUP_TIMEOUT_SECONDS = 0.05
         try:
+
             async def slow(world: Any) -> None:
                 await asyncio.sleep(1.0)
 
-            scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
-            scenarios = [FakeScenario("s1", "id-1", setup_fn=slow, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+            scheduler = hs.HostedScheduler(
+                pool=pool,
+                world_factory=FakeWorldFactory(),
+                call_runner=FakeCallRunner({}),
+                outbound=outbound,
+                job_seed=1,
+            )
+            scenarios = [
+                FakeScenario(
+                    "s1",
+                    "id-1",
+                    setup_fn=slow,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                )
+            ]
             result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
             assert result.receipts[0].failure.code == "setup_timeout"
         finally:
@@ -1459,11 +1942,32 @@ def test_concurrent_worlds_make_progress_while_one_is_blocked_in_sync_code() -> 
             time.sleep(0.2)
             started_order.append(f"end-{world.world_index}")
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),)), "s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        runner = FakeCallRunner(
+            {
+                "s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
+                "s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
+            }
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
         scenarios = [
-            FakeScenario("s1", "id-1", setup_fn=both_slow, sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
-            FakeScenario("s2", "id-2", setup_fn=both_slow, sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=both_slow,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            ),
+            FakeScenario(
+                "s2",
+                "id-2",
+                setup_fn=both_slow,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            ),
         ]
         t0 = asyncio.get_running_loop().time()
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
@@ -1478,7 +1982,9 @@ def test_concurrent_worlds_make_progress_while_one_is_blocked_in_sync_code() -> 
     asyncio.run(scenario())
 
 
-def test_a_leaked_phase_thread_does_not_starve_a_sibling_world_and_close_still_completes() -> None:
+def test_a_leaked_phase_thread_does_not_starve_a_sibling_world_and_close_still_completes() -> (
+    None
+):
     # R1 (highest-ranked missing test): a phase whose thread never returns must not stop the
     # NEXT scenario's phase from running, and `pool.close()` must still complete promptly. With
     # the shared default executor this used to fail once enough threads leaked; with a dedicated
@@ -1490,22 +1996,48 @@ def test_a_leaked_phase_thread_does_not_starve_a_sibling_world_and_close_still_c
         original = hs.SETUP_TIMEOUT_SECONDS
         hs.SETUP_TIMEOUT_SECONDS = 0.1
         try:
+
             def maybe_runaway(world: Any) -> None:
                 if world.world_index == 0:
                     time.sleep(5.0)  # abandoned -- this thread never returns
 
-            runner = FakeCallRunner({"s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-            scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+            runner = FakeCallRunner(
+                {"s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+            )
+            scheduler = hs.HostedScheduler(
+                pool=pool,
+                world_factory=FakeWorldFactory(),
+                call_runner=runner,
+                outbound=outbound,
+                job_seed=1,
+            )
             scenarios = [
-                FakeScenario("s1", "id-1", setup_fn=maybe_runaway, sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
-                FakeScenario("s2", "id-2", setup_fn=maybe_runaway, sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+                FakeScenario(
+                    "s1",
+                    "id-1",
+                    setup_fn=maybe_runaway,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                ),
+                FakeScenario(
+                    "s2",
+                    "id-2",
+                    setup_fn=maybe_runaway,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                ),
             ]
             result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
-            assert result.receipts[0].failure is not None and result.receipts[0].failure.code == "setup_timeout"
-            assert result.receipts[1].status == "passed"  # world 1's phase ran despite world 0's leak
+            assert (
+                result.receipts[0].failure is not None
+                and result.receipts[0].failure.code == "setup_timeout"
+            )
+            assert (
+                result.receipts[1].status == "passed"
+            )  # world 1's phase ran despite world 0's leak
         finally:
             hs.SETUP_TIMEOUT_SECONDS = original
-        await asyncio.wait_for(pool.close(), timeout=2.0)  # must not hang behind the leaked thread
+        await asyncio.wait_for(
+            pool.close(), timeout=2.0
+        )  # must not hang behind the leaked thread
 
     asyncio.run(scenario())
 
@@ -1525,12 +2057,29 @@ def test_scenario_phases_run_on_the_dedicated_hosted_scenario_executor() -> None
         def capture(world: Any) -> None:
             seen_thread_name["name"] = threading.current_thread().name
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", setup_fn=capture, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=capture,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            )
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.receipts[0].status == "passed"
-        assert seen_thread_name["name"].startswith("hosted-scenario"), seen_thread_name["name"]
+        assert seen_thread_name["name"].startswith("hosted-scenario"), seen_thread_name[
+            "name"
+        ]
         await pool.close()
 
     asyncio.run(scenario())
@@ -1549,13 +2098,25 @@ def test_executor_sizing_covers_more_scenarios_than_the_leak_headroom_alone() ->
         original = hs.SETUP_TIMEOUT_SECONDS
         hs.SETUP_TIMEOUT_SECONDS = 0.1
         try:
+
             def runaway(world: Any) -> None:
                 time.sleep(5.0)  # abandoned -- never returns within the test
 
             n = 13  # > effective_size(1) + _LEAK_HEADROOM(10)
-            scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
+            scheduler = hs.HostedScheduler(
+                pool=pool,
+                world_factory=FakeWorldFactory(),
+                call_runner=FakeCallRunner({}),
+                outbound=outbound,
+                job_seed=1,
+            )
             scenarios = [
-                FakeScenario(f"s{i}", f"id-{i}", setup_fn=runaway, sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+                FakeScenario(
+                    f"s{i}",
+                    f"id-{i}",
+                    setup_fn=runaway,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                )
                 for i in range(n)
             ]
             result = await asyncio.wait_for(scheduler.run(scenarios), timeout=15.0)
@@ -1574,13 +2135,29 @@ def test_check_broken_leaves_later_subgoals_unjudged() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[
-            FakeSubGoal("goal1", lambda w, c: None),
-            FakeSubGoal("goal2", lambda w, c: 42),  # wrong return type -> broken
-            FakeSubGoal("goal3", lambda w, c: None),
-        ])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("goal1", lambda w, c: None),
+                    FakeSubGoal(
+                        "goal2", lambda w, c: 42
+                    ),  # wrong return type -> broken
+                    FakeSubGoal("goal3", lambda w, c: None),
+                ],
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -1597,8 +2174,16 @@ def test_zero_declared_sub_goals_is_check_broken_not_a_vacuous_pass() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
         scenarios = [FakeScenario("s1", "id-1", sub_goals=[])]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
@@ -1622,8 +2207,16 @@ def test_world_unavailable_retries_once_on_a_fresh_world_and_recovers() -> None:
             if attempts["n"] == 1:
                 raise WorldUnavailable("world 0 lost its schema")
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
         scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", check)])]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
@@ -1644,16 +2237,33 @@ def test_world_unhealthy_cause_is_truncated_and_redacted() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(2, outbound=outbound)
         await pool.start()
-        leaky_message = "connection failed: postgresql://harness:s3cr3t@localhost:14000/w0 " + ("x" * 300)
+        leaky_message = (
+            "connection failed: postgresql://harness:s3cr3t@localhost:14000/w0 "
+            + ("x" * 300)
+        )
 
         def blow_up(world: Any, calls: Any) -> None:
             raise WorldUnavailable(leaky_message)
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", blow_up)])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", blow_up)])
+        ]
         await scheduler.run(scenarios)
-        causes = [kwargs["cause"] for event, kwargs in outbound.events if event == "world_unhealthy"]
+        causes = [
+            kwargs["cause"]
+            for event, kwargs in outbound.events
+            if event == "world_unhealthy"
+        ]
         assert causes
         cause = causes[0]
         assert len(cause) <= 200
@@ -1687,7 +2297,9 @@ def test_mark_unhealthy_schedules_recovery_before_the_telemetry_emit() -> None:
         mark_task = asyncio.create_task(pool.mark_unhealthy(world_index, cause="boom"))
         await asyncio.wait_for(emit_started.wait(), timeout=1.0)
         # The emit is blocked -- recovery must already have been scheduled by this point.
-        assert pool._reconcile_task is not None, "reconcile was not scheduled ahead of the emit"
+        assert pool._reconcile_task is not None, (
+            "reconcile was not scheduled ahead of the emit"
+        )
 
         emit_release.set()
         await asyncio.wait_for(mark_task, timeout=1.0)
@@ -1706,9 +2318,19 @@ def test_world_unavailable_twice_gives_up_after_the_one_retry() -> None:
         def always_fails(world: Any, calls: Any) -> None:
             raise WorldUnavailable("always broken")
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", always_fails)])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", always_fails)])
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -1733,10 +2355,16 @@ def test_cancel_between_attempt_1_and_attempt_2_reports_errored_not_skipped() ->
         def check(world: Any, calls: Any) -> None:
             raise WorldUnavailable("world 0 lost its schema")
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound,
-            job_seed=1, cancel_requested=lambda: cancel_flag["v"],
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=lambda: cancel_flag["v"],
         )
 
         real_lease = pool.lease
@@ -1744,7 +2372,9 @@ def test_cancel_between_attempt_1_and_attempt_2_reports_errored_not_skipped() ->
 
         async def flaky_lease(*, exclude=frozenset(), abandon=None):
             lease_calls["n"] += 1
-            if lease_calls["n"] == 2:  # the retry-lease call, right after attempt 1 failed
+            if (
+                lease_calls["n"] == 2
+            ):  # the retry-lease call, right after attempt 1 failed
                 cancel_flag["v"] = True
             return await real_lease(exclude=exclude, abandon=abandon)
 
@@ -1754,7 +2384,9 @@ def test_cancel_between_attempt_1_and_attempt_2_reports_errored_not_skipped() ->
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
-        assert receipt.failure is not None and receipt.failure.code == "world_unavailable"
+        assert (
+            receipt.failure is not None and receipt.failure.code == "world_unavailable"
+        )
         assert receipt.scenario_attempt == 1
         assert receipt.world_index == 0
         # Defensive, not discriminating on its own: this site's own retry-lease `None` return
@@ -1770,7 +2402,9 @@ def test_cancel_between_attempt_1_and_attempt_2_reports_errored_not_skipped() ->
     asyncio.run(scenario())
 
 
-def test_cancel_during_the_retry_leases_own_health_probe_reports_errored_not_skipped() -> None:
+def test_cancel_during_the_retry_leases_own_health_probe_reports_errored_not_skipped() -> (
+    None
+):
     # R3, the SECOND post-attempt-1 `return None` site: a cancel/abort can also land AFTER the
     # retry-lease has already granted a world (during ITS OWN reset/healthy await), rather than
     # while queued for one -- a distinct code path from the test above, reached at the top of the
@@ -1779,7 +2413,9 @@ def test_cancel_during_the_retry_leases_own_health_probe_reports_errored_not_ski
         cancel_flag = {"v": False}
 
         class Provisioner(FakeProvisioner):
-            async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+            async def healthy(
+                self, runtime: EnvironmentRuntime, *, work_directory: Path
+            ) -> bool:
                 if runtime.world_index == 1:
                     cancel_flag["v"] = True
                 async with self._serialized(f"healthy(w{runtime.world_index})"):
@@ -1792,16 +2428,24 @@ def test_cancel_during_the_retry_leases_own_health_probe_reports_errored_not_ski
         def check(world: Any, calls: Any) -> None:
             raise WorldUnavailable("world 0 lost its schema")
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound,
-            job_seed=1, cancel_requested=lambda: cancel_flag["v"],
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=lambda: cancel_flag["v"],
         )
         scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", check)])]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
-        assert receipt.failure is not None and receipt.failure.code == "world_unavailable"
+        assert (
+            receipt.failure is not None and receipt.failure.code == "world_unavailable"
+        )
         assert receipt.scenario_attempt == 1
         assert receipt.world_index == 0
         # The retry lease itself succeeded (world 1 granted), but attempt 2's own cancel
@@ -1822,14 +2466,26 @@ def test_evidence_missing_retries_without_marking_the_world_unhealthy() -> None:
         seen = {"n": 0}
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 seen["n"] += 1
                 if seen["n"] == 1:
                     return _call_outcome(turns=1, calls=())
                 return _call_outcome(turns=1, calls=(hs.Call(name="x", arguments={}),))
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "passed"
@@ -1849,17 +2505,70 @@ def test_evidence_missing_twice_errors() -> None:
         await pool.start()
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 return _call_outcome(turns=1, calls=())
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
         assert receipt.failure.code == "evidence_missing"
         assert receipt.scenario_attempt == 2
-        assert receipt.call is not None  # the call step DID run; only evidence capture failed
+        assert (
+            receipt.call is not None
+        )  # the call step DID run; only evidence capture failed
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_conversation_only_scenario_can_be_judged_without_tool_calls() -> None:
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "refuse-unsafe-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("safe_refusal", lambda w, c: None, judged="judge")
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "passed"
+        assert receipt.failure is None
+        assert receipt.scenario_attempt == 1
         await pool.close()
 
     asyncio.run(scenario())
@@ -1874,11 +2583,23 @@ def test_zero_turns_and_zero_calls_is_still_evidence_missing() -> None:
         await pool.start()
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 return _call_outcome(turns=0, calls=())
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.failure.code == "evidence_missing"
@@ -1891,21 +2612,36 @@ def test_zero_turns_and_zero_calls_is_still_evidence_missing() -> None:
 def test_call_aborted_with_partial_evidence_is_reported_not_null() -> None:
     async def scenario() -> None:
         outbound = FakeOutbound()
-        pool, _ = _pool(2, outbound=outbound)  # `call_failed` is infrastructure-domain (retryable) — needs a spare world
+        pool, _ = _pool(
+            2, outbound=outbound
+        )  # `call_failed` is infrastructure-domain (retryable) — needs a spare world
         await pool.start()
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 raise hs.CallAborted(
                     "livekit room dropped",
                     partial=hs.CallOutcome(
-                        calls=(), turns=0, started_at="2026-08-25T00:00:00.000Z",
-                        ended_at="2026-08-25T00:00:01.000Z", duration_ms=1000,
+                        calls=(),
+                        turns=0,
+                        started_at="2026-08-25T00:00:00.000Z",
+                        ended_at="2026-08-25T00:00:01.000Z",
+                        duration_ms=1000,
                     ),
                 )
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -1929,15 +2665,25 @@ def test_call_aborted_with_no_partial_evidence_still_retries() -> None:
             def __init__(self) -> None:
                 self.attempts = 0
 
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 self.attempts += 1
                 if self.attempts == 1:
                     raise hs.CallAborted("livekit room never opened", partial=None)
                 return _call_outcome(calls=(hs.Call(name="x", arguments={}),))
 
         runner = Runner()
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.status == "passed"
@@ -1997,9 +2743,7 @@ def test_call_aborted_retries_on_reset_same_world_when_pool_size_is_one() -> Non
         retry_events = [
             kwargs for event, kwargs in outbound.events if event == "scenario_retried"
         ]
-        assert retry_events == [
-            {"scenario_key": "s1", "from_world": 0, "to_world": 0}
-        ]
+        assert retry_events == [{"scenario_key": "s1", "from_world": 0, "to_world": 0}]
         await pool.close()
 
     asyncio.run(scenario())
@@ -2013,8 +2757,16 @@ def test_call_runner_raising_a_bare_exception_maps_to_call_failed() -> None:
         pool, _ = _pool(2, outbound=outbound)
         await pool.start()
         runner = FakeCallRunner({"s1": ConnectionError("livekit socket reset")})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
         assert receipt.failure.code == "call_failed"
@@ -2026,7 +2778,9 @@ def test_call_runner_raising_a_bare_exception_maps_to_call_failed() -> None:
     asyncio.run(scenario())
 
 
-def test_a_bug_in_the_driver_itself_becomes_a_driver_crashed_receipt_without_killing_the_run() -> None:
+def test_a_bug_in_the_driver_itself_becomes_a_driver_crashed_receipt_without_killing_the_run() -> (
+    None
+):
     # T7/B3/R7: a crash that blows past every handled path in `_execute` (not the agent, not a
     # check, not the call) must land as `driver_crashed` and must not suppress the OTHER
     # scenario's receipt. R7: it must also report the REAL world_index the crash happened on
@@ -2040,21 +2794,36 @@ def test_a_bug_in_the_driver_itself_becomes_a_driver_crashed_receipt_without_kil
             def __bool__(self) -> bool:
                 raise RuntimeError("sub_goals blew up")
 
-        runner = FakeCallRunner({
-            "s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
-            "s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
-        })
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        runner = FakeCallRunner(
+            {
+                "s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
+                "s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
+            }
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
         broken = FakeScenario("s1", "id-1")
         broken.sub_goals = BrokenSubGoals()  # type: ignore[assignment]
-        scenarios = [broken, FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scenarios = [
+            broken,
+            FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.receipts[0].status == "errored"
         assert result.receipts[0].failure.code == "driver_crashed"
         assert result.receipts[0].failure.domain == "simulator"
-        assert result.receipts[0].world_index == 0  # R7: the real world, not always None
+        assert (
+            result.receipts[0].world_index == 0
+        )  # R7: the real world, not always None
         assert result.receipts[0].scenario_attempt == 1
-        assert result.receipts[1].status == "passed"  # the crash did not suppress this receipt
+        assert (
+            result.receipts[1].status == "passed"
+        )  # the crash did not suppress this receipt
         assert len(outbound.receipts) == 2
         await pool.close()
 
@@ -2076,11 +2845,28 @@ def test_driver_crashed_reports_unjudged_sub_goals_when_they_are_readable() -> N
                 raise RuntimeError("world.read_only() blew up")
 
         class Factory:
-            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> Any:
+            async def create(
+                self, runtime: EnvironmentRuntime, *, rng: random.Random
+            ) -> Any:
                 return BrokenReadOnly()
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=Factory(), call_runner=FakeCallRunner({}), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g1", lambda w, c: None), FakeSubGoal("g2", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=Factory(),
+            call_runner=FakeCallRunner({}),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("g1", lambda w, c: None),
+                    FakeSubGoal("g2", lambda w, c: None),
+                ],
+            )
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -2094,7 +2880,9 @@ def test_driver_crashed_reports_unjudged_sub_goals_when_they_are_readable() -> N
     asyncio.run(scenario())
 
 
-def test_driver_crashed_reports_the_call_summary_when_the_call_step_already_ran() -> None:
+def test_driver_crashed_reports_the_call_summary_when_the_call_step_already_ran() -> (
+    None
+):
     # A crash AFTER a successful call step -- here, `world.read_only()` blowing up while building
     # the check-phase handle -- must not report `call: null`. The call demonstrably ran;
     # outbound-channels.md Channel 2's errored-receipt body only allows `null` when the call
@@ -2115,24 +2903,40 @@ def test_driver_crashed_reports_the_call_summary_when_the_call_step_already_ran(
                 raise RuntimeError("check-phase read_only() blew up")
 
         class Factory:
-            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> Any:
+            async def create(
+                self, runtime: EnvironmentRuntime, *, rng: random.Random
+            ) -> Any:
                 return BrokenSecondReadOnly()
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=Factory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=Factory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
         assert receipt.failure is not None and receipt.failure.code == "driver_crashed"
         assert receipt.call is not None
-        assert receipt.call.duration_ms == 5000  # _call_outcome()'s fixture value -- the call ran
+        assert (
+            receipt.call.duration_ms == 5000
+        )  # _call_outcome()'s fixture value -- the call ran
         await pool.close()
 
     asyncio.run(scenario())
 
 
-def test_a_retrys_driver_crashed_receipt_does_not_carry_the_previous_attempts_call_summary() -> None:
+def test_a_retrys_driver_crashed_receipt_does_not_carry_the_previous_attempts_call_summary() -> (
+    None
+):
     # `_ScenarioContext` is shared across both attempts of a retry (`_run_scenario` recurses
     # with the same `context` object) -- `world_index`/`attempt` were refreshed on entry but
     # `call` was not, so an attempt-1 outcome that reached the call step
@@ -2151,20 +2955,42 @@ def test_a_retrys_driver_crashed_receipt_does_not_carry_the_previous_attempts_ca
             def read_only(self) -> Any:
                 if self.world_index == 1:
                     # attempt 2's own world -- crashes before its call step ever runs.
-                    raise RuntimeError("attempt 2's read_only() blew up before its own call step")
-                return object()  # attempt 1's world -- used by the default no-op ready_fn
+                    raise RuntimeError(
+                        "attempt 2's read_only() blew up before its own call step"
+                    )
+                return (
+                    object()
+                )  # attempt 1's world -- used by the default no-op ready_fn
 
         class Factory:
-            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> Any:
+            async def create(
+                self, runtime: EnvironmentRuntime, *, rng: random.Random
+            ) -> Any:
                 return WorldForAttempt(runtime.world_index)
 
         # Attempt 1's call genuinely ran (started_at/duration_ms distinct from any fixture default)
         # but captured zero tool calls -- `evidence_missing`, retried onto a fresh world.
         runner = FakeCallRunner(
-            {"s1": hs.CallOutcome(calls=(), turns=1, started_at="A1", ended_at="A1-end", duration_ms=1111)}
+            {
+                "s1": hs.CallOutcome(
+                    calls=(),
+                    turns=1,
+                    started_at="A1",
+                    ended_at="A1-end",
+                    duration_ms=1111,
+                )
+            }
         )
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=Factory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=Factory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         receipt = result.receipts[0]
         assert receipt.status == "errored"
@@ -2188,10 +3014,23 @@ def test_exactly_one_receipt_per_scenario_key_even_when_one_scenario_crashes() -
         def boom(world: Any) -> None:
             raise ValueError("scenario code bug")
 
-        runner = FakeCallRunner({"s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
+        runner = FakeCallRunner(
+            {"s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
         scenarios = [
-            FakeScenario("s1", "id-1", setup_fn=boom, sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=boom,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            ),
             FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
         ]
         result = await scheduler.run(scenarios)
@@ -2210,10 +3049,22 @@ def test_outbound_failures_never_kill_the_run_or_change_the_receipt() -> None:
     async def scenario() -> None:
         pool, _ = _pool(1)
         await pool.start()
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
         outbound = FailingOutbound(fail_on={"scenario_started", "receipt"})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)])]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1", "id-1", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.receipts[0].status == "passed"
         assert result.aborted is None
@@ -2236,19 +3087,42 @@ def test_a_fence_stops_the_run_from_launching_further_scenarios() -> None:
             ) -> None:
                 if scenario_key == "s0":
                     raise HostedFencedError(
-                        ChannelError(ChannelOutcome.FENCED, None, "fence_mismatch", "attempt superseded")
+                        ChannelError(
+                            ChannelOutcome.FENCED,
+                            None,
+                            "fence_mismatch",
+                            "attempt superseded",
+                        )
                     )
                 await super().scenario_started(
-                    scenario_key=scenario_key, world_index=world_index, scenario_attempt=scenario_attempt
+                    scenario_key=scenario_key,
+                    world_index=world_index,
+                    scenario_attempt=scenario_attempt,
                 )
 
         outbound = FencingOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
         n = 5
-        runner = FakeCallRunner({f"s{i}": _call_outcome(calls=(hs.Call(name="x", arguments={}),)) for i in range(n)})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario(f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]) for i in range(n)]
+        runner = FakeCallRunner(
+            {
+                f"s{i}": _call_outcome(calls=(hs.Call(name="x", arguments={}),))
+                for i in range(n)
+            }
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+            )
+            for i in range(n)
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.fenced is not None
         assert isinstance(result.fenced, HostedFencedError)
@@ -2261,7 +3135,9 @@ def test_a_fence_stops_the_run_from_launching_further_scenarios() -> None:
     asyncio.run(scenario())
 
 
-def test_a_fence_landing_before_the_world_is_resolved_releases_it_instead_of_demoting_it() -> None:
+def test_a_fence_landing_before_the_world_is_resolved_releases_it_instead_of_demoting_it() -> (
+    None
+):
     # A `_FATAL_OUTBOUND` escaping through the first `scenario_started` emit reached
     # `_run_scenario`'s `finally` with `world_resolved` still `False`, and `mark_unhealthy()`
     # there demoted a world that never did anything wrong -- a
@@ -2273,18 +3149,35 @@ def test_a_fence_landing_before_the_world_is_resolved_releases_it_instead_of_dem
                 self, *, scenario_key: str, world_index: int, scenario_attempt: int
             ) -> None:
                 raise HostedFencedError(
-                    ChannelError(ChannelOutcome.FENCED, None, "fence_mismatch", "attempt superseded")
+                    ChannelError(
+                        ChannelOutcome.FENCED,
+                        None,
+                        "fence_mismatch",
+                        "attempt superseded",
+                    )
                 )
 
         outbound = FencingOutbound()
         pool, provisioner = _pool(1, outbound=outbound)
         await pool.start()
-        runner = FakeCallRunner({"s0": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario("s0", "id-0", sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        runner = FakeCallRunner(
+            {"s0": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario("s0", "id-0", sub_goals=[FakeSubGoal("g", lambda w, c: None)])
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.fenced is not None
-        assert [event for event, _ in outbound.events if event == "world_unhealthy"] == []
+        assert [
+            event for event, _ in outbound.events if event == "world_unhealthy"
+        ] == []
         # If a reconcile were (wrongly) scheduled, close() waits for it to finish before
         # returning -- checking `provision_calls` only after close() makes this deterministic.
         await pool.close()
@@ -2301,7 +3194,9 @@ def test_a_channel_failed_error_latches_the_same_fenced_path() -> None:
         class ChannelFailingOutbound(FakeOutbound):
             async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
                 raise HostedChannelFailedError(
-                    ChannelError(ChannelOutcome.CHANNEL_FAILED, None, "not_found", "channel gone")
+                    ChannelError(
+                        ChannelOutcome.CHANNEL_FAILED, None, "not_found", "channel gone"
+                    )
                 )
 
         outbound = ChannelFailingOutbound()
@@ -2329,19 +3224,42 @@ def test_an_attempt_superseded_error_latches_the_same_fenced_path() -> None:
             ) -> None:
                 if scenario_key == "s0":
                     raise HostedAttemptSupersededError(
-                        ChannelError(ChannelOutcome.PERMANENT_ITEM, None, "attempt_superseded", "attempt was superseded")
+                        ChannelError(
+                            ChannelOutcome.PERMANENT_ITEM,
+                            None,
+                            "attempt_superseded",
+                            "attempt was superseded",
+                        )
                     )
                 await super().scenario_started(
-                    scenario_key=scenario_key, world_index=world_index, scenario_attempt=scenario_attempt
+                    scenario_key=scenario_key,
+                    world_index=world_index,
+                    scenario_attempt=scenario_attempt,
                 )
 
         outbound = SupersedingOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
         n = 5
-        runner = FakeCallRunner({f"s{i}": _call_outcome(calls=(hs.Call(name="x", arguments={}),)) for i in range(n)})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario(f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]) for i in range(n)]
+        runner = FakeCallRunner(
+            {
+                f"s{i}": _call_outcome(calls=(hs.Call(name="x", arguments={}),))
+                for i in range(n)
+            }
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+            )
+            for i in range(n)
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.fenced is not None
         assert isinstance(result.fenced, HostedAttemptSupersededError)
@@ -2365,25 +3283,50 @@ def test_cancel_after_the_first_scenario_skips_the_rest() -> None:
         cancel_flag = {"v": False}
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 cancel_flag["v"] = True
                 return _call_outcome(calls=(hs.Call(name="x", arguments={}),))
 
         scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound,
-            job_seed=1, cancel_requested=lambda: cancel_flag["v"],
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+            cancel_requested=lambda: cancel_flag["v"],
         )
-        scenarios = [FakeScenario(f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]) for i in range(3)]
+        scenarios = [
+            FakeScenario(
+                f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+            )
+            for i in range(3)
+        ]
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
         assert result.aborted is None  # a cancel is not a job-level failure
         assert result.receipts[0].status == "passed"  # the in-flight scenario finished
         assert result.receipts[1] == hs.ResultReceipt(
-            scenario_key="s1", scenario_id="id-1", scenario_attempt=1, world_index=None,
-            status="skipped", sub_goals=(), evaluations=(), call=None, failure=None,
+            scenario_key="s1",
+            scenario_id="id-1",
+            scenario_attempt=1,
+            world_index=None,
+            status="skipped",
+            sub_goals=(),
+            evaluations=(),
+            call=None,
+            failure=None,
         )
         assert result.receipts[2] == hs.ResultReceipt(
-            scenario_key="s2", scenario_id="id-2", scenario_attempt=1, world_index=None,
-            status="skipped", sub_goals=(), evaluations=(), call=None, failure=None,
+            scenario_key="s2",
+            scenario_id="id-2",
+            scenario_attempt=1,
+            world_index=None,
+            status="skipped",
+            sub_goals=(),
+            evaluations=(),
+            call=None,
+            failure=None,
         )
         # (outbound-channels.md v1.3 Sequencing: "terminal event -> skipped receipts ->
         # manifest"): `run()` only SYNTHESIZES the skipped receipts -- emitting them is the
@@ -2410,12 +3353,18 @@ def test_zero_ready_worlds_aborts_the_run_and_skips_the_rest() -> None:
         calls = {"n": 0}
         real_provision = provisioner.provision
 
-        async def flaky_provision(bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+        async def flaky_provision(
+            bundle, *, source, bundle_dir, work_directory, contract=None, instances=1
+        ):
             calls["n"] += 1
             if calls["n"] == 1:
                 return await real_provision(
-                    bundle, source=source, bundle_dir=bundle_dir, work_directory=work_directory,
-                    contract=contract, instances=instances,
+                    bundle,
+                    source=source,
+                    bundle_dir=bundle_dir,
+                    work_directory=work_directory,
+                    contract=contract,
+                    instances=instances,
                 )
             raise RuntimeError("provisioner is down")
 
@@ -2425,12 +3374,22 @@ def test_zero_ready_worlds_aborts_the_run_and_skips_the_rest() -> None:
         await pool.start()
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 if scenario.scenario_key == "s1":
                     raise WorldUnavailable("world 0's schema is gone")
-                raise AssertionError(f"{scenario.scenario_key} should never have reached the call step")
+                raise AssertionError(
+                    f"{scenario.scenario_key} should never have reached the call step"
+                )
 
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1)
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
         scenarios = [
             FakeScenario("s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
             FakeScenario("s2", "id-2", sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
@@ -2441,7 +3400,9 @@ def test_zero_ready_worlds_aborts_the_run_and_skips_the_rest() -> None:
         assert result.aborted.domain == "environment"
         assert result.aborted.code == "world_unavailable"
         statuses = {r.scenario_key: r.status for r in result.receipts}
-        assert statuses["s1"] == "errored"  # M8: ran and failed -- must not read as "never ran"
+        assert (
+            statuses["s1"] == "errored"
+        )  # M8: ran and failed -- must not read as "never ran"
         assert statuses["s2"] == "skipped"
         assert statuses["s3"] == "skipped"
         started = [event for event, _ in outbound.events if event == "scenario_started"]
@@ -2450,7 +3411,9 @@ def test_zero_ready_worlds_aborts_the_run_and_skips_the_rest() -> None:
         # caller explicitly asks for the synthesized `skipped` ones.
         assert [r.scenario_key for r in outbound.receipts] == ["s1"]
         await scheduler.emit_skipped_receipts(result)
-        skipped_keys = sorted(r.scenario_key for r in outbound.receipts if r.status == "skipped")
+        skipped_keys = sorted(
+            r.scenario_key for r in outbound.receipts if r.status == "skipped"
+        )
         assert skipped_keys == ["s2", "s3"]
 
     asyncio.run(scenario())
@@ -2463,7 +3426,9 @@ def test_pool_size_caps_concurrent_scenario_execution() -> None:
         concurrency = {"now": 0, "max": 0}
 
         class Runner:
-            async def run(self, scenario: FakeScenario, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
                 concurrency["now"] += 1
                 concurrency["max"] = max(concurrency["max"], concurrency["now"])
                 await asyncio.sleep(0.02)
@@ -2471,8 +3436,19 @@ def test_pool_size_caps_concurrent_scenario_execution() -> None:
                 return _call_outcome(calls=(hs.Call(name="x", arguments={}),))
 
         outbound = FakeOutbound()
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=Runner(), outbound=outbound, job_seed=1)
-        scenarios = [FakeScenario(f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]) for i in range(4)]
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                f"s{i}", f"id-{i}", sub_goals=[FakeSubGoal("goal", lambda w, c: None)]
+            )
+            for i in range(4)
+        ]
         result = await scheduler.run(scenarios)
         assert concurrency["max"] == 1
         assert all(r.status == "passed" for r in result.receipts)
@@ -2491,17 +3467,36 @@ def test_scenario_seed_is_job_seed_plus_index() -> None:
         def make_setup(key: str):
             def setup(world: Any) -> None:
                 seen_first_draw[key] = world.rng.randint(0, 10**9)
+
             return setup
 
         outbound = FakeOutbound()
-        runner = FakeCallRunner({
-            "s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
-            "s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
-        })
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=777)
+        runner = FakeCallRunner(
+            {
+                "s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
+                "s2": _call_outcome(calls=(hs.Call(name="x", arguments={}),)),
+            }
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=777,
+        )
         scenarios = [
-            FakeScenario("s1", "id-1", setup_fn=make_setup("s1"), sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
-            FakeScenario("s2", "id-2", setup_fn=make_setup("s2"), sub_goals=[FakeSubGoal("g", lambda w, c: None)]),
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=make_setup("s1"),
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            ),
+            FakeScenario(
+                "s2",
+                "id-2",
+                setup_fn=make_setup("s2"),
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            ),
         ]
         await scheduler.run(scenarios)
         assert seen_first_draw["s1"] == random.Random(777 + 0).randint(0, 10**9)
@@ -2528,9 +3523,24 @@ def test_a_retry_reseeds_the_rng_identically() -> None:
             if attempts["n"] == 1:
                 raise WorldUnavailable("world 0 lost its schema")
 
-        runner = FakeCallRunner({"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))})
-        scheduler = hs.HostedScheduler(pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=555)
-        scenarios = [FakeScenario("s1", "id-1", setup_fn=setup, sub_goals=[FakeSubGoal("g", lambda w, c: None)])]
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="x", arguments={}),))}
+        )
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=runner,
+            outbound=outbound,
+            job_seed=555,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=setup,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            )
+        ]
         result = await scheduler.run(scenarios)
         assert result.receipts[0].status == "passed"
         assert result.receipts[0].scenario_attempt == 2

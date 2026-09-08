@@ -38,6 +38,19 @@ from .files import file_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
 
+_TERMINAL_SAVE_TOOLS = frozenset(
+    {
+        "mcp__world__save_world",
+        "mcp__provision__save_environment",
+        "mcp__scenarios__save_scenarios",
+        # Source-data review is another persisted authoring boundary.  Its handler only
+        # succeeds after every scenario was reviewed and at least one executable invariant
+        # was declared.  Letting ADK take another turn after that success can burn the entire
+        # call budget and turn a completed review into a spurious validation failure.
+        "mcp__source_data__finish_review",
+    }
+)
+
 # Vertex list pricing per 1M tokens (input, output), as of 2026-08; verify before relying on
 # cost figures. An unknown model reports no cost rather than a wrong one.
 PRICES_PER_MILLION = {
@@ -183,6 +196,20 @@ def _flattened(result: Any) -> str:
     return content if isinstance(content, str) else str(result)
 
 
+def _successful_terminal_save(name: str, response: Any) -> bool:
+    """Whether a tool response proves this authoring stage has persisted its final output.
+
+    Save tools deliberately reject incomplete work with ``is_error`` so the model can repair and
+    retry. Once one succeeds, another model turn can only rewrite already-valid output or burn the
+    stage budget; the persisted artifact is the stage's actual completion boundary.
+    """
+    return bool(
+        name in _TERMINAL_SAVE_TOOLS
+        and isinstance(response, dict)
+        and not response.get("is_error")
+    )
+
+
 def _spec_tool(name: str, spec: ToolSpec) -> Any:
     """A ToolSpec as an ADK tool, through ADK's own extension point.
 
@@ -284,14 +311,13 @@ class VertexGeminiSession:
         if self._runner is None or self._pending is None:
             raise RuntimeError("nothing to reply to; send a message first")
         yield SessionOpened(session_id=self.session_id)
-        message = types.Content(
-            role="user", parts=[types.Part(text=self._pending)]
-        )
+        message = types.Content(role="user", parts=[types.Part(text=self._pending)])
         self._pending = None
         turns = 0
         tokens_in = 0
         tokens_out = 0
         settled = False
+        terminal_save_succeeded = False
         try:
             async for event in self._runner.run_async(
                 user_id="stage",
@@ -319,6 +345,10 @@ class VertexGeminiSession:
                         )
                     if getattr(part, "function_response", None):
                         response = part.function_response.response
+                        response_name = part.function_response.name or ""
+                        terminal_save_succeeded = terminal_save_succeeded or (
+                            _successful_terminal_save(response_name, response)
+                        )
                         returned.append(
                             ToolReturned(
                                 id=getattr(part.function_response, "id", None) or "",
@@ -334,6 +364,9 @@ class VertexGeminiSession:
                     yield ModelReply(parts=parts, model=self._model)
                 for outcome in returned:
                     yield outcome
+                if terminal_save_succeeded:
+                    settled = True
+                    break
                 if event.is_final_response():
                     settled = True
         except Exception as exc:
@@ -361,7 +394,9 @@ class VertexGeminiSession:
             errors=(
                 []
                 if settled
-                else [f"the stage spent its whole budget of {self._spec.max_turns} calls"]
+                else [
+                    f"the stage spent its whole budget of {self._spec.max_turns} calls"
+                ]
             ),
         )
 

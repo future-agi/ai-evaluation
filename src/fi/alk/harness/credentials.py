@@ -7,6 +7,7 @@ platform can use to ask for missing secrets before a build or provider call star
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -88,6 +89,9 @@ class CredentialManifest(BaseModel):
 _IGNORED_PARTS = {
     ".git",
     ".venv",
+    "venv",
+    ".tox",
+    ".nox",
     "node_modules",
     "test",
     "tests",
@@ -219,6 +223,77 @@ _CONNECTOR_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "livekit": ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"),
 }
 
+_LIVEKIT_PROVIDER_CREDENTIALS = {
+    "deepgram": ("DEEPGRAM_API_KEY",),
+    "cartesia": ("CARTESIA_API_KEY",),
+    "elevenlabs": ("ELEVENLABS_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+}
+
+
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
+    """Discover credentials consumed internally by constructors in submitted Python.
+
+    This is AST-based because model constructors routinely span multiple lines and contain
+    nested calls; a regex ending at the first ``)`` silently misses valid ``vertexai=True``
+    configurations.  Parsing is read-only and never imports or executes customer code.
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "livekit.plugins":
+            for item in node.names:
+                aliases[item.asname or item.name] = item.name
+        elif isinstance(node, ast.Import):
+            for item in node.names:
+                prefix = "livekit.plugins."
+                if item.name.startswith(prefix):
+                    aliases[item.asname or item.name] = item.name[len(prefix) :].split(".")[0]
+
+    found: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        path = _dotted_name(node.func)
+        if not path:
+            continue
+        parts = path.split(".")
+        provider = aliases.get(parts[0], parts[-2] if len(parts) > 1 else "")
+        constructor = parts[-1]
+        if provider in _LIVEKIT_PROVIDER_CREDENTIALS and constructor in {
+            "LLM",
+            "STT",
+            "TTS",
+            "RealtimeModel",
+        }:
+            for name in _LIVEKIT_PROVIDER_CREDENTIALS[provider]:
+                found.add((name, f"sdk:livekit.plugins.{provider}"))
+        if provider == "google" and constructor in {"LLM", "STT", "TTS"}:
+            vertex = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "vertexai"),
+                None,
+            )
+            if isinstance(vertex, ast.Constant) and vertex.value is True:
+                for name in (
+                    "GOOGLE_APPLICATION_CREDENTIALS",
+                    "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+                    "GOOGLE_CLOUD_PROJECT",
+                ):
+                    found.add((name, "sdk:livekit.plugins.google.vertex"))
+    return sorted(found)
+
 
 def discover_credentials(
     root: str | Path,
@@ -236,6 +311,11 @@ def discover_credentials(
         configured.add(str(alias).upper())
         configured.add(str(ref.key).upper())
         configured.add(_identifier(ref.purpose).upper())
+    # Hosted process runtime materializes this vault value to a private file and exports the
+    # conventional Google variable to the child.  Discovery deals in names only; no credential
+    # value is read or persisted here.
+    if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in configured:
+        configured.add("GOOGLE_APPLICATION_CREDENTIALS")
 
     findings: dict[str, dict[str, object]] = {}
     connector_hits: set[str] = set()
@@ -269,7 +349,11 @@ def discover_credentials(
         def record(
             name: str, *, required: bool, declared_default: bool = False
         ) -> None:
-            if name in _NON_USER_CONFIGURATION:
+            # ALK_* is a reserved control-plane namespace. Provider adapters and the
+            # hosted lifecycle legitimately read these values from their process
+            # environment, but they are injected at launch and must never be admitted as
+            # customer-supplied target configuration.
+            if name in _NON_USER_CONFIGURATION or name.startswith("ALK_"):
                 return
             item = findings.setdefault(
                 name,
@@ -291,11 +375,20 @@ def discover_credentials(
         # environment declaration. Only env templates use NAME=value syntax.
         if path.name.lower() in _ENV_TEMPLATE_NAMES:
             for match in _ENV_DECLARATION.finditer(content):
+                name = match.group(1)
                 value = match.group(2).strip().strip("\"'")
                 usable_default = bool(value) and not _PLACEHOLDER_VALUE.fullmatch(value)
                 record(
-                    match.group(1),
-                    required=not usable_default,
+                    name,
+                    # A blank non-secret setting in an example file documents a knob; it
+                    # does not prove that the selected runtime path needs a value. Strict
+                    # source reads and Compose's :? operator remain authoritative. Secret
+                    # placeholders stay required because SDKs commonly consume them without
+                    # an explicit getenv call in customer code.
+                    required=(
+                        not usable_default
+                        and _kind(name) is RequirementKind.SECRET
+                    ),
                     declared_default=usable_default,
                 )
         if path.name.lower() in _COMPOSE_NAMES:
@@ -336,6 +429,12 @@ def discover_credentials(
             )
         for match in _JS_ENV.finditer(content):
             record(match.group(1), required=True)
+        if path.suffix.lower() == ".py":
+            for name, origin in _python_sdk_requirements(content):
+                record(name, required=True)
+                detected = findings[name]["detected_from"]
+                assert isinstance(detected, set)
+                detected.add(origin)
 
     for connector in sorted(connector_hits):
         for name in _CONNECTOR_REQUIREMENTS.get(connector, ()):
@@ -472,7 +571,17 @@ def _credential_choices(
         ["GEMINI_API_KEY"],
         ["GOOGLE_API_KEY"],
         ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+        ["GOOGLE_APPLICATION_CREDENTIALS_JSON", "GOOGLE_CLOUD_PROJECT"],
     ]
+    # Repositories often keep more than one model backend behind LLM_PROVIDER. A strict
+    # credential read inside one branch (or a standalone bakeoff utility in the same runtime
+    # tree) must not make every backend credential mandatory. The selected provider's one
+    # complete authentication route is the requirement. Without an explicit provider selector
+    # we remain conservative and do not merge independent integrations into one choice.
+    if "LLM_PROVIDER" in by_name:
+        google_options.extend(
+            [option for option in (["OPENAI_API_KEY"], ["AGENTCC_API_KEY"])]
+        )
     present_options = [
         option for option in google_options if all(name in by_name for name in option)
     ]

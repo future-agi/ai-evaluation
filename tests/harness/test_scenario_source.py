@@ -32,7 +32,12 @@ import pytest
 
 from fi.alk.harness import scenario_source as ss
 from fi.alk.harness.hosted_entrypoint import ScenarioPreallocationError
-from fi.alk.harness.hosted_scheduler import Call, CallOutcome, HostedScheduler, WorldPool
+from fi.alk.harness.hosted_scheduler import (
+    Call,
+    CallOutcome,
+    HostedScheduler,
+    WorldPool,
+)
 from fi.alk.harness.process_runtime import EnvironmentRuntime, RuntimeState
 
 # =================================================================================================
@@ -98,12 +103,16 @@ def test_bundle_has_scenarios_false_when_no_scenarios_directory(tmp_path: Path) 
     assert ss.bundle_has_scenarios(tmp_path) is False
 
 
-def test_bundle_has_scenarios_false_when_scenarios_directory_is_empty(tmp_path: Path) -> None:
+def test_bundle_has_scenarios_false_when_scenarios_directory_is_empty(
+    tmp_path: Path,
+) -> None:
     (tmp_path / ss.SCENARIOS_DIRNAME).mkdir()
     assert ss.bundle_has_scenarios(tmp_path) is False
 
 
-def test_bundle_has_scenarios_false_when_subdirectory_has_no_scenario_json(tmp_path: Path) -> None:
+def test_bundle_has_scenarios_false_when_subdirectory_has_no_scenario_json(
+    tmp_path: Path,
+) -> None:
     (tmp_path / ss.SCENARIOS_DIRNAME / "s1").mkdir(parents=True)
     assert ss.bundle_has_scenarios(tmp_path) is False
 
@@ -149,6 +158,69 @@ def test_load_scenarios_reads_the_documented_on_disk_layout(tmp_path: Path) -> N
     assert judged.judged != ""  # mandatory, non-empty marker (CONTRACT QUESTIONS).
 
 
+def test_load_scenarios_distinguishes_conversation_only_from_tool_action_solutions(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"tools": [{"name": "book_ride"}]}), encoding="utf-8"
+    )
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "refusal",
+        scenario_key="refusal",
+        raw_body={
+            "scenario_key": "refusal",
+            "sub_goals": ["safe_refusal"],
+            "solution": [
+                {"tool": "listen", "arguments": {}},
+                {"tool": "respond", "arguments": {}},
+            ],
+        },
+    )
+    _write_scenario(
+        root,
+        "booking",
+        scenario_key="booking",
+        raw_body={
+            "scenario_key": "booking",
+            "sub_goals": ["booked"],
+            "solution": [
+                {"tool": "conversation_turn", "arguments": {}},
+                {"tool": "book_ride", "arguments": {"destination": "airport"}},
+            ],
+        },
+    )
+
+    by_key = {
+        scenario.scenario_key: scenario for scenario in ss.load_scenarios(tmp_path)
+    }
+    assert by_key["refusal"].requires_tool_evidence is False
+    assert by_key["booking"].requires_tool_evidence is True
+
+
+def test_load_scenarios_does_not_invent_tool_evidence_without_declared_tools(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "conversation",
+        scenario_key="conversation",
+        raw_body={
+            "scenario_key": "conversation",
+            "sub_goals": ["helpful"],
+            "solution": [
+                {"tool": "listen", "arguments": {}},
+                {"tool": "respond", "arguments": {}},
+            ],
+        },
+    )
+
+    scenario = ss.load_scenarios(tmp_path)[0]
+    assert scenario.requires_tool_evidence is False
+
+
 def test_load_scenarios_sorts_by_folder_name_like_folder_py(tmp_path: Path) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(root, "bravo", scenario_key="bravo")
@@ -157,7 +229,9 @@ def test_load_scenarios_sorts_by_folder_name_like_folder_py(tmp_path: Path) -> N
     assert [s.scenario_key for s in scenarios] == ["alpha", "bravo"]
 
 
-def test_load_scenarios_missing_setup_or_ready_defaults_to_empty_text(tmp_path: Path) -> None:
+def test_load_scenarios_missing_setup_or_ready_defaults_to_empty_text(
+    tmp_path: Path,
+) -> None:
     # `folder.py`'s `read_folder` treats a missing setup.py/ready.py as "" -- mirrored here.
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(root, "s1", scenario_key="s1")
@@ -166,7 +240,9 @@ def test_load_scenarios_missing_setup_or_ready_defaults_to_empty_text(tmp_path: 
     assert scenario.ready(object()) is None
 
 
-def test_load_scenarios_raises_typed_error_for_missing_scenario_json(tmp_path: Path) -> None:
+def test_load_scenarios_raises_typed_error_for_missing_scenario_json(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(root, "s1", scenario_key="s1", write_body=False)
     with pytest.raises(ss.ScenarioDocumentInvalid):
@@ -185,19 +261,25 @@ def test_load_scenarios_raises_typed_error_for_invalid_json(tmp_path: Path) -> N
 def test_load_scenarios_raises_typed_error_for_non_object_json(tmp_path: Path) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(root, "s1", raw_body=None, write_body=False)
-    (root / "s1" / "scenario.json").write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    (root / "s1" / "scenario.json").write_text(
+        json.dumps(["not", "an", "object"]), encoding="utf-8"
+    )
     with pytest.raises(ss.ScenarioDocumentInvalid):
         ss.load_scenarios(tmp_path)
 
 
-def test_load_scenarios_raises_typed_error_for_non_string_sub_goals(tmp_path: Path) -> None:
+def test_load_scenarios_raises_typed_error_for_non_string_sub_goals(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(root, "s1", raw_body={"scenario_key": "s1", "sub_goals": [1, 2]})
     with pytest.raises(ss.ScenarioDocumentInvalid):
         ss.load_scenarios(tmp_path)
 
 
-def test_load_scenarios_raises_typed_error_when_scenarios_directory_absent(tmp_path: Path) -> None:
+def test_load_scenarios_raises_typed_error_when_scenarios_directory_absent(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(ss.ScenarioDocumentInvalid):
         ss.load_scenarios(tmp_path)
 
@@ -233,19 +315,26 @@ def test_wrapper_preserves_sub_goal_document_order(tmp_path: Path) -> None:
     assert [g.name for g in scenario.sub_goals] == ["z", "a", "m"]
 
 
-def test_judged_sub_goal_check_returns_none_and_judged_is_non_empty(tmp_path: Path) -> None:
+def test_judged_sub_goal_check_returns_none_and_judged_is_non_empty(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(root, "s1", scenario_key="s1", sub_goals=["needs_judgment"])
     scenario = ss.load_scenarios(tmp_path)[0]
     goal = scenario.sub_goals[0]
     assert goal.judged != ""
-    assert goal.check(object(), []) is None  # "held" by the shared return-value convention.
+    assert (
+        goal.check(object(), []) is None
+    )  # "held" by the shared return-value convention.
 
 
 def test_deterministic_sub_goal_judged_is_empty(tmp_path: Path) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "s1", scenario_key="s1", sub_goals=["holds"],
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["holds"],
         checks={"holds": "def check(world, calls):\n    return None\n"},
     )
     scenario = ss.load_scenarios(tmp_path)[0]
@@ -265,17 +354,26 @@ def test_compile_empty_source_is_a_no_op_success(tmp_path: Path) -> None:
     assert scenario.ready(object()) is None
 
 
-def test_setup_syntax_error_fails_at_load_as_scenario_document_invalid(tmp_path: Path) -> None:
+def test_setup_syntax_error_fails_at_load_as_scenario_document_invalid(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", setup_code="def setup(world:\n    pass\n")
+    _write_scenario(
+        root, "s1", scenario_key="s1", setup_code="def setup(world:\n    pass\n"
+    )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="would not compile"):
         ss.load_scenarios(tmp_path)
 
 
-def test_check_syntax_error_fails_at_load_as_scenario_document_invalid(tmp_path: Path) -> None:
+def test_check_syntax_error_fails_at_load_as_scenario_document_invalid(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "s1", scenario_key="s1", sub_goals=["broken"],
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["broken"],
         checks={"broken": "def check(world, calls\n    pass\n"},
     )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="would not compile"):
@@ -296,23 +394,39 @@ def test_setup_missing_entry_point_fails_at_load(tmp_path: Path) -> None:
 # =================================================================================================
 
 
-def test_existing_but_empty_check_file_is_typed_document_invalid(tmp_path: Path) -> None:
-    root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", sub_goals=["never_checked"], checks={"never_checked": ""})
-    with pytest.raises(ss.ScenarioDocumentInvalid, match="defines no check"):
-        ss.load_scenarios(tmp_path)
-
-
-def test_existing_but_whitespace_only_check_file_is_typed_document_invalid(tmp_path: Path) -> None:
+def test_existing_but_empty_check_file_is_typed_document_invalid(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "s1", scenario_key="s1", sub_goals=["never_checked"], checks={"never_checked": "   \n\t\n"}
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["never_checked"],
+        checks={"never_checked": ""},
     )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="defines no check"):
         ss.load_scenarios(tmp_path)
 
 
-def test_setup_and_ready_still_allow_empty_source_after_the_r1_2_fix(tmp_path: Path) -> None:
+def test_existing_but_whitespace_only_check_file_is_typed_document_invalid(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / ss.SCENARIOS_DIRNAME
+    _write_scenario(
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["never_checked"],
+        checks={"never_checked": "   \n\t\n"},
+    )
+    with pytest.raises(ss.ScenarioDocumentInvalid, match="defines no check"):
+        ss.load_scenarios(tmp_path)
+
+
+def test_setup_and_ready_still_allow_empty_source_after_the_r1_2_fix(
+    tmp_path: Path,
+) -> None:
     # Regression guard: R1-2's `allow_empty=False` is scoped to `check` only -- setup/ready must
     # still treat empty/whitespace source as the pre-existing no-op success (`folder.py` parity).
     root = tmp_path / ss.SCENARIOS_DIRNAME
@@ -327,13 +441,21 @@ def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
     # `_load_one`, i.e. reverting to the pre-fix behavior where an existing-but-empty check file
     # silently compiled to a no-op "held" callable -- a vacuous deterministic pass.
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", sub_goals=["never_checked"], checks={"never_checked": ""})
+    _write_scenario(
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["never_checked"],
+        checks={"never_checked": ""},
+    )
 
     # Baseline: the real fix catches it.
     with pytest.raises(ss.ScenarioDocumentInvalid, match="defines no check"):
         ss.load_scenarios(tmp_path)
 
-    def _always_allow_empty(source: str, *, label: str, entry: str, allow_empty: bool = True):
+    def _always_allow_empty(
+        source: str, *, label: str, entry: str, allow_empty: bool = True
+    ):
         # The mutant: `allow_empty` is accepted but ignored -- `check` is treated exactly like
         # `setup`/`ready` again, as if the R1-2 fix's `allow_empty=False` call-site edit were
         # reverted. A standalone reimplementation of the pre-fix `_compile_entry` body, not a call
@@ -353,7 +475,9 @@ def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
         scenarios = ss.load_scenarios(tmp_path)  # mutant: no longer raises
         goal = scenarios[0].sub_goals[0]
         assert goal.judged == ""  # still classified deterministic...
-        assert goal.check(object(), []) is None  # ...and the mutant's vacuous "held" verdict
+        assert (
+            goal.check(object(), []) is None
+        )  # ...and the mutant's vacuous "held" verdict
 
     # Restored: the guard is back.
     with pytest.raises(ss.ScenarioDocumentInvalid, match="defines no check"):
@@ -370,9 +494,13 @@ def test_mutation_vacuous_empty_check_pass_is_caught(tmp_path: Path) -> None:
 
 def test_absolute_path_subgoal_name_is_rejected(tmp_path: Path) -> None:
     outside = tmp_path / "outside.py"
-    outside.write_text("def check(world, calls):\n    return 'should never run'\n", encoding="utf-8")
+    outside.write_text(
+        "def check(world, calls):\n    return 'should never run'\n", encoding="utf-8"
+    )
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", sub_goals=[str(outside.with_suffix(""))])
+    _write_scenario(
+        root, "s1", scenario_key="s1", sub_goals=[str(outside.with_suffix(""))]
+    )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="not a plain filename"):
         ss.load_scenarios(tmp_path)
 
@@ -394,19 +522,27 @@ def test_backslash_subgoal_name_is_rejected(tmp_path: Path) -> None:
 def test_plain_subgoal_names_are_unaffected_by_the_r1_3_fix(tmp_path: Path) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "s1", scenario_key="s1", sub_goals=["holds", "judged_one"],
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["holds", "judged_one"],
         checks={"holds": "def check(world, calls):\n    return None\n"},
     )
     scenario = ss.load_scenarios(tmp_path)[0]
     assert [g.name for g in scenario.sub_goals] == ["holds", "judged_one"]
 
 
-def test_mutation_subgoal_name_sanitization_reproduces_the_bundle_escape(tmp_path: Path) -> None:
+def test_mutation_subgoal_name_sanitization_reproduces_the_bundle_escape(
+    tmp_path: Path,
+) -> None:
     # Mutation table (R1-3): simulates deleting the `_validate_subgoal_name` call in `_load_one` --
     # an absolute-path sub_goal name would once again resolve `check_path` to a file entirely
     # outside `checks/` (and outside the sealed bundle), reading and compiling it.
     outside = tmp_path / "outside.py"
-    outside.write_text("def check(world, calls):\n    return 'ran from outside the bundle'\n", encoding="utf-8")
+    outside.write_text(
+        "def check(world, calls):\n    return 'ran from outside the bundle'\n",
+        encoding="utf-8",
+    )
     root = tmp_path / ss.SCENARIOS_DIRNAME
     escaping_name = str(outside.with_suffix(""))
     _write_scenario(root, "s1", scenario_key="s1", sub_goals=[escaping_name])
@@ -414,10 +550,14 @@ def test_mutation_subgoal_name_sanitization_reproduces_the_bundle_escape(tmp_pat
     with pytest.raises(ss.ScenarioDocumentInvalid, match="not a plain filename"):
         ss.load_scenarios(tmp_path)
 
-    with mock.patch.object(ss, "_validate_subgoal_name", lambda name, *, folder_name: None):
+    with mock.patch.object(
+        ss, "_validate_subgoal_name", lambda name, *, folder_name: None
+    ):
         scenarios = ss.load_scenarios(tmp_path)  # mutant: no longer raises
         goal = scenarios[0].sub_goals[0]
-        assert goal.check(object(), []) == "ran from outside the bundle"  # read from OUTSIDE checks/
+        assert (
+            goal.check(object(), []) == "ran from outside the bundle"
+        )  # read from OUTSIDE checks/
 
     with pytest.raises(ss.ScenarioDocumentInvalid, match="not a plain filename"):
         ss.load_scenarios(tmp_path)
@@ -441,41 +581,58 @@ def test_mutation_subgoal_name_sanitization_reproduces_the_bundle_escape(tmp_pat
 # =================================================================================================
 
 
-def test_setup_module_level_sys_exit_zero_is_typed_document_invalid(tmp_path: Path) -> None:
+def test_setup_module_level_sys_exit_zero_is_typed_document_invalid(
+    tmp_path: Path,
+) -> None:
     # The worst case in the finding: `sys.exit(0)` inside scenario code, unguarded, previously
     # meant the GUEST process itself exited 0 -- a "clean terminal that never happened" (§0.6).
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(0)\n")
+    _write_scenario(
+        root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(0)\n"
+    )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="would not compile"):
         ss.load_scenarios(tmp_path)
 
 
-def test_setup_module_level_sys_exit_three_is_typed_document_invalid(tmp_path: Path) -> None:
+def test_setup_module_level_sys_exit_three_is_typed_document_invalid(
+    tmp_path: Path,
+) -> None:
     # EXIT_FENCED == 3: previously the guest would exit 3, read by the platform as a fenced/
     # superseded attempt rather than a scenario content defect.
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(3)\n")
+    _write_scenario(
+        root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(3)\n"
+    )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="would not compile"):
         ss.load_scenarios(tmp_path)
 
 
-def test_check_module_level_bare_sys_exit_is_typed_document_invalid(tmp_path: Path) -> None:
+def test_check_module_level_bare_sys_exit_is_typed_document_invalid(
+    tmp_path: Path,
+) -> None:
     # Bare `sys.exit()` (no argument) is `SystemExit()`, not `SystemExit(int)` -- still a
     # `BaseException`, not an `Exception`; a `checks/<goal>.py` file is exactly where a generator
     # could emit this by omitting the `if __name__ == "__main__":` guard around `folder.py`'s own
     # `_RUNNABLE` tail (R1-4).
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "s1", scenario_key="s1", sub_goals=["broken"],
+        root,
+        "s1",
+        scenario_key="s1",
+        sub_goals=["broken"],
         checks={"broken": "import sys\nsys.exit()\n"},
     )
     with pytest.raises(ss.ScenarioDocumentInvalid, match="would not compile"):
         ss.load_scenarios(tmp_path)
 
 
-def test_setup_unreadable_file_chmod_000_is_typed_document_invalid(tmp_path: Path) -> None:
+def test_setup_unreadable_file_chmod_000_is_typed_document_invalid(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    folder = _write_scenario(root, "s1", scenario_key="s1", setup_code="def setup(world):\n    pass\n")
+    folder = _write_scenario(
+        root, "s1", scenario_key="s1", setup_code="def setup(world):\n    pass\n"
+    )
     setup_path = folder / "setup.py"
     setup_path.chmod(0o000)
     try:
@@ -502,11 +659,15 @@ def test_scenario_json_non_utf8_bytes_is_typed_document_invalid(tmp_path: Path) 
         ss.load_scenarios(tmp_path)
 
 
-def test_unreadable_scenarios_directory_is_typed_document_invalid_not_an_escape(tmp_path: Path) -> None:
+def test_unreadable_scenarios_directory_is_typed_document_invalid_not_an_escape(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     root.mkdir(parents=True)
     (root / "s1").mkdir()
-    (root / "s1" / "scenario.json").write_text(json.dumps({"scenario_key": "s1"}), encoding="utf-8")
+    (root / "s1" / "scenario.json").write_text(
+        json.dumps({"scenario_key": "s1"}), encoding="utf-8"
+    )
     root.chmod(0o000)
     try:
         with pytest.raises(ss.ScenarioDocumentInvalid, match="cannot list"):
@@ -530,7 +691,9 @@ def test_unreadable_scenarios_directory_makes_bundle_has_scenarios_false_not_an_
         root.chmod(0o755)
 
 
-def test_mutation_revert_r1_1_containment_reproduces_the_untyped_escapes(tmp_path: Path) -> None:
+def test_mutation_revert_r1_1_containment_reproduces_the_untyped_escapes(
+    tmp_path: Path,
+) -> None:
     # Revert-verify-restore: a SCRATCH copy of this module's pre-R1-1-fix content (never a tracked
     # file -- this module did not exist as a tracked file before this task either, see the mutation
     # section's own DUPLICATION DISCLOSURE below) is imported under a private name and driven
@@ -558,7 +721,9 @@ def test_mutation_revert_r1_1_containment_reproduces_the_untyped_escapes(tmp_pat
 
         # (a) module-level sys.exit(0) -- pre-fix: raw SystemExit escapes `load_scenarios` itself.
         root = tmp_path / "a" / ss.SCENARIOS_DIRNAME
-        _write_scenario(root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(0)\n")
+        _write_scenario(
+            root, "s1", scenario_key="s1", setup_code="import sys\nsys.exit(0)\n"
+        )
         with pytest.raises(SystemExit):
             prefix.load_scenarios(tmp_path / "a")
         with pytest.raises(ss.ScenarioDocumentInvalid):
@@ -567,7 +732,9 @@ def test_mutation_revert_r1_1_containment_reproduces_the_untyped_escapes(tmp_pat
         # (b) non-UTF-8 setup.py -- pre-fix: raw UnicodeDecodeError escapes.
         root_b = tmp_path / "b" / ss.SCENARIOS_DIRNAME
         folder_b = _write_scenario(root_b, "s1", scenario_key="s1")
-        (folder_b / "setup.py").write_bytes(b"def setup(world):\n    return '\xff\xfe'\n")
+        (folder_b / "setup.py").write_bytes(
+            b"def setup(world):\n    return '\xff\xfe'\n"
+        )
         with pytest.raises(UnicodeDecodeError):
             prefix.load_scenarios(tmp_path / "b")
         with pytest.raises(ss.ScenarioDocumentInvalid):
@@ -599,10 +766,14 @@ def test_mutation_revert_r1_1_containment_reproduces_the_untyped_escapes(tmp_pat
 # =================================================================================================
 
 
-def test_scenario_code_is_unsandboxed_importing_os_runs_successfully(tmp_path: Path) -> None:
+def test_scenario_code_is_unsandboxed_importing_os_runs_successfully(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "s1", scenario_key="s1",
+        root,
+        "s1",
+        scenario_key="s1",
         setup_code=(
             "import os\n"
             "def setup(world):\n"
@@ -611,7 +782,9 @@ def test_scenario_code_is_unsandboxed_importing_os_runs_successfully(tmp_path: P
         ),
     )
     scenario = ss.load_scenarios(tmp_path)[0]
-    assert scenario.setup(object()) is None  # ran to completion -- `import os` was never blocked.
+    assert (
+        scenario.setup(object()) is None
+    )  # ran to completion -- `import os` was never blocked.
 
 
 # =================================================================================================
@@ -630,20 +803,27 @@ class _FakeProvisioner:
         self.closed = False
         self._runtimes = {
             i: EnvironmentRuntime(
-                runtime_id=f"digest:w{i}", world_index=i, bundle_digest="digest",
-                state=RuntimeState.READY, endpoints={},
+                runtime_id=f"digest:w{i}",
+                world_index=i,
+                bundle_digest="digest",
+                state=RuntimeState.READY,
+                endpoints={},
             )
             for i in range(instances)
         }
 
-    async def provision(self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1):
+    async def provision(
+        self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1
+    ):
         del bundle, source, bundle_dir, work_directory, contract
         return [self._runtimes[i] for i in range(instances)]
 
     async def reset(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> None:
         del runtime, work_directory
 
-    async def healthy(self, runtime: EnvironmentRuntime, *, work_directory: Path) -> bool:
+    async def healthy(
+        self, runtime: EnvironmentRuntime, *, work_directory: Path
+    ) -> bool:
         del runtime, work_directory
         return True
 
@@ -657,19 +837,32 @@ class _FakeWorld:
     rather than starting a fresh one -- this consumer-proof test needs a `check()` to see what
     `setup()` actually wrote, or the deterministic-check assertion below would pass vacuously."""
 
-    def __init__(self, world_index: int, rng: Any, rows: dict[str, list[dict[str, Any]]] | None = None) -> None:
+    def __init__(
+        self,
+        world_index: int,
+        rng: Any,
+        rows: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
         self.world_index = world_index
         self.rng = rng
         self.rows: dict[str, list[dict[str, Any]]] = rows if rows is not None else {}
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
-        return dict(self.rows) if table is None else {table: list(self.rows.get(table, []))}
+        return (
+            dict(self.rows)
+            if table is None
+            else {table: list(self.rows.get(table, []))}
+        )
 
-    def put(self, collection: str, record: dict[str, Any], *, key: str = "") -> dict[str, Any]:
+    def put(
+        self, collection: str, record: dict[str, Any], *, key: str = ""
+    ) -> dict[str, Any]:
         self.rows.setdefault(collection, []).append(record)
         return record
 
-    def change(self, collection: str, key: str, changes: dict[str, Any], *, by: str = "") -> int:
+    def change(
+        self, collection: str, key: str, changes: dict[str, Any], *, by: str = ""
+    ) -> int:
         del key, changes, by
         return 0
 
@@ -689,7 +882,9 @@ class _FakeWorld:
 
 
 class _FakeWorldFactory:
-    async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> _FakeWorld:
+    async def create(
+        self, runtime: EnvironmentRuntime, *, rng: random.Random
+    ) -> _FakeWorld:
         return _FakeWorld(runtime.world_index, rng)
 
 
@@ -710,10 +905,14 @@ class _FakeOutbound:
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     receipts: list[Any] = field(default_factory=list)
 
-    async def scenario_started(self, *, scenario_key: str, world_index: int, scenario_attempt: int) -> None:
+    async def scenario_started(
+        self, *, scenario_key: str, world_index: int, scenario_attempt: int
+    ) -> None:
         self.events.append(("scenario_started", {"scenario_key": scenario_key}))
 
-    async def scenario_retried(self, *, scenario_key: str, from_world: int, to_world: int) -> None:
+    async def scenario_retried(
+        self, *, scenario_key: str, from_world: int, to_world: int
+    ) -> None:
         self.events.append(("scenario_retried", {}))
 
     async def world_unhealthy(self, *, world_index: int, cause: str) -> None:
@@ -728,8 +927,20 @@ class _FakeOutbound:
 
 def _call_outcome() -> CallOutcome:
     return CallOutcome(
-        calls=(Call(name="tool", arguments={}, result="ok", ok=True, error="", refused=False, at=0.0),),
-        turns=1, started_at="2026-08-25T00:00:00.000Z", ended_at="2026-08-25T00:00:01.000Z",
+        calls=(
+            Call(
+                name="tool",
+                arguments={},
+                result="ok",
+                ok=True,
+                error="",
+                refused=False,
+                at=0.0,
+            ),
+        ),
+        turns=1,
+        started_at="2026-08-25T00:00:00.000Z",
+        ended_at="2026-08-25T00:00:01.000Z",
         duration_ms=1000,
     )
 
@@ -741,8 +952,10 @@ def _build_fixture_bundle(tmp_path: Path) -> Path:
     wrapper bug" warning). Each also carries one judged sub-goal."""
     root = tmp_path / ss.SCENARIOS_DIRNAME
     _write_scenario(
-        root, "passing",
-        scenario_key="passing", scenario_id="",
+        root,
+        "passing",
+        scenario_key="passing",
+        scenario_id="",
         sub_goals=["created_rider", "needs_judgment"],
         setup_code="def setup(world):\n    world.put('riders', {'id': 1})\n",
         ready_code="def ready(world):\n    return None\n",
@@ -755,8 +968,10 @@ def _build_fixture_bundle(tmp_path: Path) -> Path:
         },
     )
     _write_scenario(
-        root, "failing",
-        scenario_key="failing", scenario_id="",
+        root,
+        "failing",
+        scenario_key="failing",
+        scenario_id="",
         sub_goals=["created_rider"],
         setup_code="def setup(world):\n    return None\n",  # never creates the rider
         ready_code="def ready(world):\n    return None\n",
@@ -776,21 +991,32 @@ def test_consumer_proof_real_scheduler_evaluates_wrapped_scenarios() -> None:
         tmp_path = Path(tempfile.mkdtemp(prefix="p12-consumer-"))
         bundle_dir = _build_fixture_bundle(tmp_path)
         scenarios = ss.load_scenarios(bundle_dir)
-        assert [s.scenario_key for s in scenarios] == ["failing", "passing"]  # sorted by folder name
+        assert [s.scenario_key for s in scenarios] == [
+            "failing",
+            "passing",
+        ]  # sorted by folder name
 
         outbound = _FakeOutbound()
         provisioner = _FakeProvisioner(1)
         pool = WorldPool(
-            provisioner, bundle=object(), source=Path("/work/source"), bundle_dir=bundle_dir,
-            work_directory=tmp_path, instances=1, outbound=outbound,
+            provisioner,
+            bundle=object(),
+            source=Path("/work/source"),
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=1,
+            outbound=outbound,
         )
         await pool.start()
         call_runner = _FakeCallRunner(
             {"passing": _call_outcome(), "failing": _call_outcome()}
         )
         scheduler = HostedScheduler(
-            pool=pool, world_factory=_FakeWorldFactory(), call_runner=call_runner,
-            outbound=outbound, job_seed=1,
+            pool=pool,
+            world_factory=_FakeWorldFactory(),
+            call_runner=call_runner,
+            outbound=outbound,
+            job_seed=1,
         )
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=10.0)
         await pool.close()
@@ -802,20 +1028,30 @@ def test_consumer_proof_real_scheduler_evaluates_wrapped_scenarios() -> None:
         passing = receipts_by_key["passing"]
         assert passing.status == "passed"
         goals_by_name = {g.name: g for g in passing.sub_goals}
-        assert goals_by_name["created_rider"].held is True  # a real deterministic check, evaluated
+        assert (
+            goals_by_name["created_rider"].held is True
+        )  # a real deterministic check, evaluated
         assert goals_by_name["created_rider"].judged is False
-        assert goals_by_name["needs_judgment"].held is True  # placeholder "held" convention
-        assert goals_by_name["needs_judgment"].judged is True  # marks it as not really settled yet
+        assert (
+            goals_by_name["needs_judgment"].held is True
+        )  # placeholder "held" convention
+        assert (
+            goals_by_name["needs_judgment"].judged is True
+        )  # marks it as not really settled yet
 
         failing = receipts_by_key["failing"]
-        assert failing.status == "failed"  # the SAME check, genuinely evaluated, genuinely fails
+        assert (
+            failing.status == "failed"
+        )  # the SAME check, genuinely evaluated, genuinely fails
         assert failing.sub_goals[0].held is False
         assert failing.sub_goals[0].reason == "missing rider"
 
     asyncio.run(scenario())
 
 
-def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_scheduler() -> None:
+def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_scheduler() -> (
+    None
+):
     # Divergence (a) from folder.py's `_run`: a syntax error is caught at LOAD time. A RUNTIME
     # error inside a setup() that compiles fine is a different story -- it must reach
     # `hosted_scheduler.py`'s own classification (`_run_phase`'s `_PhaseCrashed` ->
@@ -824,7 +1060,10 @@ def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_sched
         tmp_path = Path(tempfile.mkdtemp(prefix="p12-setup-crash-"))
         root = tmp_path / ss.SCENARIOS_DIRNAME
         _write_scenario(
-            root, "boom", scenario_key="boom", scenario_id="",
+            root,
+            "boom",
+            scenario_key="boom",
+            scenario_id="",
             sub_goals=[],
             setup_code="def setup(world):\n    raise ValueError('setup blew up')\n",
         )
@@ -833,13 +1072,21 @@ def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_sched
         outbound = _FakeOutbound()
         provisioner = _FakeProvisioner(1)
         pool = WorldPool(
-            provisioner, bundle=object(), source=Path("/work/source"), bundle_dir=tmp_path,
-            work_directory=tmp_path, instances=1, outbound=outbound,
+            provisioner,
+            bundle=object(),
+            source=Path("/work/source"),
+            bundle_dir=tmp_path,
+            work_directory=tmp_path,
+            instances=1,
+            outbound=outbound,
         )
         await pool.start()
         scheduler = HostedScheduler(
-            pool=pool, world_factory=_FakeWorldFactory(), call_runner=_FakeCallRunner({}),
-            outbound=outbound, job_seed=1,
+            pool=pool,
+            world_factory=_FakeWorldFactory(),
+            call_runner=_FakeCallRunner({}),
+            outbound=outbound,
+            job_seed=1,
         )
         result = await asyncio.wait_for(scheduler.run(scenarios), timeout=10.0)
         await pool.close()
@@ -864,7 +1111,9 @@ def test_runtime_error_inside_setup_reaches_setup_crashed_through_the_real_sched
 # =================================================================================================
 
 
-def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Path) -> None:
+def test_real_write_folder_round_trip_matches_the_adapters_reading(
+    tmp_path: Path,
+) -> None:
     from fi.alk.harness import folder as fmod
     from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenario import Scenario
@@ -872,14 +1121,19 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Pat
     catalogue = Catalogue(
         sub_goals=[
             SubGoal(
-                name="created_rider", what="rider row exists",
+                name="created_rider",
+                what="rider row exists",
                 check=(
                     "def check(world, calls):\n"
                     "    del calls\n"
                     "    return None if world.state('riders').get('riders') else 'missing rider'\n"
                 ),
             ),
-            SubGoal(name="polite_tone", what="agent was polite", judged="was the refusal explained?"),
+            SubGoal(
+                name="polite_tone",
+                what="agent was polite",
+                judged="was the refusal explained?",
+            ),
         ]
     )
     scenario_model = Scenario(
@@ -901,7 +1155,9 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Pat
     goals_by_name = {g.name: g for g in scenario.sub_goals}
     assert set(goals_by_name) == {"created_rider", "polite_tone"}
     assert goals_by_name["created_rider"].judged == ""  # has a real checks/ file
-    assert goals_by_name["polite_tone"].judged != ""  # no checks/ file -- judged, per deterministic()
+    assert (
+        goals_by_name["polite_tone"].judged != ""
+    )  # no checks/ file -- judged, per deterministic()
 
     world = _FakeWorld(0, random.Random(0))
     assert scenario.setup(world) is None
@@ -911,8 +1167,12 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Pat
     # SystemExit(...)`) to every checks/ file it writes -- this proves `exec(code, {})` resolves
     # `__name__` to `'builtins'` (never `'__main__'`), so that tail stays inert, against the REAL
     # producer's own bytes rather than a hand-written stand-in that never carries the tail at all.
-    assert goals_by_name["created_rider"].check(world, []) is None  # held, genuinely evaluated
-    assert goals_by_name["polite_tone"].check(world, []) is None  # judged placeholder convention
+    assert (
+        goals_by_name["created_rider"].check(world, []) is None
+    )  # held, genuinely evaluated
+    assert (
+        goals_by_name["polite_tone"].check(world, []) is None
+    )  # judged placeholder convention
 
 
 # =================================================================================================
@@ -924,12 +1184,16 @@ def test_real_write_folder_round_trip_matches_the_adapters_reading(tmp_path: Pat
 # =================================================================================================
 
 
-def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_failure() -> None:
+def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_failure() -> (
+    None
+):
     async def scenario() -> None:
         tmp_path = Path(tempfile.mkdtemp(prefix="p12-load-timeout-"))
         root = tmp_path / ss.SCENARIOS_DIRNAME
         _write_scenario(
-            root, "s1", scenario_key="s1",
+            root,
+            "s1",
+            scenario_key="s1",
             # Module-level, not inside setup() -- runs during `_compile_entry`'s `exec`, i.e.
             # during the load itself, which is exactly what a real budget must bound.
             setup_code="import time\ntime.sleep(1.5)\ndef setup(world):\n    pass\n",
@@ -938,7 +1202,11 @@ def test_load_timeout_converts_a_hanging_module_level_scenario_into_a_typed_fail
         with mock.patch.object(ss, "_LOAD_TIMEOUT_SECONDS", 0.1):
             with pytest.raises(ss.ScenarioDocumentInvalid, match="exceeded"):
                 await source.build(
-                    object(), object(), object(), pool=object(), world_factory=object(),
+                    object(),
+                    object(),
+                    object(),
+                    pool=object(),
+                    world_factory=object(),
                     bundle_dir=tmp_path,
                 )
 
@@ -960,7 +1228,11 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
 
         with mock.patch.object(ss, "register_with_platform", _passthrough):
             scenarios = await source.build(
-                _FakeJob(run_id="job-1"), object(), object(), pool=object(), world_factory=object(),
+                _FakeJob(run_id="job-1"),
+                object(),
+                object(),
+                pool=object(),
+                world_factory=object(),
                 bundle_dir=tmp_path,
             )
         assert [s.scenario_key for s in scenarios] == ["s1"]
@@ -982,7 +1254,9 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
 
 def test_mutation_skip_compile_check_is_killed(tmp_path: Path) -> None:
     root = tmp_path / ss.SCENARIOS_DIRNAME
-    _write_scenario(root, "s1", scenario_key="s1", setup_code="def setup(world:\n    pass\n")
+    _write_scenario(
+        root, "s1", scenario_key="s1", setup_code="def setup(world:\n    pass\n"
+    )
 
     # Baseline: the real compiler catches the syntax error.
     with pytest.raises(ss.ScenarioDocumentInvalid):
@@ -996,7 +1270,9 @@ def test_mutation_skip_compile_check_is_killed(tmp_path: Path) -> None:
 
     with mock.patch.object(ss, "_compile_entry", _never_fails):
         scenarios = ss.load_scenarios(tmp_path)  # mutant: no longer raises
-        assert scenarios[0].setup(object()) is None  # confirms the mutant path actually ran
+        assert (
+            scenarios[0].setup(object()) is None
+        )  # confirms the mutant path actually ran
 
     # Restored: the guard is back.
     with pytest.raises(ss.ScenarioDocumentInvalid):
@@ -1019,11 +1295,15 @@ def test_mutation_judged_flag_dropped_is_killed_by_5b_verdict_assertions() -> No
     def _dropped_judged(folder: Path, **_read_as_the_real_one_is):
         compiled = original_load_one(folder)
         broken_goals = tuple(
-            ss._CompiledSubGoal(name=g.name, judged="", check=g.check) for g in compiled.sub_goals
+            ss._CompiledSubGoal(name=g.name, judged="", check=g.check)
+            for g in compiled.sub_goals
         )
         return ss._CompiledScenario(
-            scenario_key=compiled.scenario_key, scenario_id=compiled.scenario_id,
-            sub_goals=broken_goals, setup=compiled.setup, ready=compiled.ready,
+            scenario_key=compiled.scenario_key,
+            scenario_id=compiled.scenario_id,
+            sub_goals=broken_goals,
+            setup=compiled.setup,
+            ready=compiled.ready,
         )
 
     with mock.patch.object(ss, "_load_one", _dropped_judged):
@@ -1050,8 +1330,11 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
         compiled = original_load_one(folder)
         key = compiled.scenario_key or "synthesized-key"
         return ss._CompiledScenario(
-            scenario_key=key, scenario_id=compiled.scenario_id, sub_goals=compiled.sub_goals,
-            setup=compiled.setup, ready=compiled.ready,
+            scenario_key=key,
+            scenario_id=compiled.scenario_id,
+            sub_goals=compiled.sub_goals,
+            setup=compiled.setup,
+            ready=compiled.ready,
         )
 
     with mock.patch.object(ss, "_load_one", _synthesizes_key):
@@ -1073,7 +1356,10 @@ def test_mutation_empty_key_reader_synthesizing_a_key_is_caught(tmp_path: Path) 
 
 def _scenario(key: str, *, scenario_id: str = "") -> ss._CompiledScenario:
     return ss._CompiledScenario(
-        scenario_key=key, scenario_id=scenario_id, sub_goals=(), setup=lambda w: None,
+        scenario_key=key,
+        scenario_id=scenario_id,
+        sub_goals=(),
+        setup=lambda w: None,
         ready=lambda w: None,
     )
 
@@ -1096,14 +1382,18 @@ class _FakeScenariosClient:
     provision_calls: list[dict[str, Any]] = field(default_factory=list)
     begin_calls: list[dict[str, Any]] = field(default_factory=list)
 
-    def provision(self, payload: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+    def provision(
+        self, payload: dict[str, Any], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         del deadline
         self.provision_calls.append(payload)
         if self.provision_error is not None:
             raise self.provision_error
         return self.provision_response
 
-    def begin(self, payload: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+    def begin(
+        self, payload: dict[str, Any], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         del deadline
         self.begin_calls.append(payload)
         if self.begin_error is not None:
@@ -1139,7 +1429,11 @@ def test_build_rejects_empty_scenario_key_before_calling_register_with_platform(
         with mock.patch.object(ss, "register_with_platform", _spy):
             with pytest.raises(ss.ScenarioDocumentInvalid, match="scenario_key"):
                 await source.build(
-                    _FakeJob(), object(), object(), pool=object(), world_factory=object(),
+                    _FakeJob(),
+                    object(),
+                    object(),
+                    pool=object(),
+                    world_factory=object(),
                     bundle_dir=tmp_path,
                 )
         assert register_calls == []  # never reached the network
@@ -1176,7 +1470,9 @@ def test_begin_payload_carries_operation_run_test_id_and_the_full_key_set() -> N
     scenarios = (_scenario("a"), _scenario("b"))
     payload = ss._begin_payload("run-test-1", scenarios)
     assert payload == {
-        "operation": "begin", "run_test_id": "run-test-1", "scenario_keys": ["a", "b"],
+        "operation": "begin",
+        "run_test_id": "run-test-1",
+        "scenario_keys": ["a", "b"],
     }
 
 
@@ -1195,7 +1491,8 @@ def test_scenario_ids_by_key_matches_regardless_of_response_order() -> None:
         {"scenario_key": "a", "scenario_id": "platform-a"},
     ]
     assert ss._scenario_ids_by_key(submitted, reordered_response) == {
-        "a": "platform-a", "b": "platform-b",
+        "a": "platform-a",
+        "b": "platform-b",
     }
 
 
@@ -1243,7 +1540,9 @@ def test_scenario_ids_by_key_raises_typed_error_for_duplicate_key() -> None:
 
 def test_scenario_ids_by_key_raises_typed_error_for_empty_scenario_id() -> None:
     with pytest.raises(ScenarioPreallocationError) as exc_info:
-        ss._scenario_ids_by_key((_scenario("a"),), [{"scenario_key": "a", "scenario_id": ""}])
+        ss._scenario_ids_by_key(
+            (_scenario("a"),), [{"scenario_key": "a", "scenario_id": ""}]
+        )
     assert exc_info.value.error.code == "scenarios_provision_response_invalid"
 
 
@@ -1267,20 +1566,33 @@ def test_register_with_platform_assigns_platform_ids_and_begins_the_full_set() -
         )
         result = await ss.register_with_platform(client, submitted, run_name="run-1")
 
-        assert [s.scenario_key for s in result] == ["a", "b"]  # submission order preserved
-        assert [s.scenario_id for s in result] == ["platform-a", "platform-b"]  # matched by key
-        assert result[0].setup is submitted[0].setup  # untouched fields carried through verbatim
+        assert [s.scenario_key for s in result] == [
+            "a",
+            "b",
+        ]  # submission order preserved
+        assert [s.scenario_id for s in result] == [
+            "platform-a",
+            "platform-b",
+        ]  # matched by key
+        assert (
+            result[0].setup is submitted[0].setup
+        )  # untouched fields carried through verbatim
         assert result[0].ready is submitted[0].ready
         assert result[0].sub_goals is submitted[0].sub_goals
 
         assert client.provision_calls == [
             {
-                "operation": "provision", "name": "run-1",
+                "operation": "provision",
+                "name": "run-1",
                 "personas": [{"scenario_key": "a"}, {"scenario_key": "b"}],
             }
         ]
         assert client.begin_calls == [
-            {"operation": "begin", "run_test_id": "run-test-1", "scenario_keys": ["a", "b"]},
+            {
+                "operation": "begin",
+                "run_test_id": "run-test-1",
+                "scenario_keys": ["a", "b"],
+            },
         ]
 
     asyncio.run(scenario())
@@ -1295,7 +1607,9 @@ def test_register_with_platform_guard_failure_never_calls_begin() -> None:
         client = _FakeScenariosClient(
             provision_response={
                 "run_test_id": "run-test-1",
-                "scenarios": [{"scenario_key": "a", "scenario_id": "platform-a"}],  # "b" missing
+                "scenarios": [
+                    {"scenario_key": "a", "scenario_id": "platform-a"}
+                ],  # "b" missing
             },
         )
         with pytest.raises(ScenarioPreallocationError) as exc_info:
@@ -1306,7 +1620,9 @@ def test_register_with_platform_guard_failure_never_calls_begin() -> None:
     asyncio.run(scenario())
 
 
-def test_register_with_platform_missing_run_test_id_is_a_typed_failure_before_begin() -> None:
+def test_register_with_platform_missing_run_test_id_is_a_typed_failure_before_begin() -> (
+    None
+):
     async def scenario() -> None:
         submitted = (_scenario("a"),)
         client = _FakeScenariosClient(
@@ -1338,7 +1654,10 @@ def test_mutation_positional_zip_matching_is_killed() -> None:
     ]
 
     real = ss._scenario_ids_by_key(submitted, reordered_response)
-    assert real == {"a": "platform-a", "b": "platform-b"}  # baseline: correct regardless of order
+    assert real == {
+        "a": "platform-a",
+        "b": "platform-b",
+    }  # baseline: correct regardless of order
 
     def _positional_zip_mutant(submitted, raw_scenarios):
         return {
@@ -1348,7 +1667,10 @@ def test_mutation_positional_zip_matching_is_killed() -> None:
 
     with mock.patch.object(ss, "_scenario_ids_by_key", _positional_zip_mutant):
         mutant = ss._scenario_ids_by_key(submitted, reordered_response)
-        assert mutant == {"a": "platform-b", "b": "platform-a"}  # mutant's defect: swapped ids
+        assert mutant == {
+            "a": "platform-b",
+            "b": "platform-a",
+        }  # mutant's defect: swapped ids
         assert mutant != real
 
     restored = ss._scenario_ids_by_key(submitted, reordered_response)
@@ -1360,10 +1682,14 @@ def test_mutation_missing_scenario_guard_removed_is_killed() -> None:
     # `_scenario_ids_by_key` -- as if a job with fewer provisioned scenarios than requested were
     # silently accepted instead of failing the whole registration.
     submitted = (_scenario("a"), _scenario("b"))
-    incomplete_response = [{"scenario_key": "a", "scenario_id": "platform-a"}]  # "b" never comes back
+    incomplete_response = [
+        {"scenario_key": "a", "scenario_id": "platform-a"}
+    ]  # "b" never comes back
 
     with pytest.raises(ScenarioPreallocationError) as exc_info:
-        ss._scenario_ids_by_key(submitted, incomplete_response)  # baseline: the real guard catches it
+        ss._scenario_ids_by_key(
+            submitted, incomplete_response
+        )  # baseline: the real guard catches it
     assert exc_info.value.error.code == "scenario_registration_missing"
 
     def _no_missing_guard_mutant(submitted, raw_scenarios):
@@ -1371,8 +1697,12 @@ def test_mutation_missing_scenario_guard_removed_is_killed() -> None:
         return {entry["scenario_key"]: entry["scenario_id"] for entry in raw_scenarios}
 
     with mock.patch.object(ss, "_scenario_ids_by_key", _no_missing_guard_mutant):
-        mutant = ss._scenario_ids_by_key(submitted, incomplete_response)  # mutant: no longer raises
-        assert "b" not in mutant  # confirms the mutant's defect: an incomplete mapping got through
+        mutant = ss._scenario_ids_by_key(
+            submitted, incomplete_response
+        )  # mutant: no longer raises
+        assert (
+            "b" not in mutant
+        )  # confirms the mutant's defect: an incomplete mapping got through
 
     with pytest.raises(ScenarioPreallocationError) as exc_info:
         ss._scenario_ids_by_key(submitted, incomplete_response)  # restored
@@ -1406,11 +1736,15 @@ def test_mutation_id_assignment_skipped_is_killed() -> None:
             return scenarios  # mutant's defect: returned VERBATIM, ids never merged in
 
         with mock.patch.object(ss, "register_with_platform", _skip_assignment_mutant):
-            mutant = await ss.register_with_platform(client, submitted, run_name="run-1")
+            mutant = await ss.register_with_platform(
+                client, submitted, run_name="run-1"
+            )
             assert mutant[0].scenario_id == ""  # mutant's defect: id never assigned
 
         restored = await ss.register_with_platform(client, submitted, run_name="run-1")
-        assert restored[0].scenario_id == "platform-a"  # confirms the patch was fully undone
+        assert (
+            restored[0].scenario_id == "platform-a"
+        )  # confirms the patch was fully undone
 
     asyncio.run(scenario())
 
@@ -1462,7 +1796,9 @@ def test_a_bundle_without_a_readable_contract_costs_the_run_nothing(tmp_path) ->
     assert ss._chosen_evals_and_prompt(tmp_path) == ([], "", "")
 
 
-def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_input(tmp_path) -> None:
+def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_input(
+    tmp_path,
+) -> None:
     """Provisioning defaults to text, and a voice run that stays quiet has its evals judge a transcript.
 
     Measured on run 0734ab2e: four eval configs were created with `conversation -> transcript` on a
@@ -1470,7 +1806,9 @@ def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_i
     text. For a spoken call the conversation is the recording.
     """
     (tmp_path / "contract.json").write_text(
-        json.dumps({"modality": "voice", "chosen_evals": ["customer_agent_context_retention"]}),
+        json.dumps(
+            {"modality": "voice", "chosen_evals": ["customer_agent_context_retention"]}
+        ),
         encoding="utf-8",
     )
     names, _prompt, modality = ss._chosen_evals_and_prompt(tmp_path)

@@ -673,6 +673,41 @@ def test_generated_runtime_persists_only_required_credential_names(
     assert "must-never-be-persisted" not in persisted
 
 
+def test_generated_runtime_includes_runtime_dependency_configuration_names(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "agent"
+    session = tmp_path / "session"
+    source.mkdir()
+    source.joinpath("requirements.txt").write_text("")
+    source.joinpath("agent.py").write_text("print('ready')\n")
+    contract = _contract(command=["python", "agent.py"])
+    contract.runtime_dependencies = [
+        Dependency(
+            name="Vertex AI",
+            kind="transport",
+            reached={
+                "dsn_env": "GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION",
+            },
+        )
+    ]
+
+    def run(_environment, *arguments, **_kwargs):
+        if "config" in arguments and "--format" in arguments:
+            return json.dumps(
+                {"services": {"agent-runtime": {"profiles": ["harness-runtime"]}}}
+            )
+        return ""
+
+    monkeypatch.setattr(provisioning, "_run", run)
+    environment = provisioning.provision(source, session, contract)
+
+    assert environment.runtime_configuration_names == [
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+    ]
+
+
 def test_generated_runtime_includes_ephemeral_uploaded_environment_names(
     tmp_path: Path, monkeypatch
 ) -> None:
