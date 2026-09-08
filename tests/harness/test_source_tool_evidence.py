@@ -463,3 +463,52 @@ def test_a_truthiness_check_is_told_to_compare_against_an_expected_value():
     from fi.alk.harness.catalogue import validate_sub_goal
 
     assert validate_sub_goal(truthiness) == []
+
+
+def test_the_writer_and_the_reader_agree_on_where_the_catalogue_lives(tmp_path):
+    """A round trip through the real writer. Run 7b62c314 reported every passing sub-goal as
+    "Held. The check found nothing wrong." even though its catalogue carried a description for all
+    eight, which is what happens when the reader cannot find sub_goals.json beside the scenarios.
+    This pins the two ends together so that gap fails here instead of two systems away."""
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.folder import write_folder
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_source import load_scenarios
+
+    coded = SubGoal(
+        name="schedules_callback",
+        what="a callback was written for the time the caller agreed",
+        check=(
+            "def check(world, calls):\n"
+            '    done = [x for x in calls if x.name == "schedule" and x.ok]\n'
+            '    if not done:\n        return "not scheduled"\n'
+            '    if done[0].arguments.get("when") != "10:00":\n        return "wrong time"\n'
+            "    return None\n"
+        ),
+    )
+    judged = SubGoal(
+        name="stayed_within_licence",
+        what="no premium figure was given",
+        judged=(
+            "Whether a premium was implied, which no world row records because speech leaves none"
+        ),
+    )
+    catalogue = Catalogue(sub_goals=[coded, judged])
+    scenario = Scenario(
+        name="callback", sub_goals=["schedules_callback", "stayed_within_licence"]
+    )
+
+    write_folder(scenario, catalogue, tmp_path)
+    save_catalogue(catalogue, tmp_path)
+
+    # The catalogue is a sibling of scenarios/, which is the layout the reader has to expect.
+    assert (tmp_path / "sub_goals.json").is_file()
+    assert (tmp_path / "scenarios" / "callback" / "scenario.json").is_file()
+
+    by_name = {g.name: g for g in load_scenarios(tmp_path)[0].sub_goals}
+    assert by_name["schedules_callback"].what == (
+        "a callback was written for the time the caller agreed"
+    )
+    assert by_name["schedules_callback"].judged == ""
+    assert by_name["stayed_within_licence"].what == "no premium figure was given"
+    assert by_name["stayed_within_licence"].judged.startswith("Whether a premium")
