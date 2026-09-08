@@ -548,21 +548,6 @@ class BundleScenarioSource:
         return sampled_for_calling(registered)
 
 
-# Chosen before any scenario exists, so an outbound agent gets these whether or not one was written.
-_EVALS_NEEDING_A_MAILBOX = ("voicemail_handling", "voice_mail_detection")
-
-
-def _suite_has_a_mailbox(bundle_dir: Path) -> bool:
-    for document in sorted(bundle_dir.glob("scenarios/*/scenario.json")):
-        try:
-            body = json.loads(document.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - an unreadable document is not evidence of a mailbox
-            continue
-        if str(body.get("answered_by") or "").strip().lower() == "voicemail":
-            return True
-    return False
-
-
 def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
     """The contract's chosen evals, agent prompt and modality; read as plain JSON so it cannot fail a run."""
     try:
@@ -577,10 +562,6 @@ def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
         if isinstance(chosen, list)
         else []
     )
-    if names and not _suite_has_a_mailbox(bundle_dir):
-        dropped = [one for one in names if one in _EVALS_NEEDING_A_MAILBOX]
-        if dropped:
-            names = [one for one in names if one not in _EVALS_NEEDING_A_MAILBOX]
     # Provisioning defaults to text, which would bind a voice run's evals to the transcript.
     modality = str(body.get("modality") or "").strip().lower()
     return (
