@@ -74,6 +74,51 @@ from .world.stores.postgres import AttachedPostgresStore
 
 logger = logging.getLogger(__name__)
 
+
+class _JobIdFilter(logging.Filter):
+    """Stamp every log record with the job this runner is serving.
+
+    One runner process serves exactly one job, so the id is process-wide rather than per-task
+    state. Concurrent runs are separate processes, but their stdout is collected into one place,
+    and a line with no job id cannot be attributed to a run at all -- which is the difference
+    between reading a log and guessing at it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.job_id = "-"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "job_id"):
+            record.job_id = self.job_id
+        return True
+
+
+_JOB_ID_FILTER = _JobIdFilter()
+
+
+def configure_runner_logging(job_id: str | None) -> None:
+    """Put the job id on every line this process emits, including libraries' lines.
+
+    Installed on the root logger rather than ours, because the lines that are hardest to attribute
+    are the ones from livekit, httpx and the model clients.
+    """
+    _JOB_ID_FILTER.job_id = str(job_id or "-")
+    root = logging.getLogger()
+    for handler in root.handlers:
+        handler.addFilter(_JOB_ID_FILTER)
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.addFilter(_JOB_ID_FILTER)
+        root.addHandler(handler)
+        root.setLevel(logging.INFO)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s job=%(job_id)s %(name)s: %(message)s"
+            )
+        )
+
 # --- §0.6 exit-code contract --------------------------------------------------------------------
 #
 # 0 = any terminal stage reached (completed/failed/canceled), outbox flushed. 3 = fenced/superseded
@@ -1741,6 +1786,10 @@ async def run_job(
     except ob.CapabilitiesError as exc:
         logger.error("capabilities load failed: %s: %s", exc.code, exc.message)
         return EXIT_BOOT_FAILURE
+
+    # Every line from here on is attributable. Done as early as the id is known, which is
+    # immediately after capabilities load.
+    configure_runner_logging(getattr(capabilities, "job_id", None))
 
     channel_state = ob.ChannelState()
     transport = deps.build_transport()
