@@ -43,6 +43,7 @@ SCENARIOS_DIRNAME = "scenarios"
 
 _CHECKS_DIRNAME = "checks"
 _SCENARIO_JSON = "scenario.json"
+_CATALOGUE_JSON = "sub_goals.json"
 _SETUP_PY = "setup.py"
 _READY_PY = "ready.py"
 
@@ -179,6 +180,7 @@ class _CompiledSubGoal:
     name: str
     judged: str
     check: Callable[[Any, Any], object]
+    what: str = ""
 
 
 @dataclass(frozen=True)
@@ -316,6 +318,31 @@ def _declared_tool_names(bundle_dir: Path) -> set[str]:
         return set()
 
 
+def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
+    """`sub_goals.json`'s `what`/`judged` text, which `folder.py` never writes into a scenario
+    folder. Without it a judged sub-goal reaches the platform as a name and nothing to decide.
+    """
+    path = bundle_dir / _CATALOGUE_JSON
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    entries = raw.get("sub_goals") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    claims: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            continue
+        claims[entry["name"]] = {
+            "what": str(entry.get("what") or ""),
+            "judged": str(entry.get("judged") or ""),
+        }
+    return claims
+
+
 def _load_one(
     folder: Path,
     *,
@@ -432,6 +459,30 @@ def _load_one(
     )
 
 
+def _with_claims(
+    scenario: _CompiledScenario, claims: dict[str, dict[str, str]]
+) -> _CompiledScenario:
+    """Restore each judged sub-goal's real claim from the catalogue.
+
+    `_load_one` can only tell that a sub-goal is judged, never what it was meant to decide:
+    `folder.py` writes no file for one. Without this the platform judge gets a name and a
+    placeholder, which is not something a verdict can be reached from.
+    """
+    if not claims:
+        return scenario
+    restored = tuple(
+        replace(
+            goal,
+            judged=claims[goal.name].get("judged") or goal.judged,
+            what=claims[goal.name].get("what", ""),
+        )
+        if goal.judged and goal.name in claims
+        else goal
+        for goal in scenario.sub_goals
+    )
+    return replace(scenario, sub_goals=restored)
+
+
 def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
     """Every scenario document under `<bundle_dir>/scenarios/`, compiled and wrapped, in the same
     sorted-by-folder-name order `folder.py`'s `read_all` uses. Raises `ScenarioDocumentInvalid` on
@@ -453,15 +504,19 @@ def load_scenarios(bundle_dir: Path) -> list[_CompiledScenario]:
         ) from exc
     settled_in_code = _deterministic_names(bundle_dir)
     declared_tools = _declared_tool_names(bundle_dir)
+    claims = _load_catalogue_claims(bundle_dir)
     scenarios: list[_CompiledScenario] = []
     for folder in entries:
         if not folder.is_dir():
             continue
         scenarios.append(
-            _load_one(
-                folder,
-                settled_in_code=settled_in_code,
-                declared_tools=declared_tools,
+            _with_claims(
+                _load_one(
+                    folder,
+                    settled_in_code=settled_in_code,
+                    declared_tools=declared_tools,
+                ),
+                claims,
             )
         )
     if not scenarios:

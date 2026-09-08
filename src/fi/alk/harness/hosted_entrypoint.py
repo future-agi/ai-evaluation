@@ -748,6 +748,7 @@ _ARTIFACT_LEVEL_FORBIDDEN_KINDS: dict[ArtifactLevel, frozenset[ob.ArtifactKind]]
             ob.ArtifactKind.TRACE,
             ob.ArtifactKind.TOOL_TRACE,
             ob.ArtifactKind.TRANSCRIPT,
+            ob.ArtifactKind.EVIDENCE,
             ob.ArtifactKind.OTHER,
         }
     ),
@@ -1151,6 +1152,17 @@ class OutboundAdapter:
                 "code": receipt.failure.code,
                 "message": _cap_failure_message(redacted_failure_message),
             }
+        if receipt.evidence is not None:
+            # Before the receipt, like every other artifact it references: the platform judges
+            # judged sub-goals from this, so a receipt arriving first would be judged blind.
+            await self.upload_artifact(
+                json.dumps(
+                    receipt.evidence, ensure_ascii=False, sort_keys=True, default=str
+                ).encode("utf-8"),
+                kind=ob.ArtifactKind.EVIDENCE,
+                scenario_key=receipt.scenario_key,
+                deadline=self.deadline(),
+            )
         wire = ob.build_result_receipt(
             job_id=self._capabilities.job_id,
             attempt_id=self._capabilities.attempt_id,
