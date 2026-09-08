@@ -2685,7 +2685,10 @@ async def _wait_for_closing_loop(
                 limit,
             )
             return
-        await asyncio.sleep(1.0)
+        # A turn lands in history only after its TTS finishes, so every poll interval between the
+        # farewell committing and this noticing is time in which the caller can be asked for
+        # another turn. Measured: one trailing turn survived at a one-second poll.
+        await asyncio.sleep(0.25)
 
 
 async def _wait_for_conversation_silence(
