@@ -3486,3 +3486,64 @@ def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
     # An explicit value from the scenario still wins.
     explicit = _simulator_turn_handling(vad=object(), min_endpointing_delay=0.5)
     assert explicit["endpointing"]["min_delay"] == 0.5
+
+
+def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:
+    """Measured on a live call: the caller closed correctly with "Sounds great, thanks. Talk
+    tomorrow. Bye." and was then asked for two more turns, producing "Take care." and "Bye.".
+    The prompt already forbids that; only the engine can enforce it, because the model speaks
+    again only because it was asked to."""
+    items = [
+        SimpleNamespace(type="message", role="user", text_content="Hello, this is Desmond."),
+        SimpleNamespace(
+            type="message", role="assistant", text_content="Hi Desmond, this is Avery."
+        ),
+        SimpleNamespace(type="message", role="user", text_content="Yeah, that's me."),
+        SimpleNamespace(
+            type="message",
+            role="assistant",
+            text_content="I will set up a callback for tomorrow at ten.",
+        ),
+        SimpleNamespace(
+            type="message", role="user", text_content="Sounds great, thanks. Talk tomorrow. Bye."
+        ),
+    ]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))
+
+    asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
+
+
+def test_the_call_does_not_end_on_an_agent_goodbye_alone() -> None:
+    """The agent saying goodbye is not the caller having finished: the caller may still need to
+    answer, and ending there would cut off its reply and read as the caller failing."""
+    items = [
+        SimpleNamespace(type="message", role="user", text_content="Hello?"),
+        SimpleNamespace(
+            type="message", role="assistant", text_content="Thanks, have a great day, bye."
+        ),
+    ]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))
+
+    async def run() -> bool:
+        task = asyncio.create_task(livekit._wait_for_closing_loop(session))
+        await asyncio.sleep(1.4)
+        done = task.done()
+        task.cancel()
+        return done
+
+    assert asyncio.run(run()) is False
+
+
+def test_a_caller_goodbye_before_the_agent_ever_spoke_does_not_end_the_call() -> None:
+    """A pickup is not a farewell, and nothing should end on one side alone."""
+    items = [SimpleNamespace(type="message", role="user", text_content="Bye.")]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))
+
+    async def run() -> bool:
+        task = asyncio.create_task(livekit._wait_for_closing_loop(session))
+        await asyncio.sleep(1.4)
+        done = task.done()
+        task.cancel()
+        return done
+
+    assert asyncio.run(run()) is False

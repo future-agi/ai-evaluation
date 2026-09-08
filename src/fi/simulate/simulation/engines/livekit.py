@@ -2642,9 +2642,23 @@ async def _wait_for_closing_loop(
     """
     while True:
         messages = _session_messages(session)
-        tail = [
+        spoken = [
             message for message in messages if (message.get("content") or "").strip()
-        ][-limit:]
+        ]
+        # The caller's own farewell is the end of the call from its side, so there is no reason to
+        # ask it for another turn. Waiting for a loop of farewells is what produced "Talk
+        # tomorrow. Bye." followed by "Take care." and then "Bye." -- three closings where the
+        # first was already correct. Rule 10 of the caller's prompt says exactly this, and an
+        # instruction cannot enforce it: the model only speaks again because it was asked to.
+        if (
+            _turns_from_each_side(spoken) >= 1
+            and spoken
+            and spoken[-1].get("role") == "user"
+            and _is_closing_only(str(spoken[-1].get("content") or ""))
+        ):
+            logger.info("the caller said goodbye, ending the call")
+            return
+        tail = spoken[-limit:]
         if len(tail) == limit and all(
             _is_closing_only(str(message.get("content") or "")) for message in tail
         ):
