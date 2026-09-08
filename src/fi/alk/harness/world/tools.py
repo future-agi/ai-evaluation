@@ -29,6 +29,7 @@ from ..catalogue import (
     catalogue_problems,
     load_catalogue,
     save_catalogue,
+    compares_to_a_value,
     validate_sub_goal,
     weak_check_advisory,
 )
@@ -1403,11 +1404,19 @@ def world_tools(
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()
+        # How many checks judge a VALUE rather than the presence of one. Reported as a fact at the
+        # point of saving, because the per-sub-goal note is easy to read past and this number is
+        # what decides whether the suite would catch an agent that acted on a misheard detail.
+        coded = [one for one in catalogue.sub_goals if one.deterministic()]
+        strong = [one for one in coded if compares_to_a_value(one.check)]
         return _ok(
             f"Saved to {path}.\n"
             f"{len(world.handlers)} tools, {len(tables)} collections, "
             f"{sum(_size(held) for held in tables.values())} records, "
             f"{len(world_checks)} world checks.\n"
+            f"{len(strong)} of {len(coded)} checks compare a value against an expectation; the "
+            "rest only test that an argument was present, which an agent acting on a misheard "
+            "detail would pass.\n"
             + (
                 "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free
