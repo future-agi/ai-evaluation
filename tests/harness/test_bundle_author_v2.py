@@ -831,6 +831,50 @@ def test_bundle_uses_contract_boolean_type_when_sqlite_erases_it(
     assert "'2026-09-04T12:00:00Z', 3, FALSE);" in seed_sql
 
 
+def test_adopted_source_schema_applies_defaults_for_authored_nulls(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE call_attempts ("
+        "call_id TEXT PRIMARY KEY, "
+        "room_name TEXT NOT NULL DEFAULT '', "
+        "recording_url TEXT NOT NULL DEFAULT '', "
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+        "optional_note TEXT);\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute(
+            "CREATE TABLE call_attempts ("
+            "call_id TEXT PRIMARY KEY, room_name TEXT, recording_url TEXT, "
+            "updated_at TEXT, optional_note TEXT)"
+        )
+        database.execute(
+            "INSERT INTO call_attempts VALUES (?, ?, ?, ?, ?)",
+            ("call-1", None, None, None, None),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=output,
+    )
+
+    seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
+    assert 'INSERT INTO "call_attempts" ("call_id")' in seed_sql
+    assert '"room_name", "recording_url", "updated_at", "optional_note"' not in seed_sql
+
+
 def test_bundle_preserves_sqlite_unique_constraints_for_upserts(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

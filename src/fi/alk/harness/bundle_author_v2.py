@@ -449,10 +449,30 @@ def _sqlite_sql(
                     f"({', '.join(definitions)});"
                 )
             for record in selected:
-                names = ", ".join(_identifier(column) for column in columns)
+                # An authored SQLite world cannot retain the distinction between an
+                # omitted source column and an explicitly stored NULL: every row is
+                # read back with every column present.  When the real source schema is
+                # adopted below, sending those NULLs explicitly suppresses PostgreSQL
+                # defaults and can violate source NOT NULL constraints.  Treat NULL in
+                # the generated world as "unspecified" and omit it from this row.  On
+                # PostgreSQL that produces exactly the source-schema behaviour: its
+                # default is applied when one exists, otherwise the value remains NULL.
+                populated = [
+                    (column, sql_type)
+                    for column, sql_type in zip(columns, column_types, strict=True)
+                    if record[column] is not None
+                ]
+                if not populated:
+                    statements.append(
+                        f"INSERT INTO {_identifier(table)} DEFAULT VALUES;"
+                    )
+                    continue
+                names = ", ".join(
+                    _identifier(column) for column, _sql_type in populated
+                )
                 values = ", ".join(
                     _sql_literal(_sqlite_value(record[column], sql_type))
-                    for column, sql_type in zip(columns, column_types, strict=True)
+                    for column, sql_type in populated
                 )
                 statements.append(
                     f"INSERT INTO {_identifier(table)} ({names}) VALUES ({values});"
