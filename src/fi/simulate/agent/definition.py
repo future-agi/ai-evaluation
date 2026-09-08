@@ -313,6 +313,11 @@ class TTSConfig(BaseModel):
     speed: Optional[float] = Field(
         None, description="Speech rate, where the provider supports one."
     )
+    # Cartesia takes "<name>:<level>" strings and validates both halves. Left unset the provider
+    # default applies, so a provider without the control is unaffected.
+    emotion: Optional[list[str]] = Field(
+        None, description="Emotional colour, where the provider supports one."
+    )
 
 
 class STTConfig(BaseModel):

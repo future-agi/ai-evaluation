@@ -605,6 +605,42 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
     return _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)]
 
 
+# The only emotion names and levels Cartesia sonic-3 accepts, established against the live API:
+# anger, positivity, surprise, sadness and curiosity, at lowest / low / high / highest. It rejects
+# the name and the level separately with HTTP 400, so a wrong value fails the call rather than being
+# quietly dropped, and the plugin's own TTSVoiceEmotion vocabulary ("Neutral", "Frustrated") is
+# rejected outright. Nothing outside this set is ever sent.
+_CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
+_CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
+
+# What a personality sounds like, as a baseline colour for the whole call. A caller's feeling really
+# moves during a call and this control does not, so it is a starting register rather than an arc:
+# two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
+# control at all, which is the provider default and the behaviour before this existed.
+_PERSONALITY_EMOTION = (
+    (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
+    (("professional", "formal", "businesslike", "direct", "efficient"), "positivity:low"),
+    (("irritated", "annoyed", "frustrated", "angry", "impatient", "abrupt"), "anger:low"),
+    (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
+    (("anxious", "worried", "nervous", "distressed", "upset", "sad"), "sadness:low"),
+)
+
+
+def persona_emotion(persona: Mapping[str, Any] | None) -> list[str]:
+    """The baseline emotional colour for this person, or nothing where none is recognised."""
+    if not isinstance(persona, Mapping):
+        return []
+    described = " ".join(
+        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
+    ).lower()
+    for words, emotion in _PERSONALITY_EMOTION:
+        if any(word in described for word in words):
+            name, _, level = emotion.partition(":")
+            if name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS:
+                return [emotion]
+    return []
+
+
 _AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
     "american": {
         "female": ["aura-asteria-en", "aura-luna-en", "aura-hera-en", "aura-stella-en"],
@@ -693,6 +729,7 @@ def simulator_definition(
             "model": model("tts", tts_provider),
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
             "speed": persona_speech_rate(persona),
+            "emotion": persona_emotion(persona),
         },
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
@@ -874,6 +911,7 @@ def simulation_spec(
 __all__ = [
     "CARTESIA_DEFAULT_VOICE",
     "persona_speech_rate",
+    "persona_emotion",
     "CLEANUP_TIMEOUT_SECONDS",
     "CONNECT_TIMEOUT_SECONDS",
     "READINESS_TIMEOUT_SECONDS",

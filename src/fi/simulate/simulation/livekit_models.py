@@ -188,11 +188,16 @@ def _cartesia_tts(
         if config.voice not in {"alloy", ""}
         else "f786b574-daa5-4673-aa0c-cbe3e8534c02"
     )
-    # `emotion` is deliberately not passed. It rides on Cartesia's __experimental_controls, which
-    # is documented for the sonic-2 era and carries no sonic-3 guarantee, and an unsupported
-    # control failing mid-call is worse than a caller with no emotion tag. `speed` IS documented
-    # for sonic-3 (0.6 to 2.0), so that is the one we set.
+    # Both controls ride on Cartesia's ``__experimental_controls``. Verified against the live API
+    # on sonic-3: it validates the emotion NAME and the LEVEL separately and rejects either being
+    # wrong with HTTP 400, so a bad value fails the call rather than being ignored.
+    #
+    # Note the livekit plugin's own ``TTSVoiceEmotion`` type lists a different vocabulary
+    # ("Neutral", "Frustrated", "Tired"), and every one of those is rejected by this API version.
+    # Only the "<name>:<level>" form works, which is why the values are built here from a
+    # validated set rather than taken from the plugin's types.
     speed = getattr(config, "speed", None)
+    emotion = getattr(config, "emotion", None)
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
         http_session=http_session,
@@ -203,6 +208,7 @@ def _cartesia_tts(
         ),
         voice=voice,
         **({"speed": float(speed)} if isinstance(speed, (int, float)) else {}),
+        **({"emotion": list(emotion)} if emotion else {}),
     )
 
 

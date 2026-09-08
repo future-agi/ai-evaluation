@@ -4015,3 +4015,89 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     )
 
     assert "speed" not in captured
+
+
+def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
+    """Established against the live sonic-3 API: it validates the emotion NAME and the LEVEL
+    separately and rejects either being wrong with HTTP 400, so a bad value fails the call rather
+    than being ignored. The plugin's own TTSVoiceEmotion vocabulary ("Neutral", "Frustrated",
+    "Tired") is rejected outright, which is why nothing here is taken from the plugin's types."""
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_EMOTION_LEVELS,
+        _CARTESIA_EMOTION_NAMES,
+        _PERSONALITY_EMOTION,
+        persona_emotion,
+    )
+
+    assert _CARTESIA_EMOTION_NAMES == {
+        "anger",
+        "positivity",
+        "surprise",
+        "sadness",
+        "curiosity",
+    }, "fear and disgust are rejected by the API; do not add them without re-testing"
+    assert _CARTESIA_EMOTION_LEVELS == {"lowest", "low", "high", "highest"}
+
+    for _words, emotion in _PERSONALITY_EMOTION:
+        name, _, level = emotion.partition(":")
+        assert name in _CARTESIA_EMOTION_NAMES, emotion
+        assert level in _CARTESIA_EMOTION_LEVELS, emotion
+
+    # And nothing unrecognised invents one.
+    assert persona_emotion({"personality": "Something nobody mapped"}) == []
+    assert persona_emotion({}) == []
+    assert persona_emotion(None) == []
+
+
+def test_two_personalities_do_not_share_one_emotional_register():
+    from fi.alk.harness.simulator_voice import persona_emotion
+
+    assert persona_emotion({"personality": "Warm and chatty"}) == ["positivity:high"]
+    assert persona_emotion({"personality": "Professional and formal"}) == ["positivity:low"]
+    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
+    assert persona_emotion({"personality": "Curious and sceptical"}) == ["curiosity:high"]
+
+
+def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+    monkeypatch.setattr(
+        livekit_models, "_import_plugin",
+        lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc",
+                  speed=1.05, emotion=["anger:low"]),
+        http_session=None,
+    )
+
+    assert captured["emotion"] == ["anger:low"]
+    assert captured["speed"] == 1.05
+
+
+def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
+    """An empty list must not become emotion=[] on the wire; no control is the provider default."""
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+    monkeypatch.setattr(
+        livekit_models, "_import_plugin",
+        lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc", emotion=[]),
+        http_session=None,
+    )
+
+    assert "emotion" not in captured
