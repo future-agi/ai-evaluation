@@ -3578,3 +3578,46 @@ def test_a_farewell_is_recognised_by_what_it_carries_not_by_its_length() -> None
     ]
     for text in conversation:
         assert not livekit._is_closing_only(text), text
+
+
+def test_closing_the_call_cancels_a_reply_already_being_generated() -> None:
+    """Noticing the farewell only stops the NEXT turn being asked for. On call cf030ca9 the caller
+    closed correctly and "Take care." still arrived, because it was already in flight."""
+    interrupts = []
+
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi Desmond."),
+        SimpleNamespace(type="message", role="user", text_content="Yeah, that's me."),
+        SimpleNamespace(
+            type="message", role="assistant", text_content="I'll call you back tomorrow."
+        ),
+        SimpleNamespace(
+            type="message", role="user", text_content="Sounds good, talk to you then. Bye."
+        ),
+    ]
+    session = SimpleNamespace(
+        history=SimpleNamespace(items=items),
+        interrupt=lambda *, force=False: interrupts.append(force),
+    )
+
+    asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
+
+    assert interrupts == [True], "an in-flight reply has to be cancelled, and forcibly"
+
+
+def test_a_session_with_nothing_in_flight_still_closes_cleanly() -> None:
+    """A session that raises on interrupt (already shutting down, nothing playing) must not turn a
+    finished call into an error."""
+
+    def boom(*, force=False):
+        raise RuntimeError("AgentSession isn't running")
+
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi."),
+        SimpleNamespace(type="message", role="user", text_content="Thanks, bye."),
+    ]
+    session = SimpleNamespace(
+        history=SimpleNamespace(items=items), interrupt=boom
+    )
+
+    asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))

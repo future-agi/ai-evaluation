@@ -2646,6 +2646,20 @@ def _is_closing_only(text: str) -> bool:
     return not (set(stripped) - _CLOSING_FILLER)
 
 
+def _stop_any_further_speech(session: Any) -> None:
+    """Cancel anything already in flight, so the farewell is the last thing said.
+
+    Noticing the farewell only stops us asking for the NEXT turn. A reply already being generated
+    still plays, which is how "Take care." arrived after a correct goodbye on a measured call. The
+    farewell itself is already in history, meaning its own audio finished, so there is nothing of
+    the caller's left to cut off here.
+    """
+    try:
+        session.interrupt(force=True)
+    except Exception:  # noqa: BLE001 - nothing in flight, or a session already shutting down
+        logger.debug("nothing to interrupt when the call was closed", exc_info=True)
+
+
 async def _wait_for_closing_loop(
     session: AgentSession,
     *,
@@ -2675,6 +2689,7 @@ async def _wait_for_closing_loop(
             and _is_closing_only(str(spoken[-1].get("content") or ""))
         ):
             logger.info("the caller said goodbye, ending the call")
+            _stop_any_further_speech(session)
             return
         tail = spoken[-limit:]
         if len(tail) == limit and all(
@@ -2684,6 +2699,7 @@ async def _wait_for_closing_loop(
                 "closing loop: last %d turns were farewells only, ending the call",
                 limit,
             )
+            _stop_any_further_speech(session)
             return
         # A turn lands in history only after its TTS finishes, so every poll interval between the
         # farewell committing and this noticing is time in which the caller can be asked for
