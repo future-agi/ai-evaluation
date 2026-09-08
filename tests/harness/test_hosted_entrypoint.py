@@ -3944,6 +3944,12 @@ def test_the_caller_is_given_a_countable_reason_to_lose_patience():
     text = simulator_instructions("outbound", "expecting", "", "")
 
     assert "roughly ten in a row" in text, "the trigger has to be countable, not a mood"
+    # Rule 3 forbids volunteering, and asking how much longer IS volunteering, so without an
+    # explicit carve-out the two rules contradict and the earlier one wins. Measured: A/B against
+    # the composed prompt produced 0 impatience markers over 14 questions until rule 3 said that
+    # what it governs is FACTS, not a question about the call itself.
+    assert "This governs FACTS about you" in text
+    assert "not stop you asking your own question about the call itself" in text
     assert "how many more" in text
     assert "already gave it" in text, "a repeated question must be named as repeated"
     # The rules that protect the intake flow must survive.
