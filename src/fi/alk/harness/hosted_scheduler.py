@@ -647,6 +647,23 @@ def _classify_check(value: object) -> _Verdict:
     return _Verdict(False, None, True)
 
 
+def _sub_goal_reason(goal: SubGoal, verdict: _Verdict) -> str | None:
+    """What to show a reader for this sub-goal, on a pass as much as on a failure.
+
+    A check returns nothing when it holds, which left every passing sub-goal with an empty hover
+    and no way to tell a real pass from one nobody wrote a check for. The authored description of
+    what the sub-goal means is the honest thing to show there: it says what was verified without
+    claiming evidence the check never returned. A bare ``False`` is the other end of the same
+    problem -- the reason read literally "False" -- so it gets the description too.
+    """
+    what = str(getattr(goal, "what", "") or "").strip().rstrip(".")
+    if verdict.held:
+        return f"Held: {what}." if what else "Held. The check found nothing wrong."
+    if verdict.reason and verdict.reason.strip() and verdict.reason != "False":
+        return verdict.reason
+    return f"Did not hold: {what}." if what else None
+
+
 # --- phase execution: budget + exception classification ---------------------------------------
 
 
@@ -2134,7 +2151,7 @@ class HostedScheduler:
                 SubGoalResult(
                     name=goal.name,
                     held=verdict.held,
-                    reason=verdict.reason,
+                    reason=_sub_goal_reason(goal, verdict),
                     judged=goal.judged != "",
                 )
             )

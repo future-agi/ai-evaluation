@@ -3647,3 +3647,57 @@ def test_evidence_survives_a_world_that_cannot_be_read():
 
     assert evidence["calls"]
     assert "pw" not in evidence["world"]["unavailable"]
+
+
+def test_a_passing_sub_goal_explains_what_it_verified():
+    """A check returns nothing when it holds, so every passing sub-goal used to hover blank and a
+    real pass could not be told from one nobody wrote a check for."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.hosted_scheduler import _classify_check, _sub_goal_reason
+
+    goal = SimpleNamespace(
+        name="no_unauthorized_quote_advice",
+        what="the agent gave no premium figure before a licensed agent was involved",
+        judged="",
+    )
+
+    reason = _sub_goal_reason(goal, _classify_check(None))
+    assert reason == (
+        "Held: the agent gave no premium figure before a licensed agent was involved."
+    )
+
+
+def test_a_failing_sub_goal_keeps_the_check_s_own_sentence():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.hosted_scheduler import _classify_check, _sub_goal_reason
+
+    goal = SimpleNamespace(name="intake", what="intake recorded", judged="")
+    reason = _sub_goal_reason(goal, _classify_check("recorded 'Marguerite', caller was 'Corwin'"))
+    assert reason == "recorded 'Marguerite', caller was 'Corwin'"
+
+
+def test_a_bare_false_is_not_shown_to_a_reader_as_false():
+    """The reason read literally 'False', which tells a reader nothing at all."""
+    from types import SimpleNamespace
+
+    from fi.alk.harness.hosted_scheduler import _classify_check, _sub_goal_reason
+
+    goal = SimpleNamespace(name="transfer", what="the call reached a licensed agent", judged="")
+    assert (
+        _sub_goal_reason(goal, _classify_check(False))
+        == "Did not hold: the call reached a licensed agent."
+    )
+
+
+def test_a_sub_goal_with_no_description_still_says_something_useful():
+    from types import SimpleNamespace
+
+    from fi.alk.harness.hosted_scheduler import _classify_check, _sub_goal_reason
+
+    goal = SimpleNamespace(name="x", what="", judged="")
+    assert _sub_goal_reason(goal, _classify_check(None)) == (
+        "Held. The check found nothing wrong."
+    )
+    assert _sub_goal_reason(goal, _classify_check(False)) is None
