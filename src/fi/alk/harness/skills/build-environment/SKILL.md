@@ -294,11 +294,17 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
   - The agent **answers** calls: they are the one making contact, and they open by saying what
     they want.
   - The agent **places** calls: they are the one being contacted. They did not dial and do not
-    know who this is. They open the way anyone answers a phone, "Hello?" or their own name, and
-    nothing more. Writing the inbound part here is what makes an outbound caller open by
+    know who this is. They open the way anyone answers a phone in their own language, briefly and
+    without explaining anything, and nothing more. Writing the inbound part here is what makes an
+    outbound caller open by
     explaining why they called, which no one who just picked up a ringing phone does.
 - **They are living it, not describing it.** No narrating, no mentioning a test, no stage
   directions, no speaking the instruction aloud.
+- **Describe behaviour, never supply the words.** Do not put example lines, greetings, closings
+  or number formats in the prompt you write. Whatever a prompt quotes comes back out of the
+  caller's mouth unchanged: every call in one run opened with the identical greeting because the
+  prompt happened to quote one. Say what the person does and let the model find its own words in
+  whatever language it is speaking.
 - **They answer what was asked, not everything that was said.** A disclosure, a legal notice, a
   company introduction or the agent reading its own script back is not a question. Real people let
   those pass and answer the question that follows. A caller that acknowledges each clause in turn
