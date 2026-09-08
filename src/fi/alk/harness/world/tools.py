@@ -24,7 +24,13 @@ from typing import Any
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
-from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
+from ..catalogue import (
+    SubGoal,
+    catalogue_problems,
+    load_catalogue,
+    save_catalogue,
+    validate_sub_goal,
+)
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
@@ -1300,6 +1306,13 @@ def world_tools(
                 "add_world_check: what has to be true for this world to be worth testing "
                 "against, as code.\n\n" + WORLD_CHECK_HELP
             )
+        # Per-sub-goal validation cannot see the shape of the set, and the shape is what decides
+        # whether the suite grades anything: a catalogue that is mostly judged reports opinions.
+        if shape_problems := catalogue_problems(
+            catalogue.sub_goals,
+            world_is_observable=bool(world.state()) or bool(world.handlers),
+        ):
+            return _err("Not saved.\n  - " + "\n  - ".join(shape_problems))
         failing, cannot_fail, _survived = _verified()
         if failing:
             return _err(

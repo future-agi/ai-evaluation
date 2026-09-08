@@ -452,6 +452,22 @@ Use `judged` **only** where nothing observable settles it: whether a refusal was
 whether a price was invented, tone. Say what a model has to decide and why code cannot. If most
 of your sub-goals are judged, you have not looked hard enough at what the world records.
 
+Three things are refused outright, so write for them rather than discovering them:
+
+- **A check that only matches call names.** `any(c.name == "transfer" for c in calls)` is refused.
+  It passes an agent that called the right tool with the wrong arguments, which is the failure this
+  harness exists to catch: an agent that mishears a name and opens somebody else's account calls
+  exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+- **A judged sub-goal that does not say why it is judged.** Name the judgement a model has to make
+  and the reason nothing observable can settle it. That sentence is what a reviewer can disagree
+  with; "was it polite" is not one.
+- **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
+
+The one that matters most: check the *identity* the agent acted on, not just that it acted. If the
+caller is Corwin and the agent looked up a record, assert whose record it was. An agent that
+mishears and proceeds confidently against the wrong row is the worst failure this can find, and it
+is invisible to every check that only counts calls.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong

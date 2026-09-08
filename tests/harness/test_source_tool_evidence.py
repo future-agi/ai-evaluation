@@ -246,3 +246,140 @@ def test_business_database_cannot_be_hidden_in_runtime_connections():
         ],
     )
     assert any("business-data-in-runtime" in p for p in validate_contract(contract))
+
+
+def _goal(name, *, check="", judged="", what="a thing"):
+    from fi.alk.harness.catalogue import SubGoal
+
+    return SubGoal(name=name, what=what, check=check, judged=judged)
+
+
+def test_a_check_that_only_matches_call_names_is_refused():
+    """The exact sub-goal a live run reported: 'transfer_to_licensed_agent was not called
+    successfully'. It passes an agent that called the right tool with the wrong arguments."""
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    problems = validate_sub_goal(
+        _goal(
+            "transfers_to_human_agent",
+            check=(
+                "def check(world, calls):\n"
+                '    if not any(c.name == "transfer_to_licensed_agent" and c.ok for c in calls):\n'
+                '        return "transfer_to_licensed_agent was not called successfully"\n'
+                "    return None\n"
+            ),
+        )
+    )
+
+    assert problems and "only asks whether a tool was called" in problems[0]
+
+
+def test_a_check_that_asserts_arguments_is_accepted():
+    """Reading what the agent passed is the point: an agent that misheard a name calls exactly the
+    tool it should have."""
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    assert (
+        validate_sub_goal(
+            _goal(
+                "intake_recorded_for_the_right_person",
+                check=(
+                    "def check(world, calls):\n"
+                    '    done = [c for c in calls if c.name == "record_intake" and c.ok]\n'
+                    '    if not done:\n        return "no intake recorded"\n'
+                    '    if done[0].arguments.get("name") != "Corwin":\n'
+                    "        return f\"recorded {done[0].arguments.get('name')!r}\"\n"
+                    "    return None\n"
+                ),
+            )
+        )
+        == []
+    )
+
+
+def test_a_check_that_reads_world_state_is_accepted():
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    assert (
+        validate_sub_goal(
+            _goal(
+                "one_lead_written",
+                check=(
+                    "def check(world, calls):\n"
+                    '    rows = world.state()["leads"]\n'
+                    '    return None if len(rows) == 1 else f"{len(rows)} rows"\n'
+                ),
+            )
+        )
+        == []
+    )
+
+
+def test_mentioning_the_world_in_a_comment_does_not_satisfy_the_gate():
+    """The previous gate was a substring test, so a comment naming the world passed it."""
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    problems = validate_sub_goal(
+        _goal(
+            "looks_right",
+            check=(
+                "def check(world, calls):\n"
+                "    # world is not actually read here\n"
+                '    return None if any(c.name == "x" for c in calls) else "no x"\n'
+            ),
+        )
+    )
+
+    assert problems and "only asks whether a tool was called" in problems[0]
+
+
+def test_a_judged_sub_goal_must_say_why_it_is_judged():
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    thin = validate_sub_goal(_goal("polite", judged="was it polite"))
+    assert thin and "does not say what a model has to decide" in thin[0]
+
+    assert (
+        validate_sub_goal(
+            _goal(
+                "refusal_explained",
+                judged=(
+                    "Whether the agent explained why it refused, which the world records nothing "
+                    "about because a refusal leaves no row behind"
+                ),
+            )
+        )
+        == []
+    )
+
+
+def test_a_catalogue_that_is_mostly_judged_is_refused():
+    """A judge is the fallback, not the method. One run reported six judged sub-goals."""
+    from fi.alk.harness.catalogue import catalogue_problems
+
+    judged = _goal(
+        "explained",
+        judged="Whether the refusal was explained, which nothing in the world records at all",
+    )
+    coded = _goal(
+        "row_written",
+        check='def check(world, calls):\n    return None if world.state() else "empty"\n',
+    )
+
+    problems = catalogue_problems([judged, judged, coded])
+    assert problems and "judged rather than settled by code" in problems[0]
+    assert catalogue_problems([judged, coded, coded]) == []
+
+
+def test_a_target_we_cannot_see_into_may_be_judged_throughout():
+    """A conversational agent with no executable tools and no state leaves nothing behind for a
+    check to read, so judging is the only thing available and is correct rather than lazy."""
+    from fi.alk.harness.catalogue import catalogue_problems
+
+    judged = _goal(
+        "answers_accurately",
+        judged="Whether the answer was accurate, which no world state records because this agent has none",
+    )
+
+    assert catalogue_problems([judged, judged], world_is_observable=False) == []
+    assert catalogue_problems([judged, judged], world_is_observable=True)
