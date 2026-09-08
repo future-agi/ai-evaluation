@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import spend
 from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .build import require_buildable
@@ -718,6 +719,8 @@ async def _auto(args: argparse.Namespace) -> int:
     (destination / "job.json").write_text(
         job.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
+    # Beside the authoring output, so the platform reads the running total while the sandbox lives.
+    spend.journal_to(destination / "cost.json")
     events = BufferedEventSink(EventOutbox(destination.parent, destination.name))
     event_sequence = 0
 

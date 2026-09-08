@@ -190,6 +190,9 @@ class StageDone:
     outcome: str = "success"
     turns: int = 0
     cost_usd: float | None = None
+    # The units behind the price, so a bill can be checked rather than trusted.
+    tokens_in: int = 0
+    tokens_out: int = 0
     session_id: str | None = None
     models: set[str] = field(default_factory=set)
     is_error: bool = False
