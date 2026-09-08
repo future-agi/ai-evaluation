@@ -139,3 +139,24 @@ def test_both_backends_report_the_same_units():
     ) == {"tokens_in": 12, "tokens_out": 14}
     assert _tokens(None) == {"tokens_in": 0, "tokens_out": 0}
     assert _tokens({"m": object()}) == {"tokens_in": 0, "tokens_out": 0}
+
+
+def test_the_ledger_carries_input_the_provider_served_from_cache(tmp_path):
+    """Two reruns of the same authoring produced byte-identical ledgers ($3.533797, identical
+    token counts) four times apart in wall clock. That is what provider caching looks like when
+    nothing records it, and it means a rerun's ledger overstates what was actually billed."""
+    spend._stages.clear()
+    spend.record("understand-agent", 1.0, turns=2, tokens_in=1000, tokens_out=50, tokens_cached=800)
+    spend.record("understand-agent", 1.0, turns=1, tokens_in=500, tokens_out=25, tokens_cached=400)
+
+    stage = spend.snapshot()["stages"][0]
+    assert stage["tokens_in"] == 1500
+    assert stage["tokens_cached"] == 1200, "the cached share has to be visible to be reconciled"
+    assert stage["tokens_out"] == 75
+
+
+def test_cached_tokens_default_to_zero_for_a_backend_that_does_not_report_them(tmp_path):
+    spend._stages.clear()
+    spend.record("write-scenarios", 0.5, turns=1, tokens_in=100, tokens_out=10)
+
+    assert spend.snapshot()["stages"][0]["tokens_cached"] == 0

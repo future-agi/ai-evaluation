@@ -46,8 +46,17 @@ def record(
     models: set[str] | None = None,
     tokens_in: int = 0,
     tokens_out: int = 0,
+    tokens_cached: int = 0,
 ) -> None:
-    """Add one session's reported spend. A backend that cannot price a call reports None."""
+    """Add one session's reported spend. A backend that cannot price a call reports None.
+
+    ``tokens_cached`` is the part of ``tokens_in`` the provider served from its own cache. It is
+    reported rather than discounted, because the table here carries no cache rate and a guessed
+    one would be a made-up figure presented as a price. Carrying the count is what lets anyone
+    reconciling a bill see the size of the overstatement instead of inheriting it silently: two
+    reruns of the same authoring produced byte-identical ledgers four times apart in wall clock,
+    which is what caching looks like when nothing records it.
+    """
     name = (stage or "stage").strip() or "stage"
     entry = _stages.setdefault(
         name,
@@ -59,6 +68,7 @@ def record(
             "unpriced": 0,
             "tokens_in": 0,
             "tokens_out": 0,
+            "tokens_cached": 0,
         },
     )
     if usd is None:
@@ -69,6 +79,7 @@ def record(
     entry["turns"] += int(turns or 0)
     entry["tokens_in"] += int(tokens_in or 0)
     entry["tokens_out"] += int(tokens_out or 0)
+    entry["tokens_cached"] += int(tokens_cached or 0)
     for model in sorted(models or set()):
         if model not in entry["models"]:
             entry["models"].append(model)
@@ -102,6 +113,7 @@ def snapshot() -> dict[str, Any]:
                         "unpriced",
                         "tokens_in",
                         "tokens_out",
+                        "tokens_cached",
                     )
                 },
             }

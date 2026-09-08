@@ -334,6 +334,7 @@ class Stage:
                 received.models,
                 received.tokens_in,
                 received.tokens_out,
+                getattr(received, "tokens_cached", 0),
             )
             turn.error = _why_it_failed(received) if failed else ""
             self.session_id = received.session_id or self.session_id

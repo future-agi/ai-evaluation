@@ -323,6 +323,7 @@ class VertexGeminiSession:
         turns = 0
         tokens_in = 0
         tokens_out = 0
+        tokens_cached = 0
         settled = False
         terminal_save_succeeded = False
         try:
@@ -336,6 +337,7 @@ class VertexGeminiSession:
                 if usage is not None:
                     tokens_in += usage.prompt_token_count or 0
                     tokens_out += usage.candidates_token_count or 0
+                    tokens_cached += getattr(usage, "cached_content_token_count", 0) or 0
                 parts: list[Any] = []
                 returned: list[ToolReturned] = []
                 for part in (event.content.parts if event.content else []) or []:
@@ -383,6 +385,7 @@ class VertexGeminiSession:
                 cost_usd=self._cost(tokens_in, tokens_out),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                tokens_cached=tokens_cached,
                 session_id=self.session_id,
                 models={self._model},
                 is_error=True,
@@ -400,6 +403,7 @@ class VertexGeminiSession:
             cost_usd=self._cost(tokens_in, tokens_out),
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            tokens_cached=tokens_cached,
             session_id=self.session_id,
             models={self._model},
             errors=(
