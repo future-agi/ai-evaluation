@@ -300,6 +300,7 @@ class _TestRunnerAgent(Agent):
         super().__init__(**kwargs)
         self._persona = persona
         self._min_turn_messages = min_turn_messages
+        self.min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
@@ -2419,6 +2420,14 @@ def _find_target_audio(
 # never trip it — the run is never cut off at a message count.
 _SILENCE_BACKSTOP_SECONDS = 60.0
 
+# Once both sides have spoken and the conversation has passed its turn floor, a long stretch of
+# mutual silence is a finished call nobody hung up, not a stalled one. Measured across 21 calls on
+# six agents, every call the caller had to end sat at 36 to 43 seconds of dead air, because three
+# rounds of prompt work failed to make the model call `endCall` reliably. This closes that window
+# without cutting a live conversation: agent turn latency measured 4.3s at its worst, so a full
+# stretch of nothing this long has no turn coming.
+_SETTLED_SILENCE_SECONDS = 12.0
+
 
 async def _wait_for_conversation_end(
     room: rtc.Room,
@@ -2466,7 +2475,11 @@ async def _wait_for_conversation_end(
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
         "conversation_settled": asyncio.create_task(
-            _wait_for_conversation_silence(session)
+            _wait_for_conversation_silence(
+                session,
+                # A stub agent in a test carries no floor; absent means never settle early.
+                min_turn_messages=int(getattr(customer_agent, "min_turn_messages", 0) or 0),
+            )
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
@@ -2610,6 +2623,7 @@ async def _wait_for_conversation_silence(
     session: AgentSession,
     *,
     quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
+    min_turn_messages: int = 0,
 ) -> None:
     """Finish only after a long, genuine stretch of mutual silence.
 
@@ -2639,11 +2653,16 @@ async def _wait_for_conversation_silence(
             getattr(session, "agent_state", None) == "speaking"
             or getattr(session, "user_state", None) == "speaking"
         )
+        # A conversation both sides genuinely took part in is finished, not stalled, so it does
+        # not need the full backstop before it can be declared over.
+        floor, _ = _turn_requirements(min_turn_messages)
+        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
+        effective_quiet = _SETTLED_SILENCE_SECONDS if settled else quiet_seconds
         if participant_speaking:
             stable_since = None
         elif stable_since is None or signature != last_signature:
             stable_since = loop.time()
-        elif loop.time() - stable_since >= quiet_seconds:
+        elif loop.time() - stable_since >= effective_quiet:
             return
         last_signature = signature
         await asyncio.sleep(0.1)
@@ -3085,6 +3104,20 @@ def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
+
+
+def _turns_from_each_side(messages: list[dict[str, Any]]) -> int:
+    """How many turns the quieter of the two speakers took.
+
+    Counted per side because a total is inflated by the caller talking into the silence: a
+    measured call reached seven messages with only two of them the agent's, so the raw count
+    cleared its floor on the caller's own filler while no exchange had actually happened.
+    """
+    spoken = [msg for msg in messages if msg.get("content")]
+    return min(
+        sum(1 for msg in spoken if msg.get("role") == "assistant"),
+        sum(1 for msg in spoken if msg.get("role") == "user"),
+    )
 
 
 # Two unanswered turns: one can be the caller finishing a thought, two means nobody is replying.

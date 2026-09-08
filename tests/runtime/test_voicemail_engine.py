@@ -492,3 +492,12 @@ def test_the_closing_rule_supplies_no_words_to_say() -> None:
     )
     assert "Alright, thanks, bye" not in text
     assert "endCall" in text
+
+
+def test_a_finished_conversation_settles_faster_than_a_stalled_one() -> None:
+    """Three rounds of prompt work failed to make the caller hang up reliably, so the engine
+    stops waiting a full minute for a call that is plainly over. Measured across 21 calls on six
+    agents, every call the caller had to end sat at 36 to 43 seconds of dead air."""
+    assert livekit._SETTLED_SILENCE_SECONDS < livekit._SILENCE_BACKSTOP_SECONDS
+    # Worst measured agent turn latency was 4.3s, so the settled window must clear it comfortably.
+    assert livekit._SETTLED_SILENCE_SECONDS > 8.0
