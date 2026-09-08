@@ -290,82 +290,13 @@ def _contract_column_declarations(
     schema = contract.get("data_schema")
     if not isinstance(schema, dict):
         return {}
-    declarations: dict[tuple[str, str], str] = {}
-    for table, raw_columns in schema.items():
-        if isinstance(raw_columns, str):
-            raw_columns = _columns_from_ddl(raw_columns)
-        if not isinstance(raw_columns, dict):
-            continue
-        # A table may be written either as {column: declaration} or wrapped as
-        # {"columns": {column: declaration}}. Reading only the first shape turns the second into a
-        # single entry named "columns", so every type and default hint is dropped and the compiler
-        # falls back to SQLite affinity: BOOLEAN arrives as bigint, TIMESTAMPTZ as text, and a
-        # column the source defaults becomes NOT NULL with nothing to write.
-        wrapped = raw_columns.get("columns")
-        if isinstance(wrapped, dict):
-            raw_columns = wrapped
-        for column, declaration in raw_columns.items():
-            if str(declaration).strip():
-                declarations[(str(table), str(column))] = str(declaration).strip()
-    return declarations
-
-
-# Table-level constraints share the comma-separated list with the columns and are not columns.
-_NOT_A_COLUMN = ("primary", "unique", "foreign", "check", "constraint", "exclude", "like")
-
-
-def _columns_from_ddl(statement: str) -> dict[str, str]:
-    """Split a table written as one string into per-column declarations.
-
-    The authoring model writes a table's columns as a string in more than one way, and reading
-    none of them costs every type and default the string carries. Two forms are handled: a whole
-    `CREATE TABLE name (...)` statement, and a bare comma-separated column list with no statement
-    around it. The bare form cannot be found by looking for the first parenthesis, because the
-    first one is usually inside a `REFERENCES other(column)` clause.
-    """
-    if re.search(r"\bCREATE\s+TABLE\b", statement, flags=re.IGNORECASE):
-        opened = statement.find("(")
-        if opened < 0:
-            return {}
-        depth = 0
-        body: list[str] = []
-        for index in range(opened, len(statement)):
-            character = statement[index]
-            if character == "(":
-                depth += 1
-                if depth == 1:
-                    continue
-            elif character == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            body.append(character)
-    else:
-        body = list(statement)
-    parts: list[str] = []
-    depth = 0
-    current: list[str] = []
-    for character in body:
-        if character == "," and depth == 0:
-            parts.append("".join(current))
-            current = []
-            continue
-        if character == "(":
-            depth += 1
-        elif character == ")":
-            depth -= 1
-        current.append(character)
-    parts.append("".join(current))
-    columns: dict[str, str] = {}
-    for part in parts:
-        cleaned = " ".join(part.split())
-        if not cleaned:
-            continue
-        name, _, rest = cleaned.partition(" ")
-        if not rest or name.lower() in _NOT_A_COLUMN:
-            continue
-        columns[name.strip('"')] = rest
-    return columns
+    return {
+        (str(table), str(column)): str(declaration).strip()
+        for table, raw_columns in schema.items()
+        if isinstance(raw_columns, dict)
+        for column, declaration in raw_columns.items()
+        if str(declaration).strip()
+    }
 
 
 def _contract_sql_type(declaration: str) -> str | None:

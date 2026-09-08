@@ -287,29 +287,13 @@ A thin prompt is the commonest reason a run tells you nothing: the simulated per
 question instantly and correctly, so the agent is never tested on eliciting anything. What makes
 it worth reading is the behaviour it pins down. Cover all of these, for **this** agent:
 
-- **Which part they play, said outright, and it differs by direction.** This reads as too obvious
-  to write down and it is the one that actually breaks: a model asked to speak with no conversation
-  behind it will sometimes take the other part, offer to look something up, and get told that no
-  question was asked. Either way say they never offer help and never answer on the agent's behalf.
-  - The agent **answers** calls: they are the one making contact, and they open by saying what
-    they want.
-  - The agent **places** calls: they are the one being contacted. They did not dial and do not
-    know who this is. They open the way anyone answers a phone in their own language, briefly and
-    without explaining anything, and nothing more. Writing the inbound part here is what makes an
-    outbound caller open by
-    explaining why they called, which no one who just picked up a ringing phone does.
+- **Which part they play, said outright.** They are the one making contact, not the agent being
+  contacted. This reads as too obvious to write down and it is the one that actually breaks: the
+  opening turn has no conversation behind it, so a model asked to speak there will sometimes take
+  the other part, offer to look something up, and get told that no question was asked. Say that
+  they never offer help, never answer on the agent's behalf, and open by saying what they want.
 - **They are living it, not describing it.** No narrating, no mentioning a test, no stage
   directions, no speaking the instruction aloud.
-- **Describe behaviour, never supply the words.** Do not put example lines, greetings, closings
-  or number formats in the prompt you write. Whatever a prompt quotes comes back out of the
-  caller's mouth unchanged: every call in one run opened with the identical greeting because the
-  prompt happened to quote one. Say what the person does and let the model find its own words in
-  whatever language it is speaking.
-- **They answer what was asked, not everything that was said.** A disclosure, a legal notice, a
-  company introduction or the agent reading its own script back is not a question. Real people let
-  those pass and answer the question that follows. A caller that acknowledges each clause in turn
-  spends two turns on one exchange and says things nobody says out loud, "I agree to the
-  recording" being the one measured on a real call.
 - **One short turn at a time**, the way people actually talk in this channel. Someone speaking
   aloud under time pressure says less per turn than someone typing.
 - **What they volunteer and what they hold back.** They do not recite everything they know. If
@@ -327,17 +311,6 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
     scenario needs the agent to get past a lookup, the identifier belongs in its instruction.
 - **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
   circumstance. Never keep pushing forever, and never invent a new goal.
-- **How they end it, which is where a caller stops sounding human.** When what they came for is
-  settled, they end the call by calling `endCall`, and the prompt must name that tool. At most a
-  few words of their own first, once, and some people simply stop talking. Say that they do not
-  repeat a closing, thank more than once, or restate what was agreed.
-
-  Two rules for how you write this, both learned from real runs. **Name the tool**: a prompt that
-  said only to end the call produced a caller that closed seven times over twenty seconds and then
-  sat through thirty-six seconds of silence, because closing words do not hang up a line. And
-  **write it as behaviour, never as example phrases**: whatever wording a prompt quotes tends to
-  come back out of the caller's mouth, and an English closing is wrong the moment the caller is
-  speaking another language.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
   look it up instead?" is not the end of the conversation, and stopping there is the commonest
   way a run tests one turn and nothing else: the agent refused, offered two alternatives, and

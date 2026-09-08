@@ -243,11 +243,7 @@ def _resolve_target_profile(kind: str):
 
 
 def _dump_simulator_prompt(instructions: str) -> None:
-    """Write the caller's composed system prompt beside the run, best effort and never fatal.
-
-    Directory comes from the environment so this stays inert outside a sandbox; a diagnostic must
-    not create files under somebody's working directory just by importing the engine.
-    """
+    """Write the composed caller prompt beside the run; env-gated so it is inert by default."""
     directory = os.environ.get("ALK_PROMPT_DUMP_DIR")
     if not directory:
         return
@@ -309,10 +305,7 @@ class _TestRunnerAgent(Agent):
 
     @function_tool(
         name="endCall",
-        # Kept to a plain statement of what the tool does. Anything phrased like speech gets
-        # spoken: a description carrying example wording comes back out of the caller's mouth.
-        # Nothing here is quotable, and nothing is English-specific, because the caller may be
-        # speaking another language.
+        # Nothing quotable and nothing English-specific: wording here comes back out as speech.
         description=(
             "Ends the call. Nothing else ends it and no one else ends it for you. "
             "Use it once you have nothing further."
@@ -328,11 +321,6 @@ class _TestRunnerAgent(Agent):
             alternation_required and not _has_role_alternation(messages)
         )
         if below_floor and _target_has_gone_quiet(messages):
-            logger.warning(
-                "endCall allowed below the floor: %d messages, floor %d, target silent",
-                len(messages),
-                floor,
-            )
             below_floor = False
         if below_floor:
             # Whether the caller ever reached for this tool, and why it was turned away, is the
@@ -343,9 +331,7 @@ class _TestRunnerAgent(Agent):
                 floor,
                 _has_role_alternation(messages),
             )
-            # Say how many more are needed and that it should try again, so a refusal reads as
-            # "not yet" rather than "stop asking". A caller told only to continue does not come
-            # back to the tool, and the call then runs to the silence watchdog.
+            # "Not yet" rather than "stop asking", or the caller never retries the tool.
             return (
                 f"Not yet: {len(messages)} of {floor} messages so far and both speakers must "
                 "have spoken. Keep the conversation going, then call endCall again."
@@ -1301,11 +1287,7 @@ class LiveKitEngine(BaseEngine):
             customer_agent, models = await self._create_customer_agent(
                 persona,
                 simulator,
-                # `call_type` is the AGENT's direction, and it decides which half of the role
-                # block the caller is given. Hardcoding inbound told the caller it had placed the
-                # call even when the agent under test was the one dialling, so an outbound run
-                # composed a prompt that said "You are MAKING this call" and then contradicted
-                # itself further down. Read it from the same signal the opening turn uses.
+                # The AGENT's direction; it picks which half of the role block the caller gets.
                 call_type=(
                     "outbound"
                     if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower() == "outbound"
@@ -2236,9 +2218,6 @@ class LiveKitEngine(BaseEngine):
             "max_endpointing_delay": max_endpointing_delay,
             "use_tts_aligned_transcript": use_aligned_transcript,
         }
-        # The composed system prompt is the one thing nobody can read after a run: the template
-        # lives in the bundle, but what the caller was actually given, persona and situation
-        # rendered in, exists only here. Write it where the sandbox mirror can pick it up.
         _dump_simulator_prompt(instructions)
         agent = _TestRunnerAgent(
             persona=persona,
@@ -2420,12 +2399,7 @@ def _find_target_audio(
 # never trip it — the run is never cut off at a message count.
 _SILENCE_BACKSTOP_SECONDS = 60.0
 
-# Once both sides have spoken and the conversation has passed its turn floor, a long stretch of
-# mutual silence is a finished call nobody hung up, not a stalled one. Measured across 21 calls on
-# six agents, every call the caller had to end sat at 36 to 43 seconds of dead air, because three
-# rounds of prompt work failed to make the model call `endCall` reliably. This closes that window
-# without cutting a live conversation: agent turn latency measured 4.3s at its worst, so a full
-# stretch of nothing this long has no turn coming.
+# Mutual silence this long in a conversation both sides joined is a finished call, not a stalled one.
 _SETTLED_SILENCE_SECONDS = 12.0
 
 
@@ -2653,8 +2627,6 @@ async def _wait_for_conversation_silence(
             getattr(session, "agent_state", None) == "speaking"
             or getattr(session, "user_state", None) == "speaking"
         )
-        # A conversation both sides genuinely took part in is finished, not stalled, so it does
-        # not need the full backstop before it can be declared over.
         floor, _ = _turn_requirements(min_turn_messages)
         settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
         effective_quiet = _SETTLED_SILENCE_SECONDS if settled else quiet_seconds
@@ -3107,12 +3079,7 @@ def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
 
 
 def _turns_from_each_side(messages: list[dict[str, Any]]) -> int:
-    """How many turns the quieter of the two speakers took.
-
-    Counted per side because a total is inflated by the caller talking into the silence: a
-    measured call reached seven messages with only two of them the agent's, so the raw count
-    cleared its floor on the caller's own filler while no exchange had actually happened.
-    """
+    """How many turns the quieter speaker took; a total is inflated by one side's own filler."""
     spoken = [msg for msg in messages if msg.get("content")]
     return min(
         sum(1 for msg in spoken if msg.get("role") == "assistant"),

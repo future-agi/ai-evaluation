@@ -155,12 +155,6 @@ Find, in roughly this order:
     names is the shape. Where a query names a field no sample row has, record the field and say the
     rows you saw did not carry it.
 
-    **Copy a column's declaration verbatim, not just its type.** Where the source declares its
-    schema, keep `NOT NULL`, `CHECK` and above all `DEFAULT` exactly as written. The world's own
-    schema is generated from these strings, so a dropped `DEFAULT` leaves a `NOT NULL` column with
-    nothing to write: the agent's first `INSERT` relies on the default, the store refuses it, and
-    the tool returns a 500 the agent reports as its own system being unavailable.
-
     This is the single most expensive thing to get wrong at this stage, and it does not fail where
     you would see it. A missing column does not break the build: the world stands up, the schema
     reads sensibly, and the agent starts. It breaks on the first tool call that runs that query, the

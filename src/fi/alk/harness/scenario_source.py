@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
@@ -55,8 +54,6 @@ _READY_PY = "ready.py"
 # wall-clock budget here converts that hang into a typed terminal instead -- a worker thread cannot
 # actually be killed, so this accepts a leaked thread over an unbounded one, on the reasoning that a
 # terminal event today is strictly better than none ever.
-logger = logging.getLogger(__name__)
-
 _LOAD_TIMEOUT_SECONDS = 60.0
 
 
@@ -551,9 +548,7 @@ class BundleScenarioSource:
         return sampled_for_calling(registered)
 
 
-# An eval whose premise is a scenario property nothing in this suite carries. The contract chooses
-# evals before a single scenario exists, so an outbound agent is given the mailbox evals whether or
-# not the writer ever wrote a mailbox.
+# Chosen before any scenario exists, so an outbound agent gets these whether or not one was written.
 _EVALS_NEEDING_A_MAILBOX = ("voicemail_handling", "voice_mail_detection")
 
 
@@ -582,13 +577,9 @@ def _chosen_evals_and_prompt(bundle_dir: Path) -> tuple[list[str], str, str]:
         if isinstance(chosen, list)
         else []
     )
-    # Judging twenty person-answered calls on how they handled a mailbox costs a judge call each
-    # and answers "not applicable" every time, and an optimiser reading those verdicts recommends
-    # fixing something the agent was never asked to do.
     if names and not _suite_has_a_mailbox(bundle_dir):
         dropped = [one for one in names if one in _EVALS_NEEDING_A_MAILBOX]
         if dropped:
-            logger.info("no mailbox in the suite, so dropping %s", ", ".join(dropped))
             names = [one for one in names if one not in _EVALS_NEEDING_A_MAILBOX]
     # Provisioning defaults to text, which would bind a voice run's evals to the transcript.
     modality = str(body.get("modality") or "").strip().lower()

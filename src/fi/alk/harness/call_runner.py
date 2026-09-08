@@ -402,11 +402,7 @@ def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
 
 
 def _dials_the_person(doc: dict[str, Any]) -> bool:
-    """Whether the agent under test places the call, so the person answers it.
-
-    Resolved the way the simulator's own direction is resolved further down: the scenario wins,
-    then the contract value `hosted_entrypoint` puts in the environment, then inbound.
-    """
+    """Whether the agent places the call: scenario first, then the environment, then inbound."""
     direction = str(
         doc.get("call_direction") or os.environ.get(CALL_DIRECTION_ALIAS) or "inbound"
     )
@@ -512,14 +508,8 @@ def _build_spec(
             tts_provider=simulator.tts.provider,
         ),
         simulator=simulator,
-        # An outbound agent dials a person, and the person answers the phone. Opening with the
-        # agent leaves the caller's "Hello?" nowhere to go but on top of the greeting, which is
-        # what every measured outbound call did: the pickup line landed 2.4 to 3.8 seconds inside
-        # the agent's first turn. Interruption stays on, because an agent talking over a pickup is
-        # what really happens.
-        direction=(
-            "simulator_first" if _dials_the_person(doc) else "agent_first"
-        ),
+        # An outbound agent dials; the person answers, so the caller opens.
+        direction="simulator_first" if _dials_the_person(doc) else "agent_first",
         max_seconds=call_timeout_seconds,
         min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
@@ -1013,9 +1003,6 @@ class CallRunnerImpl:
             self._environ["HARNESS_BACKGROUND_NOISE"] = noise
         else:
             self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
-        # The caller's composed system prompt is written here per scenario. The bundle keeps the
-        # template; only this holds what the model was actually given, persona and situation
-        # rendered in, and it is the first thing anyone asks to see when a caller misbehaves.
         self._environ["ALK_PROMPT_DUMP_DIR"] = str(
             self._context.work_directory
             / "voice-calls"
