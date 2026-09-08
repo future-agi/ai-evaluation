@@ -425,3 +425,41 @@ def test_a_coded_sub_goal_also_carries_its_description():
     assert by_name["schedules_callback"].judged == "", "a coded sub-goal must not become judged"
     assert by_name["protocol"].what == "the agent stayed on protocol"
     assert by_name["protocol"].judged == "whether it stayed civil"
+
+
+def test_a_truthiness_check_is_told_to_compare_against_an_expected_value():
+    """Measured on the catalogue a live run authored: five of six coded checks read the arguments
+    and tested only that they were present. An agent that mishears a detail and acts confidently
+    on the wrong one passes every one of those."""
+    from fi.alk.harness.catalogue import compares_to_a_value, weak_check_advisory
+
+    truthiness = _goal(
+        "transfers_to_human_agent",
+        check=(
+            "def check(world, calls):\n"
+            '    xfers = [c for c in calls if c.name == "transfer_to_licensed_agent" and c.ok]\n'
+            '    if not xfers:\n        return "not called"\n'
+            '    reason = xfers[0].arguments.get("reason")\n'
+            "    if not reason or not isinstance(reason, str) or not reason.strip():\n"
+            '        return "no reason"\n'
+            "    return None\n"
+        ),
+    )
+    compares = _goal(
+        "intake_recorded_for_the_right_person",
+        check=(
+            "def check(world, calls):\n"
+            '    done = [c for c in calls if c.name == "record_intake" and c.ok]\n'
+            '    if done[0].arguments.get("name") != "Corwin":\n        return "wrong name"\n'
+            "    return None\n"
+        ),
+    )
+
+    assert not compares_to_a_value(truthiness.check)
+    assert compares_to_a_value(compares.check)
+    assert "only tests that they are present" in weak_check_advisory(truthiness)
+    assert weak_check_advisory(compares) == ""
+    # Advisory, never a refusal: it must not block a catalogue from being accepted.
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    assert validate_sub_goal(truthiness) == []

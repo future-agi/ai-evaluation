@@ -175,6 +175,50 @@ def _presence_only_problems(sub_goal: SubGoal) -> list[str]:
     ]
 
 
+def compares_to_a_value(source: str) -> bool:
+    """Whether a check tests an argument against something specific, or only that it is non-empty.
+
+    This is the difference between "a reason was given" and "the reason was the right one". An
+    agent that mishears a name and proceeds confidently against the wrong record passes every
+    truthiness test: the argument is present, is a string, and is non-empty. Measured on a real
+    authored catalogue, five of six coded checks tested only truthiness.
+
+    Advisory rather than a refusal: hardening this would have refused five of those six, and an
+    authoring loop that cannot satisfy a gate fails the run instead of improving the check.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        for op in node.ops:
+            if not isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
+                continue
+            right = node.comparators[0] if node.comparators else None
+            # Comparing against None/""/0 is truthiness wearing a comparison's clothes, and
+            # matching on `c.name` is routing to the right call rather than judging its outcome.
+            if isinstance(right, ast.Constant) and right.value in (None, "", 0):
+                continue
+            if isinstance(node.left, ast.Attribute) and node.left.attr == "name":
+                continue
+            return True
+    return False
+
+
+def weak_check_advisory(sub_goal: SubGoal) -> str:
+    """What to say about a check that reads the arguments but only tests that they are there."""
+    if not sub_goal.check.strip() or compares_to_a_value(sub_goal.check):
+        return ""
+    return (
+        f"{sub_goal.name}: the check reads the arguments but only tests that they are present and "
+        "non-empty. An agent that mishears a detail and acts confidently on the wrong one passes "
+        "that. Compare the value against what this scenario expected, or against the world row it "
+        "should match"
+    )
+
+
 def _judged_problems(sub_goal: SubGoal) -> list[str]:
     """Hold a judged sub-goal to the reason it is judged.
 

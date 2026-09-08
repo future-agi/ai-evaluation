@@ -468,6 +468,26 @@ caller is Corwin and the agent looked up a record, assert whose record it was. A
 mishears and proceeds confidently against the wrong row is the worst failure this can find, and it
 is invisible to every check that only counts calls.
 
+**Reading the argument is not the same as checking it.** This is the most common weak check, and
+measuring a real catalogue found five of six doing it:
+
+```python
+# Weak. An agent that misheard the name passes this: a reason was given, it is a string, and it
+# is not empty.
+reason = xfers[0].arguments.get("reason")
+if not reason or not isinstance(reason, str) or not reason.strip():
+    return f"no reason given: {reason!r}"
+
+# Strong. Compare the value against what this scenario expected, or against the world row it
+# should have matched.
+if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
+    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
+```
+
+`add_sub_goal` accepts a truthiness check and tells you it is one. Take the note: the agent under
+test will pass it while doing the wrong thing, and that is the failure the whole suite exists to
+catch.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong

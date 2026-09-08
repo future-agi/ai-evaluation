@@ -30,6 +30,7 @@ from ..catalogue import (
     load_catalogue,
     save_catalogue,
     validate_sub_goal,
+    weak_check_advisory,
 )
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -1078,10 +1079,15 @@ def world_tools(
         ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
+        # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
+        # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
+        advisory = weak_check_advisory(sub_goal)
         settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(
             f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "
-            f"{settled} settled by code: " + ", ".join(sorted(catalogue.names()))
+            f"{settled} settled by code: "
+            + ", ".join(sorted(catalogue.names()))
+            + (f"\n\nWorth strengthening: {advisory}" if advisory else "")
         )
 
     @tool(
