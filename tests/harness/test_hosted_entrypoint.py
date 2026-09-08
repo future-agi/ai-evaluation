@@ -3949,3 +3949,63 @@ def test_the_caller_is_given_a_countable_reason_to_lose_patience():
     # The rules that protect the intake flow must survive.
     assert "Answer only what was asked, one fact at a time" in text
     assert "close in ONE turn" in text
+
+
+def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
+    """The definition carrying a speed proves nothing on its own: the provider call has to receive
+    it. Cartesia documents speed as valid 0.6 to 2.0 for sonic-3, which is the model we use."""
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+
+    def fake_tts(**kwargs):
+        captured.update(kwargs)
+        return "tts"
+
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda name: SimpleNamespace(TTS=fake_tts),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc", speed=1.12),
+        http_session=None,
+    )
+
+    assert captured["speed"] == 1.12
+    assert captured["voice"] == "abc"
+    # emotion is deliberately absent: it rides on __experimental_controls with no sonic-3
+    # guarantee, and an unsupported control failing mid-call is worse than no emotion tag.
+    assert "emotion" not in captured
+
+
+def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
+    """A persona with no rate must not send speed=None into a provider that would reject it."""
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+
+    def fake_tts(**kwargs):
+        captured.update(kwargs)
+        return "tts"
+
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda name: SimpleNamespace(TTS=fake_tts),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc"), http_session=None
+    )
+
+    assert "speed" not in captured
