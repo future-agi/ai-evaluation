@@ -292,8 +292,11 @@ class _TestRunnerAgent(Agent):
     @function_tool(
         name="endCall",
         description=(
-            "End the conversation after you have said one natural closing sentence. "
-            "Use this immediately when the caller says goodbye or the objective is done."
+            "Hang up. You are the person on this call, so call this yourself the moment your "
+            "business is finished: the other side has confirmed what you needed, refused you "
+            "and you have accepted it, or said goodbye. Say your closing words and call this in "
+            "the SAME turn, not afterwards. Saying goodbye does not end a call on its own; "
+            "nothing else will hang up for you, and the line stays open until you do."
         ),
     )
     async def end_call(self, ctx: RunContext) -> str:
@@ -321,9 +324,12 @@ class _TestRunnerAgent(Agent):
                 floor,
                 _has_role_alternation(messages),
             )
+            # Say how many more are needed and that it should try again, so a refusal reads as
+            # "not yet" rather than "stop asking". A caller told only to continue does not come
+            # back to the tool, and the call then runs to the silence watchdog.
             return (
-                "Continue the conversation until both speakers have participated "
-                f"and at least {floor} messages are complete."
+                f"Not yet: {len(messages)} of {floor} messages so far and both speakers must "
+                "have spoken. Keep the conversation going, then call endCall again."
             )
         logger.warning("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
