@@ -2384,8 +2384,86 @@ def _find_target_audio(
 # never trip it — the run is never cut off at a message count.
 _SILENCE_BACKSTOP_SECONDS = 60.0
 
-# Mutual silence this long in a conversation both sides joined is a finished call, not a stalled one.
-_SETTLED_SILENCE_SECONDS = 12.0
+# Mutual silence in a conversation both sides joined is a finished call rather than a stalled one.
+#
+# What counts as silence is the whole problem. An agent that is thinking is not silent: it is
+# working, and a slow agent spends its slowness there. Timing that as dead air is why no fixed
+# window could be right -- one agent was measured at 4.3s to answer and another at 25.2s, and a
+# window set from the first cuts the second off mid-answer, which then reads as the agent failing.
+# So the timer holds while either side is busy, and only runs when both are genuinely idle. That
+# needs no per-agent tuning and no latency guess, because it asks the transport what is happening
+# instead of inferring it from the clock.
+#
+# The measured fallback below is for providers that never report a thinking state, where a busy
+# agent is indistinguishable from an idle one. There the window stretches to clear the slowest
+# reply this call has actually seen, floored so a fast agent still settles promptly and capped at
+# the backstop, because an early settle that waits longer than the real one is not an early settle.
+_SETTLED_SILENCE_FLOOR_SECONDS = 12.0
+_SETTLED_LATENCY_MULTIPLE = 2.0
+
+# livekit.agents AgentState is Literal["initializing", "idle", "listening", "thinking", "speaking"].
+# Only "idle" and "listening" are silence. UserState carries no thinking state, so a caller counts
+# as busy only while actually speaking.
+_AGENT_BUSY_STATES = frozenset({"initializing", "thinking", "speaking"})
+_USER_BUSY_STATES = frozenset({"speaking"})
+
+
+def _either_side_busy(session: Any) -> bool:
+    """Whether work is in flight, as opposed to a conversation that has gone quiet."""
+    return (
+        getattr(session, "agent_state", None) in _AGENT_BUSY_STATES
+        or getattr(session, "user_state", None) in _USER_BUSY_STATES
+    )
+
+
+def _settled_silence_window(observed_agent_reply: float, backstop_seconds: float) -> float:
+    """How long silence must last before a settled call is treated as over."""
+    return min(
+        backstop_seconds,
+        max(_SETTLED_SILENCE_FLOOR_SECONDS, observed_agent_reply * _SETTLED_LATENCY_MULTIPLE),
+    )
+
+
+def _turn_gap_seconds(
+    previous: dict[str, Any], current: dict[str, Any]
+) -> float | None:
+    """Silence between one turn finishing and the next starting, in seconds.
+
+    Uses the real audio timing the transport reports and falls back to the wall-clock stamp for
+    text-only turns. Returns None when neither side is timed, so a caller can tell "no gap" from
+    "not measurable" rather than reading an absent measurement as zero.
+    """
+    start = current.get("started_speaking_at") or current.get("created_at") or None
+    end = previous.get("stopped_speaking_at") or previous.get("created_at") or None
+    if not start or not end:
+        return None
+    gap = float(start) - float(end)
+    return gap if gap >= 0 else None
+
+
+def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
+    """The slowest reply this agent has actually produced on this call.
+
+    Read from the transport rather than tracked against the poll loop's own clock, so it is also
+    correct for history that arrives in bulk (a resume, a reconnect) where there was no live
+    transition to observe. Prefers LiveKit's reported end-to-end latency and falls back to the gap
+    between the caller finishing and the agent starting, which is the wait a listener would hear.
+    """
+    slowest = 0.0
+    previous: dict[str, Any] | None = None
+    for message in messages:
+        if not message.get("content"):
+            continue
+        if message.get("role") == "assistant":
+            reported = message.get("e2e_latency")
+            if reported:
+                slowest = max(slowest, float(reported))
+            elif previous is not None and previous.get("role") == "user":
+                gap = _turn_gap_seconds(previous, message)
+                if gap is not None:
+                    slowest = max(slowest, gap)
+        previous = message
+    return slowest
 
 
 async def _wait_for_conversation_end(
@@ -2608,18 +2686,20 @@ async def _wait_for_conversation_silence(
             stable_since = None
             await asyncio.sleep(0.1)
             continue
-        participant_speaking = (
-            getattr(session, "agent_state", None) == "speaking"
-            or getattr(session, "user_state", None) == "speaking"
-        )
+        now = loop.time()
+        participant_busy = _either_side_busy(session)
         floor, _ = _turn_requirements(min_turn_messages)
         settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
-        effective_quiet = _SETTLED_SILENCE_SECONDS if settled else quiet_seconds
-        if participant_speaking:
+        effective_quiet = (
+            _settled_silence_window(_observed_agent_reply_seconds(messages), quiet_seconds)
+            if settled
+            else quiet_seconds
+        )
+        if participant_busy:
             stable_since = None
         elif stable_since is None or signature != last_signature:
-            stable_since = loop.time()
-        elif loop.time() - stable_since >= effective_quiet:
+            stable_since = now
+        elif now - stable_since >= effective_quiet:
             return
         last_signature = signature
         await asyncio.sleep(0.1)
@@ -2756,13 +2836,10 @@ async def _wait_for_agent_first_silence(
     while True:
         messages = _session_messages(session)
         signature = tuple((message["role"], message["content"]) for message in messages)
-        participant_speaking = (
-            getattr(session, "agent_state", None) == "speaking"
-            or getattr(session, "user_state", None) == "speaking"
-        )
-        # A turn lands in history only after its TTS finishes, so an in-flight
-        # utterance longer than the timeout must count as activity.
-        if signature != last_signature or participant_speaking:
+        # A turn lands in history only after its TTS finishes, so an in-flight utterance longer
+        # than the timeout must count as activity -- and so must an agent that is still thinking,
+        # or the caller opens over the top of a reply that was on its way.
+        if signature != last_signature or _either_side_busy(session):
             last_signature = signature
             last_change = asyncio.get_running_loop().time()
         roles = {message["role"] for message in messages if message["content"]}

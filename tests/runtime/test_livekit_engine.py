@@ -1535,6 +1535,179 @@ def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
     assert asyncio.run(run()) is False
 
 
+def test_a_thinking_agent_is_not_silence(monkeypatch) -> None:
+    """The architecture point. A slow agent spends its slowness in the "thinking" state, so timing
+    that as dead air is what made a fixed settle window unsettable: one agent answers in 4.3s and
+    another in 25.2s, and any constant between them cuts the slow one off mid-answer. Holding the
+    timer while either side is busy needs no per-agent tuning at all."""
+    monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
+
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+        SimpleNamespace(type="message", role="user", text_content="Hello"),
+        SimpleNamespace(type="message", role="assistant", text_content="More?"),
+        SimpleNamespace(type="message", role="user", text_content="Yes"),
+    ]
+    session = SimpleNamespace(
+        agent_state="thinking", user_state="listening",
+        history=SimpleNamespace(items=items),
+    )
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(
+                session, quiet_seconds=5.0, min_turn_messages=6
+            )
+        )
+        # Far longer than the window, but the agent is working, so nothing has gone quiet.
+        await asyncio.sleep(0.30)
+        while_thinking = task.done()
+        session.agent_state = "idle"
+        await asyncio.sleep(0.20)
+        once_idle = task.done()
+        task.cancel()
+        return while_thinking, once_idle
+
+    while_thinking, once_idle = asyncio.run(run())
+    assert while_thinking is False, "counted the agent's own thinking as dead air"
+    assert once_idle is True, "never settled once both sides were actually idle"
+
+
+def test_the_caller_does_not_open_over_an_agent_that_is_still_thinking(monkeypatch) -> None:
+    """Same definition, applied to the other timer. This is the one that made the caller barge in
+    on the agent's opening line: a reply that is still being composed was read as silence."""
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+        SimpleNamespace(type="message", role="user", text_content="Hello"),
+    ]
+    session = SimpleNamespace(
+        agent_state="thinking", user_state="listening",
+        history=SimpleNamespace(items=items),
+    )
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_agent_first_silence(session, timeout_seconds=0.05)
+        )
+        await asyncio.sleep(0.25)
+        while_thinking = task.done()
+        session.agent_state = "idle"
+        await asyncio.sleep(0.20)
+        once_idle = task.done()
+        task.cancel()
+        return while_thinking, once_idle
+
+    while_thinking, once_idle = asyncio.run(run())
+    assert while_thinking is False, "would let the caller talk over a reply in flight"
+    assert once_idle is True
+
+
+def _timed_message(role: str, text: str, *, started=None, stopped=None, latency=None):
+    metrics = {}
+    if started is not None:
+        metrics["started_speaking_at"] = started
+    if stopped is not None:
+        metrics["stopped_speaking_at"] = stopped
+    if latency is not None:
+        metrics["e2e_latency"] = latency
+    return SimpleNamespace(
+        type="message", role=role, text_content=text, metrics=metrics, created_at=started or 0.0
+    )
+
+
+def test_the_observed_reply_time_comes_from_the_transport_not_the_poll_loop() -> None:
+    """Read from LiveKit's own metrics, so it is right for history that arrives in bulk on a
+    resume or reconnect, where there was no live transition for a loop to observe."""
+    messages = livekit._session_messages(
+        SimpleNamespace(
+            history=SimpleNamespace(
+                items=[
+                    _timed_message("assistant", "Hi", started=100.0, stopped=101.0),
+                    _timed_message("user", "Hello", started=102.0, stopped=103.0),
+                    # Reported latency wins when the provider gives one.
+                    _timed_message("assistant", "One moment", started=128.2, stopped=129.0,
+                                   latency=25.2),
+                ]
+            )
+        )
+    )
+
+    assert livekit._observed_agent_reply_seconds(messages) == 25.2
+
+
+def test_the_observed_reply_time_falls_back_to_the_audible_gap() -> None:
+    """A provider that reports no latency still leaves the gap a listener would have heard."""
+    messages = livekit._session_messages(
+        SimpleNamespace(
+            history=SimpleNamespace(
+                items=[
+                    _timed_message("assistant", "Hi", started=100.0, stopped=101.0),
+                    _timed_message("user", "Hello", started=102.0, stopped=103.0),
+                    _timed_message("assistant", "Right", started=121.0, stopped=122.0),
+                ]
+            )
+        )
+    )
+
+    assert livekit._observed_agent_reply_seconds(messages) == 18.0
+    window = livekit._settled_silence_window(18.0, livekit._SILENCE_BACKSTOP_SECONDS)
+    assert window > 18.0, "a window shorter than the gap cuts the agent off mid-answer"
+
+
+def test_an_untimed_conversation_reports_no_observed_reply_time() -> None:
+    """Absent timing must read as unmeasured, not as an instant reply."""
+    messages = livekit._session_messages(
+        SimpleNamespace(
+            history=SimpleNamespace(
+                items=[
+                    SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+                    SimpleNamespace(type="message", role="user", text_content="Hello"),
+                    SimpleNamespace(type="message", role="assistant", text_content="Right"),
+                ]
+            )
+        )
+    )
+
+    assert livekit._observed_agent_reply_seconds(messages) == 0.0
+    assert (
+        livekit._settled_silence_window(0.0, livekit._SILENCE_BACKSTOP_SECONDS)
+        == livekit._SETTLED_SILENCE_FLOOR_SECONDS
+    )
+
+
+def test_the_settle_loop_honours_the_measured_reply_time(monkeypatch) -> None:
+    """End to end through the loop: a settled call whose agent was measured slow stays open past
+    the floor. This is the regression that shipped -- a 12s constant against a 25.2s reply."""
+    monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
+    monkeypatch.setattr(livekit, "_SETTLED_LATENCY_MULTIPLE", 2.0)
+
+    items = [
+        _timed_message("assistant", "Hi", started=100.0, stopped=101.0),
+        _timed_message("user", "Hello", started=102.0, stopped=103.0),
+        _timed_message("assistant", "Go on", started=103.4, stopped=104.0, latency=0.4),
+        _timed_message("user", "Yes", started=105.0, stopped=106.0),
+    ]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))  # no thinking state reported
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(
+                session, quiet_seconds=5.0, min_turn_messages=6
+            )
+        )
+        # 0.4s measured means a 0.8s window, so 0.5s of quiet is not a finished call yet.
+        await asyncio.sleep(0.5)
+        early = task.done()
+        await asyncio.sleep(0.6)
+        later = task.done()
+        task.cancel()
+        return early, later
+
+    early, later = asyncio.run(run())
+    assert early is False, "settled at the floor and ignored the measured reply time"
+    assert later is True, "never settled even after twice the measured reply time"
+
+
 def test_conversation_silence_waits_until_speech_has_finished() -> None:
     session = SimpleNamespace(
         agent_state="speaking",

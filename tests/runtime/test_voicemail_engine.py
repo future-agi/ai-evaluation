@@ -477,6 +477,30 @@ def test_a_finished_conversation_settles_faster_than_a_stalled_one() -> None:
     """Three rounds of prompt work failed to make the caller hang up reliably, so the engine
     stops waiting a full minute for a call that is plainly over. Measured across 21 calls on six
     agents, every call the caller had to end sat at 36 to 43 seconds of dead air."""
-    assert livekit._SETTLED_SILENCE_SECONDS < livekit._SILENCE_BACKSTOP_SECONDS
-    # Worst measured agent turn latency was 4.3s, so the settled window must clear it comfortably.
-    assert livekit._SETTLED_SILENCE_SECONDS > 8.0
+    window = livekit._settled_silence_window(0.0, livekit._SILENCE_BACKSTOP_SECONDS)
+    assert window < livekit._SILENCE_BACKSTOP_SECONDS
+    assert window > 8.0
+
+
+def test_the_settle_window_outlasts_the_agent_it_is_waiting_on() -> None:
+    """A fixed window is what made this wrong the first time: it was set from one agent's 4.3s
+    worst case, while another agent was measured at 25.2s. Anything shorter than the agent's own
+    reply time cuts it off mid-answer and the transcript reads as the agent failing."""
+    backstop = livekit._SILENCE_BACKSTOP_SECONDS
+
+    fast = livekit._settled_silence_window(3.0, backstop)
+    slow = livekit._settled_silence_window(25.2, backstop)
+
+    assert fast == livekit._SETTLED_SILENCE_FLOOR_SECONDS
+    assert slow > 25.2, "the window must clear the slowest reply this call actually saw"
+    assert slow > fast, "a slower agent has to be given longer, not the same"
+    # An early settle can never wait longer than the real backstop, or it is not an early settle.
+    assert livekit._settled_silence_window(10_000.0, backstop) == backstop
+
+
+def test_the_settle_window_never_undercuts_the_floor() -> None:
+    """An unmeasured call (agent never answered) settles at the floor, not at zero."""
+    assert (
+        livekit._settled_silence_window(0.0, livekit._SILENCE_BACKSTOP_SECONDS)
+        == livekit._SETTLED_SILENCE_FLOOR_SECONDS
+    )
