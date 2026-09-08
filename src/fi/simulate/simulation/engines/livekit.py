@@ -242,6 +242,23 @@ def _resolve_target_profile(kind: str):
     return profile
 
 
+def _dump_simulator_prompt(instructions: str) -> None:
+    """Write the caller's composed system prompt beside the run, best effort and never fatal.
+
+    Directory comes from the environment so this stays inert outside a sandbox; a diagnostic must
+    not create files under somebody's working directory just by importing the engine.
+    """
+    directory = os.environ.get("ALK_PROMPT_DUMP_DIR")
+    if not directory:
+        return
+    try:
+        target = Path(directory)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "simulator-system-prompt.txt").write_text(instructions, encoding="utf-8")
+    except Exception:  # noqa: BLE001 - a prompt dump must never take a call down
+        logger.warning("could not write the simulator prompt dump", exc_info=True)
+
+
 def _simulator_turn_handling(
     *,
     vad: object | None,
@@ -291,12 +308,13 @@ class _TestRunnerAgent(Agent):
 
     @function_tool(
         name="endCall",
+        # Kept to a plain statement of what the tool does. Anything phrased like speech gets
+        # spoken: a description carrying example wording comes back out of the caller's mouth.
+        # Nothing here is quotable, and nothing is English-specific, because the caller may be
+        # speaking another language.
         description=(
-            "Hang up. You are the person on this call, so call this yourself the moment your "
-            "business is finished: the other side has confirmed what you needed, refused you "
-            "and you have accepted it, or said goodbye. Say your closing words and call this in "
-            "the SAME turn, not afterwards. Saying goodbye does not end a call on its own; "
-            "nothing else will hang up for you, and the line stays open until you do."
+            "Ends the call. Nothing else ends it and no one else ends it for you. "
+            "Use it once you have nothing further."
         ),
     )
     async def end_call(self, ctx: RunContext) -> str:
@@ -2210,6 +2228,10 @@ class LiveKitEngine(BaseEngine):
             "max_endpointing_delay": max_endpointing_delay,
             "use_tts_aligned_transcript": use_aligned_transcript,
         }
+        # The composed system prompt is the one thing nobody can read after a run: the template
+        # lives in the bundle, but what the caller was actually given, persona and situation
+        # rendered in, exists only here. Write it where the sandbox mirror can pick it up.
+        _dump_simulator_prompt(instructions)
         agent = _TestRunnerAgent(
             persona=persona,
             min_turn_messages=min_turn_messages,

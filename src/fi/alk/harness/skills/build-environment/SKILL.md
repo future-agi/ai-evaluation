@@ -322,15 +322,16 @@ it worth reading is the behaviour it pins down. Cover all of these, for **this**
 - **How they react to a refusal.** Accept it, or push once and then accept it, depending on their
   circumstance. Never keep pushing forever, and never invent a new goal.
 - **How they end it, which is where a caller stops sounding human.** When what they came for is
-  settled, they end the call. At most a few words if the character would say them, once, and some
-  people simply stop talking. Do not write a closing ritual: no thanking the agent repeatedly, no
-  "have a good day", no restating what was agreed, no second goodbye.
+  settled, they end the call by calling `endCall`, and the prompt must name that tool. At most a
+  few words of their own first, once, and some people simply stop talking. Say that they do not
+  repeat a closing, thank more than once, or restate what was agreed.
 
-  **Name the tool.** Write that they end the call by calling `endCall`, in those words. Telling a
-  caller to "end the call" without naming the mechanism is not enough: measured on a real run whose
-  prompt said exactly that, the caller said goodbye seven times over twenty seconds and then sat
-  through thirty-six seconds of silence, because saying goodbye is not the same as hanging up and
-  nothing told it which action ends a call.
+  Two rules for how you write this, both learned from real runs. **Name the tool**: a prompt that
+  said only to end the call produced a caller that closed seven times over twenty seconds and then
+  sat through thirty-six seconds of silence, because closing words do not hang up a line. And
+  **write it as behaviour, never as example phrases**: whatever wording a prompt quotes tends to
+  come back out of the caller's mouth, and an English closing is wrong the moment the caller is
+  speaking another language.
 - **Never leave a direct question unanswered.** A refusal that ends in "would you like me to
   look it up instead?" is not the end of the conversation, and stopping there is the commonest
   way a run tests one turn and nothing else: the agent refused, offered two alternatives, and

@@ -1013,6 +1013,15 @@ class CallRunnerImpl:
             self._environ["HARNESS_BACKGROUND_NOISE"] = noise
         else:
             self._environ.pop("HARNESS_BACKGROUND_NOISE", None)
+        # The caller's composed system prompt is written here per scenario. The bundle keeps the
+        # template; only this holds what the model was actually given, persona and situation
+        # rendered in, and it is the first thing anyone asks to see when a caller misbehaves.
+        self._environ["ALK_PROMPT_DUMP_DIR"] = str(
+            self._context.work_directory
+            / "voice-calls"
+            / "prompts"
+            / str(doc.get("scenario_key") or doc.get("name") or "call")
+        )
 
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and

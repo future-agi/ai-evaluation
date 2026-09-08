@@ -440,3 +440,24 @@ def test_a_caller_that_has_never_heard_the_agent_may_not_hang_up() -> None:
     """A call where only the caller ever spoke is a failed call, not a finished one."""
     assert livekit._target_has_gone_quiet([_said("user"), _said("user")]) is False
     assert livekit._target_has_gone_quiet([]) is False
+
+
+def test_the_simulator_prompt_is_dumped_only_when_a_directory_is_named(tmp_path, monkeypatch) -> None:
+    """The composed system prompt is the one artefact a finished run cannot show you.
+
+    Gated on an environment variable so importing the engine outside a sandbox never writes files
+    into somebody's working directory.
+    """
+    monkeypatch.delenv("ALK_PROMPT_DUMP_DIR", raising=False)
+    livekit._dump_simulator_prompt("nothing should be written")
+    assert list(tmp_path.iterdir()) == []
+
+    target = tmp_path / "prompts" / "busy-driver"
+    monkeypatch.setenv("ALK_PROMPT_DUMP_DIR", str(target))
+    livekit._dump_simulator_prompt("You are Corwin. You are driving.")
+    written = target / "simulator-system-prompt.txt"
+    assert written.read_text(encoding="utf-8") == "You are Corwin. You are driving."
+
+    # A dump failure must never take a call down.
+    monkeypatch.setenv("ALK_PROMPT_DUMP_DIR", "/proc/cannot/write/here")
+    livekit._dump_simulator_prompt("still fine")
