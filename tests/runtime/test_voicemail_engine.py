@@ -406,3 +406,77 @@ def test_the_mailbox_timer_is_cancelled_with_the_call(monkeypatch):
         assert agent._mailbox_close_task is None
 
     asyncio.run(drive())
+
+
+def _said(role: str, content: str = "something") -> dict[str, str]:
+    return {"role": role, "content": content}
+
+
+def test_caller_may_hang_up_once_the_target_stops_replying() -> None:
+    """The floor counts messages, and the caller's own filler counts toward it.
+
+    A caller refused the tool talks to fill the silence and eventually buys its own permission,
+    which is the opposite of what the floor is for. Measured on a real call: the agent finished,
+    the caller said goodbye five times over thirty-seven seconds.
+    """
+    # One unanswered turn is the caller finishing a thought; the agent may still be about to reply.
+    one_unanswered_turn = [
+        _said("assistant"),
+        _said("user"),
+        _said("assistant"),
+        _said("user"),
+    ]
+    assert livekit._target_has_gone_quiet(one_unanswered_turn) is False
+
+    # Two in a row means nobody is replying.
+    agent_gone_quiet = one_unanswered_turn + [_said("user")]
+    assert livekit._target_has_gone_quiet(agent_gone_quiet) is True
+
+    # And replying resets it.
+    assert livekit._target_has_gone_quiet(agent_gone_quiet + [_said("assistant")]) is False
+
+
+def test_a_caller_that_has_never_heard_the_agent_may_not_hang_up() -> None:
+    """A call where only the caller ever spoke is a failed call, not a finished one."""
+    assert livekit._target_has_gone_quiet([_said("user"), _said("user")]) is False
+    assert livekit._target_has_gone_quiet([]) is False
+
+
+def test_an_outbound_agent_makes_the_caller_the_one_receiving(monkeypatch) -> None:
+    """call_type is the AGENT's direction and it picks which half of the role block is written.
+
+    Hardcoded to inbound, an outbound run told the caller "You are MAKING this call" and then
+    contradicted itself further down with the harness's own instructions.
+    """
+    from fi.simulate.simulation.voice_prompt import build_voice_simulator_prompt
+    from fi.simulate.simulation.models import Persona
+
+    persona = Persona(persona={"name": "Marcus"}, situation="You are expecting a call.", outcome="")
+    receiving = build_voice_simulator_prompt(persona, call_type="outbound")
+    assert "You are RECEIVING this call" in receiving
+    assert "You are MAKING this call" not in receiving
+
+    placing = build_voice_simulator_prompt(persona, call_type="inbound")
+    assert "You are MAKING this call" in placing
+
+
+def test_the_closing_rule_supplies_no_words_to_say() -> None:
+    """Whatever the prompt quotes is spoken back verbatim, and in English."""
+    from fi.simulate.simulation.voice_prompt import build_voice_simulator_prompt
+    from fi.simulate.simulation.models import Persona
+
+    text = build_voice_simulator_prompt(
+        Persona(persona={"name": "Marcus"}, situation="You want a refund.", outcome=""),
+        call_type="outbound",
+    )
+    assert "Alright, thanks, bye" not in text
+    assert "endCall" in text
+
+
+def test_a_finished_conversation_settles_faster_than_a_stalled_one() -> None:
+    """Three rounds of prompt work failed to make the caller hang up reliably, so the engine
+    stops waiting a full minute for a call that is plainly over. Measured across 21 calls on six
+    agents, every call the caller had to end sat at 36 to 43 seconds of dead air."""
+    assert livekit._SETTLED_SILENCE_SECONDS < livekit._SILENCE_BACKSTOP_SECONDS
+    # Worst measured agent turn latency was 4.3s, so the settled window must clear it comfortably.
+    assert livekit._SETTLED_SILENCE_SECONDS > 8.0

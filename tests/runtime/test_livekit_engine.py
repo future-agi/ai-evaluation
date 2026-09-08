@@ -1290,7 +1290,10 @@ def test_end_call_waits_for_minimum_balanced_conversation() -> None:
 
     result = asyncio.run(agent.end_call(None))
 
-    assert "at least 2 messages" in result
+    # The refusal must say how many more are needed AND invite another attempt: a caller told
+    # only to continue does not come back to the tool, and the call runs to the watchdog.
+    assert "1 of 2 messages" in result
+    assert "call endCall again" in result
     assert not agent.end_requested.is_set()
 
 

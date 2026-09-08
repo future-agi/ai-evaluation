@@ -291,9 +291,10 @@ class _TestRunnerAgent(Agent):
 
     @function_tool(
         name="endCall",
+        # Nothing quotable and nothing English-specific: wording here comes back out as speech.
         description=(
-            "End the conversation after you have said one natural closing sentence. "
-            "Use this immediately when the caller says goodbye or the objective is done."
+            "Ends the call. Nothing else ends it and no one else ends it for you. "
+            "Use it once you have nothing further."
         ),
     )
     async def end_call(self, ctx: RunContext) -> str:
@@ -302,9 +303,12 @@ class _TestRunnerAgent(Agent):
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
         floor, alternation_required = _turn_requirements(self._min_turn_messages)
-        if len(messages) < floor or (
+        below_floor = len(messages) < floor or (
             alternation_required and not _has_role_alternation(messages)
-        ):
+        )
+        if below_floor and _target_has_gone_quiet(messages):
+            below_floor = False
+        if below_floor:
             # Whether the caller ever reached for this tool, and why it was turned away, is the
             # difference between a simulator that will not hang up and one that was not allowed to.
             logger.warning(
@@ -313,9 +317,10 @@ class _TestRunnerAgent(Agent):
                 floor,
                 _has_role_alternation(messages),
             )
+            # "Not yet" rather than "stop asking", or the caller never retries the tool.
             return (
-                "Continue the conversation until both speakers have participated "
-                f"and at least {floor} messages are complete."
+                f"Not yet: {len(messages)} of {floor} messages so far and both speakers must "
+                "have spoken. Keep the conversation going, then call endCall again."
             )
         logger.warning("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
@@ -1268,9 +1273,12 @@ class LiveKitEngine(BaseEngine):
             customer_agent, models = await self._create_customer_agent(
                 persona,
                 simulator,
-                # Who dialled and who speaks first are separate axes. The caller always places
-                # the call; conversation_direction only decides who opens once connected.
-                call_type="inbound",
+                # The AGENT's direction; it picks which half of the role block the caller gets.
+                call_type=(
+                    "outbound"
+                    if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower() == "outbound"
+                    else "inbound"
+                ),
                 # `name` is an identity for dispatch, not a label for the caller to hear.
                 agent_name=agent_definition.description,
                 min_turn_messages=min_turn_messages,
@@ -2376,6 +2384,9 @@ def _find_target_audio(
 # never trip it — the run is never cut off at a message count.
 _SILENCE_BACKSTOP_SECONDS = 60.0
 
+# Mutual silence this long in a conversation both sides joined is a finished call, not a stalled one.
+_SETTLED_SILENCE_SECONDS = 12.0
+
 
 async def _wait_for_conversation_end(
     room: rtc.Room,
@@ -2423,7 +2434,11 @@ async def _wait_for_conversation_end(
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
         "conversation_settled": asyncio.create_task(
-            _wait_for_conversation_silence(session)
+            _wait_for_conversation_silence(
+                session,
+                # A stub agent in a test carries no floor; absent means never settle early.
+                min_turn_messages=int(getattr(customer_agent, "_min_turn_messages", 0) or 0),
+            )
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
@@ -2567,6 +2582,7 @@ async def _wait_for_conversation_silence(
     session: AgentSession,
     *,
     quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
+    min_turn_messages: int = 0,
 ) -> None:
     """Finish only after a long, genuine stretch of mutual silence.
 
@@ -2596,11 +2612,14 @@ async def _wait_for_conversation_silence(
             getattr(session, "agent_state", None) == "speaking"
             or getattr(session, "user_state", None) == "speaking"
         )
+        floor, _ = _turn_requirements(min_turn_messages)
+        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
+        effective_quiet = _SETTLED_SILENCE_SECONDS if settled else quiet_seconds
         if participant_speaking:
             stable_since = None
         elif stable_since is None or signature != last_signature:
             stable_since = loop.time()
-        elif loop.time() - stable_since >= quiet_seconds:
+        elif loop.time() - stable_since >= effective_quiet:
             return
         last_signature = signature
         await asyncio.sleep(0.1)
@@ -3042,6 +3061,38 @@ def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
+
+
+def _turns_from_each_side(messages: list[dict[str, Any]]) -> int:
+    """How many turns the quieter speaker took; a total is inflated by one side's own filler."""
+    spoken = [msg for msg in messages if msg.get("content")]
+    return min(
+        sum(1 for msg in spoken if msg.get("role") == "assistant"),
+        sum(1 for msg in spoken if msg.get("role") == "user"),
+    )
+
+
+# Two unanswered turns: one can be the caller finishing a thought, two means nobody is replying.
+_QUIET_AFTER_UNANSWERED_TURNS = 2
+
+
+def _target_has_gone_quiet(messages: list[dict[str, Any]]) -> bool:
+    """Whether the agent has stopped replying, so the floor can never be reached honestly.
+
+    The floor counts messages, and the caller's own turns count toward it, so a caller that is
+    refused the tool talks to fill the silence and eventually buys its own permission. That is the
+    opposite of what the floor is for. When the agent has spoken and then stopped, the caller is
+    allowed to hang up instead.
+    """
+    spoken = [message for message in messages if message.get("content")]
+    if not any(message.get("role") == "assistant" for message in spoken):
+        return False
+    trailing = 0
+    for message in reversed(spoken):
+        if message.get("role") != "user":
+            break
+        trailing += 1
+    return trailing >= _QUIET_AFTER_UNANSWERED_TURNS
 
 
 def _conversation_outcome(

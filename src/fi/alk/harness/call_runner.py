@@ -401,6 +401,14 @@ def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
 # value lookup is lane-specific. ---------------------------------------------------------------
 
 
+def _dials_the_person(doc: dict[str, Any]) -> bool:
+    """Whether the agent places the call: scenario first, then the environment, then inbound."""
+    direction = str(
+        doc.get("call_direction") or os.environ.get(CALL_DIRECTION_ALIAS) or "inbound"
+    )
+    return direction.strip().lower() == "outbound"
+
+
 def _build_spec(
     *,
     run_id: str,
@@ -500,7 +508,8 @@ def _build_spec(
             tts_provider=simulator.tts.provider,
         ),
         simulator=simulator,
-        direction="agent_first",
+        # An outbound agent dials; the person answers, so the caller opens.
+        direction="simulator_first" if _dials_the_person(doc) else "agent_first",
         max_seconds=call_timeout_seconds,
         min_turn_messages=min_turn_messages,
         # Hosted targets can legitimately spend tens of seconds in a provider call or a tool
