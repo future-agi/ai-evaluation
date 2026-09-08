@@ -242,19 +242,6 @@ def _resolve_target_profile(kind: str):
     return profile
 
 
-def _dump_simulator_prompt(instructions: str) -> None:
-    """Write the composed caller prompt beside the run; env-gated so it is inert by default."""
-    directory = os.environ.get("ALK_PROMPT_DUMP_DIR")
-    if not directory:
-        return
-    try:
-        target = Path(directory)
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "simulator-system-prompt.txt").write_text(instructions, encoding="utf-8")
-    except Exception:  # noqa: BLE001 - a prompt dump must never take a call down
-        logger.warning("could not write the simulator prompt dump", exc_info=True)
-
-
 def _simulator_turn_handling(
     *,
     vad: object | None,
@@ -296,7 +283,6 @@ class _TestRunnerAgent(Agent):
         super().__init__(**kwargs)
         self._persona = persona
         self._min_turn_messages = min_turn_messages
-        self.min_turn_messages = min_turn_messages
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
@@ -2218,7 +2204,6 @@ class LiveKitEngine(BaseEngine):
             "max_endpointing_delay": max_endpointing_delay,
             "use_tts_aligned_transcript": use_aligned_transcript,
         }
-        _dump_simulator_prompt(instructions)
         agent = _TestRunnerAgent(
             persona=persona,
             min_turn_messages=min_turn_messages,
@@ -2452,7 +2437,7 @@ async def _wait_for_conversation_end(
             _wait_for_conversation_silence(
                 session,
                 # A stub agent in a test carries no floor; absent means never settle early.
-                min_turn_messages=int(getattr(customer_agent, "min_turn_messages", 0) or 0),
+                min_turn_messages=int(getattr(customer_agent, "_min_turn_messages", 0) or 0),
             )
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
