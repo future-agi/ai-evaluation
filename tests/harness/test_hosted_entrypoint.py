@@ -3932,3 +3932,20 @@ def test_the_simulator_definition_carries_the_persona_s_pace():
     definition = simulator_definition(lambda key: "", persona={"name": "Marcus Thorne"})
 
     assert definition.tts.speed == persona_speech_rate({"name": "Marcus Thorne"})
+
+
+def test_the_caller_is_given_a_countable_reason_to_lose_patience():
+    """Measured across 16 calls: ONE impatience marker, and that on a hostile do-not-call. The two
+    longest intakes, at 51 and 36 caller turns, had none. Rule 12a's triggers are semantic ("a
+    figure that sounds high") and the model does not apply them positionally, so 12d gives a
+    countable one instead."""
+    from fi.alk.harness.simulator_voice import simulator_instructions
+
+    text = simulator_instructions("outbound", "expecting", "", "")
+
+    assert "roughly ten in a row" in text, "the trigger has to be countable, not a mood"
+    assert "how many more" in text
+    assert "already gave it" in text, "a repeated question must be named as repeated"
+    # The rules that protect the intake flow must survive.
+    assert "Answer only what was asked, one fact at a time" in text
+    assert "close in ONE turn" in text
