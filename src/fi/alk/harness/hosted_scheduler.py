@@ -190,7 +190,7 @@ class SubGoal(Protocol):
     def check(self, world: ReadOnlyWorld, calls: Sequence[Call]) -> object: ...
 
 
-JudgeFn = Callable[[Any, Any, Sequence[Call]], Awaitable[tuple[bool | None, str]]]
+JudgeFn = Callable[..., Awaitable[tuple[bool | None, str]]]
 
 
 class Scenario(Protocol):
@@ -222,6 +222,9 @@ class CallOutcome:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
+    # What was said. The artifact above is an id the sandbox cannot read back, and a judged
+    # sub-goal about wording has nothing else to go on.
+    messages: tuple[Any, ...] = ()
 
 
 class CallAborted(RuntimeError):
@@ -305,6 +308,9 @@ class CallSummary:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
+    # What was said. The artifact above is an id the sandbox cannot read back, and a judged
+    # sub-goal about wording has nothing else to go on.
+    messages: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2054,7 +2060,12 @@ class HostedScheduler:
             # Judged sub-goals only read, so they are independent of each other and of the coded
             # checks: one round trip for all of them rather than one each.
             verdicts = await asyncio.gather(
-                *(self._judge(goal, check_handle, calls) for _, goal in judged_pending),
+                *(
+                    self._judge(
+                        goal, check_handle, calls, messages=call_outcome.messages
+                    )
+                    for _, goal in judged_pending
+                ),
                 return_exceptions=True,
             )
             for (slot, goal), outcome in zip(judged_pending, verdicts):
@@ -2076,18 +2087,21 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        # An undecided judge is not evidence against the agent, so it cannot read as a failed
-        # scenario, and it cannot read as a passed one either since nothing settled that sub-goal.
-        # `errored` is the honest third answer, and the platform keeps a completed call playable
-        # for one while carrying the outcome separately.
+        # An undecided sub-goal is reported unsettled on the sub-goal itself. It is not evidence
+        # against the agent, so it cannot read as failed, and it does not decide the scenario:
+        # promoting it there condemned calls that ran to completion with their evidence intact,
+        # and attaching a failure to one made a working call look broken. The status follows the
+        # sub-goals that were actually settled. `errored` is kept for the one case that has no
+        # verdict to report at all: nothing settled, so there is nothing to say about the agent.
+        settled = [result for result in sub_goal_results if result.held is not None]
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
-        elif any(result.held is None for result in sub_goal_results):
-            status = "errored"
-        else:
+        elif settled:
             status = "passed"
+        else:
+            status = "errored"
         failure = None
-        if status == "errored":
+        if status == "errored" and sub_goal_results:
             undecided = [
                 result.name for result in sub_goal_results if result.held is None
             ]

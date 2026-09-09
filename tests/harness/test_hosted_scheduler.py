@@ -2540,7 +2540,7 @@ def test_conversation_only_scenario_can_be_judged_without_tool_calls(
 ) -> None:
     """A judged sub-goal now gets a real verdict; it used to pass before anything looked."""
 
-    async def _verdict(goal, world, calls):
+    async def _verdict(goal, world, calls, *, messages=()):
         return True, "the agent refused and named the reason"
 
     monkeypatch.setattr(hs, "_judge", _verdict)
@@ -3677,7 +3677,7 @@ def test_a_sub_goal_with_no_description_still_says_something_useful():
 def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
     """The behaviour that did not exist before: a judge can fail a run."""
 
-    async def _verdict(goal, world, calls):
+    async def _verdict(goal, world, calls, *, messages=()):
         return False, "no contacts row records the removal"
 
     monkeypatch.setattr(hs, "_judge", _verdict)
@@ -3723,11 +3723,12 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(
 ) -> None:
     """A judge that could not tell is not evidence against the agent, so it cannot read as failed.
 
-    Nor as passed, since nothing settled that sub-goal: `errored` is the third answer, and the
-    platform keeps a completed call playable for one.
+    Nor does it decide the scenario. The call ran to completion and a check settled, so the
+    scenario reports what was settled and the unsettled sub-goal stays visible as `None`. It is
+    not a failure of the call, so no failure is attached.
     """
 
-    async def _verdict(goal, world, calls):
+    async def _verdict(goal, world, calls, *, messages=()):
         return None, "the tables carry nothing either way"
 
     monkeypatch.setattr(hs, "_judge", _verdict)
@@ -3761,8 +3762,57 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "errored"
+        assert receipt.status == "passed"
         assert [goal.held for goal in receipt.sub_goals] == [True, None]
+        assert receipt.failure is None
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_scenario_that_settled_nothing_at_all_is_errored_not_passed(monkeypatch) -> None:
+    """The one case with no verdict to report: every sub-goal undecided.
+
+    Reporting this as passed is the auto-pass this whole path exists to prevent, so `errored`
+    stays for it and names what could not be decided.
+    """
+
+    async def _verdict(goal, world, calls, *, messages=()):
+        return None, "the tables carry nothing either way"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("was_it_reassuring", lambda w, c: None, judged="tone"),
+                    FakeSubGoal("was_it_clear", lambda w, c: None, judged="wording"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "errored"
+        assert [goal.held for goal in receipt.sub_goals] == [None, None]
         assert receipt.failure is not None
         assert receipt.failure.code == "judge_undecided"
         assert "was_it_reassuring" in receipt.failure.message
@@ -3777,7 +3827,7 @@ def test_judged_sub_goals_are_decided_together_not_one_after_another(
     """They only read, so N judged sub-goals cost one round trip rather than N."""
     started: list[str] = []
 
-    async def _verdict(goal, world, calls):
+    async def _verdict(goal, world, calls, *, messages=()):
         started.append(goal.name)
         await asyncio.sleep(0.05)
         return True, f"{goal.name} seen"
