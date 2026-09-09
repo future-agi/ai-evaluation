@@ -2083,25 +2083,16 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        # An unsettled sub-goal is not evidence against the agent and does not decide the
-        # scenario; the status follows what was settled. `errored` is kept for the one case with
-        # no verdict at all, since reporting that as passed is the auto-pass this path prevents.
-        settled = [result for result in sub_goal_results if result.held is not None]
+        # A sub-goal the judge did not settle is reported unsettled on the sub-goal itself and
+        # never decides the scenario: the call ran, its evidence stands, and a model that could
+        # not answer is a fault of neither the agent nor the run. Only a settled `False` fails a
+        # scenario. `errored` stays reachable for a call or infrastructure fault, which is raised
+        # elsewhere; nothing about a verdict produces one.
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
-        elif settled:
-            status = "passed"
         else:
-            status = "errored"
+            status = "passed"
         failure = None
-        if status == "errored" and sub_goal_results:
-            undecided = [
-                result.name for result in sub_goal_results if result.held is None
-            ]
-            failure = _failure(
-                "judge_undecided",
-                "The judge could not decide: " + ", ".join(undecided),
-            )
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,

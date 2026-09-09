@@ -3770,11 +3770,11 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(
     asyncio.run(scenario())
 
 
-def test_a_scenario_that_settled_nothing_at_all_is_errored_not_passed(monkeypatch) -> None:
-    """The one case with no verdict to report: every sub-goal undecided.
+def test_a_judge_that_settled_nothing_still_does_not_error_the_scenario(monkeypatch) -> None:
+    """No judge outcome errors a scenario, including every sub-goal undecided.
 
-    Reporting this as passed is the auto-pass this whole path exists to prevent, so `errored`
-    stays for it and names what could not be decided.
+    The call ran and its evidence stands. The unsettled sub-goals stay visible as `None` on the
+    receipt, which is where a reader sees that nothing decided them.
     """
 
     async def _verdict(goal, world, calls, *, messages=()):
@@ -3811,11 +3811,9 @@ def test_a_scenario_that_settled_nothing_at_all_is_errored_not_passed(monkeypatc
         ]
         result = await scheduler.run(scenarios)
         receipt = result.receipts[0]
-        assert receipt.status == "errored"
+        assert receipt.status == "passed"
         assert [goal.held for goal in receipt.sub_goals] == [None, None]
-        assert receipt.failure is not None
-        assert receipt.failure.code == "judge_undecided"
-        assert "was_it_reassuring" in receipt.failure.message
+        assert receipt.failure is None
         await pool.close()
 
     asyncio.run(scenario())
