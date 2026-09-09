@@ -3985,8 +3985,8 @@ def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
 
     assert captured["speed"] == 1.12
     assert captured["voice"] == "abc"
-    # emotion is deliberately absent: it rides on __experimental_controls with no sonic-3
-    # guarantee, and an unsupported control failing mid-call is worse than no emotion tag.
+    # Absent because this persona has no recognised emotion, not because emotion is unsupported:
+    # probing the live API settled that it is accepted, and it is wired from a validated set.
     assert "emotion" not in captured
 
 
@@ -4015,6 +4015,44 @@ def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
     )
 
     assert "speed" not in captured
+
+
+def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(monkeypatch, caplog):
+    """The only record of what the simulator actually sounded like.
+
+    call_metadata reports conversation_speed 1.0 and a constant voice name on every call whatever
+    the simulator was given, so without this line a run's real delivery cannot be checked after the
+    fact, and the tests below would be the only evidence that either control was ever applied.
+    """
+    import logging
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda name: SimpleNamespace(TTS=lambda **kwargs: "tts"),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    with caplog.at_level(logging.INFO, logger="fi.simulate.simulation.livekit_models"):
+        livekit_models._cartesia_tts(
+            TTSConfig(
+                provider="cartesia",
+                model="sonic-3",
+                voice="abc",
+                speed=1.12,
+                emotion=["anger:low"],
+            ),
+            http_session=None,
+        )
+
+    said = caplog.text
+    assert "voice=abc" in said
+    assert "speed=1.12" in said
+    assert "anger:low" in said
 
 
 def test_every_emotion_we_can_emit_is_one_cartesia_accepts():

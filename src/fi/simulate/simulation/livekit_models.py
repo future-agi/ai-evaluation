@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ except ImportError as exc:
     ) from exc
 
 from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -198,6 +201,11 @@ def _cartesia_tts(
     # validated set rather than taken from the plugin's types.
     speed = getattr(config, "speed", None)
     emotion = getattr(config, "emotion", None)
+    # The only record of what the simulator actually sounded like: call_metadata reports a constant
+    # speed and voice name whatever it was given.
+    logger.info(
+        "cartesia_tts voice=%s speed=%s emotion=%s", voice, speed, emotion or None
+    )
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
         http_session=http_session,
