@@ -160,3 +160,39 @@ def test_cached_tokens_default_to_zero_for_a_backend_that_does_not_report_them(t
     spend.record("write-scenarios", 0.5, turns=1, tokens_in=100, tokens_out=10)
 
     assert spend.snapshot()["stages"][0]["tokens_cached"] == 0
+
+
+def test_the_default_model_is_one_we_can_price():
+    """A run on an unpriced model reports a total that understates the bill.
+
+    It is not silent: the turns land in ``unpriced_turns``. But the number somebody reads is the
+    total, so bumping the default without adding its prices has to fail here rather than in a
+    month's invoice.
+    """
+    from fi.alk.harness.backends.vertex_gemini import DEFAULT_MODEL, PRICES_PER_MILLION
+
+    assert DEFAULT_MODEL in PRICES_PER_MILLION, (
+        f"{DEFAULT_MODEL} has no entry in PRICES_PER_MILLION, so every run on it reports "
+        "less than it cost"
+    )
+
+
+def test_every_harness_stage_feeds_the_one_ledger():
+    """Parallel scenario writers and the suite review each open their own session.
+
+    Spend is recorded in ``Stage``'s handling of ``StageDone`` and nowhere else, so a stage added
+    later is counted without anybody remembering to count it. `validate-source-data` proved that on
+    a real run: it appeared in the ledger without being wired anywhere.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "src" / "fi" / "alk" / "harness"
+    recorded = [
+        path.name
+        for path in root.glob("*.py")
+        if "spend.record(" in path.read_text(encoding="utf-8")
+    ]
+    assert recorded == ["session.py"], (
+        "spend must be recorded in exactly one place; a second call site double-counts or drifts, "
+        f"found: {recorded}"
+    )
