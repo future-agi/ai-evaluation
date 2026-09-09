@@ -36,7 +36,7 @@ import logging
 import os
 import stat
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
@@ -1411,16 +1411,9 @@ class CallRunnerImpl:
         # coverage guarantee turns an empty `calls` tuple into evidence_missing/simulator
         # regardless of turns (hosted_scheduler.py's own unconditioned-on-turns rule).
         calls = () if is_silent_agent else base.calls
-        return CallOutcome(
-            calls=calls,
-            turns=base.turns,
-            started_at=base.started_at,
-            ended_at=base.ended_at,
-            duration_ms=base.duration_ms,
-            transcript_artifact=base.transcript_artifact,
-            recording_artifacts=base.recording_artifacts,
-            stop_reason=base.stop_reason,
-        )
+        # Copied rather than rebuilt field by field: relisting them dropped `messages` silently,
+        # and the judge then had no transcript to settle a spoken claim against.
+        return replace(base, calls=calls)
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         seam = self._context.evidence_seam

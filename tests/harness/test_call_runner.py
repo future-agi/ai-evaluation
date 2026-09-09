@@ -1532,3 +1532,26 @@ def test_a_timed_out_call_that_never_got_going_still_aborts(tmp_path: Path) -> N
         _runtime(metadata={"livekit_agent_name": "a-w0"}),
     )
     assert "voice_call_not_completed" in str(aborted)
+
+
+def test_the_returned_outcome_keeps_the_transcript_the_judge_needs():
+    """The final outcome used to be rebuilt field by field, which dropped `messages` in silence.
+
+    A judged sub-goal about what was said then had no transcript, and the judge could only answer
+    that it could not tell -- observed on a real localhost run before this was fixed.
+    """
+    from dataclasses import replace
+
+    from fi.alk.harness.hosted_scheduler import CallOutcome
+
+    said = ({"role": "user", "content": "call me back tomorrow"},)
+    base = CallOutcome(
+        calls=(),
+        turns=12,
+        started_at="2026-09-10T00:00:00.000Z",
+        ended_at="2026-09-10T00:01:24.000Z",
+        duration_ms=84000,
+        transcript_artifact="sha256:" + "0" * 64,
+        messages=said,
+    )
+    assert replace(base, calls=()).messages == said
