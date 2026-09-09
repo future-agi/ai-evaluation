@@ -2523,7 +2523,13 @@ async def _wait_for_conversation_end(
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
         "conversation_stalled": asyncio.create_task(
-            _wait_for_conversation_silence(session)
+            _wait_for_conversation_silence(
+                session,
+                # A stub agent in a test carries no floor; absent means never settle early.
+                min_turn_messages=int(
+                    getattr(customer_agent, "_min_turn_messages", 0) or 0
+                ),
+            )
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
@@ -2719,6 +2725,7 @@ async def _wait_for_conversation_silence(
     session: AgentSession,
     *,
     quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
+    min_turn_messages: int = 0,
 ) -> None:
     """Finish only after a long, genuine stretch of mutual silence.
 
