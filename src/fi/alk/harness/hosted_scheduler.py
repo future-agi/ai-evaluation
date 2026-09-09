@@ -222,8 +222,8 @@ class CallOutcome:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
-    # What was said. The artifact above is an id the sandbox cannot read back, and a judged
-    # sub-goal about wording has nothing else to go on.
+    # The artifact above is an id the sandbox cannot read back, and a judged sub-goal about
+    # wording has nothing else to go on.
     messages: tuple[Any, ...] = ()
 
 
@@ -308,9 +308,6 @@ class CallSummary:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
-    # What was said. The artifact above is an id the sandbox cannot read back, and a judged
-    # sub-goal about wording has nothing else to go on.
-    messages: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2087,12 +2084,9 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        # An undecided sub-goal is reported unsettled on the sub-goal itself. It is not evidence
-        # against the agent, so it cannot read as failed, and it does not decide the scenario:
-        # promoting it there condemned calls that ran to completion with their evidence intact,
-        # and attaching a failure to one made a working call look broken. The status follows the
-        # sub-goals that were actually settled. `errored` is kept for the one case that has no
-        # verdict to report at all: nothing settled, so there is nothing to say about the agent.
+        # An unsettled sub-goal is not evidence against the agent and does not decide the
+        # scenario; the status follows what was settled. `errored` is kept for the one case with
+        # no verdict at all, since reporting that as passed is the auto-pass this path prevents.
         settled = [result for result in sub_goal_results if result.held is not None]
         if any(result.held is False for result in sub_goal_results):
             status = "failed"
