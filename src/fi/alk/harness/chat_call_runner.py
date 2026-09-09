@@ -502,4 +502,5 @@ class HostedChatCallRunner:
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),
             transcript_artifact=transcript_id,
+            messages=tuple(transcript.canonical_messages()),
         )
