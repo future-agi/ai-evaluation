@@ -27,6 +27,12 @@ class _World:
         return self.rows
 
 
+class _RejectingWorld(_World):
+    def query(self, sql: str, params=()) -> list[dict]:
+        self.queried.append(sql)
+        raise RuntimeError("relation sqlite_master does not exist")
+
+
 def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
     """Run the judge with the model replaced by a scripted decide() call."""
     world = world or _World()
@@ -76,6 +82,17 @@ def test_the_judge_reads_the_live_world_before_deciding(monkeypatch):
     """It is given the final state, not a snapshot: the query has to reach the world handle."""
     (held, _), world = _drive(
         monkeypatch, {"passed": True, "explanation": "row seen", "look": True}
+    )
+    assert held is True
+    assert world.queried == ["select 1"]
+
+
+def test_bad_model_sql_is_returned_as_recoverable_tool_feedback(monkeypatch):
+    world = _RejectingWorld()
+    (held, _), world = _drive(
+        monkeypatch,
+        {"passed": True, "explanation": "contacts row seen", "look": True},
+        world=world,
     )
     assert held is True
     assert world.queried == ["select 1"]

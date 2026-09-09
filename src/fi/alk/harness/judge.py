@@ -31,7 +31,9 @@ _INSTRUCTIONS = """
 You decide one claim about a session that already happened, against the world it left behind.
 
 Look before you answer: read the actions you were given, inspect the tables the claim touches, query
-for a specific row when the claim is about one. The world is the run's final state.
+for a specific row when the claim is about one. The world is the run's final state. Its SQL dialect
+is PostgreSQL, not SQLite. Use inspect_world to discover tables; do not query sqlite_master or make
+up a schema.
 
 Then call decide, once. `passed` true when the claim holds, false when it does not, and an
 explanation citing what you saw: a value, a row, an action and its arguments. An explanation that
@@ -77,11 +79,24 @@ async def judge(goal: Any, world: Any, calls: Sequence[Any]) -> tuple[bool | Non
 
     @tool(
         "query_world",
-        "Run one read-only SQL query, for a claim about a specific row.",
+        "Run one read-only PostgreSQL query for a specific row. Use inspect_world for schema discovery.",
         schema({"sql": str}, ["sql"]),
     )
     async def query_world(args: dict[str, Any]) -> dict[str, Any]:
-        return _say(_dump(world.query(str(args.get("sql") or ""))))
+        sql = str(args.get("sql") or "")
+        try:
+            return _say(_dump(world.query(sql)))
+        except Exception as exc:  # noqa: BLE001 - bad model SQL is feedback, not a stage crash
+            return _say(
+                _dump(
+                    {
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "dialect": "postgresql",
+                        "recovery": "Use inspect_world to discover real tables, then retry once.",
+                    }
+                ),
+                error=True,
+            )
 
     @tool(
         "decide",

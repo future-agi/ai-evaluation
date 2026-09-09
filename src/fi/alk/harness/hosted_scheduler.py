@@ -361,6 +361,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "ready_not_ready": FailureDomain.SIMULATOR,
     "ready_broken": FailureDomain.SIMULATOR,
     "check_broken": FailureDomain.SIMULATOR,
+    "judge_undecided": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
@@ -2074,6 +2075,15 @@ class HostedScheduler:
             status = "errored"
         else:
             status = "passed"
+        failure = None
+        if status == "errored":
+            undecided = [
+                result.name for result in sub_goal_results if result.held is None
+            ]
+            failure = _failure(
+                "judge_undecided",
+                "The judge could not decide: " + ", ".join(undecided),
+            )
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
@@ -2083,7 +2093,7 @@ class HostedScheduler:
             sub_goals=tuple(sub_goal_results),
             evaluations=(),
             call=self._call_summary(call_outcome),
-            failure=None,
+            failure=failure,
         )
 
     @staticmethod

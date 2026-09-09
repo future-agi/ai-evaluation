@@ -3696,7 +3696,7 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(monkeypat
                 "removal-request",
                 "id-1",
                 sub_goals=[
-                    FakeSubGoal("callback_booked", lambda w, c: None),
+                    FakeSubGoal("callback_booked", lambda w, c: True),
                     FakeSubGoal("was_it_reassuring", lambda w, c: None, judged="tone"),
                 ],
                 requires_tool_evidence=False,
@@ -3706,6 +3706,9 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(monkeypat
         receipt = result.receipts[0]
         assert receipt.status == "errored"
         assert [goal.held for goal in receipt.sub_goals] == [True, None]
+        assert receipt.failure is not None
+        assert receipt.failure.code == "judge_undecided"
+        assert "was_it_reassuring" in receipt.failure.message
         await pool.close()
 
     asyncio.run(scenario())
