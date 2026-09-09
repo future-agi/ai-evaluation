@@ -194,8 +194,8 @@ def _cartesia_tts(
     # Both ride on Cartesia's ``__experimental_controls``. sonic-3 rejects a wrong emotion name or
     # level with HTTP 400, and rejects the plugin's own TTSVoiceEmotion vocabulary, so the values
     # come from a set validated against the live API rather than from the plugin's types.
-    speed = getattr(config, "speed", None)
-    emotion = getattr(config, "emotion", None)
+    speed = config.speed
+    emotion = config.emotion
     # The only record of what the simulator actually sounded like: call_metadata reports a constant
     # speed and voice name whatever it was given.
     logger.info(

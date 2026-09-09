@@ -172,11 +172,12 @@ def test_every_harness_stage_feeds_the_one_ledger():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "src" / "fi" / "alk" / "harness"
-    recorded = [
+    # rglob, not glob: a second call site added under backends/ or world/ has to fail this too.
+    recorded = sorted(
         path.name
-        for path in root.glob("*.py")
+        for path in root.rglob("*.py")
         if "spend.record(" in path.read_text(encoding="utf-8")
-    ]
+    )
     assert recorded == ["session.py"], (
         "spend must be recorded in exactly one place; a second call site double-counts or drifts, "
         f"found: {recorded}"
@@ -190,13 +191,20 @@ def test_the_price_table_agrees_with_the_platform_model_table():
 
     from fi.alk.harness.backends.vertex_gemini import PRICES_PER_MILLION
 
-    table = Path(
-        "/Users/karthikavinash/Desktop/repos/future-agi/agentcc-gateway/internal/modeldb/litellm.json"
+    # The platform checked out beside this repo, or nowhere: never an absolute path, which would
+    # carry one machine's layout into a public repo and skip for everyone else.
+    table = (
+        Path(__file__).resolve().parents[3]
+        / "future-agi"
+        / "agentcc-gateway"
+        / "internal"
+        / "modeldb"
+        / "litellm.json"
     )
     if not table.exists():
         import pytest
 
-        pytest.skip("platform checkout not present")
+        pytest.skip("platform checkout not beside this repo")
 
     models = json.loads(table.read_text(encoding="utf-8"))
     for name, (want_in, want_out, _good_until) in PRICES_PER_MILLION.items():
