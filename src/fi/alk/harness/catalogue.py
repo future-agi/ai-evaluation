@@ -33,9 +33,6 @@ CATALOGUE = "sub_goals.json"
 # Turning it on is a deliberate choice: fail authoring rather than accept a check that an agent
 # acting on a misheard detail would pass. That is the failure the suite exists to catch, so this is
 # a real option and not a hypothetical one.
-REFUSE_TRUTHINESS_CHECKS = False
-
-
 class SubGoal(BaseModel):
     """One named thing the agent can be checked on, shared across every scenario that needs it.
 
@@ -128,8 +125,6 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         )
     problems.extend(_presence_only_problems(sub_goal))
     problems.extend(_judged_problems(sub_goal))
-    if REFUSE_TRUTHINESS_CHECKS and (advisory := weak_check_advisory(sub_goal)):
-        problems.append(advisory)
     return problems
 
 
