@@ -181,3 +181,26 @@ def test_every_harness_stage_feeds_the_one_ledger():
         "spend must be recorded in exactly one place; a second call site double-counts or drifts, "
         f"found: {recorded}"
     )
+
+
+def test_the_price_table_agrees_with_the_platform_model_table():
+    """Prices are copied from the platform's litellm table, so drift is a silent mis-bill."""
+    import json
+    from pathlib import Path
+
+    from fi.alk.harness.backends.vertex_gemini import PRICES_PER_MILLION
+
+    table = Path(
+        "/Users/karthikavinash/Desktop/repos/future-agi/agentcc-gateway/internal/modeldb/litellm.json"
+    )
+    if not table.exists():
+        import pytest
+
+        pytest.skip("platform checkout not present")
+
+    models = json.loads(table.read_text(encoding="utf-8"))
+    for name, (want_in, want_out, _good_until) in PRICES_PER_MILLION.items():
+        entry = models.get(f"vertex_ai/{name}") or models.get(name)
+        assert entry, f"{name} is priced here but absent from the platform table"
+        assert round(entry["input_cost_per_token"] * 1_000_000, 6) == want_in, name
+        assert round(entry["output_cost_per_token"] * 1_000_000, 6) == want_out, name

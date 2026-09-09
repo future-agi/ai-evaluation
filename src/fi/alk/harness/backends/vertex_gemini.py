@@ -54,13 +54,28 @@ _TERMINAL_SAVE_TOOLS = frozenset(
     }
 )
 
-# Vertex list pricing per 1M tokens: (input, output, last day the pair is known good). Verified
-# 2026-09-06. An unknown or expired model reports no cost rather than a wrong one, and shows up in
+# Vertex list pricing per 1M tokens: (input, output, last day the pair is known good). Checked
+# against the platform's litellm model table. An unknown or expired model reports no cost rather than a wrong one, and shows up in
 # `unpriced_turns`; gemini-3.7-flash is introductory pricing that doubles on 2027-01-01.
 PRICES_PER_MILLION = {
+    "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
     "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
-    "gemini-3.5-flash-lite": (0.30, 2.50, "2026-12-31"),
-    "gemini-3.1-flash-lite": (0.25, 1.50, "2026-12-31"),
+    "gemini-3.6-flash": (0.75, 3.75, "2026-12-31"),
+    "gemini-3.5-transcribe-preview": (2.5, 12, "2026-12-31"),
+    "gemini-3.5-transcribe-live-preview": (3.5, 21, "2026-12-31"),
+    "gemini-3.5-flash-lite": (0.3, 2.5, "2026-12-31"),
+    "gemini-3.5-flash": (1.5, 9, "2026-12-31"),
+    "gemini-3.1-pro-preview-customtools": (2, 12, "2026-12-31"),
+    "gemini-3.1-pro-preview": (2, 12, "2026-12-31"),
+    "gemini-3.1-flash-lite-preview": (0.25, 1.5, "2026-12-31"),
+    "gemini-3.1-flash-lite-image": (0.25, 1.5, "2026-12-31"),
+    "gemini-3.1-flash-lite": (0.25, 1.5, "2026-12-31"),
+    "gemini-3.1-flash-image-preview": (0.5, 3, "2026-12-31"),
+    "gemini-3.1-flash-image": (0.5, 3, "2026-12-31"),
+    "gemini-3-pro-preview": (2, 12, "2026-12-31"),
+    "gemini-3-pro-image-preview": (2, 12, "2026-12-31"),
+    "gemini-3-pro-image": (2, 12, "2026-12-31"),
+    "gemini-3-flash-preview": (0.5, 3, "2026-12-31"),
 }
 
 _PYTHON_TYPES = {
