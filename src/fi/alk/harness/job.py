@@ -32,6 +32,7 @@ class SourceKind(str, Enum):
     ARCHIVE = "archive"
     IMAGE = "image"
     REMOTE = "remote"
+    PROVIDER = "provider"
 
 
 class SourceVisibility(str, Enum):
@@ -53,6 +54,12 @@ class RepositorySource(BaseModel):
 
     @model_validator(mode="after")
     def _required_locator(self) -> "RepositorySource":
+        # A connected provider agent is itself the source of truth. Its ID lives
+        # in AgentConnection.config and its definition is fetched with the
+        # run-scoped provider credential during authoring, so no repository
+        # locator is required.
+        if self.kind is SourceKind.PROVIDER:
+            return self
         if self.kind is SourceKind.GITHUB and self.repository:
             location = parse_github_location(self.repository)
             if self.ref and location.ref and self.ref != location.ref:

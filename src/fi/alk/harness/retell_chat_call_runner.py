@@ -329,7 +329,7 @@ class RetellChatCallRunner:
             await wrapper.aclose()
         ended = datetime.now(timezone.utc)
         transcript_id = await self._adapter.upload_artifact(
-            (transcript.spoken() + "\n").encode(),
+            transcript.artifact(),
             kind=ArtifactKind.TRANSCRIPT,
             scenario_key=scenario.scenario_key,
         )

@@ -92,6 +92,24 @@ async def _single_exchange(
     )
 
 
+def test_chat_transcript_artifact_preserves_structured_roles() -> None:
+    transcript = Transcript(
+        exchanges=[
+            Exchange("customer", "I need help with an invoice."),
+            Exchange("agent", "What is the invoice number?"),
+        ],
+        ended=FINISHED,
+    )
+
+    payload = json.loads(transcript.artifact())
+
+    assert payload["messages"] == [
+        {"role": "user", "content": "I need help with an invoice."},
+        {"role": "assistant", "content": "What is the invoice number?"},
+    ]
+    assert payload["ended"] == FINISHED
+
+
 def _context(tmp_path: Path) -> CallRunnerContext:
     bundle = tmp_path / "bundle"
     scenario = bundle / "scenarios" / "one"
