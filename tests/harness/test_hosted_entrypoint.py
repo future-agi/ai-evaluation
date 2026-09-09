@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 import contextlib
 import hashlib
 import json
@@ -67,6 +68,21 @@ TARGET_PROVIDER_ALIAS = "LIVEKIT_API_KEY"
 # Bundle fixture — mirrors test_process_preflight.py's own helper (not imported: this file is
 # self-contained per the "touch only your two new files" rule).
 # =================================================================================================
+
+
+@pytest.fixture(autouse=True)
+def _judged_sub_goals_decided_without_a_model(monkeypatch):
+    """These tests are about the entrypoint, not about judging.
+
+    A judged sub-goal now goes to a model, so without this every scenario carrying one would make a
+    live call and fail on the verdict rather than on what the test is asking about.
+    """
+    from fi.alk.harness import hosted_scheduler
+
+    async def _held(goal, world, calls):
+        return True, f"{goal.name}: stubbed for an entrypoint test"
+
+    monkeypatch.setattr(hosted_scheduler, "_judge", _held)
 
 
 def _base_manifest_body() -> dict[str, Any]:
@@ -525,7 +541,11 @@ class FakeWorldFactory:
 class FakeSubGoal:
     name: str
     should_hold: bool
-    judged: str = "yes"
+    # Empty: this fake carries a working check, so it is a CODED sub-goal. A real sub-goal is one
+    # or the other -- `deterministic()` is `bool(check)` and scenario_source only marks `judged`
+    # when no check file exists -- so a fake that claimed both routed itself to the judge and
+    # never ran the check it was given.
+    judged: str = ""
 
     def check(self, world: Any, calls: Any) -> object:
         del world, calls

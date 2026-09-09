@@ -2535,7 +2535,14 @@ def test_evidence_missing_twice_errors() -> None:
     asyncio.run(scenario())
 
 
-def test_conversation_only_scenario_can_be_judged_without_tool_calls() -> None:
+def test_conversation_only_scenario_can_be_judged_without_tool_calls(monkeypatch) -> None:
+    """A judged sub-goal now gets a real verdict; it used to pass before anything looked."""
+
+    async def _verdict(goal, world, calls):
+        return True, "the agent refused and named the reason"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
     async def scenario() -> None:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
@@ -2569,6 +2576,10 @@ def test_conversation_only_scenario_can_be_judged_without_tool_calls() -> None:
         assert receipt.status == "passed"
         assert receipt.failure is None
         assert receipt.scenario_attempt == 1
+        # The verdict is the judge's, not a placeholder: its explanation reaches the receipt.
+        judged = [goal for goal in receipt.sub_goals if goal.judged]
+        assert [goal.held for goal in judged] == [True]
+        assert judged[0].reason == "the agent refused and named the reason"
         await pool.close()
 
     asyncio.run(scenario())
@@ -3701,3 +3712,95 @@ def test_a_sub_goal_with_no_description_still_says_something_useful():
         "Held. The check found nothing wrong."
     )
     assert _sub_goal_reason(goal, _classify_check(False)) is None
+
+
+def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
+    """The behaviour that did not exist before: a judge can fail a run."""
+
+    async def _verdict(goal, world, calls):
+        return False, "no contacts row records the removal"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[FakeSubGoal("removal_honoured", lambda w, c: None, judged="judge")],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "failed"
+        assert [goal.held for goal in receipt.sub_goals] == [False]
+        assert receipt.sub_goals[0].reason == "no contacts row records the removal"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_judged_sub_goals_are_decided_together_not_one_after_another(monkeypatch) -> None:
+    """They only read, so N judged sub-goals cost one round trip rather than N."""
+    started: list[str] = []
+
+    async def _verdict(goal, world, calls):
+        started.append(goal.name)
+        await asyncio.sleep(0.05)
+        return True, f"{goal.name} seen"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "two-judged",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("first", lambda w, c: None, judged="judge"),
+                    FakeSubGoal("second", lambda w, c: None, judged="judge"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        began = asyncio.get_running_loop().time()
+        result = await scheduler.run(scenarios)
+        elapsed = asyncio.get_running_loop().time() - began
+        assert [goal.held for goal in result.receipts[0].sub_goals] == [True, True]
+        assert started == ["first", "second"]
+        # Sequential would be at least 0.10s; together it is one sleep.
+        assert elapsed < 0.09, f"judged sub-goals ran sequentially ({elapsed:.3f}s)"
+        await pool.close()
+
+    asyncio.run(scenario())

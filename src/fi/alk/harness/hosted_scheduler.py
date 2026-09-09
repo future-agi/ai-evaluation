@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from .job import FailureDomain, HarnessStage
+from .judge import judge as _judge
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
@@ -188,6 +189,9 @@ class SubGoal(Protocol):
     )
 
     def check(self, world: ReadOnlyWorld, calls: Sequence[Call]) -> object: ...
+
+
+JudgeFn = Callable[[Any, Any, Sequence[Call]], Awaitable[tuple[bool | None, str]]]
 
 
 class Scenario(Protocol):
@@ -1553,6 +1557,7 @@ class HostedScheduler:
         outbound: OutboundPort,
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
+        judge: JudgeFn | None = None,
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1560,6 +1565,10 @@ class HostedScheduler:
         self._outbound = outbound
         self._job_seed = job_seed
         self._cancel_requested = cancel_requested or (lambda: False)
+        # Injected like every other collaborator, so a test decides a judged sub-goal without a
+        # model call. Resolved here rather than as a default argument, which would bind at import
+        # and ignore both injection and patching.
+        self._judge = judge or _judge
         self._executor: ThreadPoolExecutor | None = None
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
@@ -2103,6 +2112,7 @@ class HostedScheduler:
             )
 
         sub_goal_results: list[SubGoalResult] = []
+        judged_pending: list[tuple[int, Any]] = []
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
@@ -2138,6 +2148,14 @@ class HostedScheduler:
                     )
                 )
                 continue
+            if goal.judged:
+                # A judged sub-goal has no code to settle it: a model decides, here, while the
+                # world the call left behind is still alive. Collected and run together below.
+                judged_pending.append((len(sub_goal_results), goal))
+                sub_goal_results.append(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
+                )
+                continue
             verdict = _classify_check(outcome.value)
             if verdict.broken:
                 broken_failure = _failure(
@@ -2157,6 +2175,22 @@ class HostedScheduler:
                     judged=goal.judged != "",
                 )
             )
+
+        if judged_pending:
+            # Judged sub-goals only read, so they are independent of each other and of the coded
+            # checks: one round trip for all of them rather than one each.
+            verdicts = await asyncio.gather(
+                *(self._judge(goal, check_handle, calls) for _, goal in judged_pending),
+                return_exceptions=True,
+            )
+            for (slot, goal), outcome in zip(judged_pending, verdicts):
+                if isinstance(outcome, BaseException):
+                    held, why = None, f"the judge could not run: {outcome!r}"
+                else:
+                    held, why = outcome
+                sub_goal_results[slot] = SubGoalResult(
+                    name=goal.name, held=held, reason=why, judged=True
+                )
 
         if broken_failure is not None:
             return self._fault(

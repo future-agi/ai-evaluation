@@ -55,6 +55,21 @@ class _FakeJob:
     run_id: str = "job-1"
 
 
+@pytest.fixture(autouse=True)
+def _judged_sub_goals_decided_without_a_model(monkeypatch):
+    """These tests are about wrapping scenarios, not about judging.
+
+    A judged sub-goal now goes to a model, so without this the two consumer-proof tests would make
+    a live call and assert on the verdict rather than on the wrapping.
+    """
+    from fi.alk.harness import hosted_scheduler
+
+    async def _held(goal, world, calls):
+        return True, f"{goal.name}: stubbed for a scenario-source test"
+
+    monkeypatch.setattr(hosted_scheduler, "_judge", _held)
+
+
 def _write_scenario(
     scenarios_root: Path,
     name: str,
