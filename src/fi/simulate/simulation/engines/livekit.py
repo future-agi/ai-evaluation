@@ -3347,6 +3347,16 @@ def _conversation_outcome(
             retryable=True,
         )
     floor, alternation_required = _turn_requirements(min_turn_messages)
+    # A caller that closed the call itself has decided the conversation was finished, and that is
+    # as authoritative as the provider evidence promoted below. Measured: a do-not-call scenario
+    # completed in five messages -- pickup, greeting, the removal request, the agent confirming
+    # removal, "Fine. Goodbye." -- and was then failed for insufficient_conversation purely for
+    # being short. Before the caller closed cleanly it would have trailed extra farewells past the
+    # floor and passed, so holding it to a turn count now punishes the fix. Both roles still have
+    # to have spoken, which keeps a genuine mute or one-sided call failing.
+    caller_closed = stop_reason in {"simulator_end_call", "closing_loop"}
+    if caller_closed and _has_role_alternation(messages):
+        floor, alternation_required = 0, False
     if len(messages) < floor or (
         alternation_required and not _has_role_alternation(messages)
     ):

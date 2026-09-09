@@ -3637,3 +3637,39 @@ def test_a_session_with_nothing_in_flight_still_closes_cleanly() -> None:
     )
 
     asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
+
+
+def test_a_call_the_caller_closed_is_not_failed_for_being_short() -> None:
+    """Measured on call ec24ee93: a do-not-call scenario completed in five messages -- pickup,
+    greeting, the removal request, the agent confirming removal, "Fine. Goodbye." -- and was failed
+    for insufficient_conversation purely on length. Before the caller closed cleanly it would have
+    trailed extra farewells past the floor and passed, so a turn count now punishes the fix."""
+    messages = [
+        {"role": livekit._CALLER, "content": "Hello?"},
+        {"role": livekit._TARGET, "content": "Hi, this is Avery with Alderway Insurance."},
+        {"role": livekit._CALLER, "content": "Take me off your list and do not call again."},
+        {"role": livekit._TARGET, "content": "I have removed your number and we will not call."},
+        {"role": livekit._CALLER, "content": "Fine. Goodbye."},
+    ]
+
+    for reason in ("simulator_end_call", "closing_loop"):
+        outcome = livekit._conversation_outcome(reason, messages, min_turn_messages=8)
+        assert outcome.status == CaseStatus.COMPLETED, (
+            f"{reason} produced {outcome.status} / "
+            f"{getattr(outcome.failure, 'code', None)}"
+        )
+
+
+def test_a_one_sided_call_still_fails_even_if_the_caller_closed() -> None:
+    """The exemption must not hide a genuine mute or one-sided call: both roles have to speak."""
+    only_caller = [
+        {"role": livekit._CALLER, "content": "Hello?"},
+        {"role": livekit._CALLER, "content": "Anyone there? Goodbye."},
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "closing_loop", only_caller, min_turn_messages=8
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
