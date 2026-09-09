@@ -4101,3 +4101,22 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
     )
 
     assert "emotion" not in captured
+
+
+def test_the_closing_turn_must_carry_everything_left_to_say():
+    """Rule 9 named THANKS specifically and the model did not generalise. On call 5e9f613d the
+    caller said "Goodbye." and then "Understood. Make sure it stays off the list." -- a residual
+    demand, not a thanks, so the rule as written did not cover it."""
+    from fi.alk.harness.simulator_voice import simulator_instructions
+
+    text = simulator_instructions("outbound", "expecting", "", "")
+
+    assert "EVERYTHING you still" in text
+    for kind in ("a thanks", "a last condition", "a reminder", "a warning", "a caveat"):
+        assert kind in text, kind
+    # The worked example has to show both shapes, or the rule is abstract.
+    assert "make sure it stays off the list. Goodbye." in text
+    assert "Say your last point BEFORE the farewell" in text
+    # And the rules this must not undo.
+    assert "Answer only what was asked, one fact at a time" in text
+    assert "After your closing turn you say nothing further" in text
