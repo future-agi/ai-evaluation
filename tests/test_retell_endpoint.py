@@ -732,7 +732,7 @@ def test_reconcile_status_fence_only_registered_or_ongoing() -> None:
     assert capture.get("stopped_ids") == ["ongoing_upper"]
 
 
-def test_reconcile_two_matching_rows_stops_newer_and_logs_ambiguous(
+def test_reconcile_two_matching_rows_stops_nothing_and_logs_ambiguous(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Uses the bare-list handler purely as a convenient row-carrying
@@ -767,19 +767,19 @@ def test_reconcile_two_matching_rows_stops_newer_and_logs_ambiguous(
         return result
 
     result = _run(run())
-    assert result == ["newer"]
-    assert capture.get("stopped_ids") == ["newer"]
+    # Ambiguity fails closed: nothing is stopped on the customer's account.
+    assert result == []
+    assert "stopped_ids" not in capture
     record = next(
         r for r in caplog.records if "retell_reconcile_ambiguous" in r.message
     )
-    assert record.left_alone == 1
-    assert record.stopped_call_id == "newer"
-    # The row we left alone is a third-party id and must never leave the
-    # process in this record, under any attribute name.
+    assert record.stoppable == 2
+    # Neither in-window row's id may leave the process in this record, under
+    # any attribute name — the log carries counts only.
     for value in vars(record).values():
         items = value if isinstance(value, (list, tuple, set)) else [value]
         for item in items:
-            assert item != "older"
+            assert item not in ("older", "newer")
 
 
 def test_reconcile_no_destination_field_at_all_stops_nothing(
@@ -1262,6 +1262,48 @@ def test_reconcile_full_page_logs_page_full(caplog: pytest.LogCaptureFixture) ->
 
     result = _run(run())
     assert result == []
+    assert any("retell_reconcile_page_full" in r.message for r in caplog.records)
+
+
+def test_reconcile_full_page_with_matching_row_stops_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A full page means the candidate set may be truncated, so our own call
+    # could be off the page. Even a row that matches our line must not be
+    # stopped — fail closed.
+    ours = {
+        "call_id": "ours",
+        "to_number": "+15550000099",
+        "from_number": "+15550000001",
+        "start_timestamp": 1_500,
+        "call_status": "registered",
+    }
+    fillers = [
+        {
+            "call_id": f"filler_{i}",
+            "to_number": "+19990000000",
+            "from_number": "+15550000001",
+            "start_timestamp": 1_000 + i,
+            "call_status": "ended",
+        }
+        for i in range(49)
+    ]
+    capture: dict[str, Any] = {}
+
+    async def run() -> list[str]:
+        originator, client = _originator(
+            _list_calls_handler([ours, *fillers], capture)
+        )
+        with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+            result = await originator.reconcile_and_stop(
+                started_after_ms=1_000, ended_before_ms=2_000
+            )
+        await client.aclose()
+        return result
+
+    result = _run(run())
+    assert result == []
+    assert "stopped_ids" not in capture
     assert any("retell_reconcile_page_full" in r.message for r in caplog.records)
 
 

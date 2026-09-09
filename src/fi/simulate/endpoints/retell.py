@@ -397,12 +397,14 @@ class RetellCallOriginator:
         # never no_candidates (the "page genuinely empty" signal).
         has_more = bool(getattr(response, "has_more", False))
         if len(rows) == self._LIST_CALLS_LIMIT or has_more:
+            # Truncated/full page: ordering isn't guaranteed, so our own call
+            # may be off the page. A partial view of the customer's production
+            # account cannot establish ownership — fail closed, stop nothing.
             logger.warning(
                 "retell_reconcile_page_full",
                 extra={"row_count": len(rows), "has_more": has_more},
             )
-            if not rows:
-                return []
+            return []
 
         if not rows:
             # The likely inert mode: a range filter on start_timestamp can't
@@ -500,11 +502,20 @@ class RetellCallOriginator:
         if not stoppable:
             return []
 
-        # Our own dial is the last event inside the window; stop only the
-        # latest match and leave every other in-window match alone.
-        stoppable.sort(key=lambda row: row["start_timestamp"], reverse=True)
-        target, ambiguous = stoppable[0], stoppable[1:]
+        if len(stoppable) > 1:
+            # More than one in-window stoppable row from our line to the leased
+            # DID. Source number + destination + window does not single out our
+            # own call — concurrent calls, a duplicate request, or a prior
+            # timed-out attempt could all sit here — and this is the customer's
+            # production account, so fail closed and stop nothing. Log the count
+            # only, never the third-party ids.
+            logger.warning(
+                "retell_reconcile_ambiguous",
+                extra={"stoppable": len(stoppable)},
+            )
+            return []
 
+        target = stoppable[0]
         call_id = target.get("call_id")
         has_id = isinstance(call_id, str)
         if not has_id or not _CALL_ID_PATTERN.fullmatch(call_id):
@@ -515,15 +526,6 @@ class RetellCallOriginator:
                 extra={"has_id": has_id, "count": len(stoppable)},
             )
             return []
-
-        if ambiguous:
-            # The id we stopped is ours by construction (validated above);
-            # the others are the customer's rows and only their count
-            # belongs in our logs.
-            logger.warning(
-                "retell_reconcile_ambiguous",
-                extra={"stopped_call_id": call_id, "left_alone": len(ambiguous)},
-            )
 
         try:
             await self.stop(call_id, timeout=self._RECONCILE_TIMEOUT)
