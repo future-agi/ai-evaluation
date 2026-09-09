@@ -58,6 +58,16 @@ class Transcript:
     def spoken(self) -> str:
         return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
 
+    def canonical_messages(self) -> list[dict[str, str]]:
+        """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
+        return [
+            {
+                "role": "assistant" if turn.speaker == "agent" else "user",
+                "content": turn.text,
+            }
+            for turn in self.exchanges
+        ]
+
     def artifact(self) -> bytes:
         """Return the lossless transcript wire format used by hosted ingestion."""
         return (

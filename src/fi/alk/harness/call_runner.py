@@ -1337,6 +1337,11 @@ class CallRunnerImpl:
             duration_ms=_duration_ms(case_started_at, ended_at),
             transcript_artifact=transcript_artifact,
             recording_artifacts=tuple(recording_artifacts),
+            messages=tuple(
+                case.result.messages or ()
+                if case is not None and case.result is not None
+                else ()
+            ),
             stop_reason=(
                 str(case.result.metadata.get("stop_reason"))
                 if case is not None

@@ -150,3 +150,13 @@ def test_a_long_cell_is_trimmed_rather_than_flooding_the_judge():
     trimmed = judge_module._short({"blob": "x" * 5000})
     assert len(str(trimmed)) < 1000
     assert "5000 chars" in str(trimmed)
+
+
+def test_the_judge_is_given_what_was_said_not_only_what_was_done():
+    """A claim about wording has to reach the transcript, or it can only ever be undecided."""
+    said = [{"role": "user", "content": "one large fries"}] * 400
+    said.append({"role": "assistant", "content": "your order is one large fries"})
+    rendered = judge_module._transcript(said)
+    assert "user: one large fries" in rendered
+    assert "your order is one large fries" in rendered
+    assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
