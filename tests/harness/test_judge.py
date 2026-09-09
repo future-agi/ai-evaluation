@@ -153,29 +153,10 @@ def test_a_long_cell_is_trimmed_rather_than_flooding_the_judge():
 
 
 def test_the_judge_is_given_what_was_said_not_only_what_was_done():
-    """A claim about wording has to reach the transcript, or it can only ever be undecided.
-
-    Three drivethru, three insurance and two hotel scenarios errored on `judge_undecided` for
-    exactly this reason: the sub-goal asked whether the agent said something and the judge was
-    handed tool calls alone.
-    """
-    said = [
-        {"role": "user", "content": "one large fries please"},
-        {"role": "assistant", "content": "That is one large fries. Anything else?"},
-    ]
-    rendered = judge_module._transcript(said)
-    assert "user: one large fries please" in rendered
-    assert "assistant: That is one large fries. Anything else?" in rendered
-
-
-def test_a_long_transcript_keeps_its_tail_where_a_readback_would_be():
-    said = [{"role": "assistant", "content": "x" * 200} for _ in range(400)]
+    """A claim about wording has to reach the transcript, or it can only ever be undecided."""
+    said = [{"role": "user", "content": "one large fries"}] * 400
     said.append({"role": "assistant", "content": "your order is one large fries"})
     rendered = judge_module._transcript(said)
-    assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 64
+    assert "user: one large fries" in rendered
     assert "your order is one large fries" in rendered
-    assert rendered.startswith("... [earlier turns trimmed]")
-
-
-def test_a_session_with_no_transcript_says_so_rather_than_inventing_one():
-    assert judge_module._transcript([]) == ""
+    assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8

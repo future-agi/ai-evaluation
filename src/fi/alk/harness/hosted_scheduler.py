@@ -222,8 +222,7 @@ class CallOutcome:
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
     stop_reason: str | None = None
-    # The artifact above is an id the sandbox cannot read back, and a judged sub-goal about
-    # wording has nothing else to go on.
+    # The artifact above is an id the sandbox cannot read back.
     messages: tuple[Any, ...] = ()
 
 
