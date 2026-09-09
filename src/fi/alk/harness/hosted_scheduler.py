@@ -218,6 +218,7 @@ class CallOutcome:
     duration_ms: int
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
+    stop_reason: str | None = None
 
 
 class CallAborted(RuntimeError):
@@ -293,6 +294,7 @@ class CallSummary:
     turns: int
     transcript_artifact: str | None = None
     recording_artifacts: tuple[str, ...] = ()
+    stop_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2195,6 +2197,7 @@ class HostedScheduler:
             turns=outcome.turns,
             transcript_artifact=outcome.transcript_artifact,
             recording_artifacts=outcome.recording_artifacts,
+            stop_reason=outcome.stop_reason,
         )
 
     def _fault(

@@ -1178,6 +1178,9 @@ class OutboundAdapter:
                 "transcript_artifact": transcript_artifact,
                 "recording_artifacts": recording_artifacts,
             }
+            stop_reason = getattr(receipt.call, "stop_reason", None)
+            if stop_reason:
+                call["stop_reason"] = stop_reason
         elif receipt.call is not None:
             # `hosted_scheduler.CallSummary.started_at` is `str | None`, but
             # `outbound.CallSummary.started_at` requires a real timestamp -- per the contract a
@@ -1832,6 +1835,7 @@ async def run_job(
     # held outside the try so an exception on any path after this line still lets the
     # `finally` below close whatever was actually provisioned.
     pool: WorldPool | None = None
+    call_runner: CallRunner | None = None
 
     def cancel_requested() -> bool:
         requested = cancel_state.requested() or adapter.is_fenced
@@ -2327,6 +2331,15 @@ async def run_job(
                 )  # idempotent backstop for any path above that missed one.
             except Exception:  # noqa: BLE001 - a finally must never mask the real exit path
                 logger.exception("pool.close() failed in the run_job finally backstop")
+        if call_runner is not None:
+            close_call_runner = getattr(call_runner, "close", None)
+            if callable(close_call_runner):
+                try:
+                    result = close_call_runner()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception:  # noqa: BLE001 - cleanup must never mask the real exit path
+                    logger.exception("call runner close failed in the run_job finally backstop")
         restore_sigterm()
 
 

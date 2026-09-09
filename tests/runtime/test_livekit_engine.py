@@ -1338,6 +1338,7 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
 
 def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
     calls = []
+    removed_listeners = []
 
     class FakeSession:
         history = SimpleNamespace(
@@ -1349,6 +1350,9 @@ def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
 
         def on(self, _event, _callback):
             return None
+
+        def off(self, event, callback):
+            removed_listeners.append((event, callback))
 
         def shutdown(self, *, drain=True):
             calls.append(("shutdown", drain))
@@ -1388,14 +1392,16 @@ def test_minimum_messages_is_a_floor_not_a_stop_trigger() -> None:
 
     assert reason == "simulator_end_call"
     assert calls == []
+    assert [event for event, _callback in removed_listeners] == ["close"]
 
 
-def test_conversation_end_returns_settled_when_silence_backstop_fires(
+def test_conversation_end_returns_stalled_when_silence_backstop_fires(
     monkeypatch,
 ) -> None:
     # Wiring check: task-dict key -> reason tuple -> returned string. With no
     # endCall and no disconnect, a fired silence backstop ends as
-    # "conversation_settled" (which classifies COMPLETED).
+    # "conversation_stalled" (which is a retryable failure). Silence alone is
+    # never evidence that a business conversation completed.
     class FakeRoom:
         def on(self, _event, _callback):
             return None
@@ -1430,7 +1436,7 @@ def test_conversation_end_returns_settled_when_silence_backstop_fires(
             agent_first_silence_timeout_seconds=30,
         )
 
-    assert asyncio.run(run()) == "conversation_settled"
+    assert asyncio.run(run()) == "conversation_stalled"
 
 
 def test_provider_disconnect_can_end_a_balanced_conversation() -> None:
@@ -1733,7 +1739,31 @@ def test_conversation_silence_waits_until_speech_has_finished() -> None:
     asyncio.run(run())
 
 
-def test_conversation_settled_reason_classifies_completed() -> None:
+def test_conversation_silence_waits_until_model_thinking_has_finished() -> None:
+    session = SimpleNamespace(
+        agent_state="thinking",
+        user_state="listening",
+        history=SimpleNamespace(
+            items=[
+                SimpleNamespace(type="message", role="assistant", text_content="Hello"),
+                SimpleNamespace(type="message", role="user", text_content="Keep going"),
+            ]
+        ),
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(session, quiet_seconds=0.01)
+        )
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        session.agent_state = "listening"
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run())
+
+
+def test_conversation_stalled_reason_classifies_retryable_failure() -> None:
     messages = [
         {"role": "assistant", "content": "One"},
         {"role": "user", "content": "Two"},
@@ -1743,10 +1773,12 @@ def test_conversation_settled_reason_classifies_completed() -> None:
         {"role": "user", "content": "Six"},
     ]
     outcome = livekit._conversation_outcome(
-        "conversation_settled", messages, min_turn_messages=6
+        "conversation_stalled", messages, min_turn_messages=6
     )
-    assert outcome.status == CaseStatus.COMPLETED
-    assert outcome.metadata["stop_reason"] == "conversation_settled"
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "conversation_stalled"
+    assert outcome.failure.retryable is True
 
 
 def test_conversation_timeout_does_not_start_session_teardown() -> None:
@@ -1784,24 +1816,23 @@ def test_conversation_timeout_does_not_start_session_teardown() -> None:
     assert calls == []
 
 
-def test_session_cleanup_timeout_does_not_cancel_livekit_close_task() -> None:
+def test_session_cleanup_timeout_cancels_and_reaps_livekit_close_task() -> None:
     close_started = asyncio.Event()
-    allow_close = asyncio.Event()
-    close_finished = asyncio.Event()
+    close_cancelled = asyncio.Event()
 
     class FakeSession:
         async def aclose(self):
             close_started.set()
-            await allow_close.wait()
-            close_finished.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                close_cancelled.set()
 
     async def run() -> None:
         with pytest.raises(asyncio.TimeoutError):
             await livekit._close_agent_session(FakeSession(), timeout=0.01)
         assert close_started.is_set()
-        assert not close_finished.is_set()
-        allow_close.set()
-        await asyncio.wait_for(close_finished.wait(), timeout=1)
+        assert close_cancelled.is_set()
 
     asyncio.run(run())
 
@@ -1919,7 +1950,9 @@ def test_farewell_only_turns_are_recognised_as_a_closing_loop() -> None:
 
 def test_a_turn_carrying_content_is_not_a_closing() -> None:
     # A farewell that also asks something is still live conversation.
-    assert not livekit._is_closing_only("Goodbye, but can you resend the receipt first?")
+    assert not livekit._is_closing_only(
+        "Goodbye, but can you resend the receipt first?"
+    )
     assert not livekit._is_closing_only("Yes, please book it.")
     assert not livekit._is_closing_only("")
 

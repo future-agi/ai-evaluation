@@ -211,28 +211,55 @@ async def author_invariants(
             )
         return reply({"path": path, "source": content})
 
+    def scenario_review(name: str) -> dict:
+        path = scenarios[name]
+        reviewed.add(name)
+        return {
+            "name": name,
+            "scenario": json.loads(path.read_text()),
+            **{
+                part: (path.parent / part).read_text()
+                if (path.parent / part).exists()
+                else ""
+                for part in ("setup.py", "ready.py")
+            },
+        }
+
     @tool(
         "read_scenario",
-        "Read a scenario's intended outcome and actual setup/ready code",
+        "Read one scenario's intended outcome and actual setup/ready code",
         {"name": str},
     )
     async def read_scenario(args):
         name = args["name"]
         if name not in scenarios:
             return reply({"error": "Choose a listed scenario"})
-        path = scenarios[name]
-        reviewed.add(name)
-        return reply(
-            {
-                "scenario": json.loads(path.read_text()),
-                **{
-                    part: (path.parent / part).read_text()
-                    if (path.parent / part).exists()
-                    else ""
-                    for part in ("setup.py", "ready.py")
-                },
-            }
-        )
+        return reply(scenario_review(name))
+
+    @tool(
+        "read_scenarios",
+        "Read up to 10 scenarios per call so large suites fit the bounded review budget",
+        {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 10,
+                }
+            },
+            "required": ["names"],
+        },
+    )
+    async def read_scenarios(args):
+        names = list(dict.fromkeys(args["names"]))
+        if not names or len(names) > 10:
+            return reply({"error": "Choose between 1 and 10 listed scenarios"})
+        unknown = [name for name in names if name not in scenarios]
+        if unknown:
+            return reply({"error": "Choose listed scenarios", "unknown": unknown})
+        return reply({"scenarios": [scenario_review(name) for name in names]})
 
     @tool(
         "probe_dependency",
@@ -344,6 +371,7 @@ async def author_invariants(
         tools=[
             read_source,
             read_scenario,
+            read_scenarios,
             probe_dependency,
             query_world,
             declare,
@@ -364,7 +392,8 @@ async def author_invariants(
         "API arguments. Read /openapi.json if available and source otherwise. This is a "
         "throwaway world reset after review; effects do not become seed data. Follow values "
         "from one lookup into its consumer rather than accepting HTTP 200 alone as success. "
-        "Read each scenario. Validate that its positive prerequisites match what the SOURCE "
+        "Read each scenario, using read_scenarios in batches of up to 10 for large suites. "
+        "Validate that its positive prerequisites match what the SOURCE "
         "actually does, not merely its narrative: defaults used when creating new records, "
         "capability availability and eligibility. Scope scenario-specific invariants using "
         "the scenarios array (listed keys); omit it for universal data relationships. "

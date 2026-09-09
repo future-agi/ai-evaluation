@@ -110,6 +110,13 @@ _FINAL_TURN_COMMIT_WAIT_SECONDS = 30.0
 # The hosted platform inflates ``cleanup_timeout`` to carry the whole run
 # budget (observed 1470s); as a per-step cleanup bound it must stay capped.
 _MAX_CLEANUP_TIMEOUT_SECONDS = 60.0
+# A dead LiveKit signal connection can leave any one SDK cleanup await pending
+# indefinitely. The case-level deadline is still the outer bound, but no
+# single best-effort operation may consume it all and starve every cleanup that
+# follows. Session close gets longer because it drains several SDK activities.
+_CLEANUP_STEP_TIMEOUT_SECONDS = 8.0
+_SESSION_CLEANUP_TIMEOUT_SECONDS = 15.0
+_BACKGROUND_AUDIO_CLEANUP_TIMEOUT_SECONDS = 5.0
 _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 # How long the side that was meant to speak first is given before the simulated person speaks
 # instead. Both sides are voice agents waiting to be addressed, so when the one that placed the call
@@ -981,11 +988,14 @@ class LiveKitEngine(BaseEngine):
         # actually waits, so every path gets the same bound however it got there.
         _cleanup_started: list[float] = []
 
-        def _cleanup_budget() -> float:
+        def _cleanup_budget(
+            cap: float = _CLEANUP_STEP_TIMEOUT_SECONDS,
+        ) -> float:
             if not _cleanup_started:
                 _cleanup_started.append(time.monotonic())
             spent = time.monotonic() - _cleanup_started[0]
-            return max(1.0, cleanup_timeout - spent)
+            remaining = max(0.1, cleanup_timeout - spent)
+            return min(cap, remaining)
 
         api_key = os.environ.get(runtime.api_key_env)
         api_secret = os.environ.get(runtime.api_secret_env)
@@ -1276,7 +1286,8 @@ class LiveKitEngine(BaseEngine):
                 # The AGENT's direction; it picks which half of the role block the caller gets.
                 call_type=(
                     "outbound"
-                    if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower() == "outbound"
+                    if os.environ.get("HARNESS_CALL_DIRECTION", "").strip().lower()
+                    == "outbound"
                     else "inbound"
                 ),
                 # `name` is an identity for dispatch, not a label for the caller to hear.
@@ -1835,7 +1846,9 @@ class LiveKitEngine(BaseEngine):
                     # 17 messages and both reported 570004ms and no test case.
                     await asyncio.wait_for(
                         customer_agent._stop_background_audio(),
-                        timeout=_cleanup_budget(),
+                        timeout=_cleanup_budget(
+                            _BACKGROUND_AUDIO_CLEANUP_TIMEOUT_SECONDS
+                        ),
                     )
                 except Exception:
                     logger.warning("background audio not closed cleanly", exc_info=True)
@@ -1864,7 +1877,7 @@ class LiveKitEngine(BaseEngine):
                 try:
                     await _close_agent_session(
                         session_to_close,
-                        timeout=_cleanup_budget(),
+                        timeout=_cleanup_budget(_SESSION_CLEANUP_TIMEOUT_SECONDS),
                     )
                 except Exception as exc:
                     _record_cleanup_error(
@@ -1938,7 +1951,7 @@ class LiveKitEngine(BaseEngine):
                         provider_call_id=provider_call_id,
                         originator_name=transport.inbound_call_originator,
                         case_started_at=case_started_at,
-                        cleanup_timeout=cleanup_timeout,
+                        cleanup_timeout=_cleanup_budget(),
                     )
                     for operation, exc in finalize_result.cleanup_errors:
                         _record_cleanup_error(
@@ -2382,7 +2395,7 @@ def _find_target_audio(
 # backstop for a conversation that has genuinely stalled or already finished but
 # never hung up. Kept long so normal turn-gaps (STT endpoint + LLM + TTS latency)
 # never trip it — the run is never cut off at a message count.
-_SILENCE_BACKSTOP_SECONDS = 60.0
+_SILENCE_BACKSTOP_SECONDS = 90.0
 
 # Mutual silence in a conversation both sides joined is a finished call, not a stalled one. A
 # thinking agent is working rather than silent, so the timer holds while either side is busy: no
@@ -2509,12 +2522,8 @@ async def _wait_for_conversation_end(
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
-        "conversation_settled": asyncio.create_task(
-            _wait_for_conversation_silence(
-                session,
-                # A stub agent in a test carries no floor; absent means never settle early.
-                min_turn_messages=int(getattr(customer_agent, "_min_turn_messages", 0) or 0),
-            )
+        "conversation_stalled": asyncio.create_task(
+            _wait_for_conversation_silence(session)
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
@@ -2579,7 +2588,7 @@ async def _wait_for_conversation_end(
             # that would otherwise report the same call as a stall.
             "closing_loop",
             "conversation_silence_timeout",
-            "conversation_settled",
+            "conversation_stalled",
             "provider_disconnected",
             "closed",
         ):
@@ -2589,6 +2598,7 @@ async def _wait_for_conversation_end(
             return "monitor_failed"
         return "session_closed"
     finally:
+        _remove_room_listener(session, "close", on_close)
         _remove_room_listener(
             room,
             "participant_disconnected",
@@ -2709,7 +2719,6 @@ async def _wait_for_conversation_silence(
     session: AgentSession,
     *,
     quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
-    min_turn_messages: int = 0,
 ) -> None:
     """Finish only after a long, genuine stretch of mutual silence.
 
@@ -3298,6 +3307,7 @@ def _conversation_outcome(
         )
     stalled = {
         "conversation_silence_timeout",
+        "conversation_stalled",
         "session_closed",
         "no_conversation",
         "monitor_failed",
@@ -3310,6 +3320,9 @@ def _conversation_outcome(
         message = {
             "conversation_silence_timeout": (
                 "Agent-first conversation stalled after it began"
+            ),
+            "conversation_stalled": (
+                "Conversation produced no new speech for the stall deadline"
             ),
             "session_closed": (
                 "Conversation session closed before a natural end condition"
@@ -3713,7 +3726,13 @@ def _remove_room_listener(room: rtc.Room, event: str, listener) -> None:
 
 
 async def _close_agent_session(session: AgentSession, *, timeout: float) -> None:
-    """Close without cancelling LiveKit's recursive activity teardown on timeout."""
+    """Close a session without abandoning teardown on the event loop.
+
+    A shielded, timed-out ``aclose`` used to keep running after the case had
+    returned. Repeating that in a soak test accumulated SDK activities until
+    the guest process failed. Graceful close gets a bounded opportunity; after
+    that, cancel and reap it because room and process teardown are independent.
+    """
     close_session = getattr(session, "aclose", None)
     if close_session is None:
         session.shutdown(drain=False)
@@ -3722,7 +3741,12 @@ async def _close_agent_session(session: AgentSession, *, timeout: float) -> None
     try:
         await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
     except asyncio.TimeoutError:
-        close_task.add_done_callback(_consume_background_task_result)
+        close_task.cancel()
+        try:
+            await asyncio.wait_for(close_task, timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            if not close_task.done():
+                close_task.add_done_callback(_consume_background_task_result)
         raise
 
 
