@@ -623,3 +623,16 @@ def test_turning_the_refusal_on_rejects_a_truthiness_check(monkeypatch):
     assert problems and "only tests that they are present" in problems[0]
     assert "Compare the value against what this scenario expected" in problems[0]
     assert module.validate_sub_goal(compares) == [], "a real comparison must still pass"
+
+
+def test_a_terse_but_real_judged_claim_is_accepted():
+    """Caught by the full suite, not by the ones I was watching. An earlier threshold of eight
+    words rejected "nothing observable shows tone", which is terse and genuinely says why code
+    cannot settle it. The word count is only a proxy for "more than a restatement of the name"."""
+    from fi.alk.harness.catalogue import validate_sub_goal
+
+    assert validate_sub_goal(_goal("polite", judged="nothing observable shows tone")) == []
+
+    # Still refused: the name asked back as a question, which settles nothing.
+    problems = validate_sub_goal(_goal("polite", judged="was it polite"))
+    assert problems and "does not say what a model has to decide" in problems[0]

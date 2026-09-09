@@ -246,7 +246,11 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
     judged = sub_goal.judged.strip()
     if not judged or sub_goal.check.strip():
         return []
-    if len(judged.split()) < 8:
+    # A word count is a crude proxy for "more than a restatement of the name". Four is where the
+    # real cases fall either side: "was it polite" is the name asked as a question and settles
+    # nothing, while "nothing observable shows tone" is terse and genuinely says why code cannot.
+    # An earlier threshold of eight rejected the second, which is a legitimate claim.
+    if len(judged.split()) < 4:
         return [
             f"{sub_goal.name}: judged, but does not say what a model has to decide and why nothing "
             "observable settles it. Name the judgement and the reason code cannot make it, or "
