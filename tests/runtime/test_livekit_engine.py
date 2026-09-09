@@ -1622,10 +1622,12 @@ def test_the_observed_reply_time_comes_from_the_transport_not_the_poll_loop() ->
         SimpleNamespace(
             history=SimpleNamespace(
                 items=[
-                    _timed_message("assistant", "Hi", started=100.0, stopped=101.0),
-                    _timed_message("user", "Hello", started=102.0, stopped=103.0),
-                    # Reported latency wins when the provider gives one.
-                    _timed_message("assistant", "One moment", started=128.2, stopped=129.0,
+                    # role names via livekit._CALLER / _TARGET: LiveKit calls our simulated
+                    # caller "assistant" and the agent under test "user".
+                    _timed_message(livekit._CALLER, "Hi", started=100.0, stopped=101.0),
+                    _timed_message(livekit._TARGET, "Hello", started=102.0, stopped=103.0),
+                    # Reported latency wins when the provider gives one. This is the TARGET's turn.
+                    _timed_message(livekit._TARGET, "One moment", started=128.2, stopped=129.0,
                                    latency=25.2),
                 ]
             )
@@ -1641,9 +1643,10 @@ def test_the_observed_reply_time_falls_back_to_the_audible_gap() -> None:
         SimpleNamespace(
             history=SimpleNamespace(
                 items=[
-                    _timed_message("assistant", "Hi", started=100.0, stopped=101.0),
-                    _timed_message("user", "Hello", started=102.0, stopped=103.0),
-                    _timed_message("assistant", "Right", started=121.0, stopped=122.0),
+                    _timed_message(livekit._TARGET, "Hi", started=100.0, stopped=101.0),
+                    _timed_message(livekit._CALLER, "Hello", started=102.0, stopped=103.0),
+                    # The TARGET replying 18s after the caller stopped.
+                    _timed_message(livekit._TARGET, "Right", started=121.0, stopped=122.0),
                 ]
             )
         )
@@ -1660,9 +1663,9 @@ def test_an_untimed_conversation_reports_no_observed_reply_time() -> None:
         SimpleNamespace(
             history=SimpleNamespace(
                 items=[
-                    SimpleNamespace(type="message", role="assistant", text_content="Hi"),
-                    SimpleNamespace(type="message", role="user", text_content="Hello"),
-                    SimpleNamespace(type="message", role="assistant", text_content="Right"),
+                    SimpleNamespace(type="message", role=livekit._CALLER, text_content="Hi"),
+                    SimpleNamespace(type="message", role=livekit._TARGET, text_content="Hello"),
+                    SimpleNamespace(type="message", role=livekit._CALLER, text_content="Right"),
                 ]
             )
         )
@@ -1682,10 +1685,12 @@ def test_the_settle_loop_honours_the_measured_reply_time(monkeypatch) -> None:
     monkeypatch.setattr(livekit, "_SETTLED_LATENCY_MULTIPLE", 2.0)
 
     items = [
-        _timed_message("assistant", "Hi", started=100.0, stopped=101.0),
-        _timed_message("user", "Hello", started=102.0, stopped=103.0),
-        _timed_message("assistant", "Go on", started=103.4, stopped=104.0, latency=0.4),
-        _timed_message("user", "Yes", started=105.0, stopped=106.0),
+        _timed_message(livekit._CALLER, "Hi", started=100.0, stopped=101.0),
+        # Gaps kept tight so the ONE deliberate 0.4s is genuinely the slowest reply observed.
+        _timed_message(livekit._TARGET, "Hello", started=101.1, stopped=102.0),
+        _timed_message(livekit._CALLER, "Go on", started=102.1, stopped=103.0),
+        # The TARGET's own reply time is what the window has to clear.
+        _timed_message(livekit._TARGET, "Yes", started=103.1, stopped=104.0, latency=0.4),
     ]
     session = SimpleNamespace(history=SimpleNamespace(items=items))  # no thinking state reported
 
@@ -3493,19 +3498,22 @@ def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:
     tomorrow. Bye." and was then asked for two more turns, producing "Take care." and "Bye.".
     The prompt already forbids that; only the engine can enforce it, because the model speaks
     again only because it was asked to."""
+    # LiveKit calls our simulated caller "assistant" and the agent under test "user"; the
+    # published transcript swaps them. Using the named roles so this cannot invert again.
     items = [
-        SimpleNamespace(type="message", role="user", text_content="Hello, this is Desmond."),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Hello, this is Desmond."),
         SimpleNamespace(
-            type="message", role="assistant", text_content="Hi Desmond, this is Avery."
+            type="message", role=livekit._TARGET, text_content="Hi Desmond, this is Avery."
         ),
-        SimpleNamespace(type="message", role="user", text_content="Yeah, that's me."),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Yeah, that's me."),
         SimpleNamespace(
             type="message",
-            role="assistant",
+            role=livekit._TARGET,
             text_content="I will set up a callback for tomorrow at ten.",
         ),
         SimpleNamespace(
-            type="message", role="user", text_content="Sounds great, thanks. Talk tomorrow. Bye."
+            type="message", role=livekit._CALLER,
+            text_content="Sounds great, thanks. Talk tomorrow. Bye.",
         ),
     ]
     session = SimpleNamespace(history=SimpleNamespace(items=items))
@@ -3513,13 +3521,17 @@ def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:
     asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
 
 
-def test_the_call_does_not_end_on_an_agent_goodbye_alone() -> None:
-    """The agent saying goodbye is not the caller having finished: the caller may still need to
-    answer, and ending there would cut off its reply and read as the caller failing."""
+def test_the_call_does_not_end_on_the_target_s_goodbye_alone() -> None:
+    """The AGENT UNDER TEST saying goodbye is not the caller having finished: the caller may still
+    need to answer, and ending there would cut off its reply and read as the caller failing.
+
+    This is the case the role inversion got backwards. The loop was matching on the target's
+    farewell instead of the caller's, so it ended calls on the wrong side and still passed a test
+    that named the roles the same wrong way round."""
     items = [
-        SimpleNamespace(type="message", role="user", text_content="Hello?"),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Hello?"),
         SimpleNamespace(
-            type="message", role="assistant", text_content="Thanks, have a great day, bye."
+            type="message", role=livekit._TARGET, text_content="Thanks, have a great day, bye."
         ),
     ]
     session = SimpleNamespace(history=SimpleNamespace(items=items))
@@ -3536,7 +3548,7 @@ def test_the_call_does_not_end_on_an_agent_goodbye_alone() -> None:
 
 def test_a_caller_goodbye_before_the_agent_ever_spoke_does_not_end_the_call() -> None:
     """A pickup is not a farewell, and nothing should end on one side alone."""
-    items = [SimpleNamespace(type="message", role="user", text_content="Bye.")]
+    items = [SimpleNamespace(type="message", role=livekit._CALLER, text_content="Bye.")]
     session = SimpleNamespace(history=SimpleNamespace(items=items))
 
     async def run() -> bool:
@@ -3586,13 +3598,14 @@ def test_closing_the_call_cancels_a_reply_already_being_generated() -> None:
     interrupts = []
 
     items = [
-        SimpleNamespace(type="message", role="assistant", text_content="Hi Desmond."),
-        SimpleNamespace(type="message", role="user", text_content="Yeah, that's me."),
+        SimpleNamespace(type="message", role=livekit._TARGET, text_content="Hi Desmond."),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Yeah, that's me."),
         SimpleNamespace(
-            type="message", role="assistant", text_content="I'll call you back tomorrow."
+            type="message", role=livekit._TARGET, text_content="I'll call you back tomorrow."
         ),
         SimpleNamespace(
-            type="message", role="user", text_content="Sounds good, talk to you then. Bye."
+            type="message", role=livekit._CALLER,
+            text_content="Sounds good, talk to you then. Bye.",
         ),
     ]
     session = SimpleNamespace(
@@ -3613,8 +3626,8 @@ def test_a_session_with_nothing_in_flight_still_closes_cleanly() -> None:
         raise RuntimeError("AgentSession isn't running")
 
     items = [
-        SimpleNamespace(type="message", role="assistant", text_content="Hi."),
-        SimpleNamespace(type="message", role="user", text_content="Thanks, bye."),
+        SimpleNamespace(type="message", role=livekit._TARGET, text_content="Hi."),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Thanks, bye."),
     ]
     session = SimpleNamespace(
         history=SimpleNamespace(items=items), interrupt=boom

@@ -2401,6 +2401,14 @@ _SILENCE_BACKSTOP_SECONDS = 60.0
 _SETTLED_SILENCE_FLOOR_SECONDS = 12.0
 _SETTLED_LATENCY_MULTIPLE = 2.0
 
+# LiveKit reports OUR SIMULATED CALLER as "assistant" and the TARGET AGENT as "user", because the
+# caller is this session's agent and the target connects as the remote party. The published
+# transcript swaps them (see _canonical_report_messages), so session-native code must never reuse
+# the published convention. Named here because reading it the wrong way round is silent: a check
+# still runs, still passes its tests, and watches the wrong side of the call.
+_CALLER = "assistant"
+_TARGET = "user"
+
 # livekit.agents AgentState is Literal["initializing", "idle", "listening", "thinking", "speaking"].
 # Only "idle" and "listening" are silence. UserState carries no thinking state, so a caller counts
 # as busy only while actually speaking.
@@ -2454,11 +2462,11 @@ def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
     for message in messages:
         if not message.get("content"):
             continue
-        if message.get("role") == "assistant":
+        if message.get("role") == _TARGET:
             reported = message.get("e2e_latency")
             if reported:
                 slowest = max(slowest, float(reported))
-            elif previous is not None and previous.get("role") == "user":
+            elif previous is not None and previous.get("role") == _CALLER:
                 gap = _turn_gap_seconds(previous, message)
                 if gap is not None:
                     slowest = max(slowest, gap)
@@ -2685,7 +2693,7 @@ async def _wait_for_closing_loop(
         if (
             _turns_from_each_side(spoken) >= 1
             and spoken
-            and spoken[-1].get("role") == "user"
+            and spoken[-1].get("role") == _CALLER
             and _is_closing_only(str(spoken[-1].get("content") or ""))
         ):
             logger.info("the caller said goodbye, ending the call")
