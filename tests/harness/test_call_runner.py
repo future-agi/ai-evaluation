@@ -1060,6 +1060,69 @@ def test_silent_agent_mapping_is_scoped_to_zero_turns_only(tmp_path: Path) -> No
     )
     assert exc.partial is not None
     assert exc.partial.turns == 2
+    assert exc.code == "target_agent_stalled"
+
+
+def test_silence_after_caller_turn_is_attributed_to_target_agent(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_silence_timeout",
+                message="Conversation produced no new speech for the stall deadline",
+                retryable=True,
+            ),
+            transcript="assistant: Is that correct?\nuser: Yes, that is correct.",
+            messages=[
+                {"role": "assistant", "content": "Is that correct?"},
+                {"role": "user", "content": "Yes, that is correct."},
+            ],
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == "target_agent_stalled"
+    assert "Target agent produced no response" in str(exc)
+
+
+def test_silence_after_complete_target_turn_is_attributed_to_simulator(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="conversation_stalled",
+                message="Conversation produced no new speech for the stall deadline",
+                retryable=True,
+            ),
+            transcript="user: Continue.\nassistant: Is that correct?",
+            messages=[
+                {"role": "user", "content": "Continue."},
+                {"role": "assistant", "content": "Is that correct?"},
+            ],
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == "simulator_stalled"
+    assert "Simulated caller produced no response" in str(exc)
 
 
 # =================================================================================================

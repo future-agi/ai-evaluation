@@ -2535,7 +2535,9 @@ def test_evidence_missing_twice_errors() -> None:
     asyncio.run(scenario())
 
 
-def test_conversation_only_scenario_can_be_judged_without_tool_calls(monkeypatch) -> None:
+def test_conversation_only_scenario_can_be_judged_without_tool_calls(
+    monkeypatch,
+) -> None:
     """A judged sub-goal now gets a real verdict; it used to pass before anything looked."""
 
     async def _verdict(goal, world, calls):
@@ -2700,6 +2702,53 @@ def test_call_aborted_with_no_partial_evidence_still_retries() -> None:
         assert receipt.status == "passed"
         assert receipt.scenario_attempt == 2
         assert runner.attempts == 2
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_target_agent_stall_is_retried_once_but_owned_by_agent() -> None:
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                raise hs.CallAborted(
+                    "Target agent produced no response",
+                    code="target_agent_stalled",
+                    partial=hs.CallOutcome(
+                        calls=(),
+                        turns=4,
+                        started_at="2026-09-09T00:00:00.000Z",
+                        ended_at="2026-09-09T00:01:00.000Z",
+                        duration_ms=60_000,
+                    ),
+                )
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        result = await scheduler.run(
+            [
+                FakeScenario(
+                    "s1", "id-1", sub_goals=[FakeSubGoal("g", lambda w, c: None)]
+                )
+            ]
+        )
+        receipt = result.receipts[0]
+        assert receipt.status == "errored"
+        assert receipt.failure is not None
+        assert receipt.failure.code == "target_agent_stalled"
+        assert receipt.failure.domain == "agent"
+        assert receipt.scenario_attempt == 2
         await pool.close()
 
     asyncio.run(scenario())
@@ -3592,7 +3641,9 @@ def test_a_failing_sub_goal_keeps_the_check_s_own_sentence():
     from fi.alk.harness.hosted_scheduler import _classify_check, _sub_goal_reason
 
     goal = SimpleNamespace(name="intake", what="intake recorded", judged="")
-    reason = _sub_goal_reason(goal, _classify_check("recorded 'Marguerite', caller was 'Corwin'"))
+    reason = _sub_goal_reason(
+        goal, _classify_check("recorded 'Marguerite', caller was 'Corwin'")
+    )
     assert reason == "recorded 'Marguerite', caller was 'Corwin'"
 
 
@@ -3602,7 +3653,9 @@ def test_a_bare_false_is_not_shown_to_a_reader_as_false():
 
     from fi.alk.harness.hosted_scheduler import _classify_check, _sub_goal_reason
 
-    goal = SimpleNamespace(name="transfer", what="the call reached a licensed agent", judged="")
+    goal = SimpleNamespace(
+        name="transfer", what="the call reached a licensed agent", judged=""
+    )
     assert (
         _sub_goal_reason(goal, _classify_check(False))
         == "Did not hold: the call reached a licensed agent."
@@ -3649,7 +3702,9 @@ def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
             FakeScenario(
                 "removal-request",
                 "id-1",
-                sub_goals=[FakeSubGoal("removal_honoured", lambda w, c: None, judged="judge")],
+                sub_goals=[
+                    FakeSubGoal("removal_honoured", lambda w, c: None, judged="judge")
+                ],
                 requires_tool_evidence=False,
             )
         ]
@@ -3663,7 +3718,9 @@ def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(monkeypatch) -> None:
+def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(
+    monkeypatch,
+) -> None:
     """A judge that could not tell is not evidence against the agent, so it cannot read as failed.
 
     Nor as passed, since nothing settled that sub-goal: `errored` is the third answer, and the
@@ -3714,7 +3771,9 @@ def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(monkeypat
     asyncio.run(scenario())
 
 
-def test_judged_sub_goals_are_decided_together_not_one_after_another(monkeypatch) -> None:
+def test_judged_sub_goals_are_decided_together_not_one_after_another(
+    monkeypatch,
+) -> None:
     """They only read, so N judged sub-goals cost one round trip rather than N."""
     started: list[str] = []
 

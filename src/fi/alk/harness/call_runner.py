@@ -152,6 +152,41 @@ _GRADEABLE_AFTER_TIMEOUT_TURNS = 4
 _SILENT_AGENT_FAILURE_CODES = frozenset(
     {"no_conversation", "conversation_silence_timeout"}
 )
+_CONVERSATION_STALL_FAILURE_CODES = frozenset(
+    {"conversation_silence_timeout", "conversation_stalled"}
+)
+
+
+def _attributed_stall(case: Any) -> tuple[str, str] | None:
+    """Attribute a speech stall from committed transcript turns, without guessing."""
+    if (
+        case.failure is None
+        or case.failure.code not in _CONVERSATION_STALL_FAILURE_CODES
+    ):
+        return None
+    if case.result is None or not case.result.messages:
+        return None
+    last = case.result.messages[-1]
+    if not isinstance(last, dict):
+        return None
+    role = str(last.get("role") or "").strip().lower()
+    content = str(last.get("content") or "").strip()
+    if role in {"user", "caller", "customer"}:
+        return (
+            "target_agent_stalled",
+            "Target agent produced no response after the caller's final transcribed turn",
+        )
+    if role in {"assistant", "agent"}:
+        if content and content[-1] not in ".?!":
+            return (
+                "target_agent_stalled",
+                "Target agent stopped mid-utterance and produced no further speech",
+            )
+        return (
+            "simulator_stalled",
+            "Simulated caller produced no response after the target agent's final turn",
+        )
+    return None
 
 
 # --- collaborator seams (named, injectable test boundaries) -----------------------------------
@@ -1359,6 +1394,10 @@ class CallRunnerImpl:
             reason = (
                 case.failure.message if case.failure is not None else case.status.value
             )
+            attributed = _attributed_stall(case)
+            if attributed is not None:
+                code, reason = attributed
+                raise CallAborted(reason, partial=base, code=code)
             raise CallAborted(
                 f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
             )

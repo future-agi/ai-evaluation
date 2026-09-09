@@ -229,9 +229,16 @@ class CallAborted(RuntimeError):
     the call runner already measured — the receipt's `call` field must not be null once the call
     has genuinely started (outbound-channels.md Channel 2, "errored receipt body")."""
 
-    def __init__(self, message: str, *, partial: CallOutcome | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial: CallOutcome | None = None,
+        code: str = "call_failed",
+    ) -> None:
         super().__init__(message)
         self.partial = partial
+        self.code = code
 
 
 class CallRunner(Protocol):
@@ -367,10 +374,14 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "world_unavailable": FailureDomain.ENVIRONMENT,
     "state_too_large": FailureDomain.SIMULATOR,
     "call_failed": FailureDomain.INFRASTRUCTURE,
+    "target_agent_stalled": FailureDomain.AGENT,
+    "simulator_stalled": FailureDomain.SIMULATOR,
     "driver_crashed": FailureDomain.SIMULATOR,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
 }
-_RETRYABLE_CODES = frozenset({"evidence_missing"})
+_RETRYABLE_CODES = frozenset(
+    {"evidence_missing", "target_agent_stalled", "simulator_stalled"}
+)
 
 # hosted-execution-seams.md v1.13 §5.4/§2f: the closed provisioner build/run failure-code table --
 # these used to be discarded at the reset()/provision() seam (caught as a bare `Exception`, only
@@ -1921,7 +1932,7 @@ class HostedScheduler:
                 scenario,
                 world_index,
                 attempt,
-                _failure("call_failed", str(exc)),
+                _failure(exc.code, str(exc)),
                 sub_goals=_unjudged(scenario.sub_goals),
                 call=call,
             )
