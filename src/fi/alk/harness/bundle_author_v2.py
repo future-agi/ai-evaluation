@@ -1348,19 +1348,9 @@ def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
 def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     """Put the sub-goal catalogue beside the scenarios that name its entries.
 
-    The scenarios reference sub-goals by name and nothing else, so without the catalogue the
-    bundle is missing the half that says what each one means. Three things read it from beside the
-    scenarios and all three degrade silently when it is absent:
-
-    * a passing sub-goal loses its description, so the platform reports "the check found nothing
-      wrong" instead of what actually held;
-    * a judged sub-goal loses its claim, so the judge is handed a name and nothing to decide;
-    * `_deterministic_names` returns nothing, so the safeguard for a sub-goal the catalogue
-      settles in code whose check file never materialised can never fire -- and that one reports a
-      judged verdict for something meant to be measured.
-
-    Absence is a warning rather than an error: a bundle whose scenarios are all judged has nothing
-    to lose, and failing the run here would be worse than the degraded reporting it replaces.
+    Scenarios reference sub-goals by name only, so without the catalogue a description, a judged
+    sub-goal's claim and `_deterministic_names` all come back empty, each silently. A warning
+    rather than an error, since failing the run is worse than the degraded reporting.
     """
     catalogue = authoring / CATALOGUE
     if not catalogue.is_file():

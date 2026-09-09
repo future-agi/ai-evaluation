@@ -17,12 +17,11 @@ proceeds without the option, which is said out loud in the session rather than h
 
 from __future__ import annotations
 
-import logging
-from datetime import date
-
 import json
+import logging
 import os
 import uuid
+from datetime import date
 from typing import Any, AsyncIterator
 
 from .base import (
@@ -54,9 +53,9 @@ _TERMINAL_SAVE_TOOLS = frozenset(
     }
 )
 
-# Vertex list pricing per 1M tokens: (input, output, last day the pair is known good). Checked
-# against the platform's litellm model table. An unknown or expired model reports no cost rather than a wrong one, and shows up in
-# `unpriced_turns`; gemini-3.7-flash is introductory pricing that doubles on 2027-01-01.
+# Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
+# the platform's litellm model table). An unknown or stale model reports no cost rather than a
+# wrong one, and shows up in `unpriced_turns`.
 PRICES_PER_MILLION = {
     "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
     "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
