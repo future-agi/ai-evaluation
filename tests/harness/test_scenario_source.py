@@ -1835,3 +1835,46 @@ def test_the_provision_payload_carries_the_modality_so_evals_bind_to_the_right_i
 
     # Omitted rather than empty, so an older platform is unaffected.
     assert "modality" not in ss._provision_payload("run", [], [], "", "")
+
+
+def test_a_judged_sub_goal_is_exactly_one_with_no_check_file(tmp_path: Path) -> None:
+    """The scheduler routes on `judged` alone, so judged has to mean "no code settles this".
+
+    If a coded sub-goal ever arrived judged-truthy, its check would be skipped in favour of a model
+    call. Nothing asserted the equivalence until this test.
+    """
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "mixed",
+        scenario_key="mixed",
+        sub_goals=["coded", "judged_only"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    by_name = {goal.name: goal for goal in scenario.sub_goals}
+
+    assert by_name["coded"].judged == "", "a sub-goal with a check file must not be judged"
+    assert by_name["coded"].check is not ss._judged_placeholder_check
+    assert by_name["judged_only"].judged, "no check file means a model has to decide it"
+    assert by_name["judged_only"].check is ss._judged_placeholder_check
+
+
+def test_restoring_claims_never_makes_a_coded_sub_goal_judged(tmp_path: Path) -> None:
+    """`_with_claims` guards this deliberately; removing the guard would skip real checks."""
+    _write_scenario(
+        tmp_path / ss.SCENARIOS_DIRNAME,
+        "coded",
+        scenario_key="coded",
+        sub_goals=["coded"],
+        checks={"coded": "def check(world, calls):\n    return None\n"},
+    )
+    scenario = ss.load_scenarios(tmp_path)[0]
+    # A catalogue that claims the coded sub-goal is judged, which is the shape validate_sub_goal
+    # accepts today: a working check AND a judged claim on the same sub-goal.
+    restored = ss._with_claims(
+        scenario,
+        {"coded": {"what": "the row is written", "judged": "a model must weigh tone"}},
+    )
+    goal = restored.sub_goals[0]
+    assert goal.judged == "", "a coded sub-goal must stay coded whatever the catalogue claims"
+    assert goal.what == "the row is written", "the description is still restored"
