@@ -1,9 +1,13 @@
-"""Deciding a judged sub-goal against the world the call left behind.
+"""Deciding a judged sub-goal against the world the session left behind.
 
 A judged sub-goal is one nothing observable settles, so a model reaches the verdict. Until now
 nothing did: judged sub-goals carried a placeholder check returning None, which the scheduler read
 as "held", so every one passed before anything looked. This runs in the sandbox at the end of the
-call, while the world is still alive, so the judge reads real state rather than a snapshot.
+session, while the world is still alive, so the judge reads real state rather than a snapshot.
+
+Nothing here is modality-specific. It reasons over the world's tables and the actions the agent
+took, which a voice call, a typed conversation and a browser the agent drives all leave behind in
+the same shape, so the wording stays neutral rather than naming a call.
 
 A judge that cannot decide returns held None: the unjudged path the platform already skips, because
 a judge that failed to run is not evidence against the agent.
@@ -24,15 +28,15 @@ JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 
 _INSTRUCTIONS = """
-You decide one claim about a call that already happened, against the world it left behind.
+You decide one claim about a session that already happened, against the world it left behind.
 
-Look before you answer: read the calls you were given, inspect the tables the claim touches, query
+Look before you answer: read the actions you were given, inspect the tables the claim touches, query
 for a specific row when the claim is about one. The world is the run's final state.
 
 Then call decide, once. `passed` true when the claim holds, false when it does not, and an
-explanation citing what you saw: a value, a row, a call and its arguments. An explanation that only
-restates the claim is not a verdict. If you genuinely cannot tell, pass undecided true rather than
-guess. Judge only the claim you were given.
+explanation citing what you saw: a value, a row, an action and its arguments. An explanation that
+only restates the claim is not a verdict. If you genuinely cannot tell, pass undecided true rather
+than guess. Judge only the claim you were given.
 """.strip()
 
 
@@ -102,7 +106,7 @@ async def judge(goal: Any, world: Any, calls: Sequence[Any]) -> tuple[bool | Non
         f"Claim {getattr(goal, 'name', '')!r}.\n"
         f"What it means: {getattr(goal, 'what', '') or '(none written)'}\n"
         f"Why a model must decide it: {getattr(goal, 'judged', '')}\n\n"
-        f"Tool calls the agent made:\n{_dump([_call(c) for c in calls])}\n\n"
+        f"Actions the agent took:\n{_dump([_call(c) for c in calls])}\n\n"
         "Inspect the world as needed, then call decide."
     )
     try:
