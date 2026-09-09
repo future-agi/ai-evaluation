@@ -21,6 +21,20 @@ from pydantic import BaseModel, Field
 
 CATALOGUE = "sub_goals.json"
 
+# Whether a check that only tests an argument is PRESENT is refused outright, or merely flagged.
+#
+# Off, because the retry loop is unproven inside a real authoring session. Measured on genuinely
+# fresh authoring (run 0d68863e): 9 sub-goals, and 6 of the 7 coded checks test only presence, so
+# turning this on refuses most of a catalogue. The same model writes a comparison check in 3 of 3
+# trials when asked directly, so it CAN satisfy this -- but it also ignored the equivalent written
+# guidance in situ, which moved the number from 1-of-6 to 1-of-7, so in-situ behaviour under
+# refusal is exactly what has not been observed.
+#
+# Turning it on is a deliberate choice: fail authoring rather than accept a check that an agent
+# acting on a misheard detail would pass. That is the failure the suite exists to catch, so this is
+# a real option and not a hypothetical one.
+REFUSE_TRUTHINESS_CHECKS = False
+
 
 class SubGoal(BaseModel):
     """One named thing the agent can be checked on, shared across every scenario that needs it.
@@ -114,6 +128,8 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         )
     problems.extend(_presence_only_problems(sub_goal))
     problems.extend(_judged_problems(sub_goal))
+    if REFUSE_TRUTHINESS_CHECKS and (advisory := weak_check_advisory(sub_goal)):
+        problems.append(advisory)
     return problems
 
 

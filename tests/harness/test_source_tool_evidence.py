@@ -565,3 +565,61 @@ def test_a_bundle_with_no_catalogue_is_a_warning_not_a_failure(tmp_path):
     bundle.mkdir()
 
     assert _copy_sub_goal_catalogue(authoring, bundle) == []
+
+
+def test_the_truthiness_refusal_is_off_by_default():
+    """Off because the retry loop is unproven inside a real authoring session: the model writes a
+    comparison check in 3 of 3 trials when asked directly, and ignored the equivalent written
+    guidance in situ (1 of 6 checks became 1 of 7). Turning it on refuses most of a catalogue."""
+    from fi.alk.harness import catalogue as module
+
+    assert module.REFUSE_TRUTHINESS_CHECKS is False
+
+    truthiness = _goal(
+        "transfers_to_human_agent",
+        check=(
+            "def check(world, calls):\n"
+            '    xfers = [c for c in calls if c.name == "transfer_to_licensed_agent" and c.ok]\n'
+            '    if not xfers:\n        return "not called"\n'
+            '    reason = xfers[0].arguments.get("reason")\n'
+            "    if not reason or not isinstance(reason, str):\n"
+            '        return "no reason"\n'
+            "    return None\n"
+        ),
+    )
+
+    assert module.validate_sub_goal(truthiness) == [], "accepted while the switch is off"
+    assert "only tests that they are present" in module.weak_check_advisory(truthiness)
+
+
+def test_turning_the_refusal_on_rejects_a_truthiness_check(monkeypatch):
+    """One line to enable, and this pins what happens when it is: the check is refused with the
+    sentence that says what to do instead, and a check comparing a value is still accepted."""
+    from fi.alk.harness import catalogue as module
+
+    monkeypatch.setattr(module, "REFUSE_TRUTHINESS_CHECKS", True)
+
+    truthiness = _goal(
+        "transfers_to_human_agent",
+        check=(
+            "def check(world, calls):\n"
+            '    xfers = [c for c in calls if c.name == "transfer_to_licensed_agent" and c.ok]\n'
+            '    reason = xfers[0].arguments.get("reason")\n'
+            "    if not reason:\n        return \"no reason\"\n"
+            "    return None\n"
+        ),
+    )
+    compares = _goal(
+        "intake_recorded_for_the_right_person",
+        check=(
+            "def check(world, calls):\n"
+            '    done = [c for c in calls if c.name == "record_intake" and c.ok]\n'
+            '    if done[0].arguments.get("name") != "Corwin":\n        return "wrong name"\n'
+            "    return None\n"
+        ),
+    )
+
+    problems = module.validate_sub_goal(truthiness)
+    assert problems and "only tests that they are present" in problems[0]
+    assert "Compare the value against what this scenario expected" in problems[0]
+    assert module.validate_sub_goal(compares) == [], "a real comparison must still pass"
