@@ -2479,6 +2479,7 @@ class CallSummary(BaseModel):
     turns: int = Field(ge=0)
     transcript_artifact: str | None
     recording_artifacts: list[str] = Field(default_factory=list)
+    stop_reason: str | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "CallSummary":
@@ -2552,7 +2553,13 @@ class ResultReceiptDraft(BaseModel):
             raise ValueError(f"result_schema_unsupported: {self.schema_version}")
         if not is_valid_digest(self.digest):
             raise ValueError(f"receipt_digest_invalid: {self.digest!r}")
-        expected = whole_object_digest(self.model_dump(mode="json", exclude={"digest"}))
+        expected_body = self.model_dump(mode="json", exclude={"digest"})
+        # ``stop_reason`` was added after the initial receipt protocol. Preserve
+        # byte-for-byte compatibility for callers that omit it, while including
+        # it in both the digest and wire body whenever it is explicitly supplied.
+        if self.call is not None and "stop_reason" not in self.call.model_fields_set:
+            expected_body["call"].pop("stop_reason", None)
+        expected = whole_object_digest(expected_body)
         if self.digest != expected:
             unset = _unset_default_fields(self)
             hint = (
@@ -2649,7 +2656,10 @@ def build_result_receipt(
     }
     digest = whole_object_digest(core)
     draft = ResultReceiptDraft.model_validate({**core, "digest": digest})
-    return draft.model_dump(mode="json")
+    wire = draft.model_dump(mode="json")
+    if call is not None and "stop_reason" not in call:
+        wire["call"].pop("stop_reason", None)
+    return wire
 
 
 def build_skipped_receipt(

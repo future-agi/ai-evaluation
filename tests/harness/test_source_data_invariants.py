@@ -225,3 +225,49 @@ def test_author_preserves_failing_check_and_reuses_it_during_data_repair(
     )
     with pytest.raises(ValueError, match="Source changed"):
         asyncio.run(subject.author_invariants(source, out, world))
+
+
+def test_large_suite_can_be_reviewed_in_batches_within_bounded_turns(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "lookup.py").write_text("return records[alias.target]\n")
+    out = tmp_path / "authoring"
+    scenarios = out / "scenarios"
+    scenarios.mkdir(parents=True)
+    names = [f"case-{index:02d}" for index in range(25)]
+    for name in names:
+        folder = scenarios / name
+        folder.mkdir()
+        (folder / "scenario.json").write_text(
+            json.dumps({"scenario_key": name, "goal": "exercise lookup"})
+        )
+        (folder / "setup.py").write_text("def setup(world):\n    return None\n")
+        (folder / "ready.py").write_text("def ready(world):\n    return True\n")
+
+    class Stage:
+        def __init__(self, spec, **kwargs):
+            self.tools = {
+                tool.name: tool.handler for tool in spec.servers["source_data"].tools
+            }
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def say(self, *args):
+            for start in range(0, len(names), 10):
+                result = await self.tools["read_scenarios"](
+                    {"names": names[start : start + 10]}
+                )
+                assert len(json.loads(result["content"][0]["text"])["scenarios"]) <= 10
+            await self.tools["declare_invariant"](declaration())
+            result = await self.tools["finish_review"]({})
+            assert json.loads(result["content"][0]["text"])["saved"] == 1
+
+    monkeypatch.setattr(subject, "Stage", Stage)
+    checks = asyncio.run(subject.author_invariants(source, out, ReadWorld()))
+    assert [check["name"] for check in checks] == [declaration()["name"]]

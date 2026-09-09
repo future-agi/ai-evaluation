@@ -335,6 +335,7 @@ def _report(
     ended_at: datetime | None = None,
     no_cases: bool = False,
     run_id: str = "sim-run-1",
+    result_metadata: dict[str, Any] | None = None,
 ) -> SimulationReport:
     messages = messages if messages is not None else [{"role": "user", "content": "hi"}]
     started_at = started_at or datetime.now(timezone.utc)
@@ -343,7 +344,10 @@ def _report(
     if not no_cases:
         assert case_status is not None
         result = SimTestCaseResult(
-            persona=_persona(), transcript=transcript, messages=messages
+            persona=_persona(),
+            transcript=transcript,
+            messages=messages,
+            metadata=result_metadata or {},
         )
         cases.append(
             SimulationTestCaseResult(
@@ -570,6 +574,7 @@ def test_completed_call_uploads_transcript_and_returns_populated_outcome(
             messages=messages,
             started_at=started,
             ended_at=ended,
+            result_metadata={"stop_reason": "simulator_end_call"},
         )
 
     adapter = FakeAdapter()
@@ -586,6 +591,7 @@ def test_completed_call_uploads_transcript_and_returns_populated_outcome(
     assert outcome.transcript_artifact is not None
     assert outcome.transcript_artifact.startswith("sha256:")
     assert outcome.calls == ()  # http_tool: STOPPED, always zero -- CONTRACT NOTE 1
+    assert outcome.stop_reason == "simulator_end_call"
     assert len(adapter.uploads) == 1
 
 
@@ -1341,6 +1347,25 @@ def test_platform_simulator_credentials_win_without_replacing_target_livekit(
     assert runner._missing_config is None
 
 
+def test_close_quiesces_livekit_objects_before_event_loop_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_environ: dict[str, str] = {}
+    _job_obj, context = _context(tmp_path=tmp_path)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, environ=fake_environ)
+    collections: list[None] = []
+    monkeypatch.setattr(cr.gc, "collect", lambda: collections.append(None))
+
+    async def close_twice() -> None:
+        await runner.close()
+        await runner.close()
+
+    asyncio.run(close_twice())
+
+    assert collections == [None, None]
+    assert runner._closed is True
+
+
 def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
     tmp_path: Path,
 ) -> None:
@@ -1377,7 +1402,10 @@ def test_provider_voice_uses_platform_livekit_without_exposing_customer_livekit(
 
 def test_auto_connector_resolves_to_livekit_from_target_secrets() -> None:
     job = _job(connector="auto")
-    assert cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x.livekit.cloud"}) == "livekit"
+    assert (
+        cr._resolve_connector(job, {cr.LIVEKIT_URL_ALIAS: "wss://x.livekit.cloud"})
+        == "livekit"
+    )
 
 
 def test_auto_connector_resolves_to_livekit_from_config() -> None:
@@ -1417,7 +1445,9 @@ def _timed_out_runner(tmp_path: Path, turns: int):
     return cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
 
 
-def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(tmp_path: Path) -> None:
+def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(
+    tmp_path: Path,
+) -> None:
     """An intake agent may ask thirty to fifty questions, so reaching the deadline is an ordinary
     outcome. A measured 51-turn call lost all three sub-goals to `held: null` because the timeout was
     treated as infrastructure."""
@@ -1426,7 +1456,9 @@ def test_a_timed_out_call_with_a_real_conversation_is_graded_not_aborted(tmp_pat
         _FakeScenario("k1"),
         _runtime(metadata={"livekit_agent_name": "a-w0"}),
     )
-    assert outcome is not None, "a timed-out call that held a conversation must still be graded"
+    assert outcome is not None, (
+        "a timed-out call that held a conversation must still be graded"
+    )
 
 
 def test_a_timed_out_call_that_never_got_going_still_aborts(tmp_path: Path) -> None:

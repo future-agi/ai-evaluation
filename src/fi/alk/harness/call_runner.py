@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import atexit
 import asyncio
+import gc
 import json
 import logging
 import os
@@ -922,6 +923,7 @@ class CallRunnerImpl:
             simulator_secret_values,
         )
         self._scenario_attempt_counts: dict[str, int] = {}
+        self._closed = False
 
     def _cleanup_credentials(self) -> None:
         if self._adc_path is None:
@@ -935,6 +937,32 @@ class CallRunnerImpl:
         ):
             self._environ.pop(GOOGLE_APPLICATION_CREDENTIALS_ALIAS, None)
         self._adc_path = None
+
+    async def close(self) -> None:
+        """Release job-scoped resources before ``asyncio.run`` closes its event loop.
+
+        LiveKit's Python objects own native FFI handles and several of them participate in
+        reference cycles.  Leaving those cycles to interpreter shutdown lets their finalizers run
+        after LiveKit's callback loop has closed; sufficiently long jobs then abort in the native
+        FFI teardown even though every call and artifact already completed.  Collect on the event
+        loop thread and yield twice so queued FFI callbacks drain while their loop is still valid.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        self._cleanup_credentials()
+        atexit.unregister(self._cleanup_credentials)
+        gc.collect()
+        # Native RTC shutdown is not synchronous with the Python objects that requested it.
+        # Give finalizers and already-enqueued disconnect/drop-handle callbacks real scheduling
+        # windows while the loop is still alive.  Do not mutate LiveKit's private FFI subscriber
+        # list here: a subscriber is owned by its AudioStream task, and removing its queue behind
+        # that task's back produces stranded coroutines (observed after a 50-call soak as
+        # ``cannot reuse already awaited coroutine``).  Deterministic collection on the live loop
+        # addresses the shutdown-order problem without violating stream ownership.
+        await asyncio.sleep(0.25)
+        gc.collect()
+        await asyncio.sleep(0.25)
 
     async def run(
         self,
@@ -1274,6 +1302,13 @@ class CallRunnerImpl:
             duration_ms=_duration_ms(case_started_at, ended_at),
             transcript_artifact=transcript_artifact,
             recording_artifacts=tuple(recording_artifacts),
+            stop_reason=(
+                str(case.result.metadata.get("stop_reason"))
+                if case is not None
+                and case.result is not None
+                and case.result.metadata.get("stop_reason")
+                else None
+            ),
         )
 
         if case is None:
@@ -1340,6 +1375,7 @@ class CallRunnerImpl:
             duration_ms=base.duration_ms,
             transcript_artifact=base.transcript_artifact,
             recording_artifacts=base.recording_artifacts,
+            stop_reason=base.stop_reason,
         )
 
     def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
