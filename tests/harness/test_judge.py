@@ -110,6 +110,25 @@ def test_the_judge_model_is_changeable(monkeypatch):
     assert judge_module.judge_model()  # falls back to the harness model, whatever it is
 
 
+def test_the_judge_needs_no_environment_to_pick_a_priced_model(monkeypatch):
+    """With nothing set anywhere the judge still runs, on a model the ledger can price.
+
+    The override must stay an override: a deployment that sets none of these has to work, or the
+    judge would need a new env var to be usable at all.
+    """
+    from fi.alk.harness.backends import vertex_gemini
+
+    for name in (judge_module.JUDGE_MODEL_ALIAS, "ALK_HARNESS_MODEL", "ALK_HARNESS"):
+        monkeypatch.delenv(name, raising=False)
+
+    model = judge_module.judge_model()
+
+    assert model == vertex_gemini.DEFAULT_MODEL
+    assert model in vertex_gemini.PRICES_PER_MILLION, (
+        f"the judge would run unpriced on {model}, so its spend would be missing from the ledger"
+    )
+
+
 def test_a_long_cell_is_trimmed_rather_than_flooding_the_judge():
     trimmed = judge_module._short({"blob": "x" * 5000})
     assert len(str(trimmed)) < 1000
