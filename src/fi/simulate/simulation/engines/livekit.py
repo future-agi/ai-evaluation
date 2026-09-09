@@ -2409,9 +2409,15 @@ _SETTLED_LATENCY_MULTIPLE = 2.0
 _CALLER = "assistant"
 _TARGET = "user"
 
-# livekit.agents AgentState is Literal["initializing", "idle", "listening", "thinking", "speaking"].
-# Only "idle" and "listening" are silence. UserState carries no thinking state, so a caller counts
-# as busy only while actually speaking.
+# livekit.agents AgentState is Literal["initializing", "idle", "listening", "thinking", "speaking"]
+# and describes THIS SESSION'S AGENT, which is our simulated caller. UserState is
+# Literal["speaking", "listening", "away"] and describes the remote party, the agent under test.
+#
+# So this holds the timer while OUR CALLER is thinking or speaking, and while the TARGET is
+# speaking. It cannot see the target THINKING: a remote participant composing a reply is simply
+# silent on the wire, and no state reports it. That is why the measured-latency window below is
+# what actually protects a slow target, and this pair only stops us cutting off our own caller
+# mid-thought. Do not read these as "the agent under test" -- that is the wrong side.
 _AGENT_BUSY_STATES = frozenset({"initializing", "thinking", "speaking"})
 _USER_BUSY_STATES = frozenset({"speaking"})
 

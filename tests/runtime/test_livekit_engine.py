@@ -1535,11 +1535,14 @@ def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
     assert asyncio.run(run()) is False
 
 
-def test_a_thinking_agent_is_not_silence(monkeypatch) -> None:
-    """The architecture point. A slow agent spends its slowness in the "thinking" state, so timing
-    that as dead air is what made a fixed settle window unsettable: one agent answers in 4.3s and
-    another in 25.2s, and any constant between them cuts the slow one off mid-answer. Holding the
-    timer while either side is busy needs no per-agent tuning at all."""
+def test_our_caller_thinking_is_not_silence(monkeypatch) -> None:
+    """`agent_state` is THIS SESSION'S agent, which is our simulated caller, not the agent under
+    test. So this stops us cutting off our own caller mid-thought.
+
+    It does NOT protect a slow target: `UserState` is only speaking/listening/away, so a remote
+    party composing a reply is simply silent on the wire and no state reports it. The measured
+    reply-time window is what protects a slow target. I originally wrote this test believing the
+    opposite, which is the same role inversion that broke the closing loop."""
     monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
 
     items = [
