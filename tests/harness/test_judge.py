@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from fi.alk.harness import judge as judge_module
 
 

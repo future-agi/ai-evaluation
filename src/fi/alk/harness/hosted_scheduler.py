@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
 import random
 import re
@@ -320,9 +319,6 @@ class ResultReceipt:
     evaluations: tuple[Evaluation, ...]
     call: CallSummary | None
     failure: ReceiptFailure | None
-    # Uploaded as an `evidence` artifact by the emitter, never sent inline: the wire receipt is
-    # digest-signed and a world snapshot does not belong inside it.
-    evidence: dict[str, Any] | None = None
 
 
 # --- outbound (this module's own minimal sink; see the module docstring's decoupling note) ----
@@ -465,140 +461,6 @@ def _truncate(text: str, limit: int = _MESSAGE_LIMIT) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - len("…[truncated]")] + "…[truncated]"
-
-
-EVIDENCE_SCHEMA_VERSION = "futureagi.harness-evidence.v1"
-# The judge runs on the platform, so the world it reasons about is whatever the guest serialized
-# here: this is the only moment the final state exists. Bounded because a seeded world is
-# unbounded, and every drop is counted rather than silent -- a judge told "40 of 340 rows" can
-# reason about the gap, one shown 40 and told nothing cannot.
-_EVIDENCE_ROWS_PER_TABLE = 40
-_EVIDENCE_MAX_BYTES = 128_000
-_EVIDENCE_MAX_CALLS = 200
-_EVIDENCE_CELL_LIMIT = 500
-
-
-def _jsonable(value: object, limit: int = _EVIDENCE_CELL_LIMIT) -> object:
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if isinstance(value, str):
-        return _truncate(value, limit)
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item, limit) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item, limit) for item in value]
-    return _truncate(str(value), limit)
-
-
-def _relates(stem: str, text: str) -> bool:
-    """Whether a table stem and a piece of call text are about the same thing.
-
-    Prefix matching in both directions, per underscore-separated word: `book_ride` is evidence
-    about `bookings` (`book` prefixes `booking`), and `rider_id` about `riders`. Containment
-    alone misses the first of those, which is the common case.
-    """
-    for word in re.split(r"[^a-z0-9]+", text.lower()):
-        if len(word) < 3:
-            continue
-        if stem.startswith(word) or word.startswith(stem):
-            return True
-    return False
-
-
-def _table_relevance(table: str, calls: Sequence[Call]) -> int:
-    """How strongly the calls point at this table, so the byte budget is spent where the run acted."""
-    stem = table.lower().rstrip("s")
-    if len(stem) < 3:
-        return 0
-    score = 0
-    for call in calls:
-        if _relates(stem, call.name):
-            score += 2
-        for key, value in (call.arguments or {}).items():
-            if _relates(stem, str(key)) or _relates(stem, str(value)):
-                score += 1
-    return score
-
-
-def _capture_evidence(
-    scenario_key: str,
-    world: ReadOnlyWorld,
-    calls: Sequence[Call],
-    sub_goals: Sequence[SubGoal] = (),
-) -> dict[str, Any]:
-    """The run's final state, for a judge that will never see the world itself.
-
-    Carries each judged sub-goal's claim too: the platform knows a sub-goal was judged but not
-    what it was meant to decide, which lives only in the bundle catalogue on this side.
-    """
-    claims = [
-        {
-            "name": goal.name,
-            "what": str(getattr(goal, "what", "") or ""),
-            "judged": goal.judged,
-        }
-        for goal in sub_goals
-        if goal.judged
-    ]
-    recorded = [
-        {
-            "name": call.name,
-            "arguments": _jsonable(call.arguments or {}),
-            "result": _jsonable(call.result),
-            "ok": bool(call.ok),
-            "error": _truncate(str(call.error or ""), _EVIDENCE_CELL_LIMIT),
-            "refused": bool(call.refused),
-            "at": call.at,
-        }
-        for call in list(calls)[:_EVIDENCE_MAX_CALLS]
-    ]
-    try:
-        state = world.state()
-    except Exception as exc:  # noqa: BLE001 - evidence is best effort, never a failed scenario
-        return {
-            "schema_version": EVIDENCE_SCHEMA_VERSION,
-            "scenario_key": scenario_key,
-            "calls": recorded,
-            "calls_total": len(calls),
-            "judged_sub_goals": claims,
-            "world": {"unavailable": _sanitize_cause(f"{type(exc).__name__}: {exc}")},
-        }
-
-    ordered = sorted(
-        state.items(),
-        key=lambda item: (
-            -_table_relevance(item[0], calls),
-            len(item[1] or []),
-            item[0],
-        ),
-    )
-    tables: dict[str, Any] = {}
-    omitted: list[str] = []
-    budget = _EVIDENCE_MAX_BYTES
-    for name, rows in ordered:
-        rows = list(rows or [])
-        if budget <= 0:
-            omitted.append(name)
-            continue
-        shown = [_jsonable(row) for row in rows[:_EVIDENCE_ROWS_PER_TABLE]]
-        cost = len(json.dumps(shown, default=str))
-        if cost > budget and tables:
-            omitted.append(name)
-            continue
-        budget -= cost
-        tables[name] = {
-            "rows": shown,
-            "rows_shown": len(shown),
-            "rows_total": len(rows),
-        }
-    return {
-        "schema_version": EVIDENCE_SCHEMA_VERSION,
-        "scenario_key": scenario_key,
-        "calls": recorded,
-        "calls_total": len(calls),
-        "judged_sub_goals": claims,
-        "world": {"tables": tables, "omitted_tables": omitted},
-    }
 
 
 def _sanitize_cause(message: str) -> str:
@@ -2215,9 +2077,6 @@ class HostedScheduler:
             evaluations=(),
             call=self._call_summary(call_outcome),
             failure=None,
-            evidence=_capture_evidence(
-                scenario.scenario_key, check_handle, calls, scenario.sub_goals
-            ),
         )
 
     @staticmethod

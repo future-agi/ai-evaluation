@@ -3813,61 +3813,6 @@ if __name__ == "__main__":
     raise SystemExit(1 if failures else 0)
 
 
-def test_receipt_seals_evidence_as_an_artifact_before_pushing_the_receipt() -> None:
-    # The wire receipt is digest-signed and a world snapshot does not belong inside it, so
-    # evidence rides as an `evidence` artifact keyed by scenario. It must be uploaded BEFORE the
-    # receipt, like every other artifact a receipt refers to: a receipt landing first would be
-    # judged against evidence the platform does not have yet.
-    async def scenario() -> None:
-        transport = FakeTransport()
-        adapter = _build_adapter(transport)
-        await adapter.receipt(
-            ResultReceipt(
-                scenario_key="s1",
-                scenario_id="platform-s1",
-                scenario_attempt=1,
-                world_index=0,
-                status="passed",
-                sub_goals=(),
-                evaluations=(),
-                call=None,
-                failure=None,
-                evidence={"schema_version": "futureagi.harness-evidence.v1", "calls": []},
-            )
-        )
-        sealed = [json.loads(body) for body in transport.artifacts.values()]
-        assert any(
-            item.get("schema_version") == "futureagi.harness-evidence.v1"
-            for item in sealed
-        )
-        # And the receipt itself stays exactly the shape the platform already validates.
-        assert "evidence" not in transport.receipts[("job-1", "s1")]
-
-    asyncio.run(scenario())
-
-
-def test_receipt_without_evidence_uploads_nothing_extra() -> None:
-    async def scenario() -> None:
-        transport = FakeTransport()
-        adapter = _build_adapter(transport)
-        await adapter.receipt(
-            ResultReceipt(
-                scenario_key="s1",
-                scenario_id="platform-s1",
-                scenario_attempt=1,
-                world_index=0,
-                status="passed",
-                sub_goals=(),
-                evaluations=(),
-                call=None,
-                failure=None,
-            )
-        )
-        assert transport.artifacts == {}
-
-    asyncio.run(scenario())
-
-
 def test_every_runner_log_line_carries_the_job_id(capsys):
     """Concurrent runs are collected into one log stream, so a line with no job id cannot be
     attributed to a run at all."""

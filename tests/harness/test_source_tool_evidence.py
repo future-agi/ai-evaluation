@@ -385,19 +385,11 @@ def test_a_coded_sub_goal_also_carries_its_description():
     """A check says nothing when it holds, so `what` is the only thing a reader has to tell a real
     pass from one nobody wrote a check for. Measured on run 42875830: every passing sub-goal read
     "Held. The check found nothing wrong." because `what` was restored for judged ones only."""
-    from dataclasses import replace
-
     from fi.alk.harness.scenario_source import _CompiledSubGoal, _with_claims
 
     coded = _CompiledSubGoal(name="schedules_callback", judged="", check=lambda w, c: None)
     judged = _CompiledSubGoal(name="protocol", judged="x", check=lambda w, c: None)
 
-    class Scenario:
-        sub_goals = (coded, judged)
-
-    import types
-
-    scenario = types.SimpleNamespace(sub_goals=(coded, judged))
     claims = {
         "schedules_callback": {"what": "a callback was written for the time agreed", "judged": ""},
         "protocol": {"what": "the agent stayed on protocol", "judged": "whether it stayed civil"},
