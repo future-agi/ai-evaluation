@@ -3663,6 +3663,54 @@ def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_an_undecided_judge_does_not_fail_a_scenario_its_checks_passed(monkeypatch) -> None:
+    """A judge that could not tell is not evidence against the agent, so it cannot read as failed.
+
+    Nor as passed, since nothing settled that sub-goal: `errored` is the third answer, and the
+    platform keeps a completed call playable for one.
+    """
+
+    async def _verdict(goal, world, calls):
+        return None, "the tables carry nothing either way"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("callback_booked", lambda w, c: None),
+                    FakeSubGoal("was_it_reassuring", lambda w, c: None, judged="tone"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "errored"
+        assert [goal.held for goal in receipt.sub_goals] == [True, None]
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_judged_sub_goals_are_decided_together_not_one_after_another(monkeypatch) -> None:
     """They only read, so N judged sub-goals cost one round trip rather than N."""
     started: list[str] = []

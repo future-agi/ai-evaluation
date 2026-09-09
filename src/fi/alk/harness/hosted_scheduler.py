@@ -2064,9 +2064,16 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        status = (
-            "passed" if all(result.held for result in sub_goal_results) else "failed"
-        )
+        # An undecided judge is not evidence against the agent, so it cannot read as a failed
+        # scenario, and it cannot read as a passed one either since nothing settled that sub-goal.
+        # `errored` is the honest third answer, and the platform keeps a completed call playable
+        # for one while carrying the outcome separately.
+        if any(result.held is False for result in sub_goal_results):
+            status = "failed"
+        elif any(result.held is None for result in sub_goal_results):
+            status = "errored"
+        else:
+            status = "passed"
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,
