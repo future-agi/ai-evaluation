@@ -1,14 +1,9 @@
-"""`hosted_entrypoint.py` against in-memory fakes — no real postgres, no real network.
-
-`asyncio.run` drives every `async def` seam here, matching `test_hosted_scheduler.py`'s own
-convention (no pytest-asyncio dependency in this repo). Verification for this file was done by
-importing it and calling each `test_*` function directly, not via a `pytest`
-invocation.
-"""
+"""`hosted_entrypoint.py` against in-memory fakes — no real postgres, no real network."""
 
 from __future__ import annotations
 
 import asyncio
+import pytest
 import contextlib
 import hashlib
 import json
@@ -73,6 +68,21 @@ TARGET_PROVIDER_ALIAS = "LIVEKIT_API_KEY"
 # Bundle fixture — mirrors test_process_preflight.py's own helper (not imported: this file is
 # self-contained per the "touch only your two new files" rule).
 # =================================================================================================
+
+
+@pytest.fixture(autouse=True)
+def _judged_sub_goals_decided_without_a_model(monkeypatch):
+    """These tests are about the entrypoint, not about judging.
+
+    A judged sub-goal now goes to a model, so without this every scenario carrying one would make a
+    live call and fail on the verdict rather than on what the test is asking about.
+    """
+    from fi.alk.harness import hosted_scheduler
+
+    async def _held(goal, world, calls):
+        return True, f"{goal.name}: stubbed for an entrypoint test"
+
+    monkeypatch.setattr(hosted_scheduler, "_judge", _held)
 
 
 def _base_manifest_body() -> dict[str, Any]:
@@ -531,7 +541,11 @@ class FakeWorldFactory:
 class FakeSubGoal:
     name: str
     should_hold: bool
-    judged: str = "yes"
+    # Empty: this fake carries a working check, so it is a CODED sub-goal. A real sub-goal is one
+    # or the other -- `deterministic()` is `bool(check)` and scenario_source only marks `judged`
+    # when no check file exists -- so a fake that claimed both routed itself to the judge and
+    # never ran the check it was given.
+    judged: str = ""
 
     def check(self, world: Any, calls: Any) -> object:
         del world, calls
@@ -3797,3 +3811,303 @@ if __name__ == "__main__":
             print(f"ok   {test_fn.__name__} ({time.monotonic() - started:.2f}s)")
     print(f"\n{len(TESTS) - failures}/{len(TESTS)} passed")
     raise SystemExit(1 if failures else 0)
+
+
+def test_every_runner_log_line_carries_the_job_id(capsys):
+    """Concurrent runs are collected into one log stream, so a line with no job id cannot be
+    attributed to a run at all."""
+    import logging
+
+    from fi.alk.harness.hosted_entrypoint import configure_runner_logging
+
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    saved_level = root.level
+    try:
+        root.handlers = []
+        configure_runner_logging("job-abc123")
+        logging.getLogger("livekit.agents").warning("target disconnected")
+        logging.getLogger("fi.alk.harness.hosted_entrypoint").info("stage finished")
+        for handler in root.handlers:
+            handler.flush()
+    finally:
+        root.handlers = saved
+        root.setLevel(saved_level)
+
+    err = capsys.readouterr().err
+    assert "job=job-abc123 livekit.agents: target disconnected" in err
+    assert "job=job-abc123" in err.splitlines()[-1]
+
+
+def test_runner_logging_falls_back_when_the_job_id_is_unknown(capsys):
+    """A boot that fails before the id is known must still produce readable lines."""
+    import logging
+
+    from fi.alk.harness.hosted_entrypoint import configure_runner_logging
+
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    saved_level = root.level
+    try:
+        root.handlers = []
+        configure_runner_logging(None)
+        logging.getLogger("boot").error("capabilities load failed")
+        for handler in root.handlers:
+            handler.flush()
+    finally:
+        root.handlers = saved
+        root.setLevel(saved_level)
+
+    assert "job=-" in capsys.readouterr().err
+
+
+def test_two_callers_do_not_read_the_same_words_at_the_same_pace():
+    """Delivery, not content."""
+    from fi.alk.harness.simulator_voice import persona_speech_rate
+
+    marcus = persona_speech_rate({"name": "Marcus Thorne"})
+    priya = persona_speech_rate({"name": "Priya Sundaram"})
+
+    assert 0.6 <= marcus <= 2.0
+    assert 0.6 <= priya <= 2.0
+    assert marcus != priya, "every caller would sound identical"
+
+
+def test_a_persona_keeps_its_pace_across_reruns():
+    """A rate that moves between runs makes two recordings of one scenario incomparable."""
+    from fi.alk.harness.simulator_voice import persona_speech_rate
+
+    assert persona_speech_rate({"name": "Marcus Thorne"}) == persona_speech_rate(
+        {"name": "Marcus Thorne"}
+    )
+    assert persona_speech_rate({}) == 1.0
+    assert persona_speech_rate(None) == 1.0
+
+
+def test_the_simulator_definition_carries_the_persona_s_pace():
+    from fi.alk.harness.simulator_voice import persona_speech_rate, simulator_definition
+
+    definition = simulator_definition(lambda key: "", persona={"name": "Marcus Thorne"})
+
+    assert definition.tts.speed == persona_speech_rate({"name": "Marcus Thorne"})
+
+
+def test_the_caller_is_given_a_countable_reason_to_lose_patience():
+    """Measured across 16 calls: ONE impatience marker, and that on a hostile do-not-call."""
+    from fi.alk.harness.simulator_voice import simulator_instructions
+
+    text = simulator_instructions("outbound", "expecting", "", "")
+
+    assert "roughly ten in a row" in text, "the trigger has to be countable, not a mood"
+    # Rule 3 forbids volunteering, and asking how much longer IS volunteering, so without an
+    # explicit carve-out the two rules contradict and the earlier one wins. Measured: A/B against
+    # the composed prompt produced 0 impatience markers over 14 questions until rule 3 said that
+    # what it governs is FACTS, not a question about the call itself.
+    assert "This governs FACTS about you" in text
+    assert "not stop you asking your own question about the call itself" in text
+    assert "how many more" in text
+    assert "already gave it" in text, "a repeated question must be named as repeated"
+    # The rules that protect the intake flow must survive.
+    assert "Answer only what was asked, one fact at a time" in text
+    assert "close in ONE turn" in text
+
+
+def test_the_persona_s_pace_reaches_the_speech_provider(monkeypatch):
+    """The definition carrying a speed proves nothing on its own: the provider call has to receive
+    it. Cartesia documents speed as valid 0.6 to 2.0 for sonic-3, which is the model we use."""
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+
+    def fake_tts(**kwargs):
+        captured.update(kwargs)
+        return "tts"
+
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda name: SimpleNamespace(TTS=fake_tts),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc", speed=1.12),
+        http_session=None,
+    )
+
+    assert captured["speed"] == 1.12
+    assert captured["voice"] == "abc"
+    # Absent because this persona has no recognised emotion, not because emotion is unsupported:
+    # probing the live API settled that it is accepted, and it is wired from a validated set.
+    assert "emotion" not in captured
+
+
+def test_a_provider_with_no_speed_setting_is_left_alone(monkeypatch):
+    """A persona with no rate must not send speed=None into a provider that would reject it."""
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+
+    def fake_tts(**kwargs):
+        captured.update(kwargs)
+        return "tts"
+
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda name: SimpleNamespace(TTS=fake_tts),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc"), http_session=None
+    )
+
+    assert "speed" not in captured
+
+
+def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(monkeypatch, caplog):
+    """The only record of what the simulator actually sounded like.
+
+    call_metadata reports conversation_speed 1.0 and a constant voice name on every call whatever
+    the simulator was given, so without this line a run's real delivery cannot be checked after the
+    fact, and the tests below would be the only evidence that either control was ever applied.
+    """
+    import logging
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    monkeypatch.setattr(
+        livekit_models,
+        "_import_plugin",
+        lambda name: SimpleNamespace(TTS=lambda **kwargs: "tts"),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    with caplog.at_level(logging.INFO, logger="fi.simulate.simulation.livekit_models"):
+        livekit_models._cartesia_tts(
+            TTSConfig(
+                provider="cartesia",
+                model="sonic-3",
+                voice="abc",
+                speed=1.12,
+                emotion=["anger:low"],
+            ),
+            http_session=None,
+        )
+
+    said = caplog.text
+    assert "voice=abc" in said
+    assert "speed=1.12" in said
+    assert "anger:low" in said
+
+
+def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
+    """Established against the live sonic-3 API: it validates the emotion NAME and the LEVEL
+    separately and rejects either being wrong with HTTP 400, so a bad value fails the call rather
+    than being ignored. The plugin's own TTSVoiceEmotion vocabulary ("Neutral", "Frustrated",
+    "Tired") is rejected outright, which is why nothing here is taken from the plugin's types."""
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_EMOTION_LEVELS,
+        _CARTESIA_EMOTION_NAMES,
+        _PERSONALITY_EMOTION,
+        persona_emotion,
+    )
+
+    assert _CARTESIA_EMOTION_NAMES == {
+        "anger",
+        "positivity",
+        "surprise",
+        "sadness",
+        "curiosity",
+    }, "fear and disgust are rejected by the API; do not add them without re-testing"
+    assert _CARTESIA_EMOTION_LEVELS == {"lowest", "low", "high", "highest"}
+
+    for _words, emotion in _PERSONALITY_EMOTION:
+        name, _, level = emotion.partition(":")
+        assert name in _CARTESIA_EMOTION_NAMES, emotion
+        assert level in _CARTESIA_EMOTION_LEVELS, emotion
+
+    # And nothing unrecognised invents one.
+    assert persona_emotion({"personality": "Something nobody mapped"}) == []
+    assert persona_emotion({}) == []
+    assert persona_emotion(None) == []
+
+
+def test_two_personalities_do_not_share_one_emotional_register():
+    from fi.alk.harness.simulator_voice import persona_emotion
+
+    assert persona_emotion({"personality": "Warm and chatty"}) == ["positivity:high"]
+    assert persona_emotion({"personality": "Professional and formal"}) == ["positivity:low"]
+    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
+    assert persona_emotion({"personality": "Curious and sceptical"}) == ["curiosity:high"]
+
+
+def test_the_persona_s_emotion_reaches_the_speech_provider(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+    monkeypatch.setattr(
+        livekit_models, "_import_plugin",
+        lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc",
+                  speed=1.05, emotion=["anger:low"]),
+        http_session=None,
+    )
+
+    assert captured["emotion"] == ["anger:low"]
+    assert captured["speed"] == 1.05
+
+
+def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
+    """An empty list must not become emotion=[] on the wire; no control is the provider default."""
+    from types import SimpleNamespace
+
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    captured = {}
+    monkeypatch.setattr(
+        livekit_models, "_import_plugin",
+        lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw) or "tts"),
+    )
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+
+    livekit_models._cartesia_tts(
+        TTSConfig(provider="cartesia", model="sonic-3", voice="abc", emotion=[]),
+        http_session=None,
+    )
+
+    assert "emotion" not in captured
+
+
+def test_the_closing_turn_must_carry_everything_left_to_say():
+    """Rule 9 named THANKS specifically and the model did not generalise."""
+    from fi.alk.harness.simulator_voice import simulator_instructions
+
+    text = simulator_instructions("outbound", "expecting", "", "")
+
+    assert "EVERYTHING you still" in text
+    for kind in ("a thanks", "a last condition", "a reminder", "a warning", "a caveat"):
+        assert kind in text, kind
+    # The worked example has to show both shapes, or the rule is abstract.
+    assert "make sure it stays off the list. Goodbye." in text
+    assert "Say your last point BEFORE the farewell" in text
+    # And the rules this must not undo.
+    assert "Answer only what was asked, one fact at a time" in text
+    assert "After your closing turn you say nothing further" in text

@@ -64,7 +64,10 @@ SIMULATOR_INSTRUCTIONS = (
     "agent has not asked for and do not offer several details at once to be helpful, even "
     "when you know they will be needed next. Agree when asked whether a verification code "
     "should be sent, and read the code out only after the agent says it was sent and "
-    "asks you for it.\n"
+    "asks you for it. This governs FACTS about you, your account and your situation. It does "
+    "not stop you asking your own question about the call itself, such as how long this will "
+    "take or why something is needed; that is not volunteering, and rules 12a to 12d say when "
+    "to do it.\n"
     "4. Answer a repair question with the missing fact, not by restarting your request.\n"
     "5. STOP AFTER THREE. Count the agent's replies. If three of them say essentially "
     "the same thing without the task moving forward, do not try a fifth time and do not "
@@ -79,14 +82,37 @@ SIMULATOR_INSTRUCTIONS = (
     "8. Follow sequence words literally. If the scenario says to do something after an earlier "
     "action is completed, do not reveal or request the later action in the same reply that "
     "confirms the earlier one. Wait until the agent explicitly confirms the earlier action.\n"
-    "9. Once the outcome is confirmed, thank the agent once and end the call.\n"
-    "10. Do not apologise, and do not thank the agent more than once. Do not trade thanks back and "
-    "forth, and do not answer a goodbye with another goodbye.\n"
+    "9. Once the outcome is confirmed, close in ONE turn and end the call. EVERYTHING you still "
+    "have to say goes inside that turn: a thanks, a last condition, a reminder, a warning, a "
+    "caveat. 'Alright, make sure it stays off the list. Goodbye.' is one closing; 'Goodbye.' "
+    "followed by 'Make sure it stays off the list.' is two, and the second one is the tell. Say "
+    "your last point BEFORE the farewell, in the same breath, or do not say it at all.\n"
+    "10. After your closing turn you say nothing further, whatever the agent says next. Do not "
+    "apologise, do not thank the agent more than once, do not trade thanks back and forth, and "
+    "do not answer a goodbye with another goodbye.\n"
     "11. Say where you are or what you are doing only if the agent asks or it genuinely matters. It "
     "is background, not something to announce.\n"
     "12. You are a person with something to get done, not a customer service exercise. Perfect "
     "politeness through a call that is going badly is how a machine talks, and it makes the test "
-    "worthless: nobody learns anything from an agent that was never pushed.\n"
+    "worthless: nobody learns anything from an agent that was never pushed. This applies just as "
+    "much when the call is going FINE, which is most of the time: a person who is being helped "
+    "competently still reacts, still wonders, still gets tired of question fifteen of twenty.\n"
+    "12a. React to what you are told, not only to what you are asked. A figure that sounds high, a "
+    "wait that sounds long, a step that sounds pointless: say so the first time you hear it, in "
+    "your own words, once. Ask why something is needed where a person would genuinely wonder.\n"
+    "12b. Gratitude is not punctuation. Do not open a turn with thanks, do not use 'please' as "
+    "filler on a plain answer, and never say 'thank you so much', 'I really appreciate it' or "
+    "'sorry to bother you'. Answering a question is not a favour done to you, and a stream of "
+    "courtesies is the clearest sign in a transcript that nobody real was on the line.\n"
+    "12c. If you are asked something you have already answered, say that you already gave it, "
+    "once, and then give it again. Answering it twice as though it were new is the clearest sign "
+    "nobody is really listening on your side either.\n"
+    "12d. Your patience for being asked question after question is finite. Once you have answered "
+    "roughly ten in a row, say ONCE that you would like to know how many more there are, or how "
+    "long this will take, or that you have somewhere to be. Then carry on answering. This is not "
+    "refusing to co-operate: it is the single most common thing a real person does on a long form, "
+    "and a caller who never does it turns a twenty-minute intake into a transcript nobody can "
+    "learn anything from.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -560,6 +586,60 @@ def cartesia_voice_for(persona: dict) -> str:
     return voices[index]
 
 
+# How fast this person talks. Derived from the persona rather than randomised, so a rerun of the
+# same scenario sounds the same -- a rate that moves between runs makes two recordings of one
+# scenario incomparable. Cartesia documents 0.6 to 2.0 for sonic-3; this stays close to natural
+# because the point is that callers differ from each other, not that any of them sounds odd.
+_SPEECH_RATES = (0.9, 0.95, 1.0, 1.05, 1.12)
+
+
+def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
+    """A stable speech rate for this person.
+
+    Keyed on the same field as the voice, so the two move together: a persona keeps one voice and
+    one pace for as long as its name is the same.
+    """
+    if not isinstance(persona, Mapping):
+        return 1.0
+    name = str(persona.get("name") or "").strip()
+    if not name:
+        return 1.0
+    return _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)]
+
+
+# The only emotion names and levels sonic-3 accepts, established against the live API. It rejects
+# name and level separately with HTTP 400, so nothing outside this set is ever sent.
+_CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
+_CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
+
+# What a personality sounds like, as a baseline colour for the whole call. A caller's feeling really
+# moves during a call and this control does not, so it is a starting register rather than an arc:
+# two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
+# control at all, which is the provider default and the behaviour before this existed.
+_PERSONALITY_EMOTION = (
+    (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
+    (("professional", "formal", "businesslike", "direct", "efficient"), "positivity:low"),
+    (("irritated", "annoyed", "frustrated", "angry", "impatient", "abrupt"), "anger:low"),
+    (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
+    (("anxious", "worried", "nervous", "distressed", "upset", "sad"), "sadness:low"),
+)
+
+
+def persona_emotion(persona: Mapping[str, Any] | None) -> list[str]:
+    """The baseline emotional colour for this person, or nothing where none is recognised."""
+    if not isinstance(persona, Mapping):
+        return []
+    described = " ".join(
+        str(persona.get(key) or "") for key in ("personality", "communication_style", "traits")
+    ).lower()
+    for words, emotion in _PERSONALITY_EMOTION:
+        if any(word in described for word in words):
+            name, _, level = emotion.partition(":")
+            if name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS:
+                return [emotion]
+    return []
+
+
 _AURA_BY_ACCENT: dict[str, dict[str, list[str]]] = {
     "american": {
         "female": ["aura-asteria-en", "aura-luna-en", "aura-hera-en", "aura-stella-en"],
@@ -647,6 +727,8 @@ def simulator_definition(
             "provider": tts_provider,
             "model": model("tts", tts_provider),
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
+            "speed": persona_speech_rate(persona),
+            "emotion": persona_emotion(persona),
         },
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
@@ -827,6 +909,8 @@ def simulation_spec(
 
 __all__ = [
     "CARTESIA_DEFAULT_VOICE",
+    "persona_speech_rate",
+    "persona_emotion",
     "CLEANUP_TIMEOUT_SECONDS",
     "CONNECT_TIMEOUT_SECONDS",
     "READINESS_TIMEOUT_SECONDS",

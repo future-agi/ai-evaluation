@@ -452,6 +452,42 @@ Use `judged` **only** where nothing observable settles it: whether a refusal was
 whether a price was invented, tone. Say what a model has to decide and why code cannot. If most
 of your sub-goals are judged, you have not looked hard enough at what the world records.
 
+Three things are refused outright, so write for them rather than discovering them:
+
+- **A check that only matches call names.** `any(c.name == "transfer" for c in calls)` is refused.
+  It passes an agent that called the right tool with the wrong arguments, which is the failure this
+  harness exists to catch: an agent that mishears a name and opens somebody else's account calls
+  exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+- **A judged sub-goal that does not say why it is judged.** Name the judgement a model has to make
+  and the reason nothing observable can settle it. That sentence is what a reviewer can disagree
+  with; "was it polite" is not one.
+- **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
+
+The one that matters most: check the *identity* the agent acted on, not just that it acted. If the
+caller is Corwin and the agent looked up a record, assert whose record it was. An agent that
+mishears and proceeds confidently against the wrong row is the worst failure this can find, and it
+is invisible to every check that only counts calls.
+
+**Reading the argument is not the same as checking it.** This is the most common weak check, and
+measuring a real catalogue found five of six doing it:
+
+```python
+# Weak. An agent that misheard the name passes this: a reason was given, it is a string, and it
+# is not empty.
+reason = xfers[0].arguments.get("reason")
+if not reason or not isinstance(reason, str) or not reason.strip():
+    return f"no reason given: {reason!r}"
+
+# Strong. Compare the value against what this scenario expected, or against the world row it
+# should have matched.
+if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
+    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
+```
+
+`add_sub_goal` accepts a truthiness check and tells you it is one. Take the note: the agent under
+test will pass it while doing the wrong thing, and that is the failure the whole suite exists to
+catch.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong

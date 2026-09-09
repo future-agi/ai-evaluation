@@ -11,13 +11,15 @@ invented here would fit only the first.
 
 from __future__ import annotations
 
+import ast
 import json
+import textwrap
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 CATALOGUE = "sub_goals.json"
-
 
 class SubGoal(BaseModel):
     """One named thing the agent can be checked on, shared across every scenario that needs it.
@@ -110,7 +112,51 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
             "a string, or None when the sub-goal held"
         )
     problems.extend(_presence_only_problems(sub_goal))
+    problems.extend(_judged_problems(sub_goal))
     return problems
+
+
+# What a check has to touch to be about the outcome rather than about reaching a tool. `.arguments`
+# is what the agent passed, `.result`/`.error` is what came back, and `world` is the state left
+# behind. A check touching none of these can only be matching call names.
+_OUTCOME_ATTRIBUTES = frozenset({"arguments", "args", "result", "error", "refused"})
+
+
+def _reads_outcome(source: str) -> bool:
+    """Whether a check reads what happened, rather than only that a call happened.
+
+    Parsed rather than string-matched. A substring test passes a check that merely mentions
+    ``world`` in a comment or names an unused variable, and the whole point of this gate is that a
+    check which looks right and settles nothing is the expensive kind of wrong.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        # An uncompilable check fails run_check with `broken` anyway, and reporting it as
+        # outcome-blind here would hide the real reason.
+        return True
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in _OUTCOME_ATTRIBUTES:
+            return True
+        if isinstance(node, ast.Subscript):
+            # world.state()["orders"] parses as a Subscript over a Call; the attribute walk above
+            # catches `.state`, but a check handed a plain mapping is still reading state.
+            return True
+        if isinstance(node, ast.Name) and node.id == "world":
+            # Reading the world at all is reading state. The parameter itself is a Name in the
+            # signature, so only uses inside the body reach here.
+            for function in ast.walk(tree):
+                if isinstance(function, ast.FunctionDef) and function.name == "check":
+                    names = {
+                        inner.id
+                        for statement in function.body
+                        for inner in ast.walk(statement)
+                        if isinstance(inner, ast.Name)
+                    }
+                    if "world" in names:
+                        return True
+    return False
 
 
 def _presence_only_problems(sub_goal: SubGoal) -> list[str]:
@@ -118,10 +164,7 @@ def _presence_only_problems(sub_goal: SubGoal) -> list[str]:
     body = sub_goal.check
     if not body.strip():
         return []
-    # The signature always names `world`, so judge only what comes after it.
-    _, _, after = body.partition("def check(")
-    _, _, after = after.partition(")")
-    if "world" in after or "arguments" in after or ".args" in after:
+    if _reads_outcome(body):
         return []
     return [
         f"{sub_goal.name}: the check only asks whether a tool was called, which any agent reaching "
@@ -129,6 +172,101 @@ def _presence_only_problems(sub_goal: SubGoal) -> list[str]:
         "was given, or the state the world was left in. Whether a call was ended is never a "
         "sub-goal; what the agent did before stopping is"
     ]
+
+
+def compares_to_a_value(source: str) -> bool:
+    """Whether a check tests an argument against something specific, or only that it is non-empty.
+
+    This is the difference between "a reason was given" and "the reason was the right one". An
+    agent that mishears a name and proceeds confidently against the wrong record passes every
+    truthiness test: the argument is present, is a string, and is non-empty. Measured on a real
+    authored catalogue, five of six coded checks tested only truthiness.
+
+    Advisory rather than a refusal: hardening this would have refused five of those six, and an
+    authoring loop that cannot satisfy a gate fails the run instead of improving the check.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        for op in node.ops:
+            if not isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
+                continue
+            right = node.comparators[0] if node.comparators else None
+            # Comparing against None/""/0 is truthiness wearing a comparison's clothes, and
+            # matching on `c.name` is routing to the right call rather than judging its outcome.
+            if isinstance(right, ast.Constant) and right.value in (None, "", 0):
+                continue
+            if isinstance(node.left, ast.Attribute) and node.left.attr == "name":
+                continue
+            return True
+    return False
+
+
+def weak_check_advisory(sub_goal: SubGoal) -> str:
+    """What to say about a check that reads the arguments but only tests that they are there."""
+    if not sub_goal.check.strip() or compares_to_a_value(sub_goal.check):
+        return ""
+    return (
+        f"{sub_goal.name}: the check reads the arguments but only tests that they are present and "
+        "non-empty. An agent that mishears a detail and acts confidently on the wrong one passes "
+        "that. Compare the value against what this scenario expected, or against the world row it "
+        "should match"
+    )
+
+
+def _judged_problems(sub_goal: SubGoal) -> list[str]:
+    """Hold a judged sub-goal to the reason it is judged.
+
+    The catalogue guidance already says a judge is the fallback, and nothing enforced it, so the
+    fallback became the default: one run reported six sub-goals judged rather than settled by code.
+    A judged sub-goal has to say what a model must decide and why nothing observable settles it,
+    because that sentence is the thing a reviewer can disagree with.
+    """
+    judged = sub_goal.judged.strip()
+    if not judged or sub_goal.check.strip():
+        return []
+    # A word count is a crude proxy for "more than a restatement of the name". Four is where the
+    # real cases fall either side: "was it polite" is the name asked as a question and settles
+    # nothing, while "nothing observable shows tone" is terse and genuinely says why code cannot.
+    # An earlier threshold of eight rejected the second, which is a legitimate claim.
+    if len(judged.split()) < 4:
+        return [
+            f"{sub_goal.name}: judged, but does not say what a model has to decide and why nothing "
+            "observable settles it. Name the judgement and the reason code cannot make it, or "
+            "write a check"
+        ]
+    return []
+
+
+def catalogue_problems(
+    sub_goals: Sequence[SubGoal], *, world_is_observable: bool = True
+) -> list[str]:
+    """Problems with the catalogue taken as a whole, rather than with one sub-goal.
+
+    Per-sub-goal validation cannot see the shape of the set, and the shape is what decides whether
+    a suite grades anything: a catalogue that is mostly judged reports opinions.
+
+    ``world_is_observable`` is False for a target we cannot see into -- a conversational agent with
+    no executable tools and no state leaves nothing behind for a check to read, so judging is the
+    only thing available and is correct rather than lazy. It is never a way around writing a check
+    for a world that does have state.
+    """
+    usable = [one for one in sub_goals if one.name.strip()]
+    if not usable or not world_is_observable:
+        return []
+    judged = [one for one in usable if not one.deterministic()]
+    if len(judged) * 2 > len(usable):
+        return [
+            f"{len(judged)} of {len(usable)} sub-goals are judged rather than settled by code. A "
+            "judge is the fallback, not the method: most of these are answerable from the "
+            "arguments the agent passed or the state it left. Rewrite the ones that are, and keep "
+            "judging only what nothing observable can settle"
+        ]
+    return []
 
 
 def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:

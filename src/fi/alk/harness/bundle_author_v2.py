@@ -12,6 +12,7 @@ import argparse
 import ast
 import hashlib
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -23,6 +24,7 @@ from typing import Any
 import yaml
 
 from .bundle import CapabilityProtocol
+from .catalogue import CATALOGUE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
     BUNDLE_V2_SCHEMA_VERSION,
@@ -63,6 +65,8 @@ from .world.tools import _binding
 class BundleAuthorError(RuntimeError):
     """A source cannot be compiled into an honest hosted process bundle."""
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class EnvironmentPlanV2:
@@ -1341,6 +1345,25 @@ def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
         )
 
 
+def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
+    """Put the sub-goal catalogue beside the scenarios that name its entries.
+
+    Scenarios reference sub-goals by name only, so without the catalogue a description, a judged
+    sub-goal's claim and `_deterministic_names` all come back empty, each silently. A warning
+    rather than an error, since failing the run is worse than the degraded reporting.
+    """
+    catalogue = authoring / CATALOGUE
+    if not catalogue.is_file():
+        logger.warning(
+            "no %s in %s: sub-goals will reach the platform without their descriptions or claims",
+            CATALOGUE,
+            authoring,
+        )
+        return []
+    shutil.copy2(catalogue, staging / CATALOGUE)
+    return [CATALOGUE]
+
+
 def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
     """Adopt the frozen target/tool contract needed by response-carried HTTP tools.
 
@@ -1526,6 +1549,7 @@ def author_bundle_v2(
     )
     try:
         _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
+        adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
         adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)
         if "contract.json" in adopted_chat_files and contract_body:
             (temporary / "contract.json").write_text(
@@ -1665,7 +1689,10 @@ def author_bundle_v2(
                 source_digest=source_fingerprint(source_root),
                 generator="fi.alk.harness.bundle_author_v2",
                 generator_version="2",
-                adopted_files=["scenarios/"] + adopted_seed + adopted_chat_files,
+                adopted_files=["scenarios/"]
+                + adopted_catalogue
+                + adopted_seed
+                + adopted_chat_files,
                 generated_files=["manifest.json", "seed/world.sql"],
             ),
             metadata={

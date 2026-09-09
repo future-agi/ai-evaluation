@@ -18,8 +18,10 @@ proceeds without the option, which is said out loud in the session rather than h
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
+from datetime import date
 from typing import Any, AsyncIterator
 
 from .base import (
@@ -51,12 +53,28 @@ _TERMINAL_SAVE_TOOLS = frozenset(
     }
 )
 
-# Vertex list pricing per 1M tokens (input, output), as of 2026-08; verify before relying on
-# cost figures. An unknown model reports no cost rather than a wrong one.
+# Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
+# the platform's litellm model table). An unknown or stale model reports no cost rather than a
+# wrong one, and shows up in `unpriced_turns`.
 PRICES_PER_MILLION = {
-    "gemini-3.7-flash": (0.75, 3.75),
-    "gemini-3.5-flash-lite": (0.30, 2.50),
-    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.8-flash": (0.75, 3.75, "2026-12-31"),
+    "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
+    "gemini-3.6-flash": (0.75, 3.75, "2026-12-31"),
+    "gemini-3.5-transcribe-preview": (2.5, 12, "2026-12-31"),
+    "gemini-3.5-transcribe-live-preview": (3.5, 21, "2026-12-31"),
+    "gemini-3.5-flash-lite": (0.3, 2.5, "2026-12-31"),
+    "gemini-3.5-flash": (1.5, 9, "2026-12-31"),
+    "gemini-3.1-pro-preview-customtools": (2, 12, "2026-12-31"),
+    "gemini-3.1-pro-preview": (2, 12, "2026-12-31"),
+    "gemini-3.1-flash-lite-preview": (0.25, 1.5, "2026-12-31"),
+    "gemini-3.1-flash-lite-image": (0.25, 1.5, "2026-12-31"),
+    "gemini-3.1-flash-lite": (0.25, 1.5, "2026-12-31"),
+    "gemini-3.1-flash-image-preview": (0.5, 3, "2026-12-31"),
+    "gemini-3.1-flash-image": (0.5, 3, "2026-12-31"),
+    "gemini-3-pro-preview": (2, 12, "2026-12-31"),
+    "gemini-3-pro-image-preview": (2, 12, "2026-12-31"),
+    "gemini-3-pro-image": (2, 12, "2026-12-31"),
+    "gemini-3-flash-preview": (0.5, 3, "2026-12-31"),
 }
 
 _PYTHON_TYPES = {
@@ -316,6 +334,7 @@ class VertexGeminiSession:
         turns = 0
         tokens_in = 0
         tokens_out = 0
+        tokens_cached = 0
         settled = False
         terminal_save_succeeded = False
         try:
@@ -329,6 +348,7 @@ class VertexGeminiSession:
                 if usage is not None:
                     tokens_in += usage.prompt_token_count or 0
                     tokens_out += usage.candidates_token_count or 0
+                    tokens_cached += getattr(usage, "cached_content_token_count", 0) or 0
                 parts: list[Any] = []
                 returned: list[ToolReturned] = []
                 for part in (event.content.parts if event.content else []) or []:
@@ -374,6 +394,9 @@ class VertexGeminiSession:
                 outcome="failed",
                 turns=turns,
                 cost_usd=self._cost(tokens_in, tokens_out),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                tokens_cached=tokens_cached,
                 session_id=self.session_id,
                 models={self._model},
                 is_error=True,
@@ -389,6 +412,9 @@ class VertexGeminiSession:
             is_error=not settled,
             turns=turns,
             cost_usd=self._cost(tokens_in, tokens_out),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            tokens_cached=tokens_cached,
             session_id=self.session_id,
             models={self._model},
             errors=(
@@ -401,10 +427,23 @@ class VertexGeminiSession:
         )
 
     def _cost(self, tokens_in: int, tokens_out: int) -> float | None:
-        prices = PRICES_PER_MILLION.get(self._model)
-        if prices is None:
-            return None
-        return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000
+        return priced(self._model, tokens_in, tokens_out)
+
+
+logger = logging.getLogger(__name__)
+
+
+def priced(model: str, tokens_in: int, tokens_out: int) -> float | None:
+    """What these tokens cost, or None where no price can be stood behind."""
+    prices = PRICES_PER_MILLION.get(model)
+    if prices is None:
+        return None
+    if len(prices) > 2 and date.today().isoformat() > str(prices[2]):
+        logger.warning(
+            "no current price for %s: the table's figures expired on %s", model, prices[2]
+        )
+        return None
+    return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000
 
 
 class VertexGeminiBackend:

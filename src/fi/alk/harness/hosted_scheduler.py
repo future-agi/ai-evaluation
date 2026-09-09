@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from .job import FailureDomain, HarnessStage
+from .judge import judge as _judge
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
@@ -187,6 +188,9 @@ class SubGoal(Protocol):
     )
 
     def check(self, world: ReadOnlyWorld, calls: Sequence[Call]) -> object: ...
+
+
+JudgeFn = Callable[[Any, Any, Sequence[Call]], Awaitable[tuple[bool | None, str]]]
 
 
 class Scenario(Protocol):
@@ -509,6 +513,23 @@ def _classify_check(value: object) -> _Verdict:
         # checks.py's `Outcome(name, False, "False")`.
         return _Verdict(False, "False", False)
     return _Verdict(False, None, True)
+
+
+def _sub_goal_reason(goal: SubGoal, verdict: _Verdict) -> str | None:
+    """What to show a reader for this sub-goal, on a pass as much as on a failure.
+
+    A check returns nothing when it holds, which left every passing sub-goal with an empty hover
+    and no way to tell a real pass from one nobody wrote a check for. The authored description of
+    what the sub-goal means is the honest thing to show there: it says what was verified without
+    claiming evidence the check never returned. A bare ``False`` is the other end of the same
+    problem -- the reason read literally "False" -- so it gets the description too.
+    """
+    what = str(getattr(goal, "what", "") or "").strip().rstrip(".")
+    if verdict.held:
+        return f"Held: {what}." if what else "Held. The check found nothing wrong."
+    if verdict.reason and verdict.reason.strip() and verdict.reason != "False":
+        return verdict.reason
+    return f"Did not hold: {what}." if what else None
 
 
 # --- phase execution: budget + exception classification ---------------------------------------
@@ -1398,6 +1419,7 @@ class HostedScheduler:
         outbound: OutboundPort,
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
+        judge: JudgeFn | None = None,
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1405,6 +1427,10 @@ class HostedScheduler:
         self._outbound = outbound
         self._job_seed = job_seed
         self._cancel_requested = cancel_requested or (lambda: False)
+        # Injected like every other collaborator, so a test decides a judged sub-goal without a
+        # model call. Resolved here rather than as a default argument, which would bind at import
+        # and ignore both injection and patching.
+        self._judge = judge or _judge
         self._executor: ThreadPoolExecutor | None = None
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
@@ -1948,6 +1974,7 @@ class HostedScheduler:
             )
 
         sub_goal_results: list[SubGoalResult] = []
+        judged_pending: list[tuple[int, Any]] = []
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
@@ -1983,6 +2010,14 @@ class HostedScheduler:
                     )
                 )
                 continue
+            if goal.judged:
+                # A judged sub-goal has no code to settle it: a model decides, here, while the
+                # world the call left behind is still alive. Collected and run together below.
+                judged_pending.append((len(sub_goal_results), goal))
+                sub_goal_results.append(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
+                )
+                continue
             verdict = _classify_check(outcome.value)
             if verdict.broken:
                 broken_failure = _failure(
@@ -1998,10 +2033,26 @@ class HostedScheduler:
                 SubGoalResult(
                     name=goal.name,
                     held=verdict.held,
-                    reason=verdict.reason,
+                    reason=_sub_goal_reason(goal, verdict),
                     judged=goal.judged != "",
                 )
             )
+
+        if judged_pending:
+            # Judged sub-goals only read, so they are independent of each other and of the coded
+            # checks: one round trip for all of them rather than one each.
+            verdicts = await asyncio.gather(
+                *(self._judge(goal, check_handle, calls) for _, goal in judged_pending),
+                return_exceptions=True,
+            )
+            for (slot, goal), outcome in zip(judged_pending, verdicts):
+                if isinstance(outcome, BaseException):
+                    held, why = None, f"the judge could not run: {outcome!r}"
+                else:
+                    held, why = outcome
+                sub_goal_results[slot] = SubGoalResult(
+                    name=goal.name, held=held, reason=why, judged=True
+                )
 
         if broken_failure is not None:
             return self._fault(
@@ -2013,9 +2064,16 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
 
-        status = (
-            "passed" if all(result.held for result in sub_goal_results) else "failed"
-        )
+        # An undecided judge is not evidence against the agent, so it cannot read as a failed
+        # scenario, and it cannot read as a passed one either since nothing settled that sub-goal.
+        # `errored` is the honest third answer, and the platform keeps a completed call playable
+        # for one while carrying the outcome separately.
+        if any(result.held is False for result in sub_goal_results):
+            status = "failed"
+        elif any(result.held is None for result in sub_goal_results):
+            status = "errored"
+        else:
+            status = "passed"
         return ResultReceipt(
             scenario_key=scenario.scenario_key,
             scenario_id=scenario.scenario_id,

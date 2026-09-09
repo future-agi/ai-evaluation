@@ -190,6 +190,13 @@ class StageDone:
     outcome: str = "success"
     turns: int = 0
     cost_usd: float | None = None
+    # The units behind the price, so a bill can be checked rather than trusted.
+    tokens_in: int = 0
+    tokens_out: int = 0
+    # Input the provider served from its own cache. Included in tokens_in, and billed well below
+    # fresh input, so a ledger that does not carry it overstates a rerun. Carried rather than
+    # discounted here: inventing a cache rate would be a guess presented as a price.
+    tokens_cached: int = 0
     session_id: str | None = None
     models: set[str] = field(default_factory=set)
     is_error: bool = False

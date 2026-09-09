@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ except ImportError as exc:
     ) from exc
 
 from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -188,6 +191,16 @@ def _cartesia_tts(
         if config.voice not in {"alloy", ""}
         else "f786b574-daa5-4673-aa0c-cbe3e8534c02"
     )
+    # Both ride on Cartesia's ``__experimental_controls``. sonic-3 rejects a wrong emotion name or
+    # level with HTTP 400, and rejects the plugin's own TTSVoiceEmotion vocabulary, so the values
+    # come from a set validated against the live API rather than from the plugin's types.
+    speed = config.speed
+    emotion = config.emotion
+    # The only record of what the simulator actually sounded like: call_metadata reports a constant
+    # speed and voice name whatever it was given.
+    logger.info(
+        "cartesia_tts voice=%s speed=%s emotion=%s", voice, speed, emotion or None
+    )
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
         http_session=http_session,
@@ -197,6 +210,8 @@ def _cartesia_tts(
             replacement="sonic-3",
         ),
         voice=voice,
+        **({"speed": float(speed)} if isinstance(speed, (int, float)) else {}),
+        **({"emotion": list(emotion)} if emotion else {}),
     )
 
 

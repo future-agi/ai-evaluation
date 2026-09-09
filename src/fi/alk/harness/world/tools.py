@@ -24,7 +24,15 @@ from typing import Any
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
-from ..catalogue import SubGoal, load_catalogue, save_catalogue, validate_sub_goal
+from ..catalogue import (
+    SubGoal,
+    catalogue_problems,
+    load_catalogue,
+    save_catalogue,
+    compares_to_a_value,
+    validate_sub_goal,
+    weak_check_advisory,
+)
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
@@ -1072,10 +1080,15 @@ def world_tools(
         ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
+        # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
+        # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
+        advisory = weak_check_advisory(sub_goal)
         settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(
             f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "
-            f"{settled} settled by code: " + ", ".join(sorted(catalogue.names()))
+            f"{settled} settled by code: "
+            + ", ".join(sorted(catalogue.names()))
+            + (f"\n\nWorth strengthening: {advisory}" if advisory else "")
         )
 
     @tool(
@@ -1300,6 +1313,13 @@ def world_tools(
                 "add_world_check: what has to be true for this world to be worth testing "
                 "against, as code.\n\n" + WORLD_CHECK_HELP
             )
+        # Per-sub-goal validation cannot see the shape of the set, and the shape is what decides
+        # whether the suite grades anything: a catalogue that is mostly judged reports opinions.
+        if shape_problems := catalogue_problems(
+            catalogue.sub_goals,
+            world_is_observable=bool(world.state()) or bool(world.handlers),
+        ):
+            return _err("Not saved.\n  - " + "\n  - ".join(shape_problems))
         failing, cannot_fail, _survived = _verified()
         if failing:
             return _err(
@@ -1384,11 +1404,19 @@ def world_tools(
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()
+        # How many checks judge a VALUE rather than the presence of one. Reported as a fact at the
+        # point of saving, because the per-sub-goal note is easy to read past and this number is
+        # what decides whether the suite would catch an agent that acted on a misheard detail.
+        coded = [one for one in catalogue.sub_goals if one.deterministic()]
+        strong = [one for one in coded if compares_to_a_value(one.check)]
         return _ok(
             f"Saved to {path}.\n"
             f"{len(world.handlers)} tools, {len(tables)} collections, "
             f"{sum(_size(held) for held in tables.values())} records, "
             f"{len(world_checks)} world checks.\n"
+            f"{len(strong)} of {len(coded)} checks compare a value against an expectation; the "
+            "rest only test that an argument was present, which an agent acting on a misheard "
+            "detail would pass.\n"
             + (
                 "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free

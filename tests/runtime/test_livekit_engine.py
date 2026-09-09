@@ -623,13 +623,7 @@ def test_two_ten_case_suites_do_not_share_room_names(monkeypatch) -> None:
 
 
 def _role_content(messages: list[dict]) -> list[dict]:
-    """Project canonical report messages to just role+content.
-
-    ``_canonical_report_messages`` enriches each message with voice-timing
-    metadata (created_at, started/stopped_speaking_at, interrupted, e2e_latency);
-    these tests assert the role-perspective + interruption-merge behavior, which
-    lives entirely in role/content.
-    """
+    """Project canonical report messages to just role+content."""
     return [{"role": m["role"], "content": m["content"]} for m in messages]
 
 
@@ -1539,6 +1533,186 @@ def test_conversation_silence_backstop_does_not_fire_at_message_floor() -> None:
         return done
 
     assert asyncio.run(run()) is False
+
+
+def test_our_caller_thinking_is_not_silence(monkeypatch) -> None:
+    """`agent_state` is THIS SESSION'S agent, which is our simulated caller, not the agent under
+    test. So this stops us cutting off our own caller mid-thought.
+
+    It does NOT protect a slow target: `UserState` is only speaking/listening/away, so a remote
+    party composing a reply is simply silent on the wire and no state reports it. The measured
+    reply-time window is what protects a slow target. I originally wrote this test believing the
+    opposite, which is the same role inversion that broke the closing loop."""
+    monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
+
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+        SimpleNamespace(type="message", role="user", text_content="Hello"),
+        SimpleNamespace(type="message", role="assistant", text_content="More?"),
+        SimpleNamespace(type="message", role="user", text_content="Yes"),
+    ]
+    session = SimpleNamespace(
+        agent_state="thinking", user_state="listening",
+        history=SimpleNamespace(items=items),
+    )
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(
+                session, quiet_seconds=5.0, min_turn_messages=6
+            )
+        )
+        # Far longer than the window, but the agent is working, so nothing has gone quiet.
+        await asyncio.sleep(0.30)
+        while_thinking = task.done()
+        session.agent_state = "idle"
+        await asyncio.sleep(0.20)
+        once_idle = task.done()
+        task.cancel()
+        return while_thinking, once_idle
+
+    while_thinking, once_idle = asyncio.run(run())
+    assert while_thinking is False, "counted the agent's own thinking as dead air"
+    assert once_idle is True, "never settled once both sides were actually idle"
+
+
+def test_the_caller_does_not_open_over_an_agent_that_is_still_thinking(monkeypatch) -> None:
+    """Same definition, applied to the other timer."""
+    items = [
+        SimpleNamespace(type="message", role="assistant", text_content="Hi"),
+        SimpleNamespace(type="message", role="user", text_content="Hello"),
+    ]
+    session = SimpleNamespace(
+        agent_state="thinking", user_state="listening",
+        history=SimpleNamespace(items=items),
+    )
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_agent_first_silence(session, timeout_seconds=0.05)
+        )
+        await asyncio.sleep(0.25)
+        while_thinking = task.done()
+        session.agent_state = "idle"
+        await asyncio.sleep(0.20)
+        once_idle = task.done()
+        task.cancel()
+        return while_thinking, once_idle
+
+    while_thinking, once_idle = asyncio.run(run())
+    assert while_thinking is False, "would let the caller talk over a reply in flight"
+    assert once_idle is True
+
+
+def _timed_message(role: str, text: str, *, started=None, stopped=None, latency=None):
+    metrics = {}
+    if started is not None:
+        metrics["started_speaking_at"] = started
+    if stopped is not None:
+        metrics["stopped_speaking_at"] = stopped
+    if latency is not None:
+        metrics["e2e_latency"] = latency
+    return SimpleNamespace(
+        type="message", role=role, text_content=text, metrics=metrics, created_at=started or 0.0
+    )
+
+
+def test_the_observed_reply_time_comes_from_the_transport_not_the_poll_loop() -> None:
+    """Read from LiveKit's own metrics, so it is right for history that arrives in bulk on a
+    resume or reconnect, where there was no live transition for a loop to observe."""
+    messages = livekit._session_messages(
+        SimpleNamespace(
+            history=SimpleNamespace(
+                items=[
+                    # role names via livekit._CALLER / _TARGET: LiveKit calls our simulated
+                    # caller "assistant" and the agent under test "user".
+                    _timed_message(livekit._CALLER, "Hi", started=100.0, stopped=101.0),
+                    _timed_message(livekit._TARGET, "Hello", started=102.0, stopped=103.0),
+                    # Reported latency wins when the provider gives one. This is the TARGET's turn.
+                    _timed_message(livekit._TARGET, "One moment", started=128.2, stopped=129.0,
+                                   latency=25.2),
+                ]
+            )
+        )
+    )
+
+    assert livekit._observed_agent_reply_seconds(messages) == 25.2
+
+
+def test_the_observed_reply_time_falls_back_to_the_audible_gap() -> None:
+    """A provider that reports no latency still leaves the gap a listener would have heard."""
+    messages = livekit._session_messages(
+        SimpleNamespace(
+            history=SimpleNamespace(
+                items=[
+                    _timed_message(livekit._TARGET, "Hi", started=100.0, stopped=101.0),
+                    _timed_message(livekit._CALLER, "Hello", started=102.0, stopped=103.0),
+                    # The TARGET replying 18s after the caller stopped.
+                    _timed_message(livekit._TARGET, "Right", started=121.0, stopped=122.0),
+                ]
+            )
+        )
+    )
+
+    assert livekit._observed_agent_reply_seconds(messages) == 18.0
+    window = livekit._settled_silence_window(18.0, livekit._SILENCE_BACKSTOP_SECONDS)
+    assert window > 18.0, "a window shorter than the gap cuts the agent off mid-answer"
+
+
+def test_an_untimed_conversation_reports_no_observed_reply_time() -> None:
+    """Absent timing must read as unmeasured, not as an instant reply."""
+    messages = livekit._session_messages(
+        SimpleNamespace(
+            history=SimpleNamespace(
+                items=[
+                    SimpleNamespace(type="message", role=livekit._CALLER, text_content="Hi"),
+                    SimpleNamespace(type="message", role=livekit._TARGET, text_content="Hello"),
+                    SimpleNamespace(type="message", role=livekit._CALLER, text_content="Right"),
+                ]
+            )
+        )
+    )
+
+    assert livekit._observed_agent_reply_seconds(messages) == 0.0
+    assert (
+        livekit._settled_silence_window(0.0, livekit._SILENCE_BACKSTOP_SECONDS)
+        == livekit._SETTLED_SILENCE_FLOOR_SECONDS
+    )
+
+
+def test_the_settle_loop_honours_the_measured_reply_time(monkeypatch) -> None:
+    """End to end through the loop: a settled call whose agent was measured slow stays open past
+    the floor. This is the regression that shipped -- a 12s constant against a 25.2s reply."""
+    monkeypatch.setattr(livekit, "_SETTLED_SILENCE_FLOOR_SECONDS", 0.05)
+    monkeypatch.setattr(livekit, "_SETTLED_LATENCY_MULTIPLE", 2.0)
+
+    items = [
+        _timed_message(livekit._CALLER, "Hi", started=100.0, stopped=101.0),
+        # Gaps kept tight so the ONE deliberate 0.4s is genuinely the slowest reply observed.
+        _timed_message(livekit._TARGET, "Hello", started=101.1, stopped=102.0),
+        _timed_message(livekit._CALLER, "Go on", started=102.1, stopped=103.0),
+        # The TARGET's own reply time is what the window has to clear.
+        _timed_message(livekit._TARGET, "Yes", started=103.1, stopped=104.0, latency=0.4),
+    ]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))  # no thinking state reported
+
+    async def run() -> tuple[bool, bool]:
+        task = asyncio.create_task(
+            livekit._wait_for_conversation_silence(
+                session, quiet_seconds=5.0, min_turn_messages=6
+            )
+        )
+        # 0.4s measured means a 0.8s window, so 0.5s of quiet is not a finished call yet.
+        await asyncio.sleep(0.5)
+        early = task.done()
+        await asyncio.sleep(0.6)
+        later = task.done()
+        task.cancel()
+        return early, later
+
+    early, later = asyncio.run(run())
+    assert early is False, "settled at the floor and ignored the measured reply time"
+    assert later is True, "never settled even after twice the measured reply time"
 
 
 def test_conversation_silence_waits_until_speech_has_finished() -> None:
@@ -3346,3 +3520,156 @@ def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
     # An explicit value from the scenario still wins.
     explicit = _simulator_turn_handling(vad=object(), min_endpointing_delay=0.5)
     assert explicit["endpointing"]["min_delay"] == 0.5
+
+
+def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:
+    """Measured on a live call: the caller closed correctly with "Sounds great, thanks."""
+    # LiveKit calls our simulated caller "assistant" and the agent under test "user"; the
+    # published transcript swaps them. Using the named roles so this cannot invert again.
+    items = [
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Hello, this is Desmond."),
+        SimpleNamespace(
+            type="message", role=livekit._TARGET, text_content="Hi Desmond, this is Avery."
+        ),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Yeah, that's me."),
+        SimpleNamespace(
+            type="message",
+            role=livekit._TARGET,
+            text_content="I will set up a callback for tomorrow at ten.",
+        ),
+        SimpleNamespace(
+            type="message", role=livekit._CALLER,
+            text_content="Sounds great, thanks. Talk tomorrow. Bye.",
+        ),
+    ]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))
+
+    asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
+
+
+def test_the_call_does_not_end_on_the_target_s_goodbye_alone() -> None:
+    """The AGENT UNDER TEST saying goodbye is not the caller having finished: the caller may still
+    need to answer, and ending there would cut off its reply and read as the caller failing.
+
+    This is the case the role inversion got backwards. The loop was matching on the target's
+    farewell instead of the caller's, so it ended calls on the wrong side and still passed a test
+    that named the roles the same wrong way round."""
+    items = [
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Hello?"),
+        SimpleNamespace(
+            type="message", role=livekit._TARGET, text_content="Thanks, have a great day, bye."
+        ),
+    ]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))
+
+    async def run() -> bool:
+        task = asyncio.create_task(livekit._wait_for_closing_loop(session))
+        await asyncio.sleep(1.4)
+        done = task.done()
+        task.cancel()
+        return done
+
+    assert asyncio.run(run()) is False
+
+
+def test_a_caller_goodbye_before_the_agent_ever_spoke_does_not_end_the_call() -> None:
+    """A pickup is not a farewell, and nothing should end on one side alone."""
+    items = [SimpleNamespace(type="message", role=livekit._CALLER, text_content="Bye.")]
+    session = SimpleNamespace(history=SimpleNamespace(items=items))
+
+    async def run() -> bool:
+        task = asyncio.create_task(livekit._wait_for_closing_loop(session))
+        await asyncio.sleep(1.4)
+        done = task.done()
+        task.cancel()
+        return done
+
+    assert asyncio.run(run()) is False
+
+
+def test_a_farewell_is_recognised_by_what_it_carries_not_by_its_length() -> None:
+    """A six-word cap classified "Sounds great, thanks."""
+    closings = [
+        "Sounds good, talk to you then. Bye.",
+        "Talk soon. Bye-bye.",
+        "Take care.",
+        "Sounds great, thanks. Talk tomorrow. Bye.",
+        "Alright, thanks, bye!",
+        "Fine. Goodbye.",
+        "Thanks, bye.",
+    ]
+    for text in closings:
+        assert livekit._is_closing_only(text), text
+
+    # A turn that closes AND carries something is still conversation; ending on it truncates a
+    # live call and the transcript then reads as the caller giving up.
+    conversation = [
+        "Yes, it is. Bye.",
+        "No, that is not my number. Bye.",
+        "Bye, but first, what is the premium?",
+        "Hello, this is Desmond.",
+        "The address is six six four Harlow Street.",
+        "Yes, that is correct.",
+    ]
+    for text in conversation:
+        assert not livekit._is_closing_only(text), text
+
+
+def test_closing_the_call_cancels_a_reply_already_being_generated() -> None:
+    """Noticing the farewell only stops the NEXT turn being asked for."""
+    interrupts = []
+
+    items = [
+        SimpleNamespace(type="message", role=livekit._TARGET, text_content="Hi Desmond."),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Yeah, that's me."),
+        SimpleNamespace(
+            type="message", role=livekit._TARGET, text_content="I'll call you back tomorrow."
+        ),
+        SimpleNamespace(
+            type="message", role=livekit._CALLER,
+            text_content="Sounds good, talk to you then. Bye.",
+        ),
+    ]
+    session = SimpleNamespace(
+        history=SimpleNamespace(items=items),
+        interrupt=lambda *, force=False: interrupts.append(force),
+    )
+
+    asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
+
+    assert interrupts == [True], "an in-flight reply has to be cancelled, and forcibly"
+
+
+def test_a_session_with_nothing_in_flight_still_closes_cleanly() -> None:
+    """A session that raises on interrupt (already shutting down, nothing playing) must not turn a
+    finished call into an error."""
+
+    def boom(*, force=False):
+        raise RuntimeError("AgentSession isn't running")
+
+    items = [
+        SimpleNamespace(type="message", role=livekit._TARGET, text_content="Hi."),
+        SimpleNamespace(type="message", role=livekit._CALLER, text_content="Thanks, bye."),
+    ]
+    session = SimpleNamespace(
+        history=SimpleNamespace(items=items), interrupt=boom
+    )
+
+    asyncio.run(asyncio.wait_for(livekit._wait_for_closing_loop(session), timeout=5))
+
+
+def test_a_one_sided_call_fails_even_when_it_ended_cleanly() -> None:
+    """A clean close is not a conversation. The other failure tests here reach the floor with an
+    empty transcript or a stall, so nothing else pins the alternation arm on real messages."""
+    only_caller = [
+        {"role": livekit._CALLER, "content": "Hello?"},
+        {"role": livekit._CALLER, "content": "Anyone there? Goodbye."},
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "closing_loop", only_caller, min_turn_messages=8
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "insufficient_conversation"

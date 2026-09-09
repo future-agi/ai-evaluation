@@ -117,6 +117,7 @@ class ClaudeSession:
                     outcome=received.subtype,
                     turns=received.num_turns,
                     cost_usd=received.total_cost_usd,
+                    **_tokens(getattr(received, "model_usage", None)),
                     session_id=received.session_id,
                     models=set(getattr(received, "model_usage", None) or {}),
                     is_error=bool(getattr(received, "is_error", False)),
@@ -138,6 +139,23 @@ class ClaudeSession:
                     )
             return returned
         return []
+
+
+def _tokens(model_usage: Any) -> dict[str, int]:
+    """Input and output tokens across every model a stage used, for the ledger to audit against.
+
+    Read defensively: this is the SDK's shape, not ours, and a stage must not fail over accounting.
+    """
+    read = 0
+    written = 0
+    for usage in (model_usage or {}).values():
+        if isinstance(usage, dict):
+            read += int(usage.get("inputTokens") or usage.get("input_tokens") or 0)
+            written += int(usage.get("outputTokens") or usage.get("output_tokens") or 0)
+        else:
+            read += int(getattr(usage, "input_tokens", 0) or 0)
+            written += int(getattr(usage, "output_tokens", 0) or 0)
+    return {"tokens_in": read, "tokens_out": written}
 
 
 class ClaudeBackend:

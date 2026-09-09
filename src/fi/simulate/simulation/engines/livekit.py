@@ -2397,6 +2397,85 @@ def _find_target_audio(
 # never trip it — the run is never cut off at a message count.
 _SILENCE_BACKSTOP_SECONDS = 90.0
 
+# Mutual silence in a conversation both sides joined is a finished call, not a stalled one. A
+# thinking agent is working rather than silent, so the timer holds while either side is busy: no
+# fixed window fits both a 4.3s and a 25.2s reply. The measured fallback covers providers that
+# report no thinking state, stretching to the slowest reply this call has seen.
+_SETTLED_SILENCE_FLOOR_SECONDS = 12.0
+_SETTLED_LATENCY_MULTIPLE = 2.0
+
+# LiveKit reports OUR SIMULATED CALLER as "assistant" and the TARGET AGENT as "user", because the
+# caller is this session's agent and the target connects as the remote party. The published
+# transcript swaps them (see _canonical_report_messages), so session-native code must never reuse
+# the published convention. Named here because reading it the wrong way round is silent: a check
+# still runs, still passes its tests, and watches the wrong side of the call.
+_CALLER = "assistant"
+_TARGET = "user"
+
+# AgentState describes THIS SESSION'S AGENT, our caller; UserState describes the target. UserState
+# has no "thinking", so this pair stops us cutting off our own caller mid-thought and cannot see a
+# target composing a reply. The measured window below is what protects a slow target.
+_AGENT_BUSY_STATES = frozenset({"initializing", "thinking", "speaking"})
+_USER_BUSY_STATES = frozenset({"speaking"})
+
+
+def _either_side_busy(session: Any) -> bool:
+    """Whether work is in flight, as opposed to a conversation that has gone quiet."""
+    return (
+        getattr(session, "agent_state", None) in _AGENT_BUSY_STATES
+        or getattr(session, "user_state", None) in _USER_BUSY_STATES
+    )
+
+
+def _settled_silence_window(observed_agent_reply: float, backstop_seconds: float) -> float:
+    """How long silence must last before a settled call is treated as over."""
+    return min(
+        backstop_seconds,
+        max(_SETTLED_SILENCE_FLOOR_SECONDS, observed_agent_reply * _SETTLED_LATENCY_MULTIPLE),
+    )
+
+
+def _turn_gap_seconds(
+    previous: dict[str, Any], current: dict[str, Any]
+) -> float | None:
+    """Silence between one turn finishing and the next starting, in seconds.
+
+    Uses the real audio timing the transport reports and falls back to the wall-clock stamp for
+    text-only turns. Returns None when neither side is timed, so a caller can tell "no gap" from
+    "not measurable" rather than reading an absent measurement as zero.
+    """
+    start = current.get("started_speaking_at") or current.get("created_at") or None
+    end = previous.get("stopped_speaking_at") or previous.get("created_at") or None
+    if not start or not end:
+        return None
+    gap = float(start) - float(end)
+    return gap if gap >= 0 else None
+
+
+def _observed_agent_reply_seconds(messages: list[dict[str, Any]]) -> float:
+    """The slowest reply this agent has actually produced on this call.
+
+    Read from the transport rather than tracked against the poll loop's own clock, so it is also
+    correct for history that arrives in bulk (a resume, a reconnect) where there was no live
+    transition to observe. Prefers LiveKit's reported end-to-end latency and falls back to the gap
+    between the caller finishing and the agent starting, which is the wait a listener would hear.
+    """
+    slowest = 0.0
+    previous: dict[str, Any] | None = None
+    for message in messages:
+        if not message.get("content"):
+            continue
+        if message.get("role") == _TARGET:
+            reported = message.get("e2e_latency")
+            if reported:
+                slowest = max(slowest, float(reported))
+            elif previous is not None and previous.get("role") == _CALLER:
+                gap = _turn_gap_seconds(previous, message)
+                if gap is not None:
+                    slowest = max(slowest, gap)
+        previous = message
+    return slowest
+
 
 async def _wait_for_conversation_end(
     room: rtc.Room,
@@ -2444,7 +2523,13 @@ async def _wait_for_conversation_end(
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
         "conversation_stalled": asyncio.create_task(
-            _wait_for_conversation_silence(session)
+            _wait_for_conversation_silence(
+                session,
+                # A stub agent in a test carries no floor; absent means never settle early.
+                min_turn_messages=int(
+                    getattr(customer_agent, "_min_turn_messages", 0) or 0
+                ),
+            )
         ),
         "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
@@ -2541,20 +2626,52 @@ _CLOSING_PHRASES = (
 _CLOSING_EXCHANGE_LIMIT = 4
 
 
+# Words a farewell is allowed to be made of. Anything outside this set is substance, whatever the
+# turn's length: "yes it is, bye" is an answer and ending on it would cut a live call short.
+_CLOSING_FILLER = frozenset(
+    """
+    a again alright and bye byebye care cheers day drive evening fine good goodbye great
+    have later lovely morning much nice night ok okay perfect right safe see so soon sounds
+    speak sure take talk thank thanks then to tomorrow too well wonderful you your
+    """.split()
+)
+
+
 def _is_closing_only(text: str) -> bool:
     """Whether a turn is nothing but a farewell.
 
     Deliberately narrow: a turn that closes AND carries anything else (a question, a fact, a
     correction) is still conversation, and ending on it would cut a live call short.
+
+    Decided on whether every word is farewell filler rather than on a word count. A cap of six
+    words classified "Sounds great, thanks. Talk tomorrow. Bye." as a farewell and "Sounds good,
+    talk to you then. Bye." as conversation, purely because the second has one more word, and the
+    engine then asked the caller for two further turns and got two more goodbyes.
     """
     stripped = "".join(
         character.lower() if character.isalnum() or character.isspace() else " "
         for character in (text or "")
     ).split()
-    if not stripped or len(stripped) > 6:
+    if not stripped or len(stripped) > 12:
         return False
     joined = " ".join(stripped)
-    return any(phrase in joined for phrase in _CLOSING_PHRASES)
+    if not any(phrase in joined for phrase in _CLOSING_PHRASES):
+        return False
+    return not (set(stripped) - _CLOSING_FILLER)
+
+
+def _stop_any_further_speech(session: Any) -> None:
+    """Cancel anything already in flight, so the farewell is the last thing said.
+
+    Noticing the farewell only stops us asking for the NEXT turn. A reply already being generated
+    still plays, which is how "Take care." arrived after a correct goodbye on a measured call. The
+    farewell itself is already in history, meaning its own audio finished, so there is nothing of
+    the caller's left to cut off here.
+    """
+    try:
+        session.interrupt(force=True)
+    except Exception:  # noqa: BLE001 - nothing in flight, or a session already shutting down
+        logger.debug("nothing to interrupt when the call was closed", exc_info=True)
 
 
 async def _wait_for_closing_loop(
@@ -2571,9 +2688,24 @@ async def _wait_for_closing_loop(
     """
     while True:
         messages = _session_messages(session)
-        tail = [
+        spoken = [
             message for message in messages if (message.get("content") or "").strip()
-        ][-limit:]
+        ]
+        # The caller's own farewell is the end of the call from its side, so there is no reason to
+        # ask it for another turn. Waiting for a loop of farewells is what produced "Talk
+        # tomorrow. Bye." followed by "Take care." and then "Bye." -- three closings where the
+        # first was already correct. Rule 10 of the caller's prompt says exactly this, and an
+        # instruction cannot enforce it: the model only speaks again because it was asked to.
+        if (
+            _turns_from_each_side(spoken) >= 1
+            and spoken
+            and spoken[-1].get("role") == _CALLER
+            and _is_closing_only(str(spoken[-1].get("content") or ""))
+        ):
+            logger.info("the caller said goodbye, ending the call")
+            _stop_any_further_speech(session)
+            return
+        tail = spoken[-limit:]
         if len(tail) == limit and all(
             _is_closing_only(str(message.get("content") or "")) for message in tail
         ):
@@ -2581,14 +2713,19 @@ async def _wait_for_closing_loop(
                 "closing loop: last %d turns were farewells only, ending the call",
                 limit,
             )
+            _stop_any_further_speech(session)
             return
-        await asyncio.sleep(1.0)
+        # A turn lands in history only after its TTS finishes, so every poll interval between the
+        # farewell committing and this noticing is time in which the caller can be asked for
+        # another turn. Measured: one trailing turn survived at a one-second poll.
+        await asyncio.sleep(0.25)
 
 
 async def _wait_for_conversation_silence(
     session: AgentSession,
     *,
     quiet_seconds: float = _SILENCE_BACKSTOP_SECONDS,
+    min_turn_messages: int = 0,
 ) -> None:
     """Finish only after a long, genuine stretch of mutual silence.
 
@@ -2614,22 +2751,22 @@ async def _wait_for_conversation_silence(
             stable_since = None
             await asyncio.sleep(0.1)
             continue
-        # ``agent_state=thinking`` is live conversational work, not silence.  In
-        # production a tool-backed/model turn can legitimately take longer than
-        # the settled-silence grace.  Treating only emitted audio as activity
-        # deleted the room while the simulated caller was still generating its
-        # next reply, truncating otherwise healthy calls at an exact 12-second
-        # gap.  The outer per-call deadline remains the bound for a model that
-        # stays in ``thinking`` forever.
-        participant_active = (
-            getattr(session, "agent_state", None) in {"thinking", "speaking"}
-            or getattr(session, "user_state", None) == "speaking"
+        now = loop.time()
+        participant_busy = _either_side_busy(session)
+        floor, _ = _turn_requirements(min_turn_messages)
+        # Far enough in for the measured window to beat the fixed one. A third of the floor is a
+        # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
+        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
+        effective_quiet = (
+            _settled_silence_window(_observed_agent_reply_seconds(messages), quiet_seconds)
+            if settled
+            else quiet_seconds
         )
-        if participant_active:
+        if participant_busy:
             stable_since = None
         elif stable_since is None or signature != last_signature:
-            stable_since = loop.time()
-        elif loop.time() - stable_since >= quiet_seconds:
+            stable_since = now
+        elif now - stable_since >= effective_quiet:
             return
         last_signature = signature
         await asyncio.sleep(0.1)
@@ -2766,13 +2903,10 @@ async def _wait_for_agent_first_silence(
     while True:
         messages = _session_messages(session)
         signature = tuple((message["role"], message["content"]) for message in messages)
-        participant_speaking = (
-            getattr(session, "agent_state", None) == "speaking"
-            or getattr(session, "user_state", None) == "speaking"
-        )
-        # A turn lands in history only after its TTS finishes, so an in-flight
-        # utterance longer than the timeout must count as activity.
-        if signature != last_signature or participant_speaking:
+        # A turn lands in history only after its TTS finishes, so an in-flight utterance longer
+        # than the timeout must count as activity -- and so must an agent that is still thinking,
+        # or the caller opens over the top of a reply that was on its way.
+        if signature != last_signature or _either_side_busy(session):
             last_signature = signature
             last_change = asyncio.get_running_loop().time()
         roles = {message["role"] for message in messages if message["content"]}
