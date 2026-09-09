@@ -623,13 +623,7 @@ def test_two_ten_case_suites_do_not_share_room_names(monkeypatch) -> None:
 
 
 def _role_content(messages: list[dict]) -> list[dict]:
-    """Project canonical report messages to just role+content.
-
-    ``_canonical_report_messages`` enriches each message with voice-timing
-    metadata (created_at, started/stopped_speaking_at, interrupted, e2e_latency);
-    these tests assert the role-perspective + interruption-merge behavior, which
-    lives entirely in role/content.
-    """
+    """Project canonical report messages to just role+content."""
     return [{"role": m["role"], "content": m["content"]} for m in messages]
 
 
@@ -1577,8 +1571,7 @@ def test_our_caller_thinking_is_not_silence(monkeypatch) -> None:
 
 
 def test_the_caller_does_not_open_over_an_agent_that_is_still_thinking(monkeypatch) -> None:
-    """Same definition, applied to the other timer. This is the one that made the caller barge in
-    on the agent's opening line: a reply that is still being composed was read as silence."""
+    """Same definition, applied to the other timer."""
     items = [
         SimpleNamespace(type="message", role="assistant", text_content="Hi"),
         SimpleNamespace(type="message", role="user", text_content="Hello"),
@@ -3497,10 +3490,7 @@ def test_the_caller_waits_long_enough_not_to_talk_over_a_question():
 
 
 def test_the_call_ends_on_the_caller_s_own_goodbye() -> None:
-    """Measured on a live call: the caller closed correctly with "Sounds great, thanks. Talk
-    tomorrow. Bye." and was then asked for two more turns, producing "Take care." and "Bye.".
-    The prompt already forbids that; only the engine can enforce it, because the model speaks
-    again only because it was asked to."""
+    """Measured on a live call: the caller closed correctly with "Sounds great, thanks."""
     # LiveKit calls our simulated caller "assistant" and the agent under test "user"; the
     # published transcript swaps them. Using the named roles so this cannot invert again.
     items = [
@@ -3565,10 +3555,7 @@ def test_a_caller_goodbye_before_the_agent_ever_spoke_does_not_end_the_call() ->
 
 
 def test_a_farewell_is_recognised_by_what_it_carries_not_by_its_length() -> None:
-    """A six-word cap classified "Sounds great, thanks. Talk tomorrow. Bye." as a farewell and
-    "Sounds good, talk to you then. Bye." as conversation, purely on one extra word. Measured on
-    live call 23fe40b8: the caller closed correctly, was not recognised, and was asked for two
-    more turns, giving "Talk soon. Bye-bye." and "Take care."."""
+    """A six-word cap classified "Sounds great, thanks."""
     closings = [
         "Sounds good, talk to you then. Bye.",
         "Talk soon. Bye-bye.",
@@ -3596,8 +3583,7 @@ def test_a_farewell_is_recognised_by_what_it_carries_not_by_its_length() -> None
 
 
 def test_closing_the_call_cancels_a_reply_already_being_generated() -> None:
-    """Noticing the farewell only stops the NEXT turn being asked for. On call cf030ca9 the caller
-    closed correctly and "Take care." still arrived, because it was already in flight."""
+    """Noticing the farewell only stops the NEXT turn being asked for."""
     interrupts = []
 
     items = [

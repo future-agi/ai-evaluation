@@ -98,12 +98,7 @@ def test_a_session_reports_its_tokens_too(tmp_path):
 
 
 def test_a_price_that_has_run_out_refuses_instead_of_billing_it(monkeypatch):
-    """gemini-3.7-flash is introductory pricing that doubles on 2027-01-01.
-
-    A hardcoded table cannot know that, so the table carries the last day it is good for and a
-    figure past that day is withheld: `unpriced_turns` shows a gap, which somebody notices, where a
-    stale price bills confidently and nobody does.
-    """
+    """gemini-3.7-flash is introductory pricing that doubles on 2027-01-01."""
     from datetime import date
 
     from fi.alk.harness.backends import vertex_gemini
@@ -163,12 +158,7 @@ def test_cached_tokens_default_to_zero_for_a_backend_that_does_not_report_them(t
 
 
 def test_the_default_model_is_one_we_can_price():
-    """A run on an unpriced model reports a total that understates the bill.
-
-    It is not silent: the turns land in ``unpriced_turns``. But the number somebody reads is the
-    total, so bumping the default without adding its prices has to fail here rather than in a
-    month's invoice.
-    """
+    """A run on an unpriced model reports a total that understates the bill."""
     from fi.alk.harness.backends.vertex_gemini import DEFAULT_MODEL, PRICES_PER_MILLION
 
     assert DEFAULT_MODEL in PRICES_PER_MILLION, (
@@ -178,12 +168,7 @@ def test_the_default_model_is_one_we_can_price():
 
 
 def test_every_harness_stage_feeds_the_one_ledger():
-    """Parallel scenario writers and the suite review each open their own session.
-
-    Spend is recorded in ``Stage``'s handling of ``StageDone`` and nowhere else, so a stage added
-    later is counted without anybody remembering to count it. `validate-source-data` proved that on
-    a real run: it appeared in the ledger without being wired anywhere.
-    """
+    """Parallel scenario writers and the suite review each open their own session."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "src" / "fi" / "alk" / "harness"

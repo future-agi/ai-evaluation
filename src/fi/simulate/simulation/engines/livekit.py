@@ -2384,20 +2384,10 @@ def _find_target_audio(
 # never trip it — the run is never cut off at a message count.
 _SILENCE_BACKSTOP_SECONDS = 60.0
 
-# Mutual silence in a conversation both sides joined is a finished call rather than a stalled one.
-#
-# What counts as silence is the whole problem. An agent that is thinking is not silent: it is
-# working, and a slow agent spends its slowness there. Timing that as dead air is why no fixed
-# window could be right -- one agent was measured at 4.3s to answer and another at 25.2s, and a
-# window set from the first cuts the second off mid-answer, which then reads as the agent failing.
-# So the timer holds while either side is busy, and only runs when both are genuinely idle. That
-# needs no per-agent tuning and no latency guess, because it asks the transport what is happening
-# instead of inferring it from the clock.
-#
-# The measured fallback below is for providers that never report a thinking state, where a busy
-# agent is indistinguishable from an idle one. There the window stretches to clear the slowest
-# reply this call has actually seen, floored so a fast agent still settles promptly and capped at
-# the backstop, because an early settle that waits longer than the real one is not an early settle.
+# Mutual silence in a conversation both sides joined is a finished call, not a stalled one. A
+# thinking agent is working rather than silent, so the timer holds while either side is busy: no
+# fixed window fits both a 4.3s and a 25.2s reply. The measured fallback covers providers that
+# report no thinking state, stretching to the slowest reply this call has seen.
 _SETTLED_SILENCE_FLOOR_SECONDS = 12.0
 _SETTLED_LATENCY_MULTIPLE = 2.0
 
@@ -2409,15 +2399,9 @@ _SETTLED_LATENCY_MULTIPLE = 2.0
 _CALLER = "assistant"
 _TARGET = "user"
 
-# livekit.agents AgentState is Literal["initializing", "idle", "listening", "thinking", "speaking"]
-# and describes THIS SESSION'S AGENT, which is our simulated caller. UserState is
-# Literal["speaking", "listening", "away"] and describes the remote party, the agent under test.
-#
-# So this holds the timer while OUR CALLER is thinking or speaking, and while the TARGET is
-# speaking. It cannot see the target THINKING: a remote participant composing a reply is simply
-# silent on the wire, and no state reports it. That is why the measured-latency window below is
-# what actually protects a slow target, and this pair only stops us cutting off our own caller
-# mid-thought. Do not read these as "the agent under test" -- that is the wrong side.
+# AgentState describes THIS SESSION'S AGENT, our caller; UserState describes the target. UserState
+# has no "thinking", so this pair stops us cutting off our own caller mid-thought and cannot see a
+# target composing a reply. The measured window below is what protects a slow target.
 _AGENT_BUSY_STATES = frozenset({"initializing", "thinking", "speaking"})
 _USER_BUSY_STATES = frozenset({"speaking"})
 

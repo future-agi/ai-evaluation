@@ -607,11 +607,8 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
     return _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)]
 
 
-# The only emotion names and levels Cartesia sonic-3 accepts, established against the live API:
-# anger, positivity, surprise, sadness and curiosity, at lowest / low / high / highest. It rejects
-# the name and the level separately with HTTP 400, so a wrong value fails the call rather than being
-# quietly dropped, and the plugin's own TTSVoiceEmotion vocabulary ("Neutral", "Frustrated") is
-# rejected outright. Nothing outside this set is ever sent.
+# The only emotion names and levels sonic-3 accepts, established against the live API. It rejects
+# name and level separately with HTTP 400, so nothing outside this set is ever sent.
 _CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
 _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
 

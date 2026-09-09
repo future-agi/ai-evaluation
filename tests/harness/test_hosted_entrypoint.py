@@ -1,10 +1,4 @@
-"""`hosted_entrypoint.py` against in-memory fakes — no real postgres, no real network.
-
-`asyncio.run` drives every `async def` seam here, matching `test_hosted_scheduler.py`'s own
-convention (no pytest-asyncio dependency in this repo). Verification for this file was done by
-importing it and calling each `test_*` function directly, not via a `pytest`
-invocation.
-"""
+"""`hosted_entrypoint.py` against in-memory fakes — no real postgres, no real network."""
 
 from __future__ import annotations
 
@@ -3903,8 +3897,7 @@ def test_runner_logging_falls_back_when_the_job_id_is_unknown(capsys):
 
 
 def test_two_callers_do_not_read_the_same_words_at_the_same_pace():
-    """Delivery, not content. Cartesia documents speed for sonic-3, so that is the control we set;
-    emotion rides on __experimental_controls with no sonic-3 guarantee and is deliberately unset."""
+    """Delivery, not content."""
     from fi.alk.harness.simulator_voice import persona_speech_rate
 
     marcus = persona_speech_rate({"name": "Marcus Thorne"})
@@ -3935,10 +3928,7 @@ def test_the_simulator_definition_carries_the_persona_s_pace():
 
 
 def test_the_caller_is_given_a_countable_reason_to_lose_patience():
-    """Measured across 16 calls: ONE impatience marker, and that on a hostile do-not-call. The two
-    longest intakes, at 51 and 36 caller turns, had none. Rule 12a's triggers are semantic ("a
-    figure that sounds high") and the model does not apply them positionally, so 12d gives a
-    countable one instead."""
+    """Measured across 16 calls: ONE impatience marker, and that on a hostile do-not-call."""
     from fi.alk.harness.simulator_voice import simulator_instructions
 
     text = simulator_instructions("outbound", "expecting", "", "")
@@ -4142,9 +4132,7 @@ def test_a_persona_with_no_recognised_emotion_sends_no_emotion_key(monkeypatch):
 
 
 def test_the_closing_turn_must_carry_everything_left_to_say():
-    """Rule 9 named THANKS specifically and the model did not generalise. On call 5e9f613d the
-    caller said "Goodbye." and then "Understood. Make sure it stays off the list." -- a residual
-    demand, not a thanks, so the rule as written did not cover it."""
+    """Rule 9 named THANKS specifically and the model did not generalise."""
     from fi.alk.harness.simulator_voice import simulator_instructions
 
     text = simulator_instructions("outbound", "expecting", "", "")

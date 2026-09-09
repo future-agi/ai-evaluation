@@ -54,12 +54,9 @@ _TERMINAL_SAVE_TOOLS = frozenset(
     }
 )
 
-# Vertex list pricing per 1M tokens: (input, output, the last day the pair is known good).
-# Verified 2026-09-06 against Google's published pricing. An unknown model, or one whose prices
-# have run out, reports no cost rather than a wrong one: a missing figure is visible in
-# `unpriced_turns`, while a stale one bills confidently and nothing notices.
-# gemini-3.7-flash is introductory pricing that doubles on 2027-01-01, which is exactly the case
-# a hardcoded table gets wrong.
+# Vertex list pricing per 1M tokens: (input, output, last day the pair is known good). Verified
+# 2026-09-06. An unknown or expired model reports no cost rather than a wrong one, and shows up in
+# `unpriced_turns`; gemini-3.7-flash is introductory pricing that doubles on 2027-01-01.
 PRICES_PER_MILLION = {
     "gemini-3.7-flash": (0.75, 3.75, "2026-12-31"),
     "gemini-3.5-flash-lite": (0.30, 2.50, "2026-12-31"),

@@ -126,11 +126,7 @@ def test_tool_free_world_saves_without_fabricated_state_checks(tmp_path):
 
 
 def test_tool_free_world_with_baseline_data_does_not_require_tool_sequence(tmp_path):
-    """Provider chat agents may have seed variables but no callable tools.
-
-    Requiring a sequence in that shape is impossible to satisfy: empty sequences are invalid and
-    every named call would invent a tool the target does not expose.
-    """
+    """Provider chat agents may have seed variables but no callable tools."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.simulator import save_simulator_prompt
     from fi.alk.harness.world.tools import world_tools
@@ -466,10 +462,7 @@ def test_a_truthiness_check_is_told_to_compare_against_an_expected_value():
 
 
 def test_the_writer_and_the_reader_agree_on_where_the_catalogue_lives(tmp_path):
-    """A round trip through the real writer. Run 7b62c314 reported every passing sub-goal as
-    "Held. The check found nothing wrong." even though its catalogue carried a description for all
-    eight, which is what happens when the reader cannot find sub_goals.json beside the scenarios.
-    This pins the two ends together so that gap fails here instead of two systems away."""
+    """A round trip through the real writer."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.folder import write_folder
     from fi.alk.harness.scenario import Scenario
@@ -589,9 +582,7 @@ def test_a_presence_only_check_is_reported_as_weak():
 
 
 def test_a_terse_but_real_judged_claim_is_accepted():
-    """Caught by the full suite, not by the ones I was watching. An earlier threshold of eight
-    words rejected "nothing observable shows tone", which is terse and genuinely says why code
-    cannot settle it. The word count is only a proxy for "more than a restatement of the name"."""
+    """Caught by the full suite, not by the ones I was watching."""
     from fi.alk.harness.catalogue import validate_sub_goal
 
     assert validate_sub_goal(_goal("polite", judged="nothing observable shows tone")) == []
