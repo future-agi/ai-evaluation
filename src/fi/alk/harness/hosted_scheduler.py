@@ -2068,7 +2068,13 @@ class HostedScheduler:
                 if isinstance(outcome, BaseException):
                     held, why = None, f"the judge could not run: {outcome!r}"
                 else:
-                    held, why = outcome
+                    try:
+                        held, why = outcome
+                    except (TypeError, ValueError):
+                        # An injected judge that answers in some other shape is unreadable, not
+                        # authoritative. Unpacking it here would raise inside `_grade` and error
+                        # the whole scenario, which is the one thing a verdict must never do.
+                        held, why = None, f"the judge returned no usable verdict: {outcome!r}"
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name, held=held, reason=why, judged=True
                 )

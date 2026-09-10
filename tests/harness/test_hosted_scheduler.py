@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from fi.alk.harness import hosted_scheduler as hs
 from fi.alk.harness.outbound import (
     ChannelError,
@@ -3869,6 +3871,61 @@ def test_a_judge_that_raises_does_not_error_the_scenario(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "verdict", [None, True, (True, "why", "extra")], ids=["none", "bare-bool", "three-tuple"]
+)
+def test_a_judge_answering_in_the_wrong_shape_does_not_error_the_scenario(
+    verdict, monkeypatch
+) -> None:
+    """The judge is an injected seam, so its return shape is not guaranteed by the caller.
+
+    Unpacking an answer that is not a pair raises inside `_grade`, where nothing catches it, and the
+    scenario came back `errored` with `driver_crashed`. An unreadable answer is not evidence against
+    the agent, so it settles nothing and the scenario stands on its coded checks.
+    """
+
+    async def _verdict(goal, world, calls, *, messages=()):
+        return verdict
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("was_it_reassuring", lambda w, c: None, judged="tone"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "passed"
+        assert receipt.failure is None
+        assert [goal.held for goal in receipt.sub_goals] == [None]
+        assert "no usable verdict" in (receipt.sub_goals[0].reason or "")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_judged_sub_goals_are_decided_together_not_one_after_another(
     monkeypatch,
 ) -> None:
@@ -3916,6 +3973,51 @@ def test_judged_sub_goals_are_decided_together_not_one_after_another(
         assert started == ["first", "second"]
         # Sequential would be at least 0.10s; together it is one sleep.
         assert elapsed < 0.09, f"judged sub-goals ran sequentially ({elapsed:.3f}s)"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_judge_answering_with_a_two_element_list_is_still_read(monkeypatch) -> None:
+    """The guard rejects unreadable answers, not merely non-tuples: a pair that unpacks is a pair."""
+
+    async def _verdict(goal, world, calls, *, messages=()):
+        return [False, "the removal was never recorded"]
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("removal_honoured", lambda w, c: None, judged="judge"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "failed"
+        assert receipt.failure is None
+        assert receipt.sub_goals[0].held is False
+        assert receipt.sub_goals[0].reason == "the removal was never recorded"
         await pool.close()
 
     asyncio.run(scenario())
