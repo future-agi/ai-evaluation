@@ -3819,6 +3819,56 @@ def test_a_judge_that_settled_nothing_still_does_not_error_the_scenario(monkeypa
     asyncio.run(scenario())
 
 
+def test_a_judge_that_raises_does_not_error_the_scenario(monkeypatch) -> None:
+    """The scheduler's own net, not the judge's.
+
+    `judge()` swallows its own exceptions today, so this never fires in production. It is pinned
+    here because the guarantee must survive a judge implementation that does raise: a model client
+    that dies mid-verdict is an infrastructure fault, and the agent is not answerable for it.
+    """
+
+    async def _verdict(goal, world, calls, *, messages=()):
+        raise RuntimeError("the provider stream died mid-verdict")
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("was_it_reassuring", lambda w, c: None, judged="tone"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "passed"
+        assert receipt.failure is None
+        assert [goal.held for goal in receipt.sub_goals] == [None]
+        assert "the judge could not run" in (receipt.sub_goals[0].reason or "")
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
 def test_judged_sub_goals_are_decided_together_not_one_after_another(
     monkeypatch,
 ) -> None:
