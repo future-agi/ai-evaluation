@@ -121,6 +121,12 @@ class VapiCallOriginator:
         if response.status_code not in {200, 202, 204, 404}:
             response.raise_for_status()
 
+    async def reconcile_and_stop(
+        self, *, started_after_ms: int, ended_before_ms: int
+    ) -> list[str]:
+        # Vapi's stop() always has a call id in hand; no orphan guard needed.
+        return []
+
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()

@@ -4,6 +4,8 @@ from typing import Annotated, Literal, Optional
 from pydantic import AnyHttpUrl, AnyUrl, BaseModel, Field, model_validator
 
 
+# Always .fullmatch, never .match: "$" also matches immediately before a
+# trailing newline, so .match alone would let "+14155551234\n" through.
 _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
 
 
@@ -118,9 +120,23 @@ class TelephonyTransport(BaseModel):
         gt=0,
         description="Seconds to wait for an outbound SIP call to be answered.",
     )
-    inbound_call_originator: Literal["vapi"] | None = Field(
+    inbound_call_originator: Literal["vapi", "retell"] | None = Field(
         None,
         description="Provider that originates an inbound SIP call after room readiness.",
+    )
+    originator_agent_id: Optional[str] = Field(
+        None,
+        description=(
+            "Provider agent/assistant ID to run for the originated call "
+            "(sip_inbound with the retell originator only)."
+        ),
+    )
+    originator_from_number: Optional[str] = Field(
+        None,
+        description=(
+            "E.164 number the originator dials from "
+            "(sip_inbound with the retell originator only)."
+        ),
     )
 
     @model_validator(mode="after")
@@ -128,13 +144,18 @@ class TelephonyTransport(BaseModel):
         if self.kind == "sip_outbound":
             if self.inbound_call_originator is not None:
                 raise ValueError("sip_outbound cannot set inbound_call_originator")
+            if (
+                self.originator_agent_id is not None
+                or self.originator_from_number is not None
+            ):
+                raise ValueError("sip_outbound cannot set originator fields")
             if not self.sip_trunk_id or not self.sip_trunk_id.strip():
                 raise ValueError("sip_outbound requires sip_trunk_id")
-            if not self.sip_call_to or not _E164.match(self.sip_call_to):
+            if not self.sip_call_to or not _E164.fullmatch(self.sip_call_to):
                 raise ValueError(
                     "sip_outbound requires E.164 sip_call_to (e.g. +14155551234)"
                 )
-            if not self.sip_number or not _E164.match(self.sip_number):
+            if not self.sip_number or not _E164.fullmatch(self.sip_number):
                 raise ValueError(
                     "sip_outbound requires E.164 sip_number (e.g. +14155551234)"
                 )
@@ -146,6 +167,37 @@ class TelephonyTransport(BaseModel):
                 raise ValueError(
                     "sip_inbound dispatch_rule_name must be non-empty when set"
                 )
+            if (
+                self.originator_agent_id is not None
+                or self.originator_from_number is not None
+            ) and self.inbound_call_originator is None:
+                raise ValueError("originator fields require inbound_call_originator")
+            # C1: the two originator fields are Retell-only; a Vapi originator reads
+            # its config from env and would otherwise silently ignore them.
+            if (
+                self.inbound_call_originator is not None
+                and self.inbound_call_originator != "retell"
+                and (
+                    self.originator_agent_id is not None
+                    or self.originator_from_number is not None
+                )
+            ):
+                raise ValueError(
+                    f"{self.inbound_call_originator}_originator_does_not_take_originator_fields"
+                )
+            # Emptiness is only meaningful once an originator is set (None stays forward-compatible).
+            if (
+                self.inbound_call_originator is not None
+                and self.originator_agent_id is not None
+                and not self.originator_agent_id.strip()
+            ):
+                raise ValueError("originator_agent_id must be non-empty when set")
+            if self.originator_from_number is not None and not _E164.fullmatch(
+                self.originator_from_number
+            ):
+                raise ValueError(
+                    "originator_from_number must be E.164 (e.g. +14155551234)"
+                )
         elif self.kind in {"webrtc", "vapi_websocket", "retell_webcall"}:
             if any(
                 [
@@ -154,6 +206,8 @@ class TelephonyTransport(BaseModel):
                     self.sip_number,
                     self.dispatch_rule_name,
                     self.inbound_call_originator,
+                    self.originator_agent_id,
+                    self.originator_from_number,
                 ]
             ):
                 raise ValueError(f"{self.kind} transport cannot set SIP fields")
@@ -217,7 +271,8 @@ class LiveKitSimulatorRuntime(BaseModel):
         description=(
             "When True, use room_name exactly as provided (no invocation/case "
             "suffix). Required when routing to a pre-existing dispatch rule that "
-            "binds to a fixed room. Only valid for single-persona runs."
+            "binds to a fixed room. A multi-persona run is allowed when cases run "
+            "one at a time (max_concurrency 1; always the case for SIP transports)."
         ),
     )
     api_key_env: str = Field(
@@ -388,13 +443,21 @@ class AgentDefinition(BaseModel):
                     f"{self.target.provider}_target_requires_{expected_transport}"
                 )
         evidence = self.provider_evidence
-        if transport is not None and transport.inbound_call_originator == "vapi":
+        originator = (
+            transport.inbound_call_originator if transport is not None else None
+        )
+        if originator is not None:
+            # Templated on the originator name so Vapi's strings stay byte-identical.
             if transport.kind != "sip_inbound":
-                raise ValueError("vapi_originator_requires_sip_inbound")
-            if evidence is None or evidence.provider != "vapi":
-                raise ValueError("vapi_originator_requires_vapi_evidence")
+                raise ValueError(f"{originator}_originator_requires_sip_inbound")
+            if evidence is None or evidence.provider != originator:
+                raise ValueError(
+                    f"{originator}_originator_requires_{originator}_evidence"
+                )
             if evidence.call_id_source != "originator_response":
-                raise ValueError("vapi_originator_requires_originator_response")
+                raise ValueError(
+                    f"{originator}_originator_requires_originator_response"
+                )
         if evidence is not None and transport is not None:
             if evidence.provider == "retell" and transport.kind == "sip_outbound":
                 raise ValueError(

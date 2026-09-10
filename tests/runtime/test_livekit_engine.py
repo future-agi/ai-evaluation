@@ -12,8 +12,12 @@ import pytest
 
 pytest.importorskip("livekit")
 
-from fi.simulate.agent.definition import AgentDefinition
-from fi.simulate.recording.room_recorder import mix_recordings, mix_recordings_stereo
+from fi.simulate.agent.definition import AgentDefinition, TelephonyTransport
+from fi.simulate.recording.room_recorder import (
+    RecordedTrack,
+    mix_recordings,
+    mix_recordings_stereo,
+)
 from fi.simulate.runtime import TestCaseStatus as CaseStatus
 from fi.simulate.simulation import bridge as _bridge
 from fi.simulate.simulation.engines import livekit
@@ -58,6 +62,33 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int = 8000) -> None
         wav_file.writeframes(samples.astype(np.int16).tobytes())
 
 
+def test_simulator_identity_carries_fixture_phone_for_repository_agents() -> None:
+    persona = Persona(
+        persona={
+            "name": "Noor",
+            "metadata": {"caller_phone": "+1 (415) 555-0107"},
+        },
+        situation="Cancel my ride.",
+        outcome="The ride is cancelled.",
+    )
+    assert (
+        livekit._simulator_participant_identity(persona, "case_aaaaaaaaaaaa")
+        == "fagi-simulator-phone-14155550107-aaaaaaaaaaaa"
+    )
+
+
+def test_simulator_identity_preserves_legacy_shape_without_valid_phone() -> None:
+    persona = Persona(
+        persona={"name": "Caller", "metadata": {"caller_phone": "unknown"}},
+        situation="I need help.",
+        outcome="The issue is resolved.",
+    )
+    assert (
+        livekit._simulator_participant_identity(persona, "case_bbbbbbbbbbbb")
+        == "fagi-simulator-bbbbbbbbbbbb"
+    )
+
+
 def test_managed_room_names_are_unique_per_run_and_case() -> None:
     agent = _agent(room_mode="managed", agent_name="support-agent")
 
@@ -90,7 +121,10 @@ def test_external_multi_case_run_requires_room_template() -> None:
         )
 
 
-def test_verbatim_room_name_rejects_multi_persona_run() -> None:
+def test_verbatim_room_name_requires_serial_cases(monkeypatch) -> None:
+    # A stray env override of the max-case-concurrency default would let this
+    # test pass for the wrong reason (concurrency already 1), so make it explicit.
+    monkeypatch.delenv("ALK_VOICE_MAX_CASE_CONCURRENCY", raising=False)
     runtime = livekit.LiveKitSimulatorRuntime(
         url="wss://livekit.example.com",
         room_name="sim-slot-03",
@@ -100,15 +134,337 @@ def test_verbatim_room_name_rejects_multi_persona_run() -> None:
 
     with pytest.raises(
         ValueError,
-        match="room_name_verbatim requires a single-persona scenario",
+        match="room_name_verbatim_requires_serial_cases",
     ):
         asyncio.run(
             LiveKitEngine().run(
                 agent_definition=_agent(),
                 livekit_runtime=runtime,
                 scenario=_scenario(2),
+                max_concurrency=2,
             )
         )
+
+
+def test_verbatim_sip_inbound_multi_persona_reuses_the_same_room(
+    monkeypatch,
+) -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+    agent = _agent(
+        room_mode="managed", transport=TelephonyTransport(kind="sip_inbound")
+    )
+    engine = LiveKitEngine()
+    captured_room_names: list[str] = []
+
+    async def _fake_run_case(*_args, **kwargs):
+        captured_room_names.append(kwargs["room_name"])
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            livekit_runtime=runtime,
+            scenario=_scenario(3),
+            max_concurrency=2,
+        )
+    )
+
+    assert captured_room_names == ["sim-slot-03"] * 3
+    assert len(report.results) == 3
+
+
+def test_verbatim_multi_persona_sip_inbound_skips_room_template_requirement(
+    monkeypatch,
+) -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",  # no {test_case_id}/{run_id} template
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+    agent = _agent(
+        room_mode="managed", transport=TelephonyTransport(kind="sip_inbound")
+    )
+    engine = LiveKitEngine()
+
+    async def _fake_run_case(*_args, **kwargs):
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+
+    try:
+        report = asyncio.run(
+            engine.run(
+                agent_definition=agent,
+                livekit_runtime=runtime,
+                scenario=_scenario(3),
+            )
+        )
+    except ValueError as exc:
+        pytest.fail(f"sip_inbound_room_template_required unexpectedly raised: {exc}")
+
+    assert len(report.results) == 3
+
+
+def test_drain_failure_is_a_failure_of_that_case_only(monkeypatch) -> None:
+    runtime = livekit.LiveKitSimulatorRuntime(
+        url="wss://livekit.example.com",
+        room_name="sim-slot-03",
+        room_mode="managed",
+        room_name_verbatim=True,
+    )
+    agent = _agent(
+        room_mode="managed", transport=TelephonyTransport(kind="sip_inbound")
+    )
+    engine = LiveKitEngine()
+    calls = {"count": 0}
+
+    async def _fake_run_case(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return livekit._failure_outcome(
+                CaseStatus.TIMED_OUT,
+                livekit.FailureStage.PREPARING,
+                "livekit_room_drain_timeout",
+                "The leased simulator room was still occupied when its drain deadline passed",
+                retryable=True,
+            )
+        return livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    monkeypatch.setattr(engine, "_run_single_test_case", _fake_run_case)
+
+    report = asyncio.run(
+        engine.run(
+            agent_definition=agent,
+            livekit_runtime=runtime,
+            scenario=_scenario(3),
+        )
+    )
+
+    assert len(report.results) == 3
+    assert report.results[0].metadata["status"] == CaseStatus.TIMED_OUT.value
+    assert report.results[0].metadata["failure"]["code"] == "livekit_room_drain_timeout"
+    assert report.results[1].metadata["status"] == CaseStatus.COMPLETED.value
+    assert report.results[2].metadata["status"] == CaseStatus.COMPLETED.value
+
+
+class _FakeApiError(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def test_ensure_room_absent_tolerates_not_found_on_initial_delete() -> None:
+    calls: list[tuple] = []
+
+    async def delete_room(request):
+        calls.append(("delete", request.room))
+        raise _FakeApiError("not_found")
+
+    async def list_rooms(request):
+        calls.append(("list", tuple(request.names)))
+        return SimpleNamespace(rooms=[])
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    polls = asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+    assert polls == 1
+    assert calls == [("delete", "sim-slot-01"), ("list", ("sim-slot-01",))]
+
+
+def test_ensure_room_absent_redeletes_when_still_listed_once(monkeypatch) -> None:
+    calls: list[tuple] = []
+    list_responses = [
+        SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")]),
+        SimpleNamespace(rooms=[]),
+    ]
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(seconds):
+        # Real backoff sleeps would cost CI 1.5s across these two tests for no
+        # assertion value; yield instead so the poll loop still awaits.
+        await real_sleep(0)
+
+    monkeypatch.setattr(livekit.asyncio, "sleep", _fake_sleep)
+
+    async def delete_room(request):
+        calls.append(("delete", request.room))
+
+    async def list_rooms(request):
+        return list_responses.pop(0)
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    polls = asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+    assert polls == 2
+    assert calls == [("delete", "sim-slot-01"), ("delete", "sim-slot-01")]
+
+
+def test_ensure_room_absent_redeletes_when_still_listed_twice(monkeypatch) -> None:
+    calls: list[tuple] = []
+    list_responses = [
+        SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")]),
+        SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")]),
+        SimpleNamespace(rooms=[]),
+    ]
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(seconds):
+        # Real backoff sleeps would cost CI 1.5s across these two tests for no
+        # assertion value; yield instead so the poll loop still awaits.
+        await real_sleep(0)
+
+    monkeypatch.setattr(livekit.asyncio, "sleep", _fake_sleep)
+
+    async def delete_room(request):
+        calls.append(("delete", request.room))
+
+    async def list_rooms(request):
+        return list_responses.pop(0)
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    polls = asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+    assert polls == 3
+    assert len(calls) == 3
+
+
+def test_ensure_room_absent_propagates_non_not_found_delete_error() -> None:
+    async def delete_room(request):
+        raise _FakeApiError("internal")
+
+    async def list_rooms(request):
+        raise AssertionError("list_rooms should not be called")
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    with pytest.raises(_FakeApiError):
+        asyncio.run(livekit._ensure_room_absent(api_client, "sim-slot-01"))
+
+
+def test_ensure_room_absent_times_out_and_backs_off(monkeypatch) -> None:
+    sleep_calls: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def _fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        # A non-yielding stub would never let wait_for's own timeout fire.
+        await real_sleep(0)
+
+    monkeypatch.setattr(livekit.asyncio, "sleep", _fake_sleep)
+
+    async def delete_room(_request):
+        return None
+
+    async def list_rooms(_request):
+        return SimpleNamespace(rooms=[SimpleNamespace(name="sim-slot-01")])
+
+    api_client = SimpleNamespace(
+        room=SimpleNamespace(delete_room=delete_room, list_rooms=list_rooms)
+    )
+
+    async def _run():
+        await asyncio.wait_for(
+            livekit._ensure_room_absent(api_client, "sim-slot-01"),
+            timeout=0.2,
+        )
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(_run())
+
+    assert sleep_calls[:5] == [0.5, 0.5, 0.5, 5.0, 5.0]
+
+
+def test_unexpected_participants_excludes_simulator_and_recorder() -> None:
+    room = SimpleNamespace(
+        remote_participants={
+            "sim": SimpleNamespace(identity="fagi-simulator-abc"),
+            "rec": SimpleNamespace(identity="fagi-recorder-abc"),
+            "other": SimpleNamespace(identity="sip-caller-xyz"),
+        }
+    )
+
+    result = livekit._unexpected_participants(
+        room,
+        simulator_identity="fagi-simulator-abc",
+        recorder_identity="fagi-recorder-abc",
+    )
+
+    assert result == {"sip-caller-xyz"}
+
+
+def test_unexpected_participants_empty_when_only_ours() -> None:
+    room = SimpleNamespace(
+        remote_participants={
+            "sim": SimpleNamespace(identity="fagi-simulator-abc"),
+            "rec": SimpleNamespace(identity="fagi-recorder-abc"),
+        }
+    )
+
+    result = livekit._unexpected_participants(
+        room,
+        simulator_identity="fagi-simulator-abc",
+        recorder_identity="fagi-recorder-abc",
+    )
+
+    assert result == set()
+
+
+@pytest.mark.parametrize(
+    "attribute_value, expected",
+    [
+        ("+14155551234", True),
+        ("14155551234", True),
+        ("4155551234", True),
+        ("5551234", True),
+        ("sip:+14155551234@trunk.example.com", True),
+        ("sip:+14155551234@trunk;transport=udp", True),
+        ("+14155559999", False),
+        ("555", None),
+    ],
+)
+def test_caller_matches_suffix_rule(attribute_value, expected) -> None:
+    attributes = {"sip.phoneNumber": attribute_value}
+    assert livekit._caller_matches(attributes, "+14155551234") is expected
+
+
+def test_caller_matches_missing_attribute_is_unverified() -> None:
+    assert livekit._caller_matches({}, "+14155551234") is None
+
+
+def test_caller_matches_no_expected_number_is_unverified() -> None:
+    assert livekit._caller_matches({"sip.phoneNumber": "+14155551234"}, None) is None
+
+
+def test_caller_matches_national_format_mismatch_is_documented_limitation() -> None:
+    # A national-format caller ID (0-prefixed instead of the country code) is a
+    # known false mismatch, not a false match — loud and retryable.
+    assert (
+        livekit._caller_matches({"sip.phoneNumber": "0612345678"}, "+33612345678")
+        is False
+    )
+
+
+def test_number_digits_strips_sip_uri_user_part_and_params() -> None:
+    assert livekit._number_digits("sip:+1415@host9;x=1") == "1415"
 
 
 def test_missing_credentials_is_typed_failure_not_transcript(monkeypatch) -> None:
@@ -395,6 +751,39 @@ def test_target_audio_selection_uses_explicit_identity() -> None:
     assert selected.audio_track_sid == "track-target"
 
 
+def test_target_audio_selection_ignores_background_track_from_same_agent() -> None:
+    audio_kind = livekit.rtc.TrackKind.KIND_AUDIO
+    room = SimpleNamespace(
+        remote_participants={
+            "target": SimpleNamespace(
+                identity="drive-thru-agent",
+                sid="participant-target",
+                track_publications={
+                    "ambient": SimpleNamespace(
+                        sid="track-ambient",
+                        name="background_audio",
+                        kind=audio_kind,
+                    ),
+                    "speech": SimpleNamespace(
+                        sid="track-speech",
+                        name="roomio_audio",
+                        kind=audio_kind,
+                    ),
+                },
+            )
+        }
+    )
+
+    selected = livekit._find_target_audio(
+        room,
+        excluded_identities=set(),
+        target_identity="drive-thru-agent",
+    )
+
+    assert selected is not None
+    assert selected.audio_track_sid == "track-speech"
+
+
 def test_recording_mix_uses_only_explicit_paths(tmp_path: Path) -> None:
     first = tmp_path / "simulator.wav"
     second = tmp_path / "target.wav"
@@ -467,6 +856,88 @@ def test_stereo_mix_leaves_missing_side_silent(tmp_path: Path) -> None:
             dtype=np.int16,
         )
     assert samples.tolist() == [0, 2000, 0, 2000]
+
+
+def test_attach_recordings_falls_back_to_all_target_tracks(tmp_path: Path) -> None:
+    simulator = tmp_path / "simulator.wav"
+    target_speech = tmp_path / "target-speech.wav"
+    target_ambient = tmp_path / "target-ambient.wav"
+    for path, samples in (
+        (simulator, np.array([100, 100], dtype=np.int16)),
+        (target_speech, np.array([200, 200], dtype=np.int16)),
+        (target_ambient, np.array([50, 50], dtype=np.int16)),
+    ):
+        _write_wav(path, samples)
+
+    records = (
+        RecordedTrack("sim", "p1", "sim-track", simulator),
+        RecordedTrack("target", "p2", "speech-track", target_speech),
+        RecordedTrack("target", "p2", "ambient-track", target_ambient),
+    )
+    recorder = SimpleNamespace(
+        records=records,
+        errors=(),
+        recording_started_at=None,
+        paths_for_participant=lambda identity, track_sid=None: [
+            record.path
+            for record in records
+            if record.participant_identity == identity
+            and (track_sid is None or record.track_sid == track_sid)
+        ],
+    )
+    outcome = livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    livekit._attach_recordings(
+        outcome,
+        recorder,
+        simulator_identity="sim",
+        target_identity="target",
+        target_track_sid="replaced-readiness-track",
+        case_directory=tmp_path / "case",
+        sample_rate=8000,
+    )
+
+    assert outcome.audio_combined_path is not None
+    assert outcome.audio_output_path is not None
+    assert outcome.metadata["recording_diagnostics"]["target_track_count"] == 2
+
+
+def test_attach_recordings_uses_unambiguous_simulator_identity_fallback(
+    tmp_path: Path,
+) -> None:
+    simulator = tmp_path / "sdk-local-track.wav"
+    target = tmp_path / "target.wav"
+    _write_wav(simulator, np.array([100, 100], dtype=np.int16))
+    _write_wav(target, np.array([200, 200], dtype=np.int16))
+    records = (
+        RecordedTrack("sdk-local-identity", "p1", "sim-track", simulator),
+        RecordedTrack("target", "p2", "target-track", target),
+    )
+    recorder = SimpleNamespace(
+        records=records,
+        errors=(),
+        recording_started_at=None,
+        paths_for_participant=lambda identity, track_sid=None: [
+            record.path
+            for record in records
+            if record.participant_identity == identity
+            and (track_sid is None or record.track_sid == track_sid)
+        ],
+    )
+    outcome = livekit._CaseOutcome(status=CaseStatus.COMPLETED)
+
+    livekit._attach_recordings(
+        outcome,
+        recorder,
+        simulator_identity="expected-simulator-identity",
+        target_identity="target",
+        target_track_sid="target-track",
+        case_directory=tmp_path / "case",
+        sample_rate=8000,
+    )
+
+    assert outcome.audio_input_path == str(simulator)
+    assert outcome.metadata["recording_diagnostics"]["simulator_track_count"] == 1
 
 
 def test_room_recorder_token_is_hidden_subscribe_only() -> None:
@@ -860,9 +1331,7 @@ def test_end_call_signals_runner_after_minimum_balanced_conversation() -> None:
     agent._session = FakeSession()
     speech_handle = FakeSpeechHandle()
 
-    result = asyncio.run(
-        agent.end_call(SimpleNamespace(speech_handle=speech_handle))
-    )
+    result = asyncio.run(agent.end_call(SimpleNamespace(speech_handle=speech_handle)))
     asyncio.run(agent.wait_for_end_speech())
 
     assert result == "Conversation ended."
@@ -1224,6 +1693,129 @@ def test_failed_stop_reasons_never_report_completed(
     assert outcome.status == CaseStatus.FAILED
     assert outcome.failure is not None
     assert outcome.failure.code == failure_code
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {"role": "assistant", "content": "How can I help?"},
+            {"role": "user", "content": "Please book a ride."},
+            {"role": "assistant", "content": "Your ride is booked."},
+            {"role": "user", "content": "No, nothing else."},
+            {"role": "assistant", "content": "Have a great day, goodbye!"},
+            {"role": "user", "content": "Thanks, bye."},
+        ],
+        [
+            {"role": "assistant", "content": "I cannot book this account."},
+            {"role": "user", "content": "Can somebody help me?"},
+            {"role": "assistant", "content": "I will transfer you to support."},
+            {"role": "user", "content": "Please do."},
+            {"role": "assistant", "content": "I am transferring you now. Please wait."},
+            {"role": "user", "content": "Okay."},
+        ],
+    ],
+)
+def test_agent_first_silence_after_terminal_exchange_is_completed(
+    messages: list[dict[str, str]],
+) -> None:
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata == {
+        "stop_reason": "conversation_silence_timeout",
+        "terminal_exchange_recovered": True,
+    }
+
+
+def test_farewell_only_turns_are_recognised_as_a_closing_loop() -> None:
+    # Shape taken from a call that ran 76 turns trading goodbyes and cost the job its worlds.
+    assert livekit._is_closing_only("Goodbye.")
+    assert livekit._is_closing_only("Alright, thanks, bye!")
+    assert livekit._is_closing_only("Have a great day!")
+
+
+def test_a_turn_carrying_content_is_not_a_closing() -> None:
+    # A farewell that also asks something is still live conversation.
+    assert not livekit._is_closing_only("Goodbye, but can you resend the receipt first?")
+    assert not livekit._is_closing_only("Yes, please book it.")
+    assert not livekit._is_closing_only("")
+
+
+def test_closing_loop_reports_the_call_as_completed() -> None:
+    outcome = livekit._conversation_outcome(
+        "closing_loop",
+        [
+            {"role": "assistant", "content": "Your ride is booked."},
+            {"role": "user", "content": "Thanks, bye!"},
+            {"role": "assistant", "content": "Goodbye!"},
+            {"role": "user", "content": "Goodbye."},
+            {"role": "assistant", "content": "Goodbye!"},
+            {"role": "user", "content": "Goodbye."},
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+
+
+def test_silence_with_untimed_caller_turns_names_the_synthesis() -> None:
+    # Shape taken from a run whose speech synthesis was out of credit: the caller's line reaches
+    # the transcript, but nothing was ever spoken, so the agent's silence is not the agent's fault.
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi Dana, where should the driver pick you up?",
+                "started_speaking_at": 100.0,
+                "stopped_speaking_at": 104.0,
+            },
+            {
+                "role": "user",
+                "content": "Hi, I'd like to book a ride from 88 King Street.",
+                "started_speaking_at": None,
+                "stopped_speaking_at": None,
+            },
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "simulator_tts_silent"
+    assert outcome.failure.retryable is False
+
+
+def test_silence_with_audible_caller_turns_still_reports_a_stall() -> None:
+    outcome = livekit._conversation_outcome(
+        "conversation_silence_timeout",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi Dana, where should the driver pick you up?",
+                "started_speaking_at": 100.0,
+                "stopped_speaking_at": 104.0,
+            },
+            {
+                "role": "user",
+                "content": "I'm at 333 O'Farrell Street.",
+                "started_speaking_at": 105.0,
+                "stopped_speaking_at": 109.0,
+            },
+        ],
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "conversation_silence_timeout"
 
 
 def test_unsupported_provider_lists_supported_options() -> None:
@@ -1957,9 +2549,7 @@ def test_case_crash_yields_dense_failed_result_without_shifting_order(
     statuses = [r.metadata["status"] for r in report.results]
     assert statuses[2] == CaseStatus.FAILED.value
     assert report.results[2].metadata["failure"]["code"] == "case_execution_error"
-    assert all(
-        statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4)
-    )
+    assert all(statuses[i] == CaseStatus.COMPLETED.value for i in (0, 1, 3, 4))
 
 
 def test_on_case_complete_streams_every_index_including_failed_slot(
@@ -2028,7 +2618,9 @@ def test_dispatch_metadata_empty_by_default():
     # A real target agent flips to outbound/no-greet on any dispatch metadata,
     # so the default must be an empty string (not our simulation context).
     assert livekit._dispatch_metadata_json(_agent()) == ""
-    assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    assert (
+        livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata=None)) == ""
+    )
     assert livekit._dispatch_metadata_json(SimpleNamespace(dispatch_metadata={})) == ""
 
 
@@ -2245,13 +2837,26 @@ def test_merge_patches_target_turn_missing_stop_timing() -> None:
     # Native target turns reach history via generate_reply(user_input=) with no
     # audio metrics, so stop == start (zero duration) -> bot WPM/latency dead.
     messages = [
-        {"role": "user", "content": "hi", "started_speaking_at": 1.0,
-         "stopped_speaking_at": 2.0},
-        {"role": "assistant", "content": "hello there how can i help",
-         "started_speaking_at": 3.0, "stopped_speaking_at": 3.0},
+        {
+            "role": "user",
+            "content": "hi",
+            "started_speaking_at": 1.0,
+            "stopped_speaking_at": 2.0,
+        },
+        {
+            "role": "assistant",
+            "content": "hello there how can i help",
+            "started_speaking_at": 3.0,
+            "stopped_speaking_at": 3.0,
+        },
     ]
-    captured = [{"content": "hello there how can i help",
-                 "started_speaking_at": 2.5, "stopped_speaking_at": 5.0}]
+    captured = [
+        {
+            "content": "hello there how can i help",
+            "started_speaking_at": 2.5,
+            "stopped_speaking_at": 5.0,
+        }
+    ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert len(merged) == 2  # patched in place, not appended
     agent = next(m for m in merged if m["role"] == "assistant")
@@ -2262,14 +2867,24 @@ def test_merge_patches_target_turn_missing_stop_timing() -> None:
 def test_merge_aggregates_partial_target_emissions() -> None:
     # One turn arrives as several partial/extended emissions -> min-start/max-stop.
     messages = [
-        {"role": "assistant", "content": "can we look at options for that",
-         "started_speaking_at": 10.0, "stopped_speaking_at": 10.0},
+        {
+            "role": "assistant",
+            "content": "can we look at options for that",
+            "started_speaking_at": 10.0,
+            "stopped_speaking_at": 10.0,
+        },
     ]
     captured = [
-        {"content": "can we look", "started_speaking_at": 9.0,
-         "stopped_speaking_at": 9.5},
-        {"content": "can we look at options for that",
-         "started_speaking_at": 9.2, "stopped_speaking_at": 12.0},
+        {
+            "content": "can we look",
+            "started_speaking_at": 9.0,
+            "stopped_speaking_at": 9.5,
+        },
+        {
+            "content": "can we look at options for that",
+            "started_speaking_at": 9.2,
+            "stopped_speaking_at": 12.0,
+        },
     ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert merged[0]["started_speaking_at"] == 9.0
@@ -2278,21 +2893,41 @@ def test_merge_aggregates_partial_target_emissions() -> None:
 
 def test_merge_does_not_override_real_target_timing() -> None:
     messages = [
-        {"role": "assistant", "content": "genuine turn",
-         "started_speaking_at": 4.0, "stopped_speaking_at": 6.0},
+        {
+            "role": "assistant",
+            "content": "genuine turn",
+            "started_speaking_at": 4.0,
+            "stopped_speaking_at": 6.0,
+        },
     ]
-    captured = [{"content": "genuine turn", "started_speaking_at": 1.0,
-                 "stopped_speaking_at": 99.0}]
+    captured = [
+        {
+            "content": "genuine turn",
+            "started_speaking_at": 1.0,
+            "stopped_speaking_at": 99.0,
+        }
+    ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert merged[0]["started_speaking_at"] == 4.0
     assert merged[0]["stopped_speaking_at"] == 6.0
 
 
 def test_merge_appends_trailing_target_turn_with_real_timing() -> None:
-    messages = [{"role": "user", "content": "bye", "started_speaking_at": 5.0,
-                 "stopped_speaking_at": 6.0}]
-    captured = [{"content": "take care now", "started_speaking_at": 7.0,
-                 "stopped_speaking_at": 8.0}]
+    messages = [
+        {
+            "role": "user",
+            "content": "bye",
+            "started_speaking_at": 5.0,
+            "stopped_speaking_at": 6.0,
+        }
+    ]
+    captured = [
+        {
+            "content": "take care now",
+            "started_speaking_at": 7.0,
+            "stopped_speaking_at": 8.0,
+        }
+    ]
     merged = livekit._merge_captured_target_turns(messages, captured)
     assert len(merged) == 2
     trailing = merged[-1]
@@ -2336,9 +2971,7 @@ def test_room_disconnect_ends_conversation() -> None:
     # A native target commonly hangs up by deleting the room; the simulator
     # sees a room disconnect, not a participant_disconnected, and the case
     # idled through the silence backstop before ending.
-    room = _FakeEventRoom(
-        participants={"t": SimpleNamespace(identity="target-agent")}
-    )
+    room = _FakeEventRoom(participants={"t": SimpleNamespace(identity="target-agent")})
 
     class FakeSession:
         history = _BALANCED_HISTORY

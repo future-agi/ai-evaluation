@@ -75,6 +75,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "requests-futures" },
+    { name = "retell-sdk" },
     { name = "rich" },
     { name = "rouge-score" },
     { name = "typer" },
@@ -184,6 +185,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.32.5,<3" },
     { name = "requests-futures", specifier = ">=1.0.0" },
+    { name = "retell-sdk", specifier = ">=5.64,<6" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "rouge-score", specifier = ">=0.1.2" },
     { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=5.2.3,<6" },
@@ -5557,6 +5559,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/29/f1/34be702a69a5d272e844c98cee82351f880985cfbca0cc86378011078497/resampy-0.4.3.tar.gz", hash = "sha256:a0d1c28398f0e55994b739650afef4e3974115edbe96cd4bb81968425e916e47", size = 3080604, upload-time = "2024-03-05T20:36:08.119Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/b9/3b00ac340a1aab3389ebcc52c779914a44aadf7b0cb7a3bf053195735607/resampy-0.4.3-py3-none-any.whl", hash = "sha256:ad2ed64516b140a122d96704e32bc0f92b23f45419e8b8f478e5a05f83edcebd", size = 3076529, upload-time = "2024-03-05T20:36:02.439Z" },
+]
+
+[[package]]
+name = "retell-sdk"
+version = "5.64.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "cryptography" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3e/b9/9933ea0f9a3ff58c2ebec7c640894a53678d307ccbb19312b3ca68fd0152/retell_sdk-5.64.0.tar.gz", hash = "sha256:451328a9e50964810eb2c4e16751e0c0a30c23d45293909d5162bb59ef4f5096", size = 594887, upload-time = "2026-08-23T20:51:10.922Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/f0/f661fe4e920ac898957664efd1f49ec6469e221f15e61be0dadfb6d3d297/retell_sdk-5.64.0-py3-none-any.whl", hash = "sha256:f9c2a23b39812a8fa20b4cbdc6d72b8aa4f37dede33e051f43c89ae0efcca58d", size = 606968, upload-time = "2026-08-23T20:51:09.304Z" },
 ]
 
 [[package]]

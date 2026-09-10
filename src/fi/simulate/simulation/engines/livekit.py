@@ -16,7 +16,16 @@ from uuid import uuid4
 
 try:
     from livekit import api, rtc
-    from livekit.agents import Agent, AgentSession, RunContext, function_tool, metrics
+    from livekit.agents import (
+        Agent,
+        AgentSession,
+        AudioConfig,
+        BackgroundAudioPlayer,
+        RunContext,
+        function_tool,
+        metrics,
+    )
+    from livekit.agents.voice.background_audio import BuiltinAudioClip
     from livekit.agents.types import (
         ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
         TOPIC_TRANSCRIPTION,
@@ -63,7 +72,11 @@ from fi.simulate.evidence.providers import (
     RetellEvidenceSource,
     VapiEvidenceSource,
 )
-from fi.simulate.endpoints.vapi import VapiCallOriginator
+from fi.simulate.endpoints.originators import (
+    CallOriginator,
+    build_call_originator,
+    finalize_originator,
+)
 from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
 from fi.simulate.recording.room_recorder import (
@@ -101,6 +114,24 @@ _NO_CONVERSATION_TIMEOUT_SECONDS = 120.0
 _VOICE_MAX_CASE_CONCURRENCY_DEFAULT = 4
 
 
+def _simulator_participant_identity(persona: Persona, test_case_id: str) -> str:
+    """Give repository agents the scenario caller ANI through a standard identity seam.
+
+    LiveKit token metadata is not exposed consistently across every SDK/agent version. The
+    harness therefore uses the identity convention already understood by repository voice
+    agents: ``fagi-simulator-phone-<digits>-...``. A persona without a fixture-derived phone
+    keeps the legacy anonymous identity.
+    """
+    definition = persona.persona if isinstance(persona.persona, dict) else {}
+    metadata = definition.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    digits = re.sub(r"\D", "", str(metadata.get("caller_phone") or ""))
+    suffix = test_case_id[-12:]
+    if 7 <= len(digits) <= 15:
+        return f"fagi-simulator-phone-{digits}-{suffix}"
+    return f"fagi-simulator-{suffix}"
+
+
 def _voice_max_case_concurrency() -> int:
     raw = os.environ.get("ALK_VOICE_MAX_CASE_CONCURRENCY", "").strip()
     if not raw:
@@ -110,6 +141,7 @@ def _voice_max_case_concurrency() -> int:
     except ValueError:
         return _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
     return value if value >= 1 else _VOICE_MAX_CASE_CONCURRENCY_DEFAULT
+
 
 _silero_vad: Any | None = None
 _silero_vad_guard = threading.Lock()
@@ -227,15 +259,25 @@ class _TestRunnerAgent(Agent):
     )
     async def end_call(self, ctx: RunContext) -> str:
         if self._session is None:
+            logger.warning("endCall refused: no session yet")
             return "Continue the conversation before ending the call."
         messages = _session_messages(self._session)
         if len(messages) < self._min_turn_messages or not _has_role_alternation(
             messages
         ):
+            # Whether the caller ever reached for this tool, and why it was turned away, is the
+            # difference between a simulator that will not hang up and one that was not allowed to.
+            logger.warning(
+                "endCall refused: %d messages, floor %d, alternating=%s",
+                len(messages),
+                self._min_turn_messages,
+                _has_role_alternation(messages),
+            )
             return (
                 "Continue the conversation until both speakers have participated "
                 f"and at least {self._min_turn_messages} messages are complete."
             )
+        logger.warning("endCall accepted after %d messages", len(messages))
         # The tool runs inside the same SpeechHandle that carries the model's
         # natural closing sentence. Remember that exact handle before waking
         # the outer runner so it cannot snapshot history in the brief interval
@@ -319,7 +361,85 @@ class _TestRunnerAgent(Agent):
             room=room,
             room_options=RoomOptions(**room_kwargs),
         )
+        await self._maybe_start_background_audio(room, session)
         return session
+
+    async def _maybe_start_background_audio(
+        self, room: "rtc.Room", session: "AgentSession"
+    ) -> None:
+        """Mix caller-side ambient noise under the simulated caller, if the run asked for it.
+
+        Off unless HARNESS_BACKGROUND_NOISE names a source: a LiveKit builtin clip name, or an
+        http(s) URL to an ambient file. Any failure is swallowed, because a call without ambience is
+        preferable to a dropped one.
+        """
+        source = os.environ.get("HARNESS_BACKGROUND_NOISE", "").strip()
+        if not source:
+            return
+
+        def _download() -> str | None:
+            import tempfile
+            import urllib.request
+
+            try:
+                suffix = (
+                    ".mp3"
+                    if ".mp3" in source
+                    else ".ogg"
+                    if ".ogg" in source
+                    else ".wav"
+                )
+                with urllib.request.urlopen(source, timeout=15) as response:
+                    data = response.read()
+                handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                handle.write(data)
+                handle.close()
+                return handle.name
+            except Exception:
+                return None
+
+        try:
+            volume = float(os.environ.get("HARNESS_BACKGROUND_NOISE_VOLUME", "0.3"))
+            if source.startswith(("http://", "https://")):
+                clip_source: Any = await asyncio.to_thread(_download)
+                if not clip_source:
+                    return
+                self._background_noise_file = clip_source
+            else:
+                clip_source = getattr(BuiltinAudioClip, source, None)
+                if clip_source is None:
+                    logger.warning(
+                        "background audio clip %r is not one LiveKit ships", source
+                    )
+                    return
+            player = BackgroundAudioPlayer(
+                ambient_sound=AudioConfig(clip_source, volume=volume)
+            )
+            await player.start(room=room, agent_session=session)
+            self._background_player = player
+        except Exception:
+            logger.warning("background audio not started", exc_info=True)
+
+    async def _stop_background_audio(self) -> None:
+        """Close the ambience player and remove any clip downloaded for it.
+
+        Without this the mixer task, its audio source and the published track outlive the call,
+        and a suite leaks one of each (plus a temp file) per scenario.
+        """
+        player = getattr(self, "_background_player", None)
+        if player is not None:
+            self._background_player = None
+            try:
+                await player.aclose()
+            except Exception:
+                logger.warning("background audio not closed cleanly", exc_info=True)
+        downloaded = getattr(self, "_background_noise_file", None)
+        if downloaded:
+            self._background_noise_file = None
+            try:
+                Path(downloaded).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("background audio clip not removed: %s", downloaded)
 
     def open_conversation(self) -> None:
         if self._session is None:
@@ -361,7 +481,7 @@ class LiveKitEngine(BaseEngine):
         readiness_timeout: float = 30.0,
         cleanup_timeout: float = 30.0,
         conversation_direction: str = "simulator_first",
-        agent_first_silence_timeout_seconds: float = 30.0,
+        agent_first_silence_timeout_seconds: float = 120.0,
         recording_root: str | Path = "recordings",
         recording_case_directory: str | Path | None = None,
         run_id: str | None = None,
@@ -405,39 +525,11 @@ class LiveKitEngine(BaseEngine):
                 num_personas=num_scenarios,
             )
             scenario = Scenario(name="Generated Scenario", dataset=personas)
-        if runtime.room_name_verbatim and len(scenario.dataset) != 1:
-            raise ValueError("room_name_verbatim requires a single-persona scenario")
-        if (
-            runtime.room_mode == "external"
-            and len(scenario.dataset) > 1
-            and not _has_room_template(runtime.room_name)
-        ):
-            raise ValueError(
-                "external_room_template_required: concurrent-safe multi-case runs "
-                "need {run_id}, {test_case_id}, or {index} in room_name"
-            )
         transport = agent_definition.transport or TelephonyTransport()
         profile = _resolve_target_profile(transport.kind)
-        if not profile.uses_external_room and runtime.room_mode != "managed":
-            raise ValueError("managed_transport_requires_managed_room")
-        if (
-            profile.receives_inbound_call
-            and len(scenario.dataset) > 1
-            and not _has_room_template(runtime.room_name)
-        ):
-            raise ValueError(
-                "sip_inbound_room_template_required: multi-case inbound runs "
-                "need {run_id} or {test_case_id} in room_name"
-            )
-        cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
-        current_run_id = run_id or new_run_id()
-        if recording_case_directory is not None and len(scenario.dataset) != 1:
-            raise ValueError(
-                "recording_case_directory requires a single-persona scenario"
-            )
-        invocation_id = uuid4().hex[:12]
-        report = TestReport()
-
+        # Computed before the room-name checks below: a serial (concurrency-1)
+        # run is what makes reusing one fixed room across cases safe, so the
+        # verbatim check needs this value, not just the dataset size.
         # Cases run concurrently up to ``max_concurrency`` (bounded by the
         # customer agent's own session capacity). SIP legs stay serial: a run
         # leases a single DID, so overlapping calls would collide. Ask the
@@ -454,6 +546,45 @@ class LiveKitEngine(BaseEngine):
                 ),
             )
         )
+        if (
+            runtime.room_name_verbatim
+            and len(scenario.dataset) != 1
+            and case_concurrency != 1
+        ):
+            raise ValueError(
+                "room_name_verbatim_requires_serial_cases: a fixed room hosts "
+                "one case at a time; run with max_concurrency=1"
+            )
+        if (
+            runtime.room_mode == "external"
+            and len(scenario.dataset) > 1
+            and not _has_room_template(runtime.room_name)
+        ):
+            raise ValueError(
+                "external_room_template_required: concurrent-safe multi-case runs "
+                "need {run_id}, {test_case_id}, or {index} in room_name"
+            )
+        if not profile.uses_external_room and runtime.room_mode != "managed":
+            raise ValueError("managed_transport_requires_managed_room")
+        if (
+            profile.receives_inbound_call
+            and len(scenario.dataset) > 1
+            and not _has_room_template(runtime.room_name)
+            and not runtime.room_name_verbatim
+        ):
+            raise ValueError(
+                "sip_inbound_room_template_required: multi-case inbound runs "
+                "need {run_id} or {test_case_id} in room_name"
+            )
+        cleanup_timeout = min(cleanup_timeout, _MAX_CLEANUP_TIMEOUT_SECONDS)
+        current_run_id = run_id or new_run_id()
+        if recording_case_directory is not None and len(scenario.dataset) != 1:
+            raise ValueError(
+                "recording_case_directory requires a single-persona scenario"
+            )
+        invocation_id = uuid4().hex[:12]
+        report = TestReport()
+
         case_semaphore = asyncio.Semaphore(case_concurrency)
 
         async def _run_case(index: int, persona: Persona) -> TestCaseResult:
@@ -649,7 +780,7 @@ class LiveKitEngine(BaseEngine):
                 "livekit_credentials_missing",
                 f"{runtime.api_key_env} and {runtime.api_secret_env} are required",
             )
-        simulator_identity = f"fagi-simulator-{test_case_id[-12:]}"
+        simulator_identity = _simulator_participant_identity(persona, test_case_id)
         recorder_identity = f"fagi-recorder-{test_case_id[-12:]}"
         room = rtc.Room()
         models: LiveKitModels | None = None
@@ -689,9 +820,11 @@ class LiveKitEngine(BaseEngine):
         outcome: _CaseOutcome | None = None
         sip_dispatch_rule_id: str | None = None
         sip_dispatch_rule_created = False
-        vapi_originator: VapiCallOriginator | None = None
+        call_originator: CallOriginator | None = None
         provider_call_id: str | None = None
         provider_termination_source: str | None = None
+        reconciled_call_ids: list[str] = []
+        caller_verification: str | None = None
         audio_bridge: LiveKitAudioBridge | None = None
         bridge_task: asyncio.Task[None] | None = None
         case_started_at = datetime.now(timezone.utc)
@@ -748,40 +881,86 @@ class LiveKitEngine(BaseEngine):
                     api_secret,
                 )
                 if not profile.places_outbound_call:
-                    try:
-                        await asyncio.wait_for(
-                            api_client.room.create_room(
-                                api.CreateRoomRequest(name=room_name)
-                            ),
-                            timeout=connect_timeout,
-                        )
-                    except asyncio.TimeoutError:
-                        outcome = _failure_outcome(
-                            TestCaseStatus.TIMED_OUT,
-                            FailureStage.PREPARING,
-                            "livekit_room_create_timeout",
-                            "LiveKit room creation exceeded its deadline",
-                            retryable=True,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "LiveKit room creation failed",
-                            exc_info=redacted_exc_info(exc),
-                            extra={
-                                "run_id": run_id,
-                                "test_case_id": test_case_id,
-                                "room_name": room_name,
-                            },
-                        )
-                        outcome = _failure_outcome(
-                            TestCaseStatus.FAILED,
-                            FailureStage.PREPARING,
-                            "livekit_room_create_failed",
-                            "Failed to create the LiveKit room",
-                            details=_safe_provider_error_details(
-                                exc, operation="room_create"
-                            ),
-                        )
+                    # The pool's dispatch rule stays live for the whole run, so a
+                    # stray inbound call can re-create this room at any moment
+                    # between cases — drain it before trusting it as ours.
+                    if runtime.room_name_verbatim:
+                        try:
+                            polls = await asyncio.wait_for(
+                                _ensure_room_absent(api_client, room_name),
+                                timeout=connect_timeout,
+                            )
+                            logger.info(
+                                "leased room drained",
+                                extra={
+                                    "run_id": run_id,
+                                    "test_case_id": test_case_id,
+                                    "room_name": room_name,
+                                    "polls": polls,
+                                },
+                            )
+                        except asyncio.TimeoutError:
+                            outcome = _failure_outcome(
+                                TestCaseStatus.TIMED_OUT,
+                                FailureStage.PREPARING,
+                                "livekit_room_drain_timeout",
+                                "The leased simulator room was still occupied when its drain deadline passed",
+                                retryable=True,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "leased room drain failed",
+                                exc_info=redacted_exc_info(exc),
+                                extra={
+                                    "run_id": run_id,
+                                    "test_case_id": test_case_id,
+                                    "room_name": room_name,
+                                },
+                            )
+                            outcome = _failure_outcome(
+                                TestCaseStatus.FAILED,
+                                FailureStage.PREPARING,
+                                "livekit_room_drain_failed",
+                                "Could not clear the leased simulator room before the call",
+                                details=_safe_provider_error_details(
+                                    exc, operation="room_drain"
+                                ),
+                            )
+                    if outcome is None:
+                        try:
+                            await asyncio.wait_for(
+                                api_client.room.create_room(
+                                    api.CreateRoomRequest(name=room_name)
+                                ),
+                                timeout=connect_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            outcome = _failure_outcome(
+                                TestCaseStatus.TIMED_OUT,
+                                FailureStage.PREPARING,
+                                "livekit_room_create_timeout",
+                                "LiveKit room creation exceeded its deadline",
+                                retryable=True,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "LiveKit room creation failed",
+                                exc_info=redacted_exc_info(exc),
+                                extra={
+                                    "run_id": run_id,
+                                    "test_case_id": test_case_id,
+                                    "room_name": room_name,
+                                },
+                            )
+                            outcome = _failure_outcome(
+                                TestCaseStatus.FAILED,
+                                FailureStage.PREPARING,
+                                "livekit_room_create_failed",
+                                "Failed to create the LiveKit room",
+                                details=_safe_provider_error_details(
+                                    exc, operation="room_create"
+                                ),
+                            )
                 if outcome is None and profile.uses_external_room:
                     # Defer the target dispatch until AFTER the early buffer
                     # handler is registered and the session is live (both
@@ -832,12 +1011,22 @@ class LiveKitEngine(BaseEngine):
                         )
             if outcome is not None:
                 return outcome
-            token = (
+            # The target resolves who is calling from participant attributes or metadata.
+            # Without the persona's number every scenario looks like the same demo rider and
+            # the agent looks up the wrong account, which reads as an agent bug.
+            caller_phone = str(
+                (persona.persona.get("metadata") or {}).get("caller_phone") or ""
+            ).strip()
+            builder = (
                 AccessToken(api_key, api_secret)
                 .with_identity(simulator_identity)
                 .with_grants(VideoGrants(room_join=True, room=room_name))
-                .to_jwt()
             )
+            if caller_phone:
+                builder = builder.with_attributes(
+                    {"harness.callerPhone": caller_phone}
+                ).with_metadata(json.dumps({"caller_phone": caller_phone}))
+            token = builder.to_jwt()
             await asyncio.wait_for(
                 room.connect(str(runtime.url), token),
                 timeout=connect_timeout,
@@ -868,13 +1057,34 @@ class LiveKitEngine(BaseEngine):
             customer_agent, models = await self._create_customer_agent(
                 persona,
                 simulator,
-                call_type=(
-                    "inbound"
-                    if conversation_direction == "simulator_first"
-                    else "outbound"
-                ),
-                agent_name=agent_definition.name,
+                # Who dialled and who speaks first are separate axes. The caller always places
+                # the call; conversation_direction only decides who opens once connected.
+                call_type="inbound",
+                # `name` is an identity for dispatch, not a label for the caller to hear.
+                agent_name=agent_definition.description,
                 min_turn_messages=min_turn_messages,
+            )
+            setup = getattr(self, "_last_simulator_setup", {}) or {}
+            _record_simulator_setup(
+                case_directory,
+                persona=persona,
+                instructions=setup.get("instructions", ""),
+                llm_config=setup.get("llm_config"),
+                stt_config=setup.get("stt_config"),
+                tts_config=setup.get("tts_config"),
+                extra={
+                    "room_name": room_name,
+                    "agent_name": agent_definition.name,
+                    "test_case_id": test_case_id,
+                    "run_id": run_id,
+                    "conversation_direction": conversation_direction,
+                    "allow_interruptions": setup.get("allow_interruptions"),
+                    "min_endpointing_delay": setup.get("min_endpointing_delay"),
+                    "max_endpointing_delay": setup.get("max_endpointing_delay"),
+                    "use_tts_aligned_transcript": setup.get(
+                        "use_tts_aligned_transcript"
+                    ),
+                },
             )
             sip_participant_identity: str | None = None
             bridge_identity: str | None = None
@@ -1074,25 +1284,50 @@ class LiveKitEngine(BaseEngine):
                         "sip_dispatch_rule_created": sip_dispatch_rule_created,
                     },
                 )
-            if transport.inbound_call_originator == "vapi":
-                try:
-                    vapi_originator = VapiCallOriginator.from_env()
-                    vapi_call = await asyncio.wait_for(
-                        vapi_originator.start(), timeout=connect_timeout
+            if runtime.room_name_verbatim and profile.receives_inbound_call:
+                unexpected = _unexpected_participants(
+                    room,
+                    simulator_identity=simulator_identity,
+                    recorder_identity=recorder_identity,
+                )
+                if unexpected:
+                    logger.warning(
+                        "leased room occupied before dial",
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "room_name": room_name,
+                            "unexpected_participants": len(unexpected),
+                        },
                     )
-                    provider_call_id = vapi_call.call_id
+                    outcome = _failure_outcome(
+                        TestCaseStatus.FAILED,
+                        FailureStage.PREPARING,
+                        "livekit_room_occupied",
+                        "Another participant was already in the leased simulator room before the call was placed",
+                        retryable=True,
+                    )
+                    return outcome
+            if transport.inbound_call_originator is not None:
+                name = transport.inbound_call_originator
+                try:
+                    call_originator = build_call_originator(transport)
+                    originated_call = await asyncio.wait_for(
+                        call_originator.start(), timeout=connect_timeout
+                    )
+                    provider_call_id = originated_call.call_id
                 except asyncio.TimeoutError:
                     outcome = _failure_outcome(
                         TestCaseStatus.TIMED_OUT,
                         FailureStage.PREPARING,
-                        "vapi_call_start_timeout",
-                        "Vapi call creation exceeded its deadline",
+                        f"{name}_call_start_timeout",
+                        f"{name.capitalize()} call creation exceeded its deadline",
                         retryable=True,
                     )
                     return outcome
                 except Exception as exc:
                     logger.warning(
-                        "Vapi call creation failed",
+                        f"{name.capitalize()} call creation failed",
                         exc_info=redacted_exc_info(exc),
                         extra={
                             "run_id": run_id,
@@ -1102,10 +1337,10 @@ class LiveKitEngine(BaseEngine):
                     outcome = _failure_outcome(
                         TestCaseStatus.FAILED,
                         FailureStage.PREPARING,
-                        "vapi_call_start_failed",
-                        "Failed to start the Vapi call",
+                        f"{name}_call_start_failed",
+                        f"Failed to start the {name.capitalize()} call",
                         details=_safe_provider_error_details(
-                            exc, operation="vapi_call_start"
+                            exc, operation=f"{name}_call_start"
                         ),
                     )
                     return outcome
@@ -1115,6 +1350,42 @@ class LiveKitEngine(BaseEngine):
                 target_identity=effective_target_identity,
                 timeout=effective_readiness_timeout,
             )
+            if (
+                runtime.room_name_verbatim
+                and profile.receives_inbound_call
+                and transport.originator_from_number
+            ):
+                verdict = _caller_matches(
+                    target.attributes, transport.originator_from_number
+                )
+                if verdict is False:
+                    logger.warning(
+                        "leased room wrong caller",
+                        extra={
+                            "run_id": run_id,
+                            "test_case_id": test_case_id,
+                            "expected_digits": len(
+                                _number_digits(transport.originator_from_number)
+                            ),
+                            "observed_digits": len(
+                                _number_digits(
+                                    target.attributes.get(
+                                        _SIP_REMOTE_NUMBER_ATTRIBUTE, ""
+                                    )
+                                )
+                            ),
+                        },
+                    )
+                    caller_verification = "mismatch"
+                    raise _LeasedRoomCallerMismatch()
+                elif verdict is None:
+                    logger.warning(
+                        "leased room caller unverified",
+                        extra={"run_id": run_id, "test_case_id": test_case_id},
+                    )
+                    caller_verification = "unverified"
+                else:
+                    caller_verification = "matched"
             logger.info(
                 "livekit_target_joined identity=%s sid=%s track=%s run=%s case=%s",
                 target.identity,
@@ -1286,6 +1557,17 @@ class LiveKitEngine(BaseEngine):
                 message,
                 retryable=True,
             )
+        except _LeasedRoomCallerMismatch:
+            # Unlike the pre-dial failures above, this path has a billed call and
+            # a joined target; the recordings, provider evidence and metadata
+            # update below all run after the try, so this must not return early.
+            outcome = _failure_outcome(
+                TestCaseStatus.FAILED,
+                FailureStage.READINESS,
+                "livekit_room_wrong_caller",
+                "The participant that answered is not calling from the customer's configured number",
+                retryable=True,
+            )
         except Exception as exc:
             logger.error(
                 "LiveKit test case failed",
@@ -1304,6 +1586,13 @@ class LiveKitEngine(BaseEngine):
                 details={"exception_type": type(exc).__name__},
             )
         finally:
+            # The ambience belongs to the caller agent, not the engine. Guarded because teardown
+            # must never be the reason a case fails.
+            if customer_agent is not None:
+                try:
+                    await customer_agent._stop_background_audio()
+                except Exception:
+                    logger.warning("background audio not closed cleanly", exc_info=True)
             if target_transcription_handler_registered:
                 room.unregister_text_stream_handler(TOPIC_TRANSCRIPTION)
             pending_target_transcriptions.clear()
@@ -1385,20 +1674,44 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
-            if vapi_originator is not None:
+            if call_originator is not None:
+                # Guarded like every other cleanup step below: a future escape
+                # from the helper (today it never raises) must not skip the
+                # dispatch-rule/room/api-client teardown that follows.
                 try:
-                    if provider_call_id is not None:
-                        await asyncio.wait_for(
-                            vapi_originator.stop(provider_call_id),
-                            timeout=cleanup_timeout,
+                    finalize_result = await finalize_originator(
+                        call_originator,
+                        provider_call_id=provider_call_id,
+                        originator_name=transport.inbound_call_originator,
+                        case_started_at=case_started_at,
+                        cleanup_timeout=cleanup_timeout,
+                    )
+                    for operation, exc in finalize_result.cleanup_errors:
+                        _record_cleanup_error(
+                            cleanup_errors, exc, operation, run_id, test_case_id
                         )
-                        provider_termination_source = "sdk_originator_cleanup"
-                    await vapi_originator.close()
+                    if finalize_result.termination_source:
+                        provider_termination_source = finalize_result.termination_source
+                    reconciled_call_ids = finalize_result.reconciled_call_ids
+                    if provider_call_id is None and reconciled_call_ids:
+                        # We stopped a billed call we believe is ours, so
+                        # evidence fetches its record instead of reporting
+                        # "not matched" after searching nothing.
+                        provider_call_id = reconciled_call_ids[0]
+                    # Written here too (not only in the metadata.update below)
+                    # because a start-failure path returns from inside the try,
+                    # bypassing that block entirely.
+                    if outcome is not None:
+                        outcome.metadata["reconciled_call_ids"] = reconciled_call_ids
+                        if finalize_result.termination_source:
+                            outcome.metadata["provider_termination_source"] = (
+                                finalize_result.termination_source
+                            )
                 except Exception as exc:
                     _record_cleanup_error(
                         cleanup_errors,
                         exc,
-                        "vapi_call_stop",
+                        f"{transport.inbound_call_originator}_call_finalize",
                         run_id,
                         test_case_id,
                     )
@@ -1449,6 +1762,14 @@ class LiveKitEngine(BaseEngine):
                         run_id,
                         test_case_id,
                     )
+            # Written here too (not only in the metadata.update below) because a
+            # pre-dial return (e.g. the occupancy check) exits from inside the
+            # try, bypassing that block entirely.
+            if outcome is not None and outcome.metadata.get("cleanup_status") is None:
+                outcome.metadata["cleanup_status"] = (
+                    "failed" if cleanup_errors else "completed"
+                )
+                outcome.metadata["cleanup_errors"] = cleanup_errors
         if outcome is None:
             outcome = _failure_outcome(
                 TestCaseStatus.FAILED,
@@ -1514,6 +1835,8 @@ class LiveKitEngine(BaseEngine):
                     provider_target.provider if provider_target is not None else None
                 ),
                 "provider_call_id": provider_call_id,
+                "reconciled_call_ids": reconciled_call_ids,
+                "caller_verification": caller_verification,
                 "vapi_call_id": (
                     provider_call_id
                     if profile.evidence_provider == "vapi"
@@ -1523,6 +1846,7 @@ class LiveKitEngine(BaseEngine):
                 "retell_call_id": (
                     provider_call_id
                     if profile.evidence_provider == "retell"
+                    or transport.inbound_call_originator == "retell"
                     else None
                 ),
                 "simulator_model_usage": (
@@ -1611,6 +1935,16 @@ class LiveKitEngine(BaseEngine):
             tts_config=tts_config,
         )
         vad = await asyncio.to_thread(_load_silero_vad_sync)
+        self._last_simulator_setup = {
+            "instructions": instructions,
+            "llm_config": llm_config,
+            "stt_config": stt_config,
+            "tts_config": tts_config,
+            "allow_interruptions": allow_interruptions,
+            "min_endpointing_delay": min_endpointing_delay,
+            "max_endpointing_delay": max_endpointing_delay,
+            "use_tts_aligned_transcript": use_aligned_transcript,
+        }
         agent = _TestRunnerAgent(
             persona=persona,
             min_turn_messages=min_turn_messages,
@@ -1730,7 +2064,7 @@ def _find_target_audio(
     excluded_identities: set[str],
     target_identity: str | None,
 ) -> _TargetParticipant | None:
-    candidates: list[tuple[int, _TargetParticipant]] = []
+    candidates: list[tuple[int, int, _TargetParticipant]] = []
     agent_kind = getattr(
         rtc.ParticipantKind,
         "PARTICIPANT_KIND_AGENT",
@@ -1746,10 +2080,22 @@ def _find_target_audio(
         for publication in participant.track_publications.values():
             if getattr(publication, "kind", None) != rtc.TrackKind.KIND_AUDIO:
                 continue
+            # Agents may publish ambient music/noise alongside their synthesized speech. The
+            # first LiveKit publication is not necessarily the conversational track (the
+            # official drive-thru example publishes ``background_audio``). Prefer ordinary
+            # speech/microphone tracks so STT, transcription filtering, and recording all bind
+            # to the same semantic stream.
+            track_name = str(getattr(publication, "name", "") or "").lower()
+            background = any(
+                marker in track_name
+                for marker in ("background", "ambient", "music", "sound_effect")
+            )
+            track_priority = 1 if background else 0
             attrs = dict(getattr(participant, "attributes", {}) or {})
             candidates.append(
                 (
                     priority,
+                    track_priority,
                     _TargetParticipant(
                         identity=identity,
                         sid=str(participant.sid),
@@ -1762,7 +2108,15 @@ def _find_target_audio(
             )
     if not candidates:
         return None
-    return sorted(candidates, key=lambda item: (item[0], item[1].identity))[0][1]
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2].identity,
+            item[2].audio_track_sid,
+        ),
+    )[0][2]
 
 
 # A run ends naturally when the simulator calls ``endCall``; this is only the
@@ -1820,6 +2174,7 @@ async def _wait_for_conversation_end(
         "conversation_settled": asyncio.create_task(
             _wait_for_conversation_silence(session)
         ),
+        "closing_loop": asyncio.create_task(_wait_for_closing_loop(session)),
         "no_conversation": asyncio.create_task(
             _wait_for_conversation_never_started(
                 session,
@@ -1878,6 +2233,9 @@ async def _wait_for_conversation_end(
             "target_disconnected",
             "room_disconnected",
             "no_conversation",
+            # A farewell loop is a finished conversation, so it outranks the silence backstop
+            # that would otherwise report the same call as a stall.
+            "closing_loop",
             "conversation_silence_timeout",
             "conversation_settled",
             "provider_disconnected",
@@ -1895,6 +2253,63 @@ async def _wait_for_conversation_end(
             on_participant_disconnected,
         )
         _remove_room_listener(room, "disconnected", on_room_disconnected)
+
+
+_CLOSING_PHRASES = (
+    "goodbye",
+    "bye",
+    "take care",
+    "have a great day",
+    "have a good day",
+    "have a wonderful day",
+    "you too",
+)
+
+_CLOSING_EXCHANGE_LIMIT = 4
+
+
+def _is_closing_only(text: str) -> bool:
+    """Whether a turn is nothing but a farewell.
+
+    Deliberately narrow: a turn that closes AND carries anything else (a question, a fact, a
+    correction) is still conversation, and ending on it would cut a live call short.
+    """
+    stripped = "".join(
+        character.lower() if character.isalnum() or character.isspace() else " "
+        for character in (text or "")
+    ).split()
+    if not stripped or len(stripped) > 6:
+        return False
+    joined = " ".join(stripped)
+    return any(phrase in joined for phrase in _CLOSING_PHRASES)
+
+
+async def _wait_for_closing_loop(
+    session: AgentSession,
+    *,
+    limit: int = _CLOSING_EXCHANGE_LIMIT,
+) -> None:
+    """Finish once both sides are only trading farewells.
+
+    A simulator that does not reach for ``endCall`` leaves the target answering goodbye with
+    goodbye until the deadline. One such call ran seventy-six turns, held its worker past the
+    world pool's patience and cost the rest of that job its worlds, so this ends the call on the
+    evidence already in the transcript rather than waiting for a timeout that arrives too late.
+    """
+    while True:
+        messages = _session_messages(session)
+        tail = [
+            message for message in messages if (message.get("content") or "").strip()
+        ][-limit:]
+        if len(tail) == limit and all(
+            _is_closing_only(str(message.get("content") or "")) for message in tail
+        ):
+            logger.info(
+                "closing loop: last %d turns were farewells only, ending the call",
+                limit,
+            )
+            return
+        await asyncio.sleep(1.0)
 
 
 async def _wait_for_conversation_silence(
@@ -2042,14 +2457,11 @@ def _session_messages(session: AgentSession) -> list[dict[str, Any]]:
                     or current["stopped_speaking_at"]
                 )
             elif previous.get("interrupted") or interrupted:
-                previous["content"] = (
-                    f"{previous_text} {current['content']}".strip()
-                )
+                previous["content"] = f"{previous_text} {current['content']}".strip()
                 previous["interrupted"] = interrupted
-                previous["stopped_speaking_at"] = (
-                    current["stopped_speaking_at"]
-                    or previous.get("stopped_speaking_at")
-                )
+                previous["stopped_speaking_at"] = current[
+                    "stopped_speaking_at"
+                ] or previous.get("stopped_speaking_at")
             else:
                 messages.append(current)
             continue
@@ -2202,6 +2614,30 @@ def _merge_captured_target_turns(
     return merged
 
 
+def _caller_never_spoke(messages: list[dict[str, Any]]) -> bool:
+    """Whether the simulated caller's turns exist as text with no audio behind them.
+
+    Speech synthesis that fails still leaves the caller's line in the transcript, so a mute
+    simulator and a silent agent produce the same stall unless the missing audio is read directly.
+    """
+
+    def timed(message: dict[str, Any]) -> bool:
+        return isinstance(message.get("started_speaking_at"), (int, float))
+
+    spoken = [
+        message
+        for message in messages
+        if message.get("role") == "user" and (message.get("content") or "").strip()
+    ]
+    if not spoken or any(timed(message) for message in spoken):
+        return False
+    # Only the agent's turns carrying timing makes the caller's missing timing evidence of
+    # silence rather than a transcript that simply does not record when anyone spoke.
+    return any(
+        timed(message) for message in messages if message.get("role") == "assistant"
+    )
+
+
 def _has_role_alternation(messages: list[dict[str, Any]]) -> bool:
     roles = {msg.get("role") for msg in messages if msg.get("content")}
     return "user" in roles and "assistant" in roles
@@ -2216,6 +2652,28 @@ def _conversation_outcome(
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
     )
+    if (
+        stop_reason == "conversation_silence_timeout"
+        and len(messages) >= min_turn_messages
+        and _has_role_alternation(messages)
+        and _has_natural_terminal_exchange(messages)
+    ):
+        # Agent-first calls use a short silence watchdog because the tested
+        # agent owns the opening turn.  A simulator can occasionally omit its
+        # endCall tool even after both sides have clearly closed the call.  Do
+        # not turn a fully recorded farewell/transfer into an infrastructure
+        # failure merely because the now-idle room remained open.  Evaluation
+        # still decides whether the agent actually completed the requested
+        # business action.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={
+                "stop_reason": stop_reason,
+                "terminal_exchange_recovered": True,
+            },
+        )
     if stop_reason == "timeout":
         return _failure_outcome(
             TestCaseStatus.TIMED_OUT,
@@ -2225,6 +2683,20 @@ def _conversation_outcome(
             transcript=transcript,
             messages=messages,
             retryable=True,
+        )
+    if stop_reason == "conversation_silence_timeout" and _caller_never_spoke(messages):
+        # The target sat in real silence because nothing was ever spoken at it. Retrying cannot
+        # put a voice back on the line, so fail fast and name the synthesis rather than spending
+        # the attempt budget reporting the agent as stalled.
+        return _failure_outcome(
+            TestCaseStatus.FAILED,
+            FailureStage.RUNNING,
+            "simulator_tts_silent",
+            "Simulated caller produced transcript text but no audio",
+            transcript=transcript,
+            messages=messages,
+            retryable=False,
+            details={"stop_reason": stop_reason, "turn_count": str(len(messages))},
         )
     if stop_reason in {
         "conversation_silence_timeout",
@@ -2241,12 +2713,10 @@ def _conversation_outcome(
                 "Conversation session closed before a natural end condition"
             ),
             "no_conversation": (
-                "No conversation turns were committed before the inactivity "
-                "deadline"
+                "No conversation turns were committed before the inactivity deadline"
             ),
             "monitor_failed": (
-                "Conversation end monitoring failed before a natural end "
-                "condition"
+                "Conversation end monitoring failed before a natural end condition"
             ),
         }[stop_reason]
         return _failure_outcome(
@@ -2287,6 +2757,53 @@ def _conversation_outcome(
     )
 
 
+def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:
+    """Recognize only explicit terminal language near the end of a call.
+
+    This deliberately avoids broad sentiment or short-answer heuristics.  A
+    normal unanswered question must remain a silence failure.  The two safe
+    cases are an explicit farewell, or a transfer handoff followed by the
+    caller's acknowledgement.
+    """
+    tail = [
+        (
+            str(message.get("role") or "").lower(),
+            str(message.get("content") or "").strip().lower(),
+        )
+        for message in messages[-4:]
+        if str(message.get("content") or "").strip()
+    ]
+    if not tail:
+        return False
+    farewell_markers = (
+        "goodbye",
+        "bye",
+        "take care",
+        "have a great day",
+        "have a good day",
+        "have a nice day",
+    )
+    if any(marker in text for _role, text in tail for marker in farewell_markers):
+        return True
+
+    for index, (role, text) in enumerate(tail[:-1]):
+        if role != "assistant" or "transfer" not in text:
+            continue
+        if not any(marker in text for marker in ("now", "connect", "please wait")):
+            continue
+        next_role, acknowledgement = tail[index + 1]
+        if next_role == "user" and acknowledgement.rstrip(".! ") in {
+            "ok",
+            "okay",
+            "alright",
+            "please do",
+            "thank you",
+            "thanks",
+        }:
+            return True
+    return False
+
+
 def _failure_outcome(
     status: TestCaseStatus,
     stage: FailureStage,
@@ -2313,6 +2830,58 @@ def _failure_outcome(
     )
 
 
+def _record_simulator_setup(
+    case_directory: Path,
+    *,
+    persona: Persona,
+    instructions: str,
+    llm_config: Any,
+    stt_config: Any,
+    tts_config: Any,
+    turn_handling: Any = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Write the exact prompt and voice settings this call is about to use.
+
+    Reconstructing either one afterwards from a transcript is guesswork, and the simulator's
+    prompt is what decides how the caller behaves. Written before the call connects so it
+    survives a run that dies mid-conversation.
+    """
+
+    def settings(config: Any) -> Any:
+        if config is None:
+            return None
+        for method in ("model_dump", "dict"):
+            dump = getattr(config, method, None)
+            if callable(dump):
+                try:
+                    return dump()
+                except Exception:  # noqa: BLE001 - never fail a call over logging
+                    pass
+        return str(config)
+
+    try:
+        case_directory.mkdir(parents=True, exist_ok=True)
+        (case_directory / "simulator-prompt.txt").write_text(
+            instructions or "", encoding="utf-8"
+        )
+        payload = {
+            "persona": settings(persona),
+            "simulator_system_prompt": instructions or "",
+            "llm": settings(llm_config),
+            "stt": settings(stt_config),
+            "tts": settings(tts_config),
+            "turn_handling": settings(turn_handling),
+        }
+        payload.update(extra or {})
+        (case_directory / "simulator-setup.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception as error:  # noqa: BLE001 - logging must never break a run
+        logger.warning("could not record simulator setup: %s", error)
+
+
 def _attach_recordings(
     outcome: _CaseOutcome,
     recorder: RoomRecorder,
@@ -2332,6 +2901,30 @@ def _attach_recordings(
         if target_identity is not None
         else []
     )
+    # ``audio_track_sid`` identifies the track used to establish target
+    # readiness, but it is not necessarily the track that remains published for
+    # the conversation.  Agents using ``BackgroundAudioPlayer`` publish more
+    # than one audio track and can replace the initially selected publication.
+    # Recording is evidence of the whole participant, so fall back to all of the
+    # target participant's tracks instead of silently producing no artifact.
+    if target_identity is not None and not target_paths:
+        target_paths = recorder.paths_for_participant(target_identity)
+
+    # The simulator normally publishes with ``simulator_identity``.  Retain a
+    # conservative fallback for SDKs that expose the local publication under a
+    # different participant identity: only use it when there is exactly one
+    # non-target publishing participant, so another caller can never be folded
+    # into the customer channel accidentally.
+    if not simulator_paths:
+        non_target_identities = {
+            record.participant_identity
+            for record in recorder.records
+            if record.participant_identity != target_identity
+        }
+        if len(non_target_identities) == 1:
+            simulator_paths = recorder.paths_for_participant(
+                next(iter(non_target_identities))
+            )
     audio_directory = case_directory / "audio"
     input_path = _collapse_recordings(
         simulator_paths,
@@ -2370,6 +2963,27 @@ def _attach_recordings(
         }
         for record in recorder.records
     ]
+    outcome.metadata["recording_diagnostics"] = {
+        "simulator_identity": simulator_identity,
+        "target_identity": target_identity,
+        "target_track_sid": target_track_sid,
+        "simulator_track_count": len(simulator_paths),
+        "target_track_count": len(target_paths),
+        "recorder_error_types": [type(error).__name__ for error in recorder.errors],
+    }
+    if combined_path is None:
+        logger.warning(
+            "LiveKit call completed without captured audio tracks",
+            extra={
+                "simulator_identity": simulator_identity,
+                "target_identity": target_identity,
+                "target_track_sid": target_track_sid,
+                "recorded_track_count": len(recorder.records),
+                "recorder_error_types": [
+                    type(error).__name__ for error in recorder.errors
+                ],
+            },
+        )
     speech_starts = [
         float(message["started_speaking_at"])
         for message in outcome.messages
@@ -2378,9 +2992,7 @@ def _attach_recordings(
     if recorder.recording_started_at is not None and speech_starts:
         outcome.metadata["recording_offset_ms"] = max(
             0,
-            round(
-                (min(speech_starts) - recorder.recording_started_at) * 1000
-            ),
+            round((min(speech_starts) - recorder.recording_started_at) * 1000),
         )
 
 
@@ -2555,7 +3167,7 @@ def _safe_provider_error_details(
             code_value = code_value if code_value is not None else code
     else:
         code_value = None
-    status = getattr(exc, "status", None)
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
     details: dict[str, object] = {
         "operation": operation,
         "exception_type": type(exc).__name__,
@@ -2639,6 +3251,83 @@ async def _ensure_sip_inbound_dispatch(
         )
     )
     return resp.sip_dispatch_rule_id, True
+
+
+async def _ensure_room_absent(
+    api_client: api.LiveKitAPI, room_name: str, *, poll_interval: float = 0.5
+) -> int:
+    """Make ``room_name`` absent before the caller (re-)creates it.
+
+    The pool's dispatch rule stays live for the whole run, so an inbound call
+    can re-create this room between our own delete and our next poll — hence
+    the re-delete inside the loop rather than a single delete-then-poll. No
+    internal deadline: the caller bounds this with ``asyncio.wait_for``.
+    """
+
+    try:
+        await api_client.room.delete_room(api.DeleteRoomRequest(room=room_name))
+    except Exception as exc:  # noqa: BLE001
+        if not _is_not_found(exc):
+            raise
+    polls = 0
+    while True:
+        resp = await api_client.room.list_rooms(api.ListRoomsRequest(names=[room_name]))
+        polls += 1
+        if not resp.rooms:
+            return polls
+        try:
+            await api_client.room.delete_room(api.DeleteRoomRequest(room=room_name))
+        except Exception as exc:  # noqa: BLE001
+            if not _is_not_found(exc):
+                raise
+        await asyncio.sleep(poll_interval if polls < 4 else 5.0)
+
+
+def _unexpected_participants(
+    room, *, simulator_identity: str, recorder_identity: str
+) -> set[str]:
+    return {str(p.identity) for p in room.remote_participants.values()} - {
+        simulator_identity,
+        recorder_identity,
+    }
+
+
+# LiveKit: the other party's number on a SIP participant (the caller, for an
+# inbound call). sip.trunkPhoneNumber is OUR number — never use it.
+_SIP_REMOTE_NUMBER_ATTRIBUTE = "sip.phoneNumber"
+
+
+def _number_digits(value) -> str:
+    text = str(value or "")
+    if text.startswith("sip:"):
+        text = text[len("sip:") :]
+        text = text.split("@", 1)[0]
+        text = text.split(";", 1)[0]
+    return re.sub(r"\D", "", text)
+
+
+def _caller_matches(attributes, expected: str | None) -> bool | None:
+    if not expected:
+        return None
+    observed = attributes.get(_SIP_REMOTE_NUMBER_ATTRIBUTE) if attributes else None
+    if not observed:
+        return None
+    expected_digits = _number_digits(expected)
+    observed_digits = _number_digits(observed)
+    if len(expected_digits) < 7 or len(observed_digits) < 7:
+        return None
+    longer, shorter = (
+        (expected_digits, observed_digits)
+        if len(expected_digits) >= len(observed_digits)
+        else (observed_digits, expected_digits)
+    )
+    return longer.endswith(shorter)
+
+
+class _LeasedRoomCallerMismatch(Exception):
+    """Module-private: raised by the leased-room caller check (step 4a), caught
+    by the case's top-level try so the post-try recordings/evidence/metadata
+    block still runs for a call that was billed and answered."""
 
 
 async def _delete_sip_dispatch_rule(api_client: api.LiveKitAPI, rule_id: str) -> None:

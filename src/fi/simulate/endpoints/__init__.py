@@ -20,8 +20,8 @@ from .base import (
 from .callable import CallableAgentEndpoint
 from .http import HttpAgentEndpoint
 from .livekit import LiveKitAgentEndpoint
-from .retell import RetellAgentEndpoint
-from .vapi import VapiAgentEndpoint
+from .retell import RetellAgentEndpoint, RetellCall, RetellCallOriginator
+from .vapi import VapiAgentEndpoint, VapiCall, VapiCallOriginator
 from .websocket import WebSocketAgentEndpoint
 
 __all__ = [
@@ -36,6 +36,10 @@ __all__ = [
     "ReadinessResult",
     "ReconciliationResult",
     "RetellAgentEndpoint",
+    "RetellCall",
+    "RetellCallOriginator",
     "VapiAgentEndpoint",
+    "VapiCall",
+    "VapiCallOriginator",
     "WebSocketAgentEndpoint",
 ]
