@@ -26,13 +26,25 @@ from .world.tools import WORLD_SERVER, world_tools
 SKILL = "build-environment"
 
 
-def blockers(contract: AgentContract, source_root: str = "") -> list[str]:
+def blockers(
+    contract: AgentContract,
+    source_root: str = "",
+    *,
+    external_runtime: bool = False,
+) -> list[str]:
     """Reasons the real agent implementation cannot be put in a test environment.
 
     These are terminal for environment creation.  Synthesising a handler would make the suite
     test the harness's interpretation of the agent, so the only honest response is to name the
     missing seam and let the agent owner expose it.
     """
+    # In connect-only provider mode the provider owns the already-deployed tool runtime.  The
+    # harness must exercise those exact endpoints through the live agent; asking for a local
+    # import/service entrypoint would silently turn an optional source upload into a requirement.
+    # This exemption is intentionally explicit and is never inferred for repository-backed jobs.
+    if external_runtime:
+        return []
+
     problems: list[str] = []
     if contract.tools and not source_root:
         problems.append(
@@ -80,8 +92,17 @@ def blockers(contract: AgentContract, source_root: str = "") -> list[str]:
     return problems
 
 
-def require_buildable(contract: AgentContract, source_root: str = "") -> None:
-    problems = blockers(contract, source_root)
+def require_buildable(
+    contract: AgentContract,
+    source_root: str = "",
+    *,
+    external_runtime: bool = False,
+) -> None:
+    problems = blockers(
+        contract,
+        source_root,
+        external_runtime=external_runtime,
+    )
     if problems:
         raise RuntimeError(
             "Cannot create a truthful test environment without reimplementing agent behavior:\n"
@@ -137,6 +158,7 @@ def open_stage(
     source_root: str = "",
     max_turns: int = 0,
     deferred_runtime: bool = False,
+    external_runtime: bool = False,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -210,6 +232,17 @@ def open_stage(
                 else "one truthful service-backed sequence, check_world, and save_world."
             )
         )
+    elif external_runtime:
+        environment_note = (
+            "\n\n## Existing external provider runtime\n\n"
+            "The connected provider agent and its deployed HTTP tools are the runtime under "
+            "test. There is no repository or harness-controlled datastore. Do not create a "
+            "schema, seed records, adopt or bind tools, declare tool sequences, or invent a "
+            "local representation of external state. Build an empty conversation-only world, "
+            "write a concrete simulator prompt, and define reusable judged sub-goals from "
+            "observable conversation and provider tool events. The real calls, not a local "
+            "stand-in, exercise the provider tools."
+        )
     elif deferred_runtime:
         environment_note = (
             "\n\n## Runtime deferred to hosted execution\n\n"
@@ -232,6 +265,7 @@ def open_stage(
         destination,
         source_root=source_root,
         deferred_runtime=deferred_runtime,
+        external_runtime=external_runtime,
     )
     spec = SessionSpec(
         system_prompt=(
@@ -260,6 +294,7 @@ def opening(
     *,
     provisioned: bool = False,
     deferred_runtime: bool = False,
+    external_runtime: bool = False,
 ) -> str:
     if provisioning():
         return (
@@ -288,6 +323,14 @@ def opening(
             + sequence_instruction
             + "Then check_world and save_world. "
             "Do not read source, run shell commands, or investigate runtime-internal tools."
+        )
+    if external_runtime:
+        return (
+            f"Build the black-box test world for {contract.agent!r}.\n\n"
+            "Keep it empty: the existing provider agent owns its tools and external state. "
+            "Do not seed a shadow database or replay provider tools here. Add shared judged "
+            "conversation/tool-observation sub-goals, write the simulator prompt, check the "
+            "empty world, and save it."
         )
     if deferred_runtime:
         return (

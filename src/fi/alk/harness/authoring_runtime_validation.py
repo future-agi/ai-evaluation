@@ -36,10 +36,17 @@ async def validate_once(
         job_secret_purposes,
     )
     from .hosted_scheduler import _classify_ready, _run_phase
+    from .job import ProviderExecutionMode, SourceKind
     from .process_preflight import preflight_bundle
     from .process_runtime import ProcessRuntimeProvider
     from .scenario_source import load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
+
+    external_provider = (
+        getattr(getattr(job, "source", None), "kind", None) is SourceKind.PROVIDER
+        and getattr(getattr(job, "agent", None), "mode", None)
+        is ProviderExecutionMode.CONNECT_ONLY
+    )
 
     # The real execution consumes its credential file. Validation gets a private copy,
     # with the same purpose map, so it cannot destroy the execution handoff.
@@ -144,6 +151,16 @@ async def validate_once(
             # Collect all executable setup errors before spending a model review or
             # a repair attempt. Each scenario still gets an independent clean world.
             await check_setups([])
+            if external_provider:
+                # A connect-only provider owns its state and executes its tools outside
+                # this sandbox. There is no harness-owned source database to probe or
+                # seed, so source-data invariant review would invent a local environment.
+                print(
+                    "runtime validation: external provider black-box mode; "
+                    "skipping local source-data invariant review",
+                    flush=True,
+                )
+                return len(scenarios)
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
@@ -191,7 +208,7 @@ async def validate_and_repair(
             from .cli import _build, _scenarios
 
             if phase == "environment":
-                status = await _build(
+                return await _build(
                     argparse.Namespace(
                         name=source.name,
                         path=str(source),
@@ -199,10 +216,12 @@ async def validate_and_repair(
                         interactive=False,
                         guidance=[guidance],
                         skip_source_provision=True,
+                        external_runtime=(
+                            job.source.kind.value == "provider"
+                            and getattr(job.agent.mode, "value", None) == "connect_only"
+                        ),
                     )
                 )
-                if status:
-                    return status
             return await _scenarios(
                 argparse.Namespace(
                     name=source.name,

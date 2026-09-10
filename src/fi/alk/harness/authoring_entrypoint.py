@@ -16,7 +16,7 @@ from pathlib import Path
 import tempfile
 
 from .cli import _auto
-from .job import HarnessJob, ProviderExecutionMode
+from .job import HarnessJob, ProviderExecutionMode, SourceKind
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
@@ -115,10 +115,24 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
     args = parser.parse_args(argv)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
+    profile = _load_provider_import_profile(
+        job, args.target_secrets, args.provider_profile_cache
+    )
     # Transport kinds such as ``archive`` and ``github`` describe how the platform acquired the
-    # source.  Once extracted, the established ALK authoring pipeline must inspect it as a repo.
-    source_kind = str(job.metadata.get("source_kind") or "repo")
-    if source_kind not in {"repo", "spec"}:
+    # source. Once extracted, they are repositories. A source-free connect-only provider is the
+    # exception: its fetched definition is the source of truth and must never be represented by
+    # the intentionally empty /work/source directory.
+    source_free_provider = (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and profile is not None
+    )
+    source_kind = (
+        "provider"
+        if source_free_provider
+        else str(job.metadata.get("source_kind") or "repo")
+    )
+    if source_kind not in {"repo", "spec", "provider"}:
         source_kind = "repo"
     namespace = argparse.Namespace(
         path=str(args.source.resolve()),
@@ -131,9 +145,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         job=job,
         adjustments_path=str(args.adjustments) if args.adjustments else None,
         authoring_only=True,
-    )
-    profile = _load_provider_import_profile(
-        job, args.target_secrets, args.provider_profile_cache
+        provider_profile=profile if source_free_provider else None,
     )
     previous_profile_path = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV)
     with tempfile.TemporaryDirectory(prefix="alk-provider-profile-") as temporary:

@@ -9,6 +9,7 @@ from fi.alk.harness.authoring_runtime_validation import (
     validate_and_repair,
     validate_once,
 )
+from fi.alk.harness.job import HarnessJob
 
 
 def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
@@ -199,3 +200,145 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
             "close",
         ]
     assert original.exists()
+
+
+def test_connect_only_provider_validation_does_not_invent_source_data_review(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import (
+        bundle_author_v2,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text('{"RETELL_API_KEY":"secret"}')
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    calls = []
+
+    async def forbidden_review(*_args, **_kwargs):
+        pytest.fail(
+            "connect-only provider state cannot be reviewed as local source data"
+        )
+
+    monkeypatch.setattr(source_data_invariants, "author_invariants", forbidden_review)
+
+    class Provider:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def provision(self, *_args, **_kwargs):
+            calls.append("provision")
+            return [SimpleNamespace(endpoints={})]
+
+        async def reset(self, *_args, **_kwargs):
+            calls.append("reset")
+
+        async def close(self, **_kwargs):
+            calls.append("close")
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, _work):
+            pass
+
+        async def create(self, *_args, **_kwargs):
+            return World()
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
+    monkeypatch.setattr(
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+    )
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        outbound,
+        "load_capabilities",
+        lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None),
+    )
+    monkeypatch.setattr(
+        scenario_source,
+        "load_scenarios",
+        lambda _bundle: [
+            SimpleNamespace(
+                scenario_key="one",
+                setup=lambda _world: None,
+                ready=lambda _world: True,
+            )
+        ],
+    )
+    job = HarnessJob(
+        job_id="job-provider",
+        run_id="run-provider",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_test"},
+            "secret_refs": {
+                "api_key": {
+                    "manager": "platform-vault",
+                    "key": "retell-key",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+
+    assert (
+        asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 1
+    )
+    assert calls == ["provision", "reset", "close"]
+
+
+def test_connect_only_provider_repair_preserves_external_runtime_mode(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import cli
+
+    attempts = 0
+    observed = []
+
+    async def validate(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeValidationError("environment", "repair me")
+        return 1
+
+    async def build(args):
+        observed.append(args.external_runtime)
+        return 0
+
+    async def scenarios(_args):
+        pytest.fail("an environment repair must not rewrite scenarios")
+
+    monkeypatch.setattr(cli, "_build", build)
+    monkeypatch.setattr(cli, "_scenarios", scenarios)
+    job = HarnessJob(
+        job_id="job-provider",
+        run_id="run-provider",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent_test"},
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+
+    asyncio.run(validate_and_repair(job, tmp_path, tmp_path, validate=validate))
+    assert observed == [True]

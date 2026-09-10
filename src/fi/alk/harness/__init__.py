@@ -30,6 +30,7 @@ from .session import Stage, Turn
 from .sources import (
     AgentSource,
     GitHubSource,
+    ProviderSource,
     RepoSource,
     SpecSource,
     register_source,
@@ -49,6 +50,7 @@ __all__ = [
     "GitHubSource",
     "HarnessJob",
     "HarnessStage",
+    "ProviderSource",
     "RepoSource",
     "Runtime",
     "RuntimeInterface",

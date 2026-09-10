@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +42,7 @@ from .scenario import (
 )
 from .simulator import load_simulator_prompt
 from .tools import brief, schema
-from .world.snapshot import restore
+from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
 
@@ -392,7 +391,10 @@ def scenario_tools(
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
     exploration = {"since_submit": 0}
-    tool_free_target = not bool(contract.tools)
+    external_runtime_target = bool(
+        read_manifest(world_root).get("external_runtime", False)
+    )
+    tool_free_target = not bool(contract.tools) or external_runtime_target
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -740,6 +742,12 @@ def scenario_tools(
         ),
     )
     async def submit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime_target and args.get("solution"):
+            return _err(
+                "This is a connect-only external provider runtime. Reference tool calls cannot "
+                "be replayed against a local world and would be assumed rather than proved. "
+                "Use solution: [] and judged sub-goals; the live call supplies the evidence."
+            )
         # A writer working one slice of a suite stops at the size it was given. Its turn budget is
         # far larger than its slice, and left to itself it keeps writing: one run proved 559
         # scenarios against a target of 200, spending three times the quota and three times the wall
@@ -1122,8 +1130,14 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
-        return "THE BUILT WORLD (restored fresh for every scenario):\n" + "\n".join(
-            lines
-        )
+        external = bool(read_manifest(world_root).get("external_runtime", False))
+        prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
+        if external:
+            prefix += (
+                "EXTERNAL PROVIDER RUNTIME: this intentionally empty world cannot seed, "
+                "replay, or inspect provider-owned tools/state. Use solution: [] and judged "
+                "sub-goals; live conversation/tool events are the outcome evidence.\n"
+            )
+        return prefix + "\n".join(lines)
     finally:
         world.close()

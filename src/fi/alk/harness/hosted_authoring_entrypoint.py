@@ -17,6 +17,7 @@ from .authoring_entrypoint import main as authoring_main
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
+_TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
 _PASSTHROUGH = {
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
@@ -90,14 +91,27 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    values = _platform_simulator_values(_load_values(_SECRETS_PATH))
+    all_values = _load_values(_SECRETS_PATH)
+    values = _platform_simulator_values(all_values)
     _configure_generation_environment(values)
+    target_values = {
+        name: all_values[name]
+        for name in ("RETELL_API_KEY", "VAPI_API_KEY")
+        if all_values.get(name)
+    }
+    forwarded = list(argv) if argv is not None else sys.argv[1:]
+    if target_values and "--target-secrets" not in forwarded:
+        _TARGET_SECRETS_PATH.write_text(
+            json.dumps(target_values, separators=(",", ":")), encoding="utf-8"
+        )
+        _TARGET_SECRETS_PATH.chmod(0o600)
+        forwarded.extend(["--target-secrets", str(_TARGET_SECRETS_PATH)])
     try:
         from .authoring_runtime_validation import RuntimeValidationError
         from .outbound import redact_outbound_text
 
         try:
-            return authoring_main(argv, validate_runtime=True)
+            return authoring_main(forwarded, validate_runtime=True)
         except RuntimeValidationError as exc:
             print(
                 "RuntimeValidationError: " + redact_outbound_text(str(exc)),
@@ -108,6 +122,10 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         try:
             _ADC_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            _TARGET_SECRETS_PATH.unlink(missing_ok=True)
         except OSError:
             pass
 

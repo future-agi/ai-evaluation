@@ -172,6 +172,40 @@ class SpecSource:
         return "\n\n".join(parts)
 
 
+@dataclass
+class ProviderSource:
+    """A sanitized definition fetched from an externally hosted provider.
+
+    A connect-only provider agent has no repository in the sandbox.  Representing its empty
+    source directory as a :class:`RepoSource` gives an authoring model filesystem tools and can
+    make it wander outside that directory looking for an implementation.  The provider profile
+    is the complete source of truth for this mode, so expose only that profile and no file tools.
+    """
+
+    name: str
+    profile: dict[str, Any]
+    scratch: Path = Path(".")
+    kind: str = "provider"
+
+    def workdir(self) -> Path:
+        return self.scratch
+
+    def builtin_tools(self) -> tuple[str, ...]:
+        return ()
+
+    def servers(self) -> dict[str, Any]:
+        return {}
+
+    def briefing(self) -> str:
+        return (
+            "This is an externally hosted provider agent, not a repository. The sanitized "
+            "provider definition below is authoritative for its conversation, prompt, model, "
+            "voice, states, and tool schemas. There is no source code to search or open. Do not "
+            "invent behavior or tool inputs that are absent from this definition.\n\n"
+            f"PROVIDER DEFINITION:\n{json.dumps(self.profile, indent=2, sort_keys=True)}"
+        )
+
+
 _REGISTRY: dict[str, Callable[..., AgentSource]] = {
     "repo": lambda **kw: RepoSource(name=kw["name"], root=Path(kw["root"])),
     "github": lambda **kw: GitHubSource(
@@ -182,6 +216,11 @@ _REGISTRY: dict[str, Callable[..., AgentSource]] = {
         system_prompt=kw.get("system_prompt", ""),
         tool_schema=kw.get("tool_schema") or [],
         data=kw.get("data") or {},
+        scratch=Path(kw.get("scratch", ".")),
+    ),
+    "provider": lambda **kw: ProviderSource(
+        name=kw["name"],
+        profile=kw.get("profile") or {},
         scratch=Path(kw.get("scratch", ".")),
     ),
 }

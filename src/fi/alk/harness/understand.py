@@ -101,7 +101,10 @@ def open_stage(
     spec = read_only_session(
         system_prompt=(
             f"{load_skill(SKILL)}\n\n## This agent\n\n{source.briefing()}"
-            f"{_provider_import_briefing()}"
+            # A source-free connect-only target already carries this definition in its
+            # ProviderSource briefing.  Repository-backed provider imports still need the
+            # separately injected profile so the model can reconcile both sources of truth.
+            f"{_provider_import_briefing() if source.kind != 'provider' else ''}"
             f"{_eval_catalogue_briefing(available_evals)}"
         ),
         cwd=source.workdir(),

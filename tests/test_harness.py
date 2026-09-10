@@ -21,6 +21,7 @@ from fi.alk.harness.understand import load, opening
 from fi.alk.harness import (
     AgentContract,
     GitHubSource,
+    ProviderSource,
     RepoSource,
     SpecSource,
     ToolSpec,
@@ -1295,6 +1296,22 @@ def test_spec_source_gets_no_file_tools_because_there_is_nothing_to_read():
     assert source.builtin_tools() == ()
     briefing = source.briefing()
     assert "you are a bot" in briefing and "t" in briefing
+
+
+def test_provider_source_exposes_only_the_sanitized_definition(tmp_path):
+    source = ProviderSource(
+        name="hosted",
+        profile={"provider": "retell", "general_tools": [{"name": "lookup"}]},
+        scratch=tmp_path,
+    )
+
+    assert source.kind == "provider"
+    assert source.workdir() == tmp_path
+    assert source.builtin_tools() == ()
+    assert source.servers() == {}
+    briefing = source.briefing()
+    assert "not a repository" in briefing
+    assert '"lookup"' in briefing
 
 
 def test_a_new_kind_of_agent_is_a_registration_not_a_code_change():
@@ -4440,7 +4457,11 @@ def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
     """A transfer/refusal scenario cannot also require work after the conversation ends."""
     from fi.alk.harness.config import SKILLS_ROOT
 
-    text = (SKILLS_ROOT / "write-scenarios" / "SKILL.md").read_text(encoding="utf-8").lower()
+    text = (
+        (SKILLS_ROOT / "write-scenarios" / "SKILL.md")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
     # The rule, not one draft's sentences: a phrasing test pins prose and blocks any rewrite of
     # the skill, which is a document that gets rewritten.
     assert "one coherent terminal outcome" in text
@@ -5869,6 +5890,77 @@ def test_voice_runtime_owns_session_closure_tools(tmp_path):
     )
 
     assert blockers(contract, str(tmp_path)) == []
+
+
+def test_connect_only_provider_tools_are_owned_by_the_external_runtime():
+    """An existing provider agent must not require an optional repository upload."""
+    from fi.alk.harness.build import blockers
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract(
+        agent="provider-agent",
+        modality="voice",
+        tools=[{"name": "book_appointment", "args": ["start_time"]}],
+        real_use_cases=["book an appointment through the deployed provider agent"],
+        tool_entrypoints=[
+            {
+                "tool": "book_appointment",
+                "mode": "unreachable",
+                "notes": "owned by the connected provider definition",
+            }
+        ],
+    )
+
+    assert blockers(contract, "")
+    assert blockers(contract, "", external_runtime=True) == []
+
+
+def test_connect_only_provider_world_cannot_create_shadow_state(tmp_path):
+    """The black-box lane must be enforced by tools, not left to model compliance."""
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.world.snapshot import restore, save
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="provider-agent",
+        modality="voice",
+        tools=[{"name": "book_appointment", "args": ["start_time"]}],
+        real_use_cases=["book an appointment"],
+    )
+    server, world = world_tools(contract, tmp_path, external_runtime=True)
+
+    async def call(name, payload):
+        handler = _request_handler(_instance(server), "tools/call")
+        return await handler.handler(
+            None, CallToolRequestParams(name=name, arguments=payload)
+        )
+
+    schema_result = asyncio.run(
+        call("create_schema", {"sql": "CREATE TABLE appointments(id TEXT)"})
+    )
+    seed_result = asyncio.run(
+        call("seed", {"table": "appointments", "rows": [{"id": "fake"}]})
+    )
+    assert schema_result.isError
+    assert seed_result.isError
+    assert world.state() == {}
+    assert world.handlers == {}
+    assert world.runtime_tools == {"book_appointment"}
+
+    save(world, tmp_path)
+    world.close()
+    restored = restore(tmp_path)
+    try:
+        assert restored.external_runtime is True
+        assert restored.state() == {}
+        assert restored.handlers == {}
+        assert restored.runtime_tools == {"book_appointment"}
+    finally:
+        restored.close()
 
 
 def test_a_refusal_convention_written_with_escaped_quotes_still_matches():

@@ -167,22 +167,24 @@ def test_hosted_authoring_uses_original_stages_without_running_calls(
     source = tmp_path / "agent"
     source.mkdir()
     output = tmp_path / "authoring"
-    observed: list[tuple[str, bool | None]] = []
+    observed: list[tuple[str, bool | None, bool | None]] = []
 
     async def understand(_args) -> int:
-        observed.append(("understand", None))
+        observed.append(("understand", None, None))
         return 0
 
     async def build(args) -> int:
-        observed.append(("environment", args.skip_source_provision))
+        observed.append(
+            ("environment", args.skip_source_provision, args.external_runtime)
+        )
         return 0
 
     async def scenarios(_args) -> int:
-        observed.append(("scenarios", None))
+        observed.append(("scenarios", None, None))
         return 0
 
     async def calls(_args) -> int:
-        observed.append(("calls", None))
+        observed.append(("calls", None, None))
         return 0
 
     monkeypatch.setattr(cli, "_understand", understand)
@@ -210,10 +212,54 @@ def test_hosted_authoring_uses_original_stages_without_running_calls(
 
     assert status == 0
     assert observed == [
-        ("understand", None),
-        ("environment", True),
-        ("scenarios", None),
+        ("understand", None, None),
+        ("environment", True, False),
+        ("scenarios", None, None),
     ]
+
+
+def test_source_free_provider_authoring_marks_tools_as_external_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import cli
+
+    source = tmp_path / "empty-provider-source"
+    source.mkdir()
+    output = tmp_path / "authoring"
+    observed: list[bool] = []
+
+    async def ok(_args) -> int:
+        return 0
+
+    async def build(args) -> int:
+        observed.append(args.external_runtime)
+        return 0
+
+    monkeypatch.setattr(cli, "_understand", ok)
+    monkeypatch.setattr(cli, "_build", build)
+    monkeypatch.setattr(cli, "_scenarios", ok)
+    monkeypatch.setattr(cli, "load_written", lambda _destination: [object()])
+    monkeypatch.setattr("fi.alk.harness.provision.stop", lambda _destination: False)
+
+    status = asyncio.run(
+        cli._auto(
+            SimpleNamespace(
+                path=str(source),
+                name="provider-agent",
+                kind="provider",
+                out=str(output),
+                count=1,
+                model=None,
+                run_model=None,
+                authoring_only=True,
+                adjustments_path=None,
+                provider_profile={"provider": "retell"},
+            )
+        )
+    )
+
+    assert status == 0
+    assert observed == [True]
 
 
 def test_hosted_authoring_repairs_partial_scenario_suite(
@@ -546,6 +592,79 @@ def test_connect_only_provider_authoring_inspects_the_real_target(
         )
     ]
     assert not secrets.exists()
+
+
+def test_source_free_connect_only_authoring_never_enters_repo_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fi.alk.harness import authoring_entrypoint
+
+    source = tmp_path / "empty-source"
+    source.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    job = HarnessJob(
+        job_id="job-connect-only",
+        run_id="run-connect-only",
+        execution="hosted",
+        source={"kind": "provider", "visibility": "public"},
+        agent={
+            "connector": "retell",
+            "mode": "connect_only",
+            "config": {"agent_id": "agent-1"},
+            "secret_refs": {
+                "RETELL_API_KEY": {
+                    "manager": "platform-vault",
+                    "key": "secret-id",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=20,
+        runtime={"isolation": "dedicated_vm"},
+    )
+    job_path = tmp_path / "job.json"
+    job_path.write_text(job.model_dump_json(), encoding="utf-8")
+    secrets = tmp_path / "target-secrets.json"
+    secrets.write_text('{"RETELL_API_KEY":"retell-secret"}', encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        authoring_entrypoint,
+        "inspect_provider_target",
+        lambda *args, **kwargs: {
+            "provider": "retell",
+            "general_prompt": "Book appointments.",
+            "general_tools": [{"name": "book"}],
+        },
+    )
+
+    async def fake_auto(args) -> int:
+        observed.update(vars(args))
+        return 0
+
+    monkeypatch.setattr(authoring_entrypoint, "_auto", fake_auto)
+
+    status = authoring_entrypoint.main(
+        [
+            str(job_path),
+            "--source",
+            str(source),
+            "--output",
+            str(output),
+            "--target-secrets",
+            str(secrets),
+        ]
+    )
+
+    assert status == 0
+    assert observed["kind"] == "provider"
+    assert observed["count"] == 20
+    assert observed["provider_profile"] == {
+        "provider": "retell",
+        "general_prompt": "Book appointments.",
+        "general_tools": [{"name": "book"}],
+    }
 
 
 @pytest.mark.parametrize("modality", ["voice", "chat"])

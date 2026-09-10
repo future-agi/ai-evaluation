@@ -357,6 +357,7 @@ def world_tools(
     *,
     source_root: str = "",
     deferred_runtime: bool = False,
+    external_runtime: bool = False,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
@@ -415,7 +416,7 @@ def world_tools(
             # harness-authored handler and must not be smoke-called outside their captured RTC
             # session state while the world is being constructed.
             world.runtime_tools = set(contract.tool_names())
-    elif deferred_runtime:
+    elif deferred_runtime or external_runtime:
         # Hosted authoring runs on a control-plane worker without Docker. The repository's
         # exact processes and declared datastore are compiled into Bundle V2 and started in
         # Daytona; this lightweight store exists only to author baseline data, checks and
@@ -432,6 +433,9 @@ def world_tools(
     else:
         world = GeneratedWorld(":memory:", kind=named)
     world.name = contract.agent
+    world.external_runtime = external_runtime or bool(
+        getattr(world, "external_runtime", False)
+    )
     world.refusal_signature = contract.refusal_signature
     if source_root:
         world.reach(source_root)
@@ -521,6 +525,12 @@ def world_tools(
         {"sql": str},
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "The connected provider owns its external state. A local schema would be a "
+                "shadow implementation and cannot affect the agent under test. Keep this "
+                "world empty."
+            )
         try:
             applies = getattr(world.store, "apply", None)
             if applies is not None:
@@ -544,6 +554,11 @@ def world_tools(
         {"table": str, "rows": list},
     )
     async def seed(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "The connected provider owns its external state. Local seed data cannot reach "
+                "that agent and would make the scenario proof false. Keep this world empty."
+            )
         table, rows = str(args["table"]), args.get("rows") or []
         written = 0
         for row in rows:
@@ -572,6 +587,11 @@ def world_tools(
         {"sql": str},
     )
     async def change_data(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "There is no harness-controlled provider datastore to change in connect-only "
+                "mode. Keep this world empty."
+            )
         statement = str(args.get("sql") or "").strip()
         verb = statement.split(None, 1)[0].upper() if statement else ""
         if verb not in ("UPDATE", "DELETE"):
@@ -598,6 +618,10 @@ def world_tools(
         schema({"module": str, "callable": str}, ["module", "callable"]),
     )
     async def adopt_state(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "A source-free provider connection has no local state loader to adopt."
+            )
         module = str(args["module"])
         called = str(args["callable"])
         world.reach(source_root)
@@ -628,6 +652,10 @@ def world_tools(
         schema({"path": str, "note": str}, ["path"]),
     )
     async def adopt_store(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "A source-free provider connection has no local store to adopt."
+            )
         given = str(args["path"]).strip()
         found = Path(given)
         if not found.is_absolute() and source_root:
@@ -791,6 +819,11 @@ def world_tools(
         schema({"name": str, "calls": list, "expect_state": dict}, ["name", "calls"]),
     )
     async def declare_sequence(args: dict[str, Any]) -> dict[str, Any]:
+        if external_runtime:
+            return _err(
+                "Provider tools execute only during the live conversation. Do not invent a "
+                "local reference sequence; use judged sub-goals and an empty solution."
+            )
         name = str(args.get("name") or f"sequence-{len(sequences)}")
         calls = args.get("calls") or []
 
@@ -1186,7 +1219,7 @@ def world_tools(
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
         if (
-            is_data_free_conversation(contract)
+            (is_data_free_conversation(contract) or external_runtime)
             and not world.state()
             and not world.handlers
         ):
@@ -1269,7 +1302,7 @@ def world_tools(
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
         data_free = (
-            is_data_free_conversation(contract)
+            (is_data_free_conversation(contract) or external_runtime)
             and not world.state()
             and not world.handlers
         )

@@ -147,6 +147,7 @@ def save(
                 # required for that import to work.
                 "tool_implementation": "source" if world.source_root else "synthetic",
                 "runtime_tools": sorted(getattr(world, "runtime_tools", set())),
+                "external_runtime": bool(getattr(world, "external_runtime", False)),
                 # How this agent says no in a returned value. Without it a restored world
                 # cannot tell a refusal from a success, so every run records "Error: no such
                 # order" as if the call worked, and a check asking whether the agent was
@@ -237,6 +238,7 @@ def restore(path: str | Path, *, into: str | Path | None = None) -> GeneratedWor
     world.name = manifest.get("agent", "generated")
     world.handlers = handlers
     world.runtime_tools = set(manifest.get("runtime_tools") or [])
+    world.external_runtime = bool(manifest.get("external_runtime", False))
     world.tools = manifest.get("tool_specs", [])
     world.refusal_signature = str(manifest.get("refusal_signature") or "")
     # A world whose handlers bind to the agent's own code cannot run them unless that code
