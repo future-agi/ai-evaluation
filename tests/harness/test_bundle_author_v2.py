@@ -14,7 +14,7 @@ from fi.alk.harness.bundle_author_v2 import (
     resolve_environment_plan,
 )
 from fi.alk.harness.bundle_v2 import load_bundle_v2
-from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.process_preflight import preflight_bundle
 from fi.alk.harness.world.runtime import GeneratedWorld
 
@@ -92,6 +92,84 @@ def _write_callable_contract(authoring: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def test_connect_only_provider_source_needs_no_agent_process(tmp_path: Path) -> None:
+    source = tmp_path / "provider-target"
+    source.mkdir()
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "provider-only-job",
+            "run_id": "provider-only-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "retell",
+                "mode": ProviderExecutionMode.CONNECT_ONLY.value,
+                "config": {"agent_id": "agent_existing"},
+                "secret_refs": {
+                    "RETELL_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "retell-key",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+
+    plan = resolve_environment_plan(source, job, contract_modality="voice")
+    assert plan.packaging == "provider_connect_only"
+    assert plan.control_service is None
+    assert [process.name for process in plan.processes] == ["world-db"]
+
+    output = tmp_path / "bundle"
+    bundle = author_bundle_v2(
+        source=source,
+        job=job,
+        authoring=authoring,
+        output=output,
+    )
+
+    assert bundle.runtime.control_service is None
+    assert [process.name for process in bundle.processes] == ["world-db"]
+    assert bundle.metadata["provider_connect_only"] == {"connector": "retell"}
+    preflight_bundle(
+        output,
+        bundle,
+        parallelism=1,
+        secret_refs={"RETELL_API_KEY": "target_provider"},
+    )
+
+
+def test_connect_only_repository_source_still_compiles_uploaded_code(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "provider-target-with-code"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    body = _job(connector="retell").model_dump(mode="json")
+    body["agent"] = {
+        "connector": "retell",
+        "mode": ProviderExecutionMode.CONNECT_ONLY.value,
+        "config": {"agent_id": "agent_existing"},
+    }
+    job = HarnessJob.model_validate(body)
+
+    plan = resolve_environment_plan(source, job, contract_modality="voice")
+
+    assert plan.packaging == "generated_python"
+    assert plan.control_service == "agent"
+    assert [process.name for process in plan.processes] == ["world-db", "agent"]
 
 
 def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> None:

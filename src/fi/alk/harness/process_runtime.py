@@ -5158,6 +5158,8 @@ class ProcessRuntimeProvider:
         environment (`LIVEKIT_AGENT_NAME` / `HARNESS_TOOL_TRACE`); a bundle that does not set them
         simply omits the key, and the CallRunner then fails typed-and-loud rather than guessing."""
         control = self._manifest.runtime.control_service
+        if control is None:
+            return {}
         process = next((p for p in self._manifest.processes if p.name == control), None)
         env = dict(getattr(process, "environment", {}) or {})
         world_dir = world_scratch_dir(

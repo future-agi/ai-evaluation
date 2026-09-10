@@ -54,7 +54,7 @@ from .bundle_v2 import (
 from .contract import ToolEntry
 from .credentials import discover_credentials
 from .job import HarnessJob
-from .job import ProviderExecutionMode
+from .job import ProviderExecutionMode, SourceKind
 from .process_preflight import preflight_bundle
 from .provision import source_fingerprint
 from .provider_lifecycle import ProviderRepositoryManifest, load_provider_manifest
@@ -68,10 +68,11 @@ class BundleAuthorError(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class EnvironmentPlanV2:
     packaging: str
-    control_service: str
+    control_service: str | None
     processes: tuple[ManagedProcess | SourceProcess, ...]
     capabilities: dict[str, CapabilityV2]
     readiness: tuple[ReadinessProbeV2, ...]
@@ -80,7 +81,7 @@ class EnvironmentPlanV2:
         names = [process.name for process in self.processes]
         if len(names) != len(set(names)):
             raise BundleAuthorError("environment_plan_process_names_not_unique")
-        if self.control_service not in names:
+        if self.control_service is not None and self.control_service not in names:
             raise BundleAuthorError("environment_plan_control_service_missing")
         known = set(names)
         for process in self.processes:
@@ -1029,6 +1030,23 @@ def resolve_environment_plan(
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     declared_runtime_environment = _declared_runtime_environment(root)
 
+    # A connect-only provider target is hosted by Vapi/Retell and is addressed by the
+    # provider ID in the job.  When no repository was submitted there is deliberately no
+    # customer process to discover or launch; the local runtime only owns the isolated world.
+    # Keep repository-backed connect-only jobs on the normal path so uploaded tool/backend
+    # implementations are still compiled and exercised.
+    if (
+        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and job.source.kind is SourceKind.PROVIDER
+    ):
+        return EnvironmentPlanV2(
+            packaging="provider_connect_only",
+            control_service=None,
+            processes=tuple(processes),
+            capabilities=capabilities,
+            readiness=tuple(readiness),
+        )
+
     if compose is not None:
         body = _load_compose(compose)
         services = body["services"]
@@ -1698,6 +1716,16 @@ def author_bundle_v2(
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **(
+                    {
+                        "provider_connect_only": {
+                            "connector": job.agent.connector.strip().lower()
+                        }
+                    }
+                    if job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+                    and job.source.kind is SourceKind.PROVIDER
+                    else {}
+                ),
                 **(
                     {
                         "provider_lifecycle": provider_manifest.provider.model_dump(

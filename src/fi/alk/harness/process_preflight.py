@@ -499,10 +499,14 @@ def _verify_secret_purposes(
     provider_import_claims_target_provider = isinstance(
         manifest.metadata.get("provider_import"), dict
     )
+    connect_only_claims_target_provider = isinstance(
+        manifest.metadata.get("provider_connect_only"), dict
+    )
     guest_claims_target_provider = (
         process_claims_target_provider
         or lifecycle_claims_target_provider
         or provider_import_claims_target_provider
+        or connect_only_claims_target_provider
     )
     if ref_has_target_provider and not guest_claims_target_provider:
         raise PreflightError(
