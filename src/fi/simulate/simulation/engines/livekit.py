@@ -293,6 +293,9 @@ class _TestRunnerAgent(Agent):
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
+        # Recorded for the receipt, not to decide the outcome: it tells a reader whether the
+        # caller tried to hang up and the turn floor turned it away.
+        self._end_refused_by_floor = False
         self._end_speech_handle: Any | None = None
         self._usage_collector = metrics.ModelUsageCollector()
 
@@ -324,6 +327,7 @@ class _TestRunnerAgent(Agent):
                 floor,
                 _has_role_alternation(messages),
             )
+            self._end_refused_by_floor = True
             # "Not yet" rather than "stop asking", or the caller never retries the tool.
             return (
                 f"Not yet: {len(messages)} of {floor} messages so far and both speakers must "
@@ -1777,6 +1781,9 @@ class LiveKitEngine(BaseEngine):
                 stop_reason,
                 messages,
                 min_turn_messages=min_turn_messages,
+                end_refused_by_floor=getattr(
+                    customer_agent, "_end_refused_by_floor", False
+                ),
             )
         except asyncio.TimeoutError:
             stage = (
@@ -3244,6 +3251,7 @@ def _conversation_outcome(
     messages: list[dict[str, str]],
     *,
     min_turn_messages: int,
+    end_refused_by_floor: bool = False,
 ) -> _CaseOutcome:
     transcript = "\n".join(
         f"{message['role']}: {message['content']}" for message in messages
@@ -3266,6 +3274,24 @@ def _conversation_outcome(
             metadata={
                 "stop_reason": stop_reason,
                 "short_terminal_exchange": True,
+            },
+        )
+    if stop_reason == "session_closed" and _agent_answered_the_caller(messages):
+        # A session that closes after the agent has answered is a finished short call, not a
+        # dropped one. Agents whose work takes fewer turns than the floor (a lookup, an FAQ, a
+        # status check) used to be reported as an infrastructure failure for doing their job in
+        # one exchange. A close that leaves the caller's last turn unanswered still fails below,
+        # because that is a call that really was cut off. Whether the work was correct is the
+        # sub-goals' business, not the transport's.
+        return _CaseOutcome(
+            status=TestCaseStatus.COMPLETED,
+            transcript=transcript,
+            messages=messages,
+            metadata={
+                "stop_reason": stop_reason,
+                "short_task_complete": True,
+                "min_turn_messages": str(min_turn_messages),
+                "end_refused_by_floor": str(bool(end_refused_by_floor)).lower(),
             },
         )
     if (
@@ -3382,6 +3408,24 @@ def _conversation_outcome(
         messages=messages,
         metadata={"stop_reason": stop_reason},
     )
+
+
+def _agent_answered_the_caller(messages: list[dict[str, str]]) -> bool:
+    """Whether the agent got the last word after the caller had spoken.
+
+    That is the difference between a call that finished early and one that was cut off. If the
+    caller's last turn went unanswered, the session ended mid-exchange and stays a failure.
+    """
+    spoken = [
+        (str(m.get("role") or "").lower(), str(m.get("content") or "").strip())
+        for m in messages
+    ]
+    spoken = [(role, text) for role, text in spoken if text]
+    if not spoken:
+        return False
+    if not any(role == "user" for role, _ in spoken):
+        return False
+    return spoken[-1][0] == "assistant"
 
 
 def _has_natural_terminal_exchange(messages: list[dict[str, str]]) -> bool:

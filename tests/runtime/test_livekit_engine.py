@@ -1858,6 +1858,52 @@ def test_safe_provider_error_details_include_sip_status_metadata() -> None:
     }
 
 
+def test_short_task_that_asked_to_end_is_completed_not_failed() -> None:
+    """An agent whose work takes fewer turns than the floor must not read as a call failure.
+
+    The caller finished its task, reached for endCall, and the minimum-turn floor turned it away.
+    With nothing left to say its session closed, which used to surface as an infrastructure
+    `call_failed` even though the agent had answered correctly.
+    """
+    messages = [
+        {"role": "assistant", "content": "Hello, I'm Katie. How can I help you today?"},
+        {"role": "user", "content": "What is the weather in Austin right now?"},
+        {
+            "role": "assistant",
+            "content": "It's sunny and 70 degrees in Austin. Anything else I can help with?",
+        },
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "session_closed",
+        messages,
+        min_turn_messages=6,
+        end_refused_by_floor=True,
+    )
+
+    assert outcome.status == CaseStatus.COMPLETED
+    assert outcome.failure is None
+    assert outcome.metadata["short_task_complete"] is True
+
+
+def test_session_closed_on_an_unanswered_question_still_fails() -> None:
+    """A close that leaves the caller's last turn unanswered was cut off, not finished."""
+    messages = [
+        {"role": "assistant", "content": "Hello, I'm Katie. How can I help you today?"},
+        {"role": "user", "content": "What is the weather in Austin right now?"},
+    ]
+
+    outcome = livekit._conversation_outcome(
+        "session_closed",
+        messages,
+        min_turn_messages=6,
+    )
+
+    assert outcome.status == CaseStatus.FAILED
+    assert outcome.failure is not None
+    assert outcome.failure.code == "session_closed"
+
+
 @pytest.mark.parametrize(
     ("stop_reason", "messages", "failure_code"),
     [
