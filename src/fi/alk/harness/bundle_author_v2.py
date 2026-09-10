@@ -906,6 +906,23 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
+# LiveKit's CLI is a subcommand app: `agent.py` with no subcommand prints usage and exits, so the
+# worker never registers. Anything that already starts one is left alone.
+_LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
+
+
+def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
+    """Whether the entry script ends in `cli.run_app`, which is what needs the subcommand.
+
+    A repository can also start its worker itself, and appending a subcommand to one of those
+    would break it, so this reads the entry rather than assuming every LiveKit agent is a CLI app.
+    """
+    path = root / entry
+    if not path.is_file():
+        return False
+    return "cli.run_app" in path.read_text(encoding="utf-8", errors="replace")
+
+
 def _discover_callback_entrypoint(root: Path) -> str | None:
     """Return the repository's unique module-level ``agent_callback``, if present.
 
@@ -1285,13 +1302,18 @@ def resolve_environment_plan(
                 }
             )
         if is_livekit:
-            process = process.model_copy(
-                update={
-                    "started_check": StartedCheck(
-                        log_marker="registered worker", timeout_seconds=180
-                    )
-                }
-            )
+            update: dict[str, Any] = {
+                "started_check": StartedCheck(
+                    log_marker="registered worker", timeout_seconds=180
+                )
+            }
+            # A Dockerfile CMD normally carries the subcommand. A repository without one gets a
+            # bare `python agent.py`, which exits on its usage banner before it can register.
+            if _hands_off_to_livekit_cli(component, entry) and not (
+                set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
+            ):
+                update["run_command"] = [*process.run_command, "start"]
+            process = process.model_copy(update=update)
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(
