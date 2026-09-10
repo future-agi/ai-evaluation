@@ -476,6 +476,78 @@ def test_hosted_authoring_inspects_imported_target_once_then_reuses_safe_profile
     assert "retell-secret" not in cache.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    ("connector", "secret_name", "config", "expected_provider", "expected_modality"),
+    [
+        ("vapi", "VAPI_API_KEY", {"assistant_id": "assistant-1"}, "vapi", "voice"),
+        ("retell", "RETELL_API_KEY", {"agent_id": "agent-1"}, "retell", "voice"),
+        (
+            "retell_chat",
+            "RETELL_API_KEY",
+            {"agent_id": "agent-1"},
+            "retell",
+            "chat",
+        ),
+    ],
+)
+def test_connect_only_provider_authoring_inspects_the_real_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    connector: str,
+    secret_name: str,
+    config: dict[str, str],
+    expected_provider: str,
+    expected_modality: str,
+) -> None:
+    from fi.alk.harness import authoring_entrypoint
+
+    job = HarnessJob(
+        job_id=f"job-{connector}",
+        run_id=f"run-{connector}",
+        execution="hosted",
+        source={"kind": "provider"},
+        agent={
+            "connector": connector,
+            "mode": "connect_only",
+            "config": config,
+            "secret_refs": {
+                secret_name: {
+                    "manager": "platform-vault",
+                    "key": "secret-id",
+                    "purpose": "target_provider",
+                }
+            },
+        },
+        scenario_count=1,
+        runtime={"isolation": "dedicated_vm"},
+    )
+    secrets = tmp_path / f"{connector}-secrets.json"
+    secrets.write_text(json.dumps({secret_name: "provider-secret"}), encoding="utf-8")
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def inspect(provider: str, **kwargs: object) -> dict[str, object]:
+        calls.append((provider, kwargs))
+        return {"provider": provider}
+
+    monkeypatch.setattr(authoring_entrypoint, "inspect_provider_target", inspect)
+
+    profile = authoring_entrypoint._load_provider_import_profile(job, secrets)
+
+    assert profile == {"provider": expected_provider}
+    assert calls == [
+        (
+            expected_provider,
+            {
+                "source_target_id": next(iter(config.values())),
+                "api_key": "provider-secret",
+                "api_base_url": None,
+                "target_modality": expected_modality,
+            },
+        )
+    ]
+    assert not secrets.exists()
+
+
 @pytest.mark.parametrize("modality", ["voice", "chat"])
 def test_deferred_hosted_authoring_never_starts_or_imports_the_submitted_runtime(
     tmp_path: Path,

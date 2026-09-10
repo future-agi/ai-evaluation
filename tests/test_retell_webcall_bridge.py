@@ -134,3 +134,49 @@ def test_retell_webcall_connector_requires_credentials(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="RETELL_API_KEY, RETELL_AGENT_ID"):
         RetellWebCallConnector.from_env()
+
+
+def test_unrelated_participant_disconnect_does_not_end_agent_audio(monkeypatch) -> None:
+    session = _Session()
+    room = _Room()
+
+    async def publish(track, options):
+        room.published = (track, options)
+        room.handlers["track_subscribed"](
+            _RemoteAudioTrack(),
+            None,
+            SimpleNamespace(identity="retell-agent"),
+        )
+
+    room.local_participant.publish_track = publish
+    monkeypatch.setattr(retell.aiohttp, "ClientSession", lambda: session)
+    monkeypatch.setattr(retell.rtc, "Room", lambda: room)
+    monkeypatch.setattr(retell.rtc, "RemoteAudioTrack", _RemoteAudioTrack)
+    monkeypatch.setattr(retell.rtc, "AudioSource", lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(
+        retell.rtc.LocalAudioTrack,
+        "create_audio_track",
+        lambda *_args: "bridge-track",
+    )
+    monkeypatch.setattr(
+        retell.rtc,
+        "TrackPublishOptions",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    connector = RetellWebCallConnector(
+        ConnectorConfig(
+            api_key="test-key",
+            assistant_id="agent_123",
+            api_url="https://api.retellai.com/v2/create-web-call",
+            livekit_url="wss://retell.example.com",
+        )
+    )
+
+    asyncio.run(connector.connect())
+    room.handlers["participant_disconnected"](
+        SimpleNamespace(identity="unrelated-participant")
+    )
+    assert connector._agent_disconnected.is_set() is False
+    room.handlers["participant_disconnected"](SimpleNamespace(identity="retell-agent"))
+    assert connector._agent_disconnected.is_set() is True
+    asyncio.run(connector.disconnect())

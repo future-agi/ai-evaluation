@@ -99,7 +99,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return authoring_main(argv, validate_runtime=True)
         except RuntimeValidationError as exc:
-            print(redact_outbound_text(str(exc)), file=sys.stderr)
+            print(
+                "RuntimeValidationError: " + redact_outbound_text(str(exc)),
+                file=sys.stderr,
+            )
             # EX_CONFIG: deterministic generated-environment failure, not retryable infra.
             return 78
     finally:

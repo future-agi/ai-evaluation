@@ -50,13 +50,13 @@ def _load_provider_import_profile(
     secrets_path: Path | None,
     profile_cache_path: Path | None = None,
 ) -> dict[str, object] | None:
-    inspect_connect_only_chat = (
+    inspect_connect_only_provider = (
         job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and job.agent.connector.strip().lower() == "retell_chat"
+        and job.agent.connector.strip().lower() in {"vapi", "retell", "retell_chat"}
     )
     if (
         job.agent.mode is not ProviderExecutionMode.PROVIDER_IMPORT
-        and not inspect_connect_only_chat
+        and not inspect_connect_only_provider
     ):
         return None
     if profile_cache_path is not None and profile_cache_path.is_file():

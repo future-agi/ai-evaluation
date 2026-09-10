@@ -377,6 +377,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "state_too_large": FailureDomain.SIMULATOR,
     "call_failed": FailureDomain.INFRASTRUCTURE,
     "target_agent_stalled": FailureDomain.AGENT,
+    "target_agent_tool_failed": FailureDomain.AGENT,
     "simulator_stalled": FailureDomain.SIMULATOR,
     "driver_crashed": FailureDomain.SIMULATOR,
     "world_pool_exhausted": FailureDomain.INFRASTRUCTURE,
@@ -2077,7 +2078,10 @@ class HostedScheduler:
                         # An injected judge that answers in some other shape is unreadable, not
                         # authoritative. Unpacking it here would raise inside `_grade` and error
                         # the whole scenario, which is the one thing a verdict must never do.
-                        held, why = None, f"the judge returned no usable verdict: {outcome!r}"
+                        held, why = (
+                            None,
+                            f"the judge returned no usable verdict: {outcome!r}",
+                        )
                 sub_goal_results[slot] = SubGoalResult(
                     name=goal.name, held=held, reason=why, judged=True
                 )

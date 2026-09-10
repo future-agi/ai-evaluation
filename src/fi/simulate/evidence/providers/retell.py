@@ -246,6 +246,7 @@ class RetellEvidenceSource:
         assert self._context is not None
         transcript_events = payload.get("transcript_with_tool_calls") or []
         tool_calls = _extract_retell_tool_calls(transcript_events)
+        messages = _extract_retell_messages(transcript_events)
         cost = payload.get("call_cost") or {}
         metadata: dict[str, Any] = {
             "provider": "retell",
@@ -256,6 +257,7 @@ class RetellEvidenceSource:
             "end_timestamp": payload.get("end_timestamp"),
             "tool_call_count": len(tool_calls),
             "tool_calls": tool_calls or None,
+            "messages": messages or None,
             "message_count": len(transcript_events),
             "cost": coerce_json(cost) if cost else None,
             "usage": coerce_json(payload.get("llm_token_usage")),
@@ -350,3 +352,25 @@ def _extract_retell_tool_calls(events: list[Any]) -> list[dict[str, Any]]:
         if call_id:
             by_id[call_id] = call
     return calls
+
+
+def _extract_retell_messages(events: list[Any]) -> list[dict[str, Any]]:
+    """Normalize Retell's authoritative transcript into simulator roles."""
+    messages: list[dict[str, Any]] = []
+    for entry in events:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "").strip().lower()
+        normalized_role = {"agent": "assistant", "user": "user"}.get(role)
+        content = str(entry.get("content") or "").strip()
+        if normalized_role is None or not content:
+            continue
+        message: dict[str, Any] = {
+            "role": normalized_role,
+            "content": content,
+        }
+        at = entry.get("time_sec")
+        if isinstance(at, (int, float)):
+            message["created_at"] = float(at)
+        messages.append(message)
+    return messages

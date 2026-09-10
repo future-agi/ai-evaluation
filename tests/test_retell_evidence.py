@@ -11,6 +11,7 @@ from fi.simulate.agent.definition import ProviderEvidenceConfig
 from fi.simulate.evidence.providers.base import EvidenceContext
 from fi.simulate.evidence.providers.retell import (
     RetellEvidenceSource,
+    _extract_retell_messages,
     _extract_retell_tool_calls,
 )
 
@@ -60,6 +61,20 @@ def test_retell_tool_evidence_pairs_invocation_and_result() -> None:
             "ok": True,
             "at": 0,
         },
+    ]
+
+
+def test_retell_transcript_events_are_normalized_to_simulator_roles() -> None:
+    assert _extract_retell_messages(
+        [
+            {"role": "node_transition", "time_sec": 0},
+            {"role": "agent", "content": " Hello there. ", "time_sec": 0.5},
+            {"role": "user", "content": "Hi.", "time_sec": 1.25},
+            {"role": "tool_call_result", "content": "ignored"},
+        ]
+    ) == [
+        {"role": "assistant", "content": "Hello there.", "created_at": 0.5},
+        {"role": "user", "content": "Hi.", "created_at": 1.25},
     ]
 
 

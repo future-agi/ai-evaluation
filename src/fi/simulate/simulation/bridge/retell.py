@@ -23,6 +23,7 @@ class RetellWebCallConnector(ProviderConnector):
         self._audio_source: rtc.AudioSource | None = None
         self._track_future: asyncio.Future[rtc.RemoteAudioTrack] | None = None
         self._agent_disconnected = asyncio.Event()
+        self._agent_identity: str | None = None
         self._agent_ready = asyncio.Event()
         self._call_id: str | None = None
         self._connected = False
@@ -95,17 +96,22 @@ class RetellWebCallConnector(ProviderConnector):
         self._track_future = asyncio.get_running_loop().create_future()
 
         @self._room.on("track_subscribed")
-        def _on_track(track, _publication, _participant) -> None:
+        def _on_track(track, _publication, participant) -> None:
             if not isinstance(track, rtc.RemoteAudioTrack):
                 return
             if self._track_future is None or self._track_future.done():
                 return
+            identity = getattr(participant, "identity", None)
+            if identity is not None:
+                self._agent_identity = str(identity)
             self._track_future.set_result(track)
             self._agent_ready.set()
 
         @self._room.on("participant_disconnected")
-        def _on_participant_disconnected(_participant) -> None:
-            self._agent_disconnected.set()
+        def _on_participant_disconnected(participant) -> None:
+            identity = getattr(participant, "identity", None)
+            if self._agent_identity is None or str(identity) == self._agent_identity:
+                self._agent_disconnected.set()
 
         @self._room.on("disconnected")
         def _on_disconnected(*_args) -> None:
@@ -160,8 +166,6 @@ class RetellWebCallConnector(ProviderConnector):
             self._connected = False
             raise RuntimeError("retell_webcall_agent_track_timeout") from exc
         async for event in rtc.AudioStream(track):
-            if self._agent_disconnected.is_set():
-                break
             frame = event.frame
             yield frame.data.tobytes(), frame.sample_rate
         self._connected = False

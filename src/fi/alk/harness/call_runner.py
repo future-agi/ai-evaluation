@@ -1403,6 +1403,15 @@ class CallRunnerImpl:
             if attributed is not None:
                 code, reason = attributed
                 raise CallAborted(reason, partial=base, code=code)
+            if (
+                case.failure is not None
+                and case.failure.code == "target_agent_tool_failed"
+            ):
+                raise CallAborted(
+                    case.failure.message,
+                    partial=base,
+                    code="target_agent_tool_failed",
+                )
             raise CallAborted(
                 f"voice_call_not_completed: {case.status.value}: {reason}", partial=base
             )

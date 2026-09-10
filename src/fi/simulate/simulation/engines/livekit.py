@@ -2080,6 +2080,7 @@ class LiveKitEngine(BaseEngine):
                     resolved_call_id = provider_summary.metadata.get("call_id")
                     if resolved_call_id:
                         provider_call_id = str(resolved_call_id)
+                _reconcile_provider_observation(outcome, provider_summary)
                 _recover_successful_provider_end_call(outcome, provider_summary)
             outcome.provider_artifacts.extend(provider_artifacts)
         outcome.metadata.update(
@@ -2427,11 +2428,16 @@ def _either_side_busy(session: Any) -> bool:
     )
 
 
-def _settled_silence_window(observed_agent_reply: float, backstop_seconds: float) -> float:
+def _settled_silence_window(
+    observed_agent_reply: float, backstop_seconds: float
+) -> float:
     """How long silence must last before a settled call is treated as over."""
     return min(
         backstop_seconds,
-        max(_SETTLED_SILENCE_FLOOR_SECONDS, observed_agent_reply * _SETTLED_LATENCY_MULTIPLE),
+        max(
+            _SETTLED_SILENCE_FLOOR_SECONDS,
+            observed_agent_reply * _SETTLED_LATENCY_MULTIPLE,
+        ),
     )
 
 
@@ -2756,9 +2762,13 @@ async def _wait_for_conversation_silence(
         floor, _ = _turn_requirements(min_turn_messages)
         # Far enough in for the measured window to beat the fixed one. A third of the floor is a
         # threshold, not a derived figure: enough turns to have timed a reply, well short of done.
-        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(2, floor // 3)
+        settled = min_turn_messages > 0 and _turns_from_each_side(messages) >= max(
+            2, floor // 3
+        )
         effective_quiet = (
-            _settled_silence_window(_observed_agent_reply_seconds(messages), quiet_seconds)
+            _settled_silence_window(
+                _observed_agent_reply_seconds(messages), quiet_seconds
+            )
             if settled
             else quiet_seconds
         )
@@ -3193,6 +3203,76 @@ def _recover_successful_provider_end_call(
     outcome.status = TestCaseStatus.COMPLETED
     outcome.failure = None
     outcome.metadata["provider_end_call_recovered"] = True
+
+
+def _reconcile_provider_observation(
+    outcome: _CaseOutcome,
+    provider_summary: EvidenceSourceSummary,
+) -> None:
+    """Recover provider-native speech and deterministic target tool failures."""
+    raw_messages = provider_summary.metadata.get("messages")
+    provider_messages: list[dict[str, Any]] = []
+    if isinstance(raw_messages, list):
+        for raw in raw_messages:
+            if not isinstance(raw, dict):
+                continue
+            role = str(raw.get("role") or "").strip().lower()
+            content = str(raw.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            provider_messages.append(dict(raw))
+    if provider_messages and not outcome.messages:
+        outcome.messages = provider_messages
+        outcome.transcript = "\n".join(
+            f"{message['role']}: {message['content']}" for message in provider_messages
+        )
+        outcome.metadata["provider_transcript_recovered"] = True
+
+    calls = provider_summary.metadata.get("tool_calls")
+    failed_call = (
+        next(
+            (
+                call
+                for call in calls
+                if isinstance(call, dict)
+                and call.get("ok") is False
+                and str(call.get("type") or "").lower() != "end_call"
+            ),
+            None,
+        )
+        if isinstance(calls, list)
+        else None
+    )
+    if failed_call is None or outcome.failure is None:
+        return
+    if outcome.failure.code not in {
+        "insufficient_conversation",
+        "target_disconnected",
+        "room_disconnected",
+        "no_conversation",
+        "conversation_stalled",
+        "conversation_silence_timeout",
+    }:
+        return
+    name = str(failed_call.get("name") or "unknown")
+    error = str(failed_call.get("error") or "tool call failed")
+    if len(error) > 500:
+        error = error[:500]
+    outcome.status = TestCaseStatus.FAILED
+    outcome.failure = SimulationFailure(
+        stage=FailureStage.RUNNING,
+        code="target_agent_tool_failed",
+        message=f"Target agent tool {name!r} failed: {error}",
+        retryable=False,
+        provider=str(provider_summary.metadata.get("provider") or "provider"),
+        details={
+            "tool_name": name,
+            "provider_end_reason": str(
+                provider_summary.metadata.get("end_reason") or ""
+            ),
+        },
+    )
+    outcome.metadata["provider_tool_failure_attributed"] = True
 
 
 def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:

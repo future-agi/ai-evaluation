@@ -1094,6 +1094,48 @@ def test_silence_after_caller_turn_is_attributed_to_target_agent(
     assert "Target agent produced no response" in str(exc)
 
 
+def test_provider_tool_failure_is_attributed_to_target_agent(tmp_path: Path) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1")
+
+    async def place_call(spec):
+        return _report(
+            case_status=CaseStatus.FAILED,
+            failure=SimulationFailure(
+                stage=FailureStage.RUNNING,
+                code="target_agent_tool_failed",
+                message="Target agent tool 'lookup_account' failed: ENOTFOUND api.example.com",
+                retryable=False,
+            ),
+            result_metadata={
+                "evidence": [
+                    {
+                        "source_id": "retell-call",
+                        "adapter": "retell",
+                        "evidence_class": "provider_reported",
+                        "metadata": {
+                            "tool_calls": [
+                                {
+                                    "name": "lookup_account",
+                                    "ok": False,
+                                    "error": "ENOTFOUND api.example.com",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+
+    exc = _run_expect_abort(
+        cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call),
+        _FakeScenario("k1"),
+        _runtime(metadata={"livekit_agent_name": "agent-w0"}),
+    )
+    assert exc.code == "target_agent_tool_failed"
+    assert "lookup_account" in str(exc)
+
+
 def test_silence_after_complete_target_turn_is_attributed_to_simulator(
     tmp_path: Path,
 ) -> None:
