@@ -454,6 +454,13 @@ def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(
     assert [call.name for call in outcome.calls] == ["lookup_account"]
     assert b"customer: My account ID is CLI-04." in adapter.uploads[0]
     assert b"agent: Your account is active and the yield is 3.1%." in adapter.uploads[0]
+    # The judge settles a claim about wording from `messages`, and the voice lane once returned an
+    # outcome without them, so a judged sub-goal had nothing to read. `agent` is the side under
+    # test, so it must arrive as `assistant`.
+    assert {"role": "assistant", "content": "Your account is active and the yield is 3.1%."} in (
+        outcome.messages
+    )
+    assert {"role": "user", "content": "My account ID is CLI-04."} in outcome.messages
 
 
 def test_tool_world_can_import_customer_tool_from_uploaded_source(
