@@ -695,6 +695,20 @@ def validate_contract(contract: AgentContract) -> list[str]:
     # cardinality alone is not evidence that authoring omitted something.
     if not contract.real_use_cases:
         problems.append("no-use-cases")
+    # An `import`/`construct` entry without both halves is unusable: bundling compiles a binding
+    # from exactly these two fields. Caught here so the model is told while it can still fix the
+    # entry, rather than the run dying much later in `_compile_source_tool_handlers` after the
+    # runtime-validation attempts have been spent.
+    for entry in contract.tool_entrypoints:
+        if entry.mode not in {"import", "construct"}:
+            continue
+        if entry.module.strip() and entry.callable.strip():
+            continue
+        problems.append(
+            f"tool_entrypoint[{entry.tool}]:{entry.mode}-needs-module-and-callable — "
+            "give the importable module path and the callable name, or record a mode that "
+            "matches what the repository actually exposes."
+        )
     # Iterate the tools, not tool_names(): that returns a set, so duplicates collapse before
     # they can be counted and the check silently never fires.
     names = [tool.name for tool in contract.tools if tool.name.strip()]
