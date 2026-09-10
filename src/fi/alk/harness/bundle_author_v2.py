@@ -906,17 +906,12 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
-# LiveKit's CLI is a subcommand app: `agent.py` with no subcommand prints usage and exits, so the
-# worker never registers. Anything that already starts one is left alone.
+# LiveKit's CLI needs a subcommand: `agent.py` alone prints usage and exits without registering.
 _LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
 
 
 def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
-    """Whether the entry script ends in `cli.run_app`, which is what needs the subcommand.
-
-    A repository can also start its worker itself, and appending a subcommand to one of those
-    would break it, so this reads the entry rather than assuming every LiveKit agent is a CLI app.
-    """
+    """Whether the entry delegates to LiveKit's CLI. An agent that runs its own worker must not."""
     path = root / entry
     if not path.is_file():
         return False
@@ -1307,8 +1302,8 @@ def resolve_environment_plan(
                     log_marker="registered worker", timeout_seconds=180
                 )
             }
-            # A Dockerfile CMD normally carries the subcommand. A repository without one gets a
-            # bare `python agent.py`, which exits on its usage banner before it can register.
+            # Only a Dockerfile CMD carries the subcommand today, so a repository without one
+            # starts `agent.py` bare and never reaches the registration this check waits for.
             if _hands_off_to_livekit_cli(component, entry) and not (
                 set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
             ):
