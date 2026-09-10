@@ -20,16 +20,23 @@ from fi.alk.harness.world.runtime import GeneratedWorld
 
 
 def _job(
-    *, connector: str, with_secrets: bool = False, scenario_count: int = 1
+    *,
+    connector: str,
+    with_secrets: bool = False,
+    scenario_count: int = 1,
+    secret_aliases: tuple[str, ...] = ("LIVEKIT_API_KEY",),
 ) -> HarnessJob:
     secret_refs = {}
     if with_secrets:
+        # A source that really imports livekit declares the full credential set, where a toy
+        # `print('agent')` entry declares none, so a realistic fixture needs more than the key.
         secret_refs = {
-            "LIVEKIT_API_KEY": {
+            alias: {
                 "manager": "platform-vault",
-                "key": "livekit-key",
+                "key": alias.lower().replace("_", "-"),
                 "purpose": "target_provider",
             }
+            for alias in secret_aliases
         }
     return HarnessJob.model_validate(
         {
@@ -246,7 +253,11 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     )
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
-    job = _job(connector="auto", with_secrets=True)
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
 
     bundle = author_bundle_v2(
         source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
@@ -257,6 +268,100 @@ def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) ->
     assert agent.environment["HARNESS_MODE"] == "1"
     assert "target_provider" in agent.secret_purposes
     assert "target_http" not in bundle.capabilities
+
+
+def test_livekit_cli_agent_without_a_dockerfile_is_started_with_a_subcommand(
+    tmp_path: Path,
+) -> None:
+    """A repository that ships no Dockerfile has nothing to carry the subcommand.
+
+    LiveKit's CLI prints its usage banner and exits when given none, so the worker never registers
+    and the run fails at `spawn_failed` with the agent already dead.
+    """
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from livekit.agents import cli, WorkerOptions\n"
+        "if __name__ == '__main__':\n"
+        "    cli.run_app(WorkerOptions(entrypoint_fnc=None))\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text("livekit-agents\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.run_command[-1] == "start"
+
+
+def test_a_dockerfile_command_that_already_starts_a_worker_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    """The subcommand is added where one is missing, never doubled onto a command that has it."""
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from livekit.agents import cli, WorkerOptions\n"
+        "cli.run_app(WorkerOptions(entrypoint_fnc=None))\n",
+        encoding="utf-8",
+    )
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (source / "Dockerfile").write_text(
+        'FROM python:3.13\nCMD ["python", "agent.py", "start"]\n', encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert agent.run_command.count("start") == 1
+    assert agent.run_command[-1] == "start"
+
+
+def test_an_agent_that_starts_its_own_worker_gets_no_subcommand(tmp_path: Path) -> None:
+    """Not every LiveKit agent is a CLI app; appending a subcommand to one of those breaks it."""
+    source = tmp_path / "voice-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "from livekit.agents import Worker, WorkerOptions\n"
+        "import asyncio\n"
+        "asyncio.run(Worker(WorkerOptions(entrypoint_fnc=None)).run())\n",
+        encoding="utf-8",
+    )
+    (source / "requirements.txt").write_text("livekit-agents\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    )
+
+    bundle = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=tmp_path / "bundle"
+    )
+
+    agent = next(process for process in bundle.processes if process.name == "agent")
+    assert "start" not in agent.run_command
 
 
 def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
@@ -294,7 +399,11 @@ def test_bundle_accepts_post_checkout_runtime_configuration_names(
     )
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
-    job = _job(connector="auto", with_secrets=True).model_copy(
+    job = _job(
+        connector="auto",
+        with_secrets=True,
+        secret_aliases=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
+    ).model_copy(
         update={"metadata": {"environment_value_names": ["GOOGLE_CLOUD_PROJECT"]}}
     )
 

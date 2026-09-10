@@ -907,6 +907,18 @@ def _dockerfile_run(root: Path) -> list[str] | None:
     return argv
 
 
+# LiveKit's CLI needs a subcommand: `agent.py` alone prints usage and exits without registering.
+_LIVEKIT_WORKER_SUBCOMMANDS = frozenset({"start", "dev", "connect", "console"})
+
+
+def _hands_off_to_livekit_cli(root: Path, entry: str) -> bool:
+    """Whether the entry delegates to LiveKit's CLI. An agent that runs its own worker must not."""
+    path = root / entry
+    if not path.is_file():
+        return False
+    return "cli.run_app" in path.read_text(encoding="utf-8", errors="replace")
+
+
 def _discover_callback_entrypoint(root: Path) -> str | None:
     """Return the repository's unique module-level ``agent_callback``, if present.
 
@@ -1303,13 +1315,18 @@ def resolve_environment_plan(
                 }
             )
         if is_livekit:
-            process = process.model_copy(
-                update={
-                    "started_check": StartedCheck(
-                        log_marker="registered worker", timeout_seconds=180
-                    )
-                }
-            )
+            update: dict[str, Any] = {
+                "started_check": StartedCheck(
+                    log_marker="registered worker", timeout_seconds=180
+                )
+            }
+            # Only a Dockerfile CMD carries the subcommand today, so a repository without one
+            # starts `agent.py` bare and never reaches the registration this check waits for.
+            if _hands_off_to_livekit_cli(component, entry) and not (
+                set(process.run_command) & _LIVEKIT_WORKER_SUBCOMMANDS
+            ):
+                update["run_command"] = [*process.run_command, "start"]
+            process = process.model_copy(update=update)
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(
