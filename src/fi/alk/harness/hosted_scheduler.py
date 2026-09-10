@@ -2055,13 +2055,16 @@ class HostedScheduler:
         if judged_pending:
             # Judged sub-goals only read, so they are independent of each other and of the coded
             # checks: one round trip for all of them rather than one each.
+            async def _settle(goal: Any) -> Any:
+                # Awaited, not called inline: calling an injected judge whose signature does not
+                # match raises while the coroutines are still being built, which is outside
+                # `gather`'s net and errors the scenario. Inside a coroutine it is just a fault.
+                return await self._judge(
+                    goal, check_handle, calls, messages=call_outcome.messages
+                )
+
             verdicts = await asyncio.gather(
-                *(
-                    self._judge(
-                        goal, check_handle, calls, messages=call_outcome.messages
-                    )
-                    for _, goal in judged_pending
-                ),
+                *(_settle(goal) for _, goal in judged_pending),
                 return_exceptions=True,
             )
             for (slot, goal), outcome in zip(judged_pending, verdicts):

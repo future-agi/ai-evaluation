@@ -64,7 +64,7 @@ def _judged_sub_goals_decided_without_a_model(monkeypatch):
     """
     from fi.alk.harness import hosted_scheduler
 
-    async def _held(goal, world, calls):
+    async def _held(goal, world, calls, *, messages=()):
         return True, f"{goal.name}: stubbed for a scenario-source test"
 
     monkeypatch.setattr(hosted_scheduler, "_judge", _held)

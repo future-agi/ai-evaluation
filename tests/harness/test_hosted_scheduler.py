@@ -4021,3 +4021,55 @@ def test_a_judge_answering_with_a_two_element_list_is_still_read(monkeypatch) ->
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def test_a_judge_whose_signature_does_not_match_does_not_error_the_scenario(
+    monkeypatch,
+) -> None:
+    """The call itself, not the awaited result.
+
+    An injected judge missing a parameter raises while the coroutines are being built, before
+    `gather` exists to catch anything, so the scenario came back `errored`. Two red tests in
+    `test_scenario_source.py` were exactly this: stubs written before `judge()` took `messages`.
+    """
+
+    async def _stale(goal, world, calls):  # no `messages`
+        return True, "settled by a judge with the old signature"
+
+    monkeypatch.setattr(hs, "_judge", _stale)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4, calls=())
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "removal-request",
+                "id-1",
+                sub_goals=[
+                    FakeSubGoal("was_it_reassuring", lambda w, c: None, judged="tone"),
+                ],
+                requires_tool_evidence=False,
+            )
+        ]
+        result = await scheduler.run(scenarios)
+        receipt = result.receipts[0]
+        assert receipt.status == "passed"
+        assert receipt.failure is None
+        assert receipt.sub_goals[0].held is None
+        assert "the judge could not run" in (receipt.sub_goals[0].reason or "")
+        await pool.close()
+
+    asyncio.run(scenario())
