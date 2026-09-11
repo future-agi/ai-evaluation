@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+from . import observability
 from . import outbound as ob
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
 from .call_runner import CallRunnerContext, CallRunnerImpl
@@ -1012,6 +1013,7 @@ class OutboundAdapter:
     def stage_changed(self, to: HarnessStage) -> None:
         frm = self._current_stage.value if self._stage_started else None
         self._stage_started = True
+        observability.stage(to.value)
         self._emit_event(
             stage=to,
             type_=ob.OutboundEventType.STAGE_CHANGED,
@@ -1985,6 +1987,8 @@ async def run_job(
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
 
+        observability.begin(job.job_id, job.run_id)
+
         if job.seed is None:
             logger.warning(
                 "job.seed is null; spine §1 guarantees a concrete integer -- using 0"
@@ -2346,7 +2350,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", required=True, type=Path, help="/work/artifacts")
     args = parser.parse_args(argv)
-    return asyncio.run(run_job(args.job, args.source, args.output))
+    try:
+        return asyncio.run(run_job(args.job, args.source, args.output))
+    finally:
+        observability.end()
 
 
 if __name__ == "__main__":
