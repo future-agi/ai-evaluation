@@ -54,6 +54,34 @@ class SimulationRunner:
             on_case_start, on_case_complete = self._begin_streaming(
                 result_sink, spec, plan
             )
+            # Keep every case that finished. A deadline that fires while the plugin is still
+            # tidying up used to discard cases whose conversation had already completed, and the
+            # run then reported no test case at all: no turns, no transcript, and an infrastructure
+            # failure for a call that worked. Held here because this is the only layer that sees
+            # both the cases and the timeout.
+            finished: list[SimulationTestCaseResult] = []
+            # Bound to its own name before the wrapper is installed. Closing over
+            # ``on_case_complete`` and then rebinding it makes the wrapper call itself: the
+            # closure reads the name at call time, not the value it had at definition. It cost a
+            # whole run to find, and only after cases started completing at all, because a
+            # wrapper that never runs never recurses.
+            report_case = on_case_complete
+
+            async def _remember(index: int, legacy_case: Any) -> None:
+                try:
+                    finished.append(
+                        SimulationTestCaseResult.from_legacy_case(
+                            legacy_case, index=index, run_id=spec.run_id
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - never fail a case over bookkeeping
+                    logger.warning(
+                        "could not keep a finished case for the timeout path: %s", exc
+                    )
+                if report_case is not None:
+                    await report_case(index, legacy_case)
+
+            on_case_complete = _remember
             self._write_event(
                 result_sink,
                 CanonicalEvent.create(
@@ -92,6 +120,7 @@ class SimulationRunner:
                     message="Simulation exceeded its run deadline",
                     retryable=True,
                 ),
+                cases=finished,
             )
         except Exception as exc:
             stage = FailureStage.PLANNING if plan is None else FailureStage.RUNNING
@@ -249,6 +278,7 @@ class SimulationRunner:
         started_at: datetime,
         status: RunStatus,
         failure: SimulationFailure,
+        cases: list[SimulationTestCaseResult] | None = None,
     ) -> SimulationReport:
         return SimulationReport(
             run_id=spec.run_id,
@@ -260,6 +290,7 @@ class SimulationRunner:
             ended_at=datetime.now(timezone.utc),
             artifacts=ArtifactManifest(run_id=spec.run_id),
             failure=failure,
+            test_cases=list(cases or []),
         )
 
     def _write_event(

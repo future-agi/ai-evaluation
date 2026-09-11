@@ -1,0 +1,48 @@
+{
+  "agent": "account-support-chat-agent",
+  "one_liner": "Look up an account and report its support status.",
+  "modality": "chat",
+  "conversational": true,
+  "system_prompt_excerpt": "",
+  "hard_constraints": [],
+  "tools": [
+    {
+      "name": "lookup_account",
+      "args": ["account_id"],
+      "arg_types": {"account_id": "str"},
+      "arg_values": {},
+      "description": "Look up a customer account."
+    }
+  ],
+  "data_schema": {},
+  "base_environment": {},
+  "dependencies": [],
+  "implementation": "present",
+  "tool_entrypoints": [],
+  "refusal_signature": "",
+  "data_store": null,
+  "runtime": {
+    "language": "python",
+    "version": "",
+    "install": "",
+    "extras": [],
+    "workdir": "",
+    "compose_file": "compose.yml",
+    "dockerfile": "Dockerfile",
+    "command": [],
+    "context_excludes": [],
+    "platform": "",
+    "interface": {
+      "kind": "http",
+      "protocol": "openai_chat",
+      "port": 8080,
+      "path": "/v1/chat/completions",
+      "health_path": "/health",
+      "include_tools": true
+    }
+  },
+  "real_use_cases": ["Look up an account and report its support status."],
+  "notes": "",
+  "open_questions": [],
+  "amendments": []
+}

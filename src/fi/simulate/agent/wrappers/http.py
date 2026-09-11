@@ -118,7 +118,7 @@ class HTTPAgentWrapper(AgentWrapper):
         return response
 
     def _request_payload(self, input: AgentInput) -> dict[str, Any]:
-        messages = list(input.messages)
+        messages = _messages_for_protocol(input.messages, self.protocol)
         if self.system_prompt:
             messages = [{"role": "system", "content": self.system_prompt}, *messages]
         if self.protocol == "openai_chat":
@@ -225,6 +225,30 @@ def _normalize_protocol(value: str) -> str:
     return protocol
 
 
+def _messages_for_protocol(
+    messages: Sequence[Mapping[str, Any]], protocol: str
+) -> list[dict[str, Any]]:
+    """Encode canonical ALK history for the selected external-agent protocol.
+
+    ALK keeps tool calls structured internally. OpenAI-compatible endpoints require that array
+    unchanged, while the FutureAGI callback ``AgentInput`` schema represents historical
+    ``tool_calls`` as a JSON string. Normalizing here keeps the conversation runner generic and
+    prevents a retry from accidentally executing a side-effecting tool twice.
+    """
+    normalized = [dict(message) for message in messages]
+    if protocol != "fi.alk":
+        return normalized
+    for message in normalized:
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, Sequence) and not isinstance(
+            tool_calls, (str, bytes)
+        ):
+            message["tool_calls"] = json.dumps(
+                list(tool_calls), separators=(",", ":"), default=str
+            )
+    return normalized
+
+
 def _openai_tool_spec(tool: Mapping[str, Any]) -> dict[str, Any]:
     # Accept both the flat SDK tool shape ({name, description, parameters}) and
     # the OpenAI-nested shape ({"type": "function", "function": {...}}). Without
@@ -233,7 +257,11 @@ def _openai_tool_spec(tool: Mapping[str, Any]) -> dict[str, Any]:
     # real tool and the environment's mock never matches.
     fn = tool.get("function") if isinstance(tool.get("function"), Mapping) else {}
     name = str(
-        tool.get("name") or fn.get("name") or tool.get("tool") or tool.get("id") or "tool"
+        tool.get("name")
+        or fn.get("name")
+        or tool.get("tool")
+        or tool.get("id")
+        or "tool"
     )
     parameters = tool.get("parameters")
     if not isinstance(parameters, Mapping):

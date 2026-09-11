@@ -33,8 +33,11 @@ classifiers = [
   "Topic :: Software Development :: Testing",
 ]
 dependencies = [
+  "claude-agent-sdk>=0.2.139",
   "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
+  # 2.8 imports newer otel semconv than the livekit-agents pin allows
+  "google-adk>=2.7.1,<2.8",
   "httpx>=0.24.0",
   "jsonschema>=4.25.1,<5",
   "levenshtein>=0.25.0",
@@ -91,6 +94,19 @@ a2a = [
 ]
 nli = ["transformers>=5.2.0,<6", "torch>=2.10.0,<3"]
 embeddings = ["sentence-transformers>=5.2.3,<6"]
+# What `harness-ui/server.py` needs to serve the harness over HTTP. Declared rather than left to
+# whatever happens to be in the environment: uv sync removes anything undeclared, so an ad hoc
+# install of these disappears the first time somebody syncs.
+harness-ui = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+]
+# Stores the harness can provision for an agent under test. Each engine the
+# harness can stand up needs a driver to seed it, read its state and put it
+# back; the container itself is pulled at build time, not declared here.
+harness-stores = [
+  "psycopg[binary]>=3.2",
+]
 feedback = ["chromadb>=0.4.0"]
 notebook = [
   "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb
@@ -115,6 +131,9 @@ all = [
 
 [project.scripts]
 agent-learn = "fi.alk.cli:main"
+alk = "fi.alk.cli:main"
+alk-harness-worker = "fi.alk.harness.hosted_entrypoint:main"
+alk-harness-sandbox = "fi.alk.harness.sandbox_server:main"
 
 [project.urls]
 Homepage = "https://futureagi.com"
@@ -153,6 +172,10 @@ dev = [
   "hatchling>=1.25",
   "pytest>=8.3",
   "ruff>=0.9",
+  # Also in the harness-ui extra. Repeated here so that syncing without that extra does not
+  # uninstall the server out from under a working checkout.
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
 ]
 
 [tool.pytest.ini_options]

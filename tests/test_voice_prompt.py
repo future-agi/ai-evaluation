@@ -59,6 +59,20 @@ def test_simulator_instructions_supplement_scenario_prompt() -> None:
     assert "Ask for an escalation" in prompt
     assert "Your specialist appointment was cancelled without notice." in prompt
     assert "Get a new appointment time and confirm the clinic location." in prompt
-    assert prompt.index("# ADDITIONAL SIMULATOR INSTRUCTIONS") < prompt.index(
+    # The call's own instructions come after the general rules, and the objective closes the
+    # prompt: what lands last is what survives a long conversation.
+    assert prompt.index("# ADDITIONAL SIMULATOR INSTRUCTIONS") > prompt.index(
         "# CONVERSATION EXECUTION RULES"
     )
+    assert prompt.rstrip().endswith("applies at turn twenty exactly as it applied at turn one.")
+
+
+def test_prompt_closes_by_naming_who_the_caller_is() -> None:
+    """A drifting caller answered as the agent and addressed itself by its own name, which reads
+    as the agent talking to itself. The identity is restated last, where it survives a long call."""
+    prompt = build_voice_simulator_prompt(_persona(), call_type="inbound")
+
+    tail = prompt.rsplit("---", 1)[-1]
+    assert "You are Priya" in tail
+    assert "never address Priya" in tail
+    assert tail.index("You are Priya") < tail.index("What you came for:")

@@ -11,6 +11,7 @@ read from env.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -50,7 +51,7 @@ class RetellEvidenceSource:
         transcript=True,
         audio=True,
         tool_calls=True,
-        tool_results=False,
+        tool_results=True,
         usage=True,
         internal_latency=False,
         configuration_snapshot=False,
@@ -245,6 +246,7 @@ class RetellEvidenceSource:
         assert self._context is not None
         transcript_events = payload.get("transcript_with_tool_calls") or []
         tool_calls = _extract_retell_tool_calls(transcript_events)
+        messages = _extract_retell_messages(transcript_events)
         cost = payload.get("call_cost") or {}
         metadata: dict[str, Any] = {
             "provider": "retell",
@@ -254,6 +256,8 @@ class RetellEvidenceSource:
             "start_timestamp": payload.get("start_timestamp"),
             "end_timestamp": payload.get("end_timestamp"),
             "tool_call_count": len(tool_calls),
+            "tool_calls": tool_calls or None,
+            "messages": messages or None,
             "message_count": len(transcript_events),
             "cost": coerce_json(cost) if cost else None,
             "usage": coerce_json(payload.get("llm_token_usage")),
@@ -305,15 +309,68 @@ def _retell_recording_urls(payload: dict[str, Any]) -> dict[str, str | None]:
 
 def _extract_retell_tool_calls(events: list[Any]) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
     for entry in events:
         if not isinstance(entry, dict):
             continue
-        if str(entry.get("role") or "").lower() != "tool_call_invocation":
+        role = str(entry.get("role") or "").lower()
+        call_id = str(entry.get("tool_call_id") or "").strip()
+        if role == "tool_call_result" and call_id in by_id:
+            call = by_id[call_id]
+            successful = bool(entry.get("successful", True))
+            raw_result = entry.get("content")
+            if isinstance(raw_result, str):
+                try:
+                    raw_result = coerce_json(json.loads(raw_result))
+                except ValueError:
+                    pass
+            call["result"] = raw_result
+            call["ok"] = successful
+            if not successful:
+                call["error"] = str(raw_result or "tool call failed")
             continue
-        calls.append(
-            {
-                "id": entry.get("tool_call_id"),
-                "name": entry.get("name"),
-            }
-        )
+        if role != "tool_call_invocation":
+            continue
+        arguments: Any = entry.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except ValueError:
+                arguments = {"raw": arguments}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        call = {
+            "id": call_id or None,
+            "name": entry.get("name"),
+            "type": entry.get("type"),
+            "arguments": coerce_json(arguments),
+            "result": None,
+            "ok": True,
+            "at": entry.get("time_sec") or 0,
+        }
+        calls.append(call)
+        if call_id:
+            by_id[call_id] = call
     return calls
+
+
+def _extract_retell_messages(events: list[Any]) -> list[dict[str, Any]]:
+    """Normalize Retell's authoritative transcript into simulator roles."""
+    messages: list[dict[str, Any]] = []
+    for entry in events:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "").strip().lower()
+        normalized_role = {"agent": "assistant", "user": "user"}.get(role)
+        content = str(entry.get("content") or "").strip()
+        if normalized_role is None or not content:
+            continue
+        message: dict[str, Any] = {
+            "role": normalized_role,
+            "content": content,
+        }
+        at = entry.get("time_sec")
+        if isinstance(at, (int, float)):
+            message["created_at"] = float(at)
+        messages.append(message)
+    return messages

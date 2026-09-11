@@ -262,6 +262,41 @@ def test_required_env_parity_across_transport_kinds() -> None:
         "LIVEKIT_INBOUND_DID",
     ]
 
+    sip_in_retell_with_fields = _agent_def(
+        transport={
+            "kind": "sip_inbound",
+            "inbound_call_originator": "retell",
+            "originator_agent_id": "agent_123",
+            "originator_from_number": "+14155550123",
+        },
+        provider_evidence={
+            "provider": "retell",
+            "call_id_source": "originator_response",
+        },
+    )
+    assert _voice_required_env(sip_in_retell_with_fields, None, []) == [
+        *base,
+        "LIVEKIT_INBOUND_TRUNK_ID",
+        "RETELL_API_KEY",
+        "LIVEKIT_INBOUND_DID",
+    ]
+
+    sip_in_retell_without_fields = _agent_def(
+        transport={"kind": "sip_inbound", "inbound_call_originator": "retell"},
+        provider_evidence={
+            "provider": "retell",
+            "call_id_source": "originator_response",
+        },
+    )
+    assert _voice_required_env(sip_in_retell_without_fields, None, []) == [
+        *base,
+        "LIVEKIT_INBOUND_TRUNK_ID",
+        "RETELL_API_KEY",
+        "RETELL_AGENT_ID",
+        "RETELL_FROM_NUMBER",
+        "LIVEKIT_INBOUND_DID",
+    ]
+
 
 def test_retell_evidence_source_reads_api_key_from_env(monkeypatch) -> None:
     """RetellEvidenceSource(config) with no api_key argument falls back to

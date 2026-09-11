@@ -1,0 +1,34 @@
+FROM docker:27-cli AS docker-cli
+
+FROM python:3.12-slim-bookworm
+
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential git libffi-dev nodejs npm \
+    && npm install --global @anthropic-ai/claude-code \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/alk
+COPY pyproject.toml README.md ./
+COPY src ./src
+ENV PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=10 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
+      '.[livekit,harness-ui,harness-stores]' \
+      'livekit-agents==1.5.17' \
+      'livekit-plugins-cartesia==1.5.17' \
+      'livekit-plugins-deepgram==1.5.17' \
+      'livekit-plugins-elevenlabs==1.5.17' \
+      'livekit-plugins-google==1.5.17' \
+      'livekit-plugins-openai==1.5.17' \
+      'livekit-plugins-silero==1.5.17'
+
+ENV ALK_SANDBOX_HOST=0.0.0.0
+ENV ALK_SANDBOX_PORT=8788
+EXPOSE 8788
+ENTRYPOINT ["python3", "-m", "fi.alk.harness.sandbox_server"]

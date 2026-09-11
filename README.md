@@ -46,6 +46,18 @@ Use it when you want one reproducible loop:
 4. Promote the result into a replayable artifact.
 5. Prove release readiness with local gates.
 
+### The harness: point it at an agent and talk to it
+
+`src/fi/alk/harness/` builds all of the above **for** an agent instead of asking you to write it.
+Point it at an agent's source and it reads what that agent verifiably is, builds a real world its
+tools act on, and writes test scenarios that are each proved before they are kept. It is driven
+as a conversation, in a terminal or on a web page.
+
+- **[Start here](src/fi/alk/harness/README.md)**: setup from nothing, then how to use it
+- **[The web page](harness-ui/README.md)**: the same harness as a chat, on `localhost:8777`
+- **[How it works](src/fi/alk/harness/HOW-IT-WORKS.md)** and
+  **[why it is shaped this way](src/fi/alk/harness/DESIGN.md)**
+
 OpenEnv/Gymnasium shapes are compatibility inputs, not the product center.
 Agent Learning Kit is the primary runtime and release contract, and the bar is
 the executable `environment_10x_robustness` release gate.

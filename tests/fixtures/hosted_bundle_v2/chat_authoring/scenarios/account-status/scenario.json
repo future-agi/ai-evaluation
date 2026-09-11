@@ -1,0 +1,5 @@
+{
+  "name": "account-status",
+  "instruction": "Please check the current support status for account ACC-2048.",
+  "sub_goals": ["account_was_looked_up"]
+}

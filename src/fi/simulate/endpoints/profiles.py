@@ -142,22 +142,25 @@ def _sip_inbound_required_env(agent_definition: Any) -> list[str]:
     if transport is not None and not transport.dispatch_rule_name:
         names.append("LIVEKIT_INBOUND_TRUNK_ID")
     if transport is not None and transport.inbound_call_originator == "vapi":
-        names.extend(
-            (
-                (
-                    target.api_key_env
-                    if target is not None and target.provider == "vapi"
-                    else "VAPI_API_KEY"
-                ),
-                (
-                    ""
-                    if target is not None and target.provider == "vapi"
-                    else "VAPI_ASSISTANT_ID"
-                ),
-                "VAPI_PHONE_NUMBER_ID",
-                "LIVEKIT_INBOUND_DID",
-            )
+        # Same conditional-append idiom as the Retell branch below; behaviour
+        # identical (the consumer already dropped blanks from the old tuple).
+        names.append(
+            target.api_key_env
+            if target is not None and target.provider == "vapi"
+            else "VAPI_API_KEY"
         )
+        if target is None or target.provider != "vapi":
+            names.append("VAPI_ASSISTANT_ID")
+        names.append("VAPI_PHONE_NUMBER_ID")
+        names.append("LIVEKIT_INBOUND_DID")
+    if transport is not None and transport.inbound_call_originator == "retell":
+        # Parity-only rule (CLI/manifest path); the job carries these fields directly.
+        names.append("RETELL_API_KEY")
+        if not transport.originator_agent_id:
+            names.append("RETELL_AGENT_ID")
+        if not transport.originator_from_number:
+            names.append("RETELL_FROM_NUMBER")
+        names.append("LIVEKIT_INBOUND_DID")
     return names
 
 

@@ -24,6 +24,7 @@ in ``submission.json`` and returns cleanly — no HTTP is attempted.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -52,7 +53,11 @@ _STATUS_MAP = {
     "agent_unavailable": "failed",
 }
 _API_KEY_ENV = ("FI_API_KEY", "FUTURE_AGI_API_KEY", "AGENT_LEARNING_API_KEY")
-_SECRET_KEY_ENV = ("FI_SECRET_KEY", "FUTURE_AGI_SECRET_KEY", "AGENT_LEARNING_SECRET_KEY")
+_SECRET_KEY_ENV = (
+    "FI_SECRET_KEY",
+    "FUTURE_AGI_SECRET_KEY",
+    "AGENT_LEARNING_SECRET_KEY",
+)
 _INTERNAL_SECRET_ENV = (
     "FI_INTERNAL_SUBMIT_SECRET",
     "ALK_RUNNER_INTERNAL_SECRET",
@@ -168,9 +173,7 @@ class FutureAGIResultSink:
         ):
             return False
         try:
-            client = _open_client(
-                self._api_url, api_key, secret_key, internal_secret
-            )
+            client = _open_client(self._api_url, api_key, secret_key, internal_secret)
             call_ids = _allocate_call_ids(client, self._test_execution_id)
         except Exception:
             if self._stream_client is not None:
@@ -199,14 +202,15 @@ class FutureAGIResultSink:
             # More results than allocated rows: the platform under-provisioned.
             # The batch path drops these silently via ``zip``; record it here so
             # submission.json shows the drop.
-            self._stream_failures[index] = {"index": index, "reason": "no_allocated_row"}
+            self._stream_failures[index] = {
+                "index": index,
+                "reason": "no_allocated_row",
+            }
             return
         call_id = self._stream_call_ids[index]
         try:
             payload = _build_result_payload(case)
-            recording_url = _maybe_upload_recording(
-                self._stream_client, call_id, case
-            )
+            recording_url = _maybe_upload_recording(self._stream_client, call_id, case)
             if recording_url:
                 payload["recording_url"] = recording_url
             stereo_url = _maybe_upload_stereo_recording(
@@ -215,6 +219,7 @@ class FutureAGIResultSink:
             if stereo_url:
                 payload["stereo_recording_url"] = stereo_url
             _attach_channel_recordings(self._stream_client, call_id, case, payload)
+            _stamp_result_digest(payload)
             resp = self._stream_client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -293,9 +298,7 @@ class FutureAGIResultSink:
                 continue
             self.submit_case(index, case)
 
-        submitted = [
-            self._stream_call_ids[i] for i in sorted(self._streamed_indices)
-        ]
+        submitted = [self._stream_call_ids[i] for i in sorted(self._streamed_indices)]
         failed = [detail for _, detail in sorted(self._stream_failures.items())]
         # Every allocated row failing to submit is a failed submission — not a
         # green job with zero results landed (the batch path signalled this by
@@ -449,7 +452,13 @@ def _open_client(
     headers: dict[str, str] = {}
     if api_key and secret_key:
         headers.update({"x-api-key": api_key, "x-secret-key": secret_key})
-    if internal_secret:
+    # These are alternative authentication modes.  A developer/hosted-runner
+    # environment can legitimately contain both sets of variables; sending
+    # both lets the backend's bearer authenticator win and loses the customer
+    # organization carried by the API-key pair.  Prefer the explicit customer
+    # identity whenever it is complete, and use the internal token only as the
+    # service-to-service fallback.
+    elif internal_secret:
         headers["Authorization"] = f"Bearer {internal_secret}"
     return httpx.Client(
         base_url=base_url.rstrip("/"),
@@ -539,6 +548,7 @@ def _submit_via_http(
             if stereo_url:
                 payload["stereo_recording_url"] = stereo_url
             _attach_channel_recordings(client, call_id, case, payload)
+            _stamp_result_digest(payload)
             resp = client.patch(
                 f"/simulate/api/alk-simulate/call-executions/{call_id}/result/",
                 json=payload,
@@ -657,9 +667,9 @@ def _build_result_payload(case) -> dict[str, Any]:
         # (no usage evidence) leaves ``provider_call_data`` empty, the platform
         # falls back to VAPI, and an inbound default swaps agent/customer labels.
         # A falsy ``{}`` is not enough — ``detect_provider`` treats it as absent.
-        if str(result.metadata.get("engine")) == "livekit" and not provider_call_data.get(
-            "livekit"
-        ):
+        if str(
+            result.metadata.get("engine")
+        ) == "livekit" and not provider_call_data.get("livekit"):
             provider_call_data["livekit"] = {"engine": "livekit"}
 
         if provider_call_data:
@@ -687,6 +697,22 @@ def _build_result_payload(case) -> dict[str, Any]:
             payload["call_metadata"] = _json_safe(call_metadata)
 
     return payload
+
+
+def _stamp_result_digest(payload: dict[str, Any]) -> None:
+    """Bind an idempotency key to exactly the canonical payload being submitted."""
+    payload.pop("result_digest", None)
+    payload["result_digest"] = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+    )
 
 
 def _extract_transcript_segments(result) -> list[dict[str, Any]]:
@@ -894,7 +920,11 @@ def _maybe_upload_recording(
     )
     with audio_path.open("rb") as fh:
         files = {"file": (filename, fh, content_type)}
-        data = {"filename": filename}
+        data = {
+            "filename": filename,
+            "sha256": _sha256_file(audio_path),
+            "kind": _recording_kind(case.result, audio_path),
+        }
         resp = client.post(
             f"/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/",
             files=files,
@@ -930,7 +960,11 @@ def _maybe_upload_stereo_recording(
     )
     with path.open("rb") as fh:
         files = {"file": (filename, fh, content_type)}
-        data = {"filename": filename}
+        data = {
+            "filename": filename,
+            "sha256": _sha256_file(path),
+            "kind": "stereo",
+        }
         resp = client.post(
             f"/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/",
             files=files,
@@ -944,7 +978,7 @@ def _maybe_upload_stereo_recording(
 
 
 def _upload_audio_file(
-    client: httpx.Client, call_execution_id: str, path: Path
+    client: httpx.Client, call_execution_id: str, path: Path, *, kind: str
 ) -> str | None:
     """POST a single on-disk WAV to the recording endpoint; return its URL."""
     filename = path.name
@@ -953,7 +987,7 @@ def _upload_audio_file(
     )
     with path.open("rb") as fh:
         files = {"file": (filename, fh, content_type)}
-        data = {"filename": filename}
+        data = {"filename": filename, "sha256": _sha256_file(path), "kind": kind}
         resp = client.post(
             f"/simulate/api/alk-simulate/call-executions/{call_execution_id}/recording/",
             files=files,
@@ -963,6 +997,14 @@ def _upload_audio_file(
     if resp.is_error:
         return None
     return _unwrap(resp.json()).get("recording_url")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _upload_channel_recording(
@@ -977,7 +1019,8 @@ def _upload_channel_recording(
     path = Path(str(value)).expanduser()
     if not (path.exists() and path.is_file() and path.stat().st_size > 0):
         return None
-    return _upload_audio_file(client, call_execution_id, path)
+    kind = "assistant" if attr == "audio_output_path" else "customer"
+    return _upload_audio_file(client, call_execution_id, path, kind=kind)
 
 
 def _attach_channel_recordings(
@@ -1022,6 +1065,20 @@ def _select_audio_path(result) -> Path | None:
         if path.exists() and path.is_file() and path.stat().st_size > 0:
             return path
     return None
+
+
+def _recording_kind(result, path: Path) -> str:
+    if (
+        result.audio_combined_path
+        and path == Path(str(result.audio_combined_path)).expanduser()
+    ):
+        return "combined"
+    if (
+        result.audio_output_path
+        and path == Path(str(result.audio_output_path)).expanduser()
+    ):
+        return "assistant"
+    return "customer"
 
 
 _TARGET_PROVIDERS = ("vapi", "retell", "livekit")
@@ -1072,7 +1129,9 @@ def _target_provider_usage(case) -> _TargetUsage | None:
 
 def _vapi_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
     cost = metadata.get("cost") if isinstance(metadata.get("cost"), dict) else {}
-    breakdown = cost.get("breakdown") if isinstance(cost.get("breakdown"), dict) else None
+    breakdown = (
+        cost.get("breakdown") if isinstance(cost.get("breakdown"), dict) else None
+    )
     usage = None
     if breakdown:
         prompt = breakdown.get("llmPromptTokens", breakdown.get("promptTokens"))
@@ -1118,7 +1177,9 @@ def _livekit_usage(metadata: dict[str, Any]) -> _TargetUsage | None:
     usage_blob = metadata.get("usage")
     if not isinstance(usage_blob, dict):
         return None
-    llm = usage_blob.get("llm") if isinstance(usage_blob.get("llm"), dict) else usage_blob
+    llm = (
+        usage_blob.get("llm") if isinstance(usage_blob.get("llm"), dict) else usage_blob
+    )
     prompt = llm.get("prompt_tokens", llm.get("promptTokens"))
     completion = llm.get("completion_tokens", llm.get("completionTokens"))
     usage = _normalized_usage(prompt, completion)
@@ -1232,13 +1293,16 @@ def _resolve_message_timing_ms(
 
     start_raw = msg.get("started_speaking_at") or msg.get("created_at") or 0.0
     stop_raw = (
-        msg.get("stopped_speaking_at")
-        or msg.get("created_at")
-        or start_raw
-        or 0.0
+        msg.get("stopped_speaking_at") or msg.get("created_at") or start_raw or 0.0
     )
-    start_ms = max(int(round((float(start_raw) - anchor) * 1000)), 0) if start_raw else 0
-    end_ms = max(int(round((float(stop_raw) - anchor) * 1000)), start_ms) if stop_raw else start_ms
+    start_ms = (
+        max(int(round((float(start_raw) - anchor) * 1000)), 0) if start_raw else 0
+    )
+    end_ms = (
+        max(int(round((float(stop_raw) - anchor) * 1000)), start_ms)
+        if stop_raw
+        else start_ms
+    )
     return start_ms, end_ms
 
 

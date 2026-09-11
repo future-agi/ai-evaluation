@@ -386,6 +386,31 @@ def test_begin_stream_is_noop_for_local_run_without_execution(tmp_path):
     assert sink._streaming is False
 
 
+def test_result_sink_prefers_customer_api_pair_over_internal_bearer():
+    from fi.simulate.results.futureagi import _open_client
+
+    with _open_client(
+        "http://localhost:8000",
+        "customer-key",
+        "customer-secret",
+        "runner-internal-secret",
+    ) as client:
+        assert client.headers["x-api-key"] == "customer-key"
+        assert client.headers["x-secret-key"] == "customer-secret"
+        assert "Authorization" not in client.headers
+
+
+def test_result_sink_uses_internal_bearer_without_customer_api_pair():
+    from fi.simulate.results.futureagi import _open_client
+
+    with _open_client(
+        "http://localhost:8000", None, None, "runner-internal-secret"
+    ) as client:
+        assert client.headers["Authorization"] == "Bearer runner-internal-secret"
+        assert "x-api-key" not in client.headers
+        assert "x-secret-key" not in client.headers
+
+
 def test_sink_uploads_stereo_recording_and_sets_url(tmp_path, monkeypatch):
     import wave
 

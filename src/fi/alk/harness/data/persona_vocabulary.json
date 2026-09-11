@@ -1,0 +1,111 @@
+{
+  "GenderChoices": [
+    "male",
+    "female"
+  ],
+  "AgeGroupChoices": [
+    "18-25",
+    "25-32",
+    "32-40",
+    "40-50",
+    "50-60",
+    "60+"
+  ],
+  "LocationChoices": [
+    "United States",
+    "Canada",
+    "United Kingdom",
+    "Australia",
+    "India"
+  ],
+  "ProfessionChoices": [
+    "Student",
+    "Teacher",
+    "Engineer",
+    "Doctor",
+    "Nurse",
+    "Business Owner",
+    "Manager",
+    "Sales Representative",
+    "Customer Service",
+    "Technician",
+    "Consultant",
+    "Accountant",
+    "Marketing Professional",
+    "Retired",
+    "Homemaker",
+    "Freelancer",
+    "Other"
+  ],
+  "PersonalityChoices": [
+    "Friendly and cooperative",
+    "Professional and formal",
+    "Cautious and skeptical",
+    "Impatient and direct",
+    "Detail-oriented",
+    "Easy-going",
+    "Anxious",
+    "Confident",
+    "Analytical",
+    "Emotional",
+    "Reserved",
+    "Talkative"
+  ],
+  "CommunicationStyleChoices": [
+    "Direct and concise",
+    "Detailed and elaborate",
+    "Casual and friendly",
+    "Formal and polite",
+    "Technical",
+    "Simple and clear",
+    "Questioning",
+    "Assertive",
+    "Passive",
+    "Collaborative"
+  ],
+  "AccentChoices": [
+    "American",
+    "Australian",
+    "Indian",
+    "Canadian",
+    "Neutral"
+  ],
+  "LanguageChoices": [
+    "Arabic",
+    "Bulgarian",
+    "Chinese Simplified",
+    "Czech",
+    "Danish",
+    "Dutch",
+    "English",
+    "Finnish",
+    "French",
+    "German",
+    "Greek",
+    "Hindi",
+    "Hungarian",
+    "Indonesian",
+    "Italian",
+    "Japanese",
+    "Korean",
+    "Malay",
+    "Norwegian",
+    "Polish",
+    "Portuguese",
+    "Romanian",
+    "Russian",
+    "Slovak",
+    "Spanish",
+    "Swedish",
+    "Turkish",
+    "Ukrainian",
+    "Vietnamese"
+  ],
+  "ConversationSpeedChoices": [
+    "0.5",
+    "0.75",
+    "1.0",
+    "1.25",
+    "1.5"
+  ]
+}

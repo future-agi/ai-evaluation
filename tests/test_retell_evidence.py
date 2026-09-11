@@ -9,7 +9,73 @@ import httpx
 
 from fi.simulate.agent.definition import ProviderEvidenceConfig
 from fi.simulate.evidence.providers.base import EvidenceContext
-from fi.simulate.evidence.providers.retell import RetellEvidenceSource
+from fi.simulate.evidence.providers.retell import (
+    RetellEvidenceSource,
+    _extract_retell_messages,
+    _extract_retell_tool_calls,
+)
+
+
+def test_retell_tool_evidence_pairs_invocation_and_result() -> None:
+    calls = _extract_retell_tool_calls(
+        [
+            {
+                "role": "tool_call_invocation",
+                "type": "custom",
+                "tool_call_id": "call-1",
+                "name": "record_preference",
+                "arguments": '{"preference":"window"}',
+                "time_sec": 4.25,
+            },
+            {
+                "role": "tool_call_result",
+                "tool_call_id": "call-1",
+                "successful": True,
+                "content": '{"recorded":true}',
+            },
+            {
+                "role": "tool_call_invocation",
+                "type": "end_call",
+                "tool_call_id": "call-2",
+                "name": "end_call",
+            },
+        ]
+    )
+
+    assert calls == [
+        {
+            "id": "call-1",
+            "name": "record_preference",
+            "type": "custom",
+            "arguments": {"preference": "window"},
+            "result": {"recorded": True},
+            "ok": True,
+            "at": 4.25,
+        },
+        {
+            "id": "call-2",
+            "name": "end_call",
+            "type": "end_call",
+            "arguments": {},
+            "result": None,
+            "ok": True,
+            "at": 0,
+        },
+    ]
+
+
+def test_retell_transcript_events_are_normalized_to_simulator_roles() -> None:
+    assert _extract_retell_messages(
+        [
+            {"role": "node_transition", "time_sec": 0},
+            {"role": "agent", "content": " Hello there. ", "time_sec": 0.5},
+            {"role": "user", "content": "Hi.", "time_sec": 1.25},
+            {"role": "tool_call_result", "content": "ignored"},
+        ]
+    ) == [
+        {"role": "assistant", "content": "Hello there.", "created_at": 0.5},
+        {"role": "user", "content": "Hi.", "created_at": 1.25},
+    ]
 
 
 def test_retell_originator_response_uses_exact_call_id(tmp_path) -> None:

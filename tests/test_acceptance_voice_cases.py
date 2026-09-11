@@ -70,7 +70,9 @@ def test_default_deepgram_voice_stack_keeps_web_budget(
 
     inputs = voice_cases.build_inputs("1.1.2", "run-default")
 
-    assert inputs.max_seconds == 120.0
+    # Transactional calls need enough room for disambiguation, payment selection and OTP without
+    # turning a healthy but deliberate agent into an infrastructure timeout.
+    assert inputs.max_seconds == 240.0
 
 
 def test_cartesia_voice_stack_uses_cartesia_models(

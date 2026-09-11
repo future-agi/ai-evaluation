@@ -65,6 +65,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _action_optimize(args[1:])
     if command == "run":
         return _run(args[1:])
+    if command == "harness":
+        # The complete environment/scenario/simulation workflow lives in ALK. This dispatch is
+        # deliberately a thin CLI renderer; hosted executors import the same harness contracts.
+        from fi.alk.harness.cli import main as harness_main
+
+        return int(harness_main(args[1:]))
     if command in {"bench", "benchmark"}:
         return _bench(args[1:])
     if command == "eval":
@@ -6379,7 +6385,7 @@ def _help(error: Optional[str] = None) -> int:
             "replay, report, compare, baseline, promote-to-regression, shrink, "
             "optimize-eval, optimize-suite, suite, capabilities, actions, "
             "action-run, action-optimize, trust, redteam-corpus, release-proof, "
-            "eval-cli, init, persona, scenario, runs, bench"
+            "eval-cli, init, persona, scenario, runs, bench, harness"
         ),
     )
     parser.print_help(sys.stderr if error else sys.stdout)

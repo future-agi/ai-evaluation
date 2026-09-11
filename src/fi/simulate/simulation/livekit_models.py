@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ except ImportError as exc:
     ) from exc
 
 from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -188,6 +191,16 @@ def _cartesia_tts(
         if config.voice not in {"alloy", ""}
         else "f786b574-daa5-4673-aa0c-cbe3e8534c02"
     )
+    # Both ride on Cartesia's ``__experimental_controls``. sonic-3 rejects a wrong emotion name or
+    # level with HTTP 400, and rejects the plugin's own TTSVoiceEmotion vocabulary, so the values
+    # come from a set validated against the live API rather than from the plugin's types.
+    speed = config.speed
+    emotion = config.emotion
+    # The only record of what the simulator actually sounded like: call_metadata reports a constant
+    # speed and voice name whatever it was given.
+    logger.info(
+        "cartesia_tts voice=%s speed=%s emotion=%s", voice, speed, emotion or None
+    )
     return cartesia.TTS(
         api_key=_required_env("CARTESIA_API_KEY"),
         http_session=http_session,
@@ -197,6 +210,8 @@ def _cartesia_tts(
             replacement="sonic-3",
         ),
         voice=voice,
+        **({"speed": float(speed)} if isinstance(speed, (int, float)) else {}),
+        **({"emotion": list(emotion)} if emotion else {}),
     )
 
 
@@ -250,7 +265,45 @@ def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
         and not os.environ.get("VERTEX_LOCATION")
     ):
         kwargs["location"] = "global"
+    thinking = _simulator_thinking(model)
+    if thinking is not None:
+        kwargs["thinking_config"] = thinking
     return google.LLM(model=model, temperature=config.temperature, **kwargs)
+
+
+# Which control a model accepts for deliberation is a provider fact and cannot be inferred from a
+# version inside its name. Gemini 2.5 and earlier take a token budget and reject a level outright;
+# Gemini 3 takes a level, and the LiveKit plugin answers a budget it cannot use by substituting its
+# own "minimal", which Vertex rejects. A model in neither list is left alone deliberately: running
+# at the provider's own default costs some latency, where sending a control it rejects costs every
+# inference and leaves the caller silent for the whole call with nothing in the transcript to say
+# why. So a model nobody has characterised yet still holds a conversation.
+_THINKING_BY_BUDGET = ("gemini-1.5", "gemini-2.0", "gemini-2.5")
+_THINKING_BY_LEVEL = ("gemini-3",)
+# The least a level-taking model will accept. "minimal" exists in the plugin but Vertex refuses it.
+_LEAST_THINKING_LEVEL = "low"
+
+
+def _simulator_thinking(model: str) -> dict[str, object] | None:
+    """How much the simulated caller deliberates before answering.
+
+    A person on a phone call answers from what they already know, so thinking buys nothing here and
+    is charged twice: once in latency the target hears as an unnatural pause, and again in a call
+    whose duration no longer reflects how the conversation actually went. As near off as the model
+    allows. `SIMULATOR_LLM_THINKING` takes a thinking level, or a token budget as a number, and an
+    explicit request is honoured even on a model this module does not recognise.
+    """
+    asked = os.environ.get("SIMULATOR_LLM_THINKING", "").strip().lower()
+    off = asked in ("", "off", "0", "none", "false")
+    if model.startswith(_THINKING_BY_LEVEL):
+        return {"thinking_level": _LEAST_THINKING_LEVEL if off or asked.isdigit() else asked}
+    if model.startswith(_THINKING_BY_BUDGET):
+        if off:
+            return {"thinking_budget": 0}
+        return {"thinking_budget": int(asked)} if asked.isdigit() else {"thinking_level": asked}
+    if off:
+        return None
+    return {"thinking_budget": int(asked)} if asked.isdigit() else {"thinking_level": asked}
 
 
 def _google_stt(

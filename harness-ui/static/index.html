@@ -1,0 +1,1387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness</title>
+<style>
+  :root {
+    --paper: #f6f6f3; --card: #fffffe; --ink: #16191e; --muted: #6d7480;
+    --hair: #dfe0db; --hair-soft: #ebece7;
+    --world: #1c6b59; --world-wash: #e6efec;
+    --refuse: #9a6410; --refuse-wash: #f6eddc;
+    --fail: #ad3f39; --fail-wash: #f7e6e4;
+    --key: #5a5f8f; --str: #1c6b59; --num: #9a6410; --bool: #ad3f39;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0e1014; --card: #161920; --ink: #e6e8ec; --muted: #8a919d;
+      --hair: #262a32; --hair-soft: #1d212a;
+      --world: #6cc0a8; --world-wash: #14261f;
+      --refuse: #d8a55b; --refuse-wash: #2a2113;
+      --fail: #e0817a; --fail-wash: #2b1817;
+      --key: #9aa0d8; --str: #6cc0a8; --num: #d8a55b; --bool: #e0817a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 14.5px; line-height: 1.5; }
+
+  .shell { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ---------- topbar: agent · roadmap · spend ---------- */
+  .topbar {
+    display: grid; grid-template-columns: minmax(11rem, auto) 1fr minmax(9rem, auto);
+    align-items: center; gap: 1.2rem; padding: 0.55rem 1.2rem;
+    border-bottom: 1px solid var(--hair); background: var(--card); flex: 0 0 auto;
+  }
+  @media (max-width: 1000px) { .topbar { grid-template-columns: 1fr auto; } .topbar .roadmap { grid-column: 1 / -1; grid-row: 2; } }
+  .agent-pill { display: flex; align-items: baseline; gap: 0.55rem; min-width: 0; }
+  .agent-pill select {
+    font-family: var(--sans); font-size: 0.95rem; font-weight: 600;
+    color: var(--ink); background: transparent; border: 0; padding: 0.1rem 0.2rem 0.1rem 0;
+    cursor: pointer; max-width: 14rem;
+  }
+  .agent-pill select:focus-visible { outline: 1px solid var(--muted); border-radius: 3px; }
+  .ghost { font-family: var(--sans); font-size: 0.72rem; color: var(--muted); background: none;
+           border: 1px solid var(--hair); border-radius: 20px; padding: 0.15rem 0.6rem; cursor: pointer; }
+  .ghost:hover { color: var(--ink); border-color: var(--muted); }
+  .ghost.danger:hover { color: var(--fail); border-color: var(--fail); }
+  .step.blocked { opacity: 0.45; }
+  .step.blocked .lbl { text-decoration: none; }
+  .session-path { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); }
+
+  .spend { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); white-space: nowrap; text-align: right; }
+  .spend .busy-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--refuse); margin-right: 0.4rem; animation: blink 1.2s ease-in-out infinite; vertical-align: 1px; }
+  @media (prefers-reduced-motion: reduce) { .spend .busy-dot { animation: none; } }
+
+  /* the roadmap */
+  .roadmap { display: flex; align-items: flex-start; justify-content: center; gap: 0; overflow-x: auto; padding: 0.2rem 0; }
+  .step { display: flex; flex-direction: column; align-items: center; gap: 0.22rem; min-width: 6.2rem; position: relative;
+          background: none; border: 0; padding: 0.1rem 0.3rem; cursor: default; font-family: var(--sans); color: var(--muted); }
+  .step[data-go] { cursor: pointer; }
+  .step[data-go]:hover .lbl, .step[data-go]:focus-visible .lbl { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .step:focus-visible { outline: 1px solid var(--muted); border-radius: 4px; }
+  .step .dot {
+    width: 1.35rem; height: 1.35rem; border-radius: 50%; border: 2px solid var(--hair);
+    background: var(--card); color: var(--muted); display: grid; place-items: center;
+    font-family: var(--mono); font-size: 0.72rem; z-index: 1; transition: box-shadow 0.15s ease;
+  }
+  .step.done .dot { border-color: var(--world); background: var(--world-wash); color: var(--world); }
+  .step.now .dot { border-color: var(--ink); color: var(--ink); box-shadow: 0 0 0 3px var(--hair-soft); }
+  .step.now.working .dot { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 3px var(--hair-soft); } 50% { box-shadow: 0 0 0 7px var(--hair-soft); } }
+  @media (prefers-reduced-motion: reduce) { .step.now.working .dot { animation: none; } }
+  .step .lbl { font-size: 0.74rem; font-weight: 600; color: var(--muted); }
+  .step.now .lbl { color: var(--ink); }
+  .step.done .lbl { color: var(--ink); font-weight: 500; }
+  .step .sub { font-family: var(--mono); font-size: 0.62rem; color: var(--muted); white-space: nowrap; min-height: 1em; }
+  .step + .step::before {
+    content: ""; position: absolute; top: calc(0.1rem + 0.675rem); right: calc(50% + 0.85rem);
+    width: calc(100% - 1.9rem); height: 2px; background: var(--hair);
+  }
+  .step.done + .step.done::before, .step.done + .step.now::before { background: var(--world); opacity: 0.5; }
+
+  /* ---------- the two columns ---------- */
+  .app { display: grid; grid-template-columns: minmax(0, 42fr) minmax(0, 58fr); flex: 1 1 auto; min-height: 0; }
+  @media (max-width: 900px) { .app { grid-template-columns: 1fr; overflow-y: auto; } }
+
+  /* ---------- chat ---------- */
+  .chat { display: flex; flex-direction: column; border-right: 1px solid var(--hair); min-width: 0; background: var(--card); min-height: 0; }
+  @media (max-width: 900px) { .chat { height: 65vh; border-right: 0; border-bottom: 1px solid var(--hair); } }
+
+  .thread { flex: 1 1 auto; overflow-y: auto; padding: 1.1rem; display: flex; flex-direction: column; gap: 1.3rem; }
+
+  .msg { display: flex; flex-direction: column; gap: 0.35rem; }
+  .msg .who { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.07em; color: var(--muted); text-transform: uppercase; }
+  .msg .prose { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg .prose.md { white-space: normal; display: flex; flex-direction: column; gap: 0.35rem; }
+  .msg .prose.md p { margin: 0; white-space: pre-wrap; }
+  .msg .prose.md .h { font-weight: 650; font-size: 0.95rem; margin-top: 0.25rem; }
+  .msg .prose.md ul, .msg .prose.md ol { margin: 0; padding-left: 1.3rem; }
+  .msg .prose.md li { margin: 0.12rem 0; }
+  .msg .prose.md code, .exchange code { font-family: var(--mono); font-size: 0.85em; background: var(--hair-soft); border-radius: 3px; padding: 0.05em 0.3em; }
+  .msg.you .bubble { background: var(--hair-soft); border-radius: 10px 10px 10px 3px; padding: 0.6rem 0.8rem; align-self: flex-start; max-width: 92%; white-space: pre-wrap; }
+
+  .work { border-left: 2px solid var(--hair); padding-left: 0.75rem; display: flex; flex-direction: column; gap: 0.28rem; margin: 0.2rem 0; }
+  .row { font-family: var(--mono); font-size: 0.765rem; color: var(--muted); display: flex; gap: 0.5rem; align-items: baseline; }
+  .row .mark { flex: 0 0 auto; width: 0.9em; }
+  .row .what { color: var(--ink); flex: 0 0 auto; }
+  .row .said { color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+  .row.ok .mark { color: var(--world); }
+  .row.refused .mark { color: var(--refuse); }
+  .row.refused .said { color: var(--refuse); }
+  .row.busy .mark { color: var(--muted); animation: spin 1s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .row.busy .mark { animation: none; } }
+
+  .exchange { font-size: 0.85rem; margin: 0.1rem 0 0.1rem 0.75rem; }
+  .exchange .lbl { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); margin-right: 0.45em; }
+  .verdict-line { font-family: var(--mono); font-size: 0.78rem; margin-left: 0.75rem; }
+  .verdict-line.pass { color: var(--world); }
+  .verdict-line.fail { color: var(--fail); }
+
+  .thinking { display: flex; align-items: center; gap: 0.5rem; font-family: var(--mono); font-size: 0.76rem; color: var(--muted); }
+  .thinking .dots { display: inline-flex; gap: 3px; }
+  .thinking .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: blink 1.2s ease-in-out infinite; }
+  .thinking .dots i:nth-child(2) { animation-delay: 0.2s; }
+  .thinking .dots i:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .thinking .dots i { animation: none; opacity: 0.6; } }
+  .elapsed { font-variant-numeric: tabular-nums; }
+
+  details.more { font-family: var(--mono); font-size: 0.74rem; margin: 0.1rem 0 0.3rem 1.4rem; }
+  details.more summary { color: var(--muted); cursor: pointer; }
+  details.more pre { margin: 0.25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+
+  .error-line { font-family: var(--mono); font-size: 0.78rem; color: var(--fail); border-left: 2px solid var(--fail); padding-left: 0.75rem; white-space: pre-wrap; }
+
+  .composer { border-top: 1px solid var(--hair); padding: 0.75rem 1.1rem 0.9rem; flex: 0 0 auto; }
+  .chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.55rem; }
+  .chip { font-size: 0.76rem; border: 1px solid var(--hair); background: transparent; color: var(--muted); border-radius: 20px; padding: 0.24rem 0.7rem; cursor: pointer; font-family: var(--sans); }
+  .chip:hover, .chip:focus-visible { color: var(--ink); border-color: var(--muted); outline: none; }
+  .box { display: flex; align-items: flex-end; gap: 0.6rem; border: 1px solid var(--hair); border-radius: 10px; padding: 0.55rem 0.65rem; background: var(--paper); }
+  .box:focus-within { border-color: var(--muted); }
+  textarea { flex: 1 1 auto; border: 0; background: transparent; resize: none; color: var(--ink); font-family: var(--sans); font-size: 0.92rem; line-height: 1.45; outline: none; min-height: 2.4em; max-height: 9em; }
+  textarea::placeholder { color: var(--muted); }
+  .send { flex: 0 0 auto; border: 0; border-radius: 7px; background: var(--ink); color: var(--paper); padding: 0.4rem 0.8rem; font-size: 0.8rem; cursor: pointer; font-family: var(--sans); }
+  .send:disabled { opacity: 0.45; cursor: default; }
+  .stop { flex: 0 0 auto; border: 1px solid var(--fail); border-radius: 7px; background: transparent;
+          color: var(--fail); padding: 0.4rem 0.8rem; font-size: 0.8rem; cursor: pointer; font-family: var(--sans); }
+  .stop:hover { background: var(--fail-wash); }
+  .hint { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); margin-top: 0.45rem; overflow-wrap: anywhere; }
+
+  /* ---------- workspace ---------- */
+  .preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .tabs { display: flex; border-bottom: 1px solid var(--hair); padding: 0 1.1rem; overflow-x: auto; flex: 0 0 auto; background: var(--card); }
+  .tab { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.04em; color: var(--muted); padding: 0.75rem 0.9rem; border: 0; border-bottom: 2px solid transparent; white-space: nowrap; background: none; cursor: pointer; }
+  .tab .n { color: var(--muted); opacity: 0.55; margin-left: 0.35rem; }
+  .tab.on { color: var(--ink); border-bottom-color: var(--ink); }
+  .preview-body { flex: 1 1 auto; overflow-y: auto; padding: 1.1rem; }
+
+  .pane { background: var(--card); border: 1px solid var(--hair); border-radius: 6px; padding: 0.9rem 1rem; margin-bottom: 1rem; }
+  .pane-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 0.7rem; flex-wrap: wrap; }
+  .pane-head h3 { margin: 0; font-size: 0.92rem; font-weight: 600; }
+  .pane-head .meta { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
+  .pane .empty { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .pane .empty-act { margin-top: 0.6rem; }
+
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 0.76rem; }
+  th, td { text-align: left; padding: 0.26rem 0.55rem 0.26rem 0; border-bottom: 1px solid var(--hair-soft); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 0.67rem; letter-spacing: 0.06em; text-transform: uppercase; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .scroll-x { overflow-x: auto; }
+  .scroll-xy { overflow: auto; max-height: 21rem; }
+  .scroll-xy thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+
+  .filter { font-family: var(--mono); font-size: 0.74rem; color: var(--ink); background: var(--paper);
+            border: 1px solid var(--hair); border-radius: 6px; padding: 0.28rem 0.6rem; outline: none; width: 12rem; max-width: 100%; }
+  .filter:focus { border-color: var(--muted); }
+  .filter::placeholder { color: var(--muted); }
+
+  .rule-list { margin: 0; padding-left: 1.1rem; font-size: 0.84rem; }
+  .rule-list li { margin-bottom: 0.3rem; }
+  .amended { background: var(--refuse-wash); color: var(--refuse); font-family: var(--mono); font-size: 0.74rem; border-radius: 3px; padding: 0.35rem 0.55rem; margin-top: 0.6rem; }
+
+  .tag { font-size: 0.67rem; letter-spacing: 0.08em; padding: 0.12rem 0.45rem; border-radius: 3px; text-transform: uppercase; font-family: var(--mono); }
+  .tag.pass { background: var(--world-wash); color: var(--world); }
+  .tag.fail { background: var(--fail-wash); color: var(--fail); }
+  .tag.code { background: var(--world-wash); color: var(--world); }
+  .tag.judge { background: var(--refuse-wash); color: var(--refuse); }
+  .tag.soft { background: var(--hair-soft); color: var(--muted); text-transform: none; letter-spacing: 0.02em; }
+  button.tag { border: 0; cursor: pointer; }
+  button.tag.off { opacity: 0.45; }
+
+  /* expandable cards (scenarios, world tables, handlers, runs) */
+  details.xcard { background: var(--card); border: 1px solid var(--hair); border-radius: 6px; margin-bottom: 0.7rem; }
+  details.xcard > summary {
+    list-style: none; cursor: pointer; padding: 0.7rem 1rem;
+    display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; border-radius: 6px;
+  }
+  details.xcard > summary::-webkit-details-marker { display: none; }
+  details.xcard > summary::before { content: "▸"; font-family: var(--mono); color: var(--muted); font-size: 0.8rem; transition: transform 0.12s ease; }
+  details.xcard[open] > summary::before { transform: rotate(90deg); }
+  details.xcard > summary:hover { background: var(--hair-soft); }
+  details.xcard[open] > summary { border-bottom: 1px solid var(--hair-soft); border-radius: 6px 6px 0 0; }
+  details.xcard > .body { padding: 0.8rem 1rem 0.95rem 1.85rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .xcard .title { font-weight: 600; font-size: 0.9rem; }
+  .xcard .meta { font-family: var(--mono); font-size: 0.71rem; color: var(--muted); }
+  .xcard .spacer { flex: 1 1 auto; }
+
+  .field { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .field > .k { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .field blockquote { margin: 0; border-left: 3px solid var(--hair); padding: 0.15rem 0 0.15rem 0.7rem; font-size: 0.9rem; }
+  .chips-row { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+
+  /* code blocks with a copy button */
+  .codewrap { position: relative; min-width: 0; }
+  .codewrap pre { margin: 0; font-family: var(--mono); font-size: 0.72rem; white-space: pre; overflow-x: auto;
+                  background: var(--paper); border: 1px solid var(--hair-soft); border-radius: 4px; padding: 0.55rem 2.6rem 0.55rem 0.7rem; }
+  .codewrap pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .codewrap .copy { position: absolute; top: 0.35rem; right: 0.35rem; font-family: var(--mono); font-size: 0.64rem;
+                    color: var(--muted); background: var(--card); border: 1px solid var(--hair); border-radius: 4px;
+                    padding: 0.1rem 0.45rem; cursor: pointer; opacity: 0; transition: opacity 0.12s ease; }
+  .codewrap:hover .copy, .codewrap .copy:focus-visible { opacity: 1; }
+  .codewrap .copy:hover { color: var(--ink); border-color: var(--muted); }
+
+  ul.steps { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 0.76rem; counter-reset: step; }
+  ul.steps li { display: flex; gap: 0.6rem; padding: 0.26rem 0; border-bottom: 1px solid var(--hair-soft); align-items: baseline; }
+  ul.steps li:last-child { border-bottom: 0; }
+  ul.steps li::before { counter-increment: step; content: counter(step); flex: 0 0 1.3em; text-align: right; color: var(--muted); font-size: 0.7rem; }
+  ul.steps .tool { color: var(--ink); }
+  ul.steps .args { color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+
+  ul.checks { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 0.77rem; }
+  ul.checks li { display: flex; gap: 0.5rem; padding: 0.28rem 0; border-bottom: 1px solid var(--hair-soft); align-items: flex-start; }
+  ul.checks li:last-child { border-bottom: 0; }
+  .cbox { flex: 0 0 auto; width: 1em; color: var(--world); }
+  .cbox.no { color: var(--fail); }
+  .cbox.hmm { color: var(--refuse); }
+  .kind { flex: 0 0 auto; color: var(--muted); width: 5.4em; }
+  .claim { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .claim .why { display: block; color: var(--fail); font-size: 0.95em; padding-top: 0.18rem; font-family: var(--sans); }
+
+  /* what the agent did on a call */
+  ul.calls { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 0.74rem; }
+  ul.calls li { padding: 0.28rem 0; border-bottom: 1px solid var(--hair-soft); overflow-wrap: anywhere; }
+  ul.calls li:last-child { border-bottom: 0; }
+  ul.calls li.ok { color: var(--ink); }
+  ul.calls li.ok::before { content: "✓ "; color: var(--world); }
+  ul.calls li.refused { color: var(--refuse); }
+  ul.calls li.refused::before { content: "⃠ "; }
+  ul.calls li.crashed { color: var(--fail); }
+  ul.calls li.crashed::before { content: "✗ "; }
+
+  /* the transcript */
+  .talk { display: flex; flex-direction: column; gap: 0.45rem; }
+  .talk .line { max-width: 88%; padding: 0.4rem 0.65rem; border-radius: 9px; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .talk .line .spk { display: block; font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.1rem; }
+  .talk .agent { align-self: flex-start; background: var(--hair-soft); border-radius: 9px 9px 9px 3px; }
+  .talk .caller { align-self: flex-end; background: var(--world-wash); border-radius: 9px 9px 3px 9px; }
+
+  /* the JSON tree */
+  .jt { font-family: var(--mono); font-size: 0.76rem; line-height: 1.55; overflow-x: auto; }
+  .jt details { padding-left: 1.05rem; }
+  .jt details > summary { list-style: none; cursor: pointer; margin-left: -1.05rem; white-space: nowrap; }
+  .jt details > summary::-webkit-details-marker { display: none; }
+  .jt details > summary::before { content: "▸"; display: inline-block; width: 1.05rem; color: var(--muted); transition: transform 0.1s ease; }
+  .jt details[open] > summary::before { transform: rotate(90deg); }
+  .jt details > summary:hover { background: var(--hair-soft); border-radius: 3px; }
+  .jt .leaf { padding-left: 0; }
+  .jt .k { color: var(--key); }
+  .jt .s { color: var(--str); overflow-wrap: anywhere; white-space: pre-wrap; }
+  .jt .n { color: var(--num); }
+  .jt .b { color: var(--bool); }
+  .jt .z { color: var(--muted); font-style: italic; }
+  .jt .hint { color: var(--muted); font-size: 0.9em; }
+  .jt-bar { display: flex; gap: 0.45rem; margin-bottom: 0.4rem; }
+  .jt-bar button { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); background: none; border: 1px solid var(--hair); border-radius: 4px; padding: 0.12rem 0.5rem; cursor: pointer; }
+  .jt-bar button:hover { color: var(--ink); border-color: var(--muted); }
+
+  .gates { display: flex; gap: 0.9rem; flex-wrap: wrap; font-family: var(--mono); font-size: 0.73rem; }
+  .gate { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--muted); }
+  .gate .bulb { display: grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: 50%;
+                border: 1px solid var(--hair); font-size: 0.7rem; }
+  .gate.on { color: var(--world); }
+  .gate.on .bulb { border-color: var(--world); background: var(--world-wash); }
+  .gate.off { color: var(--fail); }
+  .gate.off .bulb { border-color: var(--fail); background: var(--fail-wash); }
+  .gate.unknown .bulb { border-style: dashed; }
+
+  .subline { font-style: italic; color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .problem { background: var(--fail-wash); color: var(--fail); font-family: var(--mono); font-size: 0.74rem; border-radius: 3px; padding: 0.35rem 0.55rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <div class="agent-pill">
+      <select id="agent-picker" aria-label="Session"></select>
+      <button class="ghost" id="new-session" title="Start a new session">+ new</button>
+      <button class="ghost danger" id="del-session" title="Delete this session">delete</button>
+    </div>
+    <nav class="roadmap" id="roadmap" aria-label="Stages"></nav>
+    <div class="spend" id="spend"></div>
+  </div>
+
+  <div class="app">
+    <div class="chat">
+      <div class="thread" id="thread"></div>
+      <div class="composer">
+        <div class="chips" id="chips"></div>
+        <div class="box">
+          <textarea id="input" rows="2" placeholder="Tell it what you want…  ( / to focus )" aria-label="Message"></textarea>
+          <button class="send" id="send">Send</button>
+          <button class="stop" id="stop" hidden>Stop</button>
+        </div>
+        <div class="hint" id="hint"></div>
+      </div>
+    </div>
+
+    <div class="preview">
+      <div class="tabs" id="tabs"></div>
+      <div class="preview-body" id="preview"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+let status = { stage: "", agent: null, have: {} };
+let activeTab = localStorage.getItem("harness.tab") || "contract";
+let runsFilter = "all";
+let sending = false;
+
+/* ---------------- topbar: picker, roadmap, spend ---------------- */
+
+async function renderPicker() {
+  const data = await fetch("/api/sessions").then(r => r.json()).catch(() => ({ sessions: [] }));
+  const picker = $("agent-picker");
+  picker.replaceChildren();
+  const open = data.open;
+  if (!open) picker.appendChild(new Option("no session — start one", "", true, true));
+  for (const one of data.sessions || []) {
+    const has = one.has || {};
+    const said = has.scenarios ? `${has.scenarios} scenario${has.scenarios === 1 ? "" : "s"}`
+      : has.world ? "environment built"
+      : has.contract ? "contract only"
+      : "just started";
+    const label = `${one.agent || one.id} · ${said}`;
+    picker.appendChild(new Option(label, one.id, one.id === open, one.id === open));
+  }
+  picker.onchange = async () => {
+    const id = picker.value;
+    if (!id || id === (status.session || {}).id) return;
+    status = await fetch("/api/sessions/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).then(r => r.json());
+    await restore();
+    renderAll();
+  };
+}
+
+async function newSession() {
+  if (sending) return;
+  status = await fetch("/api/sessions", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent: "" }),
+  }).then(r => r.json());
+  $("thread").replaceChildren();
+  renderAll();
+  const msg = newHarnessMsg();
+  msg.appendChild(el("p", "prose",
+    "New session. Which agent would you like to test? Tell me where its code lives."));
+}
+
+async function deleteSession() {
+  const one = status.session;
+  if (!one || sending) return;
+  if (!confirm(`Delete ${one.agent || one.id} and everything in it? This cannot be undone.`)) return;
+  status = await fetch(`/api/sessions/${encodeURIComponent(one.id)}`, { method: "DELETE" })
+    .then(r => r.json());
+  $("thread").replaceChildren();
+  await restore();
+  renderAll();
+}
+
+/* The conversation, read back from the session's folder. Refreshing the page must not lose it —
+   the folder is the state, not the browser. */
+async function restore() {
+  const thread = $("thread");
+  thread.replaceChildren();
+  const data = await fetch("/api/history").then(r => r.json()).catch(() => ({ messages: [] }));
+  for (const message of data.messages || []) {
+    if (message.role === "you") { bubbleYou(message.text); continue; }
+    const msg = newHarnessMsg();
+    if ((message.tools || []).length) {
+      const work = el("div", "work");
+      for (const one of message.tools) {
+        const row = el("div", "row " + (one.failed ? "refused" : "ok"));
+        row.appendChild(el("span", "mark", one.failed ? "✗" : "✓"));
+        row.appendChild(el("span", "what", one.label || ""));
+        const said = (one.said || [])[0] || one.target || "";
+        if (said) row.appendChild(el("span", "said", String(said).slice(0, 150)));
+        work.appendChild(row);
+      }
+      msg.appendChild(work);
+    }
+    if (message.text) msg.appendChild(renderMd(message.text));
+  }
+  scrollDown();
+}
+
+/* The five stages, and where each one's evidence lives. Clicking a step that has produced
+   something opens its tab; the roadmap is navigation, not decoration. */
+const STAGES = [
+  { key: "reception",  label: "Agent",       tab: null },
+  { key: "understand", label: "Contract",    tab: "contract" },
+  { key: "build",      label: "Environment", tab: "world" },
+  { key: "scenarios",  label: "Scenarios",   tab: "scenarios" },
+  { key: "run",        label: "Runs",        tab: "runs" },
+];
+
+function stageState() {
+  const have = status.have || {};
+  return {
+    reception:  { done: !!status.agent, sub: status.agent || "" },
+    understand: { done: !!have.contract, sub: have.contract ? "written" : "" },
+    build:      { done: !!have.world, sub: have.world ? `${have.sub_goals || 0} sub-goals` : "" },
+    scenarios:  { done: (have.scenarios || 0) > 0, sub: have.scenarios ? `${have.scenarios} proved` : "" },
+    run:        { done: (have.runs || 0) > 0, sub: have.runs ? `${have.runs_passed || 0}/${have.runs} passed` : "" },
+  };
+}
+
+function renderRoadmap() {
+  const bar = $("roadmap");
+  bar.replaceChildren();
+  const states = stageState();
+  const reachable = status.stages || {};
+  for (const stage of STAGES) {
+    const one = states[stage.key];
+    const now = status.stage === stage.key;
+    const blocked = reachable[stage.key];
+    const step = el("button", "step" + (one.done ? " done" : "") + (now ? " now" : "")
+      + (now && status.busy ? " working" : "") + (blocked ? " blocked" : ""));
+    step.appendChild(el("span", "dot", one.done ? "✓" : now ? "●" : ""));
+    step.appendChild(el("span", "lbl", stage.label));
+    step.appendChild(el("span", "sub", one.sub || (now ? "in progress" : " ")));
+    step.title = blocked || `open the ${stage.label.toLowerCase()} stage`;
+    if (!blocked && status.session) {
+      step.dataset.go = stage.key;
+      step.onclick = async () => {
+        if (sending) return;
+        if (stage.tab && one.done) setTab(stage.tab);
+        if (status.stage === stage.key) return;
+        const answer = await fetch("/api/stage", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stage: stage.key }),
+        }).then(r => r.json());
+        if (answer.error) { alert(answer.error); return; }
+        status = answer;
+        renderAll();
+      };
+    }
+    bar.appendChild(step);
+  }
+}
+
+function renderHeader() {
+  const spend = $("spend");
+  spend.replaceChildren();
+  if (status.busy) spend.appendChild(el("span", "busy-dot"));
+  const spent = status.spent_usd ? `$${status.spent_usd.toFixed(4)}` : "$0.0000";
+  spend.appendChild(document.createTextNode([status.model, spent].filter(Boolean).join(" · ")));
+  const one = status.session;
+  $("hint").textContent = one ? `${one.id}  ·  ${status.out || ""}` : "no session";
+}
+
+function renderChips() {
+  const chips = $("chips");
+  chips.replaceChildren();
+  const add = (label, fn) => {
+    const chip = el("button", "chip", label);
+    chip.onclick = fn;
+    chips.appendChild(chip);
+  };
+  const have = status.have || {};
+  if (!status.agent) {
+    add("test the drive_thru example", () => send("i want to test my drive thru voice agent, the code is in src/fi/alk"));
+  }
+  if (have.world && !have.scenarios) {
+    add("write 5 hard scenarios", () => send("write 5 hard scenarios for this agent"));
+  }
+  if (have.scenarios > 0 && status.stage === "run") {
+    add("what can be run?", () => send("which scenarios are there, and have any been run?"));
+    add("run one live call", () => send("run the first scenario that has not been run yet"));
+  } else if (have.scenarios > 0) {
+    add(`run all ${have.scenarios} against the world`, () => runScenarios(""));
+  }
+  if (status.stage && status.agent) {
+    add("next stage →", () => send(""));
+  }
+}
+
+function setTab(key) {
+  activeTab = key;
+  localStorage.setItem("harness.tab", key);
+  renderTabs(); loadTab();
+}
+
+function renderAll() { renderHeader(); renderRoadmap(); renderChips(); renderTabs(); loadTab(); renderPicker(); }
+
+/* ---------------- markdown-lite for the harness's prose ----------------
+   The stages speak markdown: headings, bullets, **bold**, `code`. While a message streams it
+   stays plain text; when the turn finishes it is re-rendered. DOM nodes only, never innerHTML. */
+
+function inlineMd(text) {
+  const fragment = document.createDocumentFragment();
+  const parts = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  for (const part of parts) {
+    if (/^\*\*[^*]+\*\*$/.test(part)) {
+      const bold = el("strong", "", part.slice(2, -2));
+      fragment.appendChild(bold);
+    } else if (/^`[^`]+`$/.test(part)) {
+      fragment.appendChild(el("code", "", part.slice(1, -1)));
+    } else if (part) {
+      fragment.appendChild(document.createTextNode(part));
+    }
+  }
+  return fragment;
+}
+
+function renderMd(raw) {
+  const out = el("div", "prose md");
+  let list = null;
+  let paragraph = [];
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const p = el("p");
+    p.appendChild(inlineMd(paragraph.join("\n")));
+    out.appendChild(p);
+    paragraph = [];
+  };
+  const flushList = () => { list = null; };
+  for (const line of String(raw).split("\n")) {
+    const heading = line.match(/^#{1,4}\s+(.*)$/);
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (heading) {
+      flushParagraph(); flushList();
+      const h = el("div", "h");
+      h.appendChild(inlineMd(heading[1]));
+      out.appendChild(h);
+    } else if (bullet || numbered) {
+      flushParagraph();
+      const want = bullet ? "ul" : "ol";
+      if (!list || list.tagName.toLowerCase() !== want) { list = el(want); out.appendChild(list); }
+      const item = el("li");
+      item.appendChild(inlineMd((bullet || numbered)[1]));
+      list.appendChild(item);
+    } else if (!line.trim()) {
+      flushParagraph(); flushList();
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  }
+  flushParagraph();
+  return out;
+}
+
+/* ---------------- shared pieces ---------------- */
+
+function pane(container, title, meta) {
+  const box = el("div", "pane");
+  if (title) {
+    const head = el("div", "pane-head");
+    head.appendChild(el("h3", "", title));
+    if (meta) head.appendChild(el("div", "meta", meta));
+    box.appendChild(head);
+  }
+  container.appendChild(box);
+  return box;
+}
+
+function emptyPane(container, title, said, action, message) {
+  const box = pane(container, title);
+  box.appendChild(el("p", "empty", said));
+  if (action) {
+    const act = el("div", "empty-act");
+    const chip = el("button", "chip", action);
+    chip.onclick = () => send(message);
+    act.appendChild(chip);
+    box.appendChild(act);
+  }
+  return box;
+}
+
+function xcard(container, summaryBits, open) {
+  const card = el("details", "xcard");
+  if (open) card.open = true;
+  const summary = el("summary");
+  for (const bit of summaryBits) summary.appendChild(bit);
+  card.appendChild(summary);
+  const body = el("div", "body");
+  card.appendChild(body);
+  container.appendChild(card);
+  return body;
+}
+
+function field(body, label, node) {
+  const wrap = el("div", "field");
+  wrap.appendChild(el("span", "k", label));
+  wrap.appendChild(node);
+  body.appendChild(wrap);
+  return wrap;
+}
+
+function codeBlock(text, { wrap = false } = {}) {
+  const box = el("div", "codewrap");
+  const pre = el("pre", wrap ? "wrap" : "", text);
+  const copy = el("button", "copy", "copy");
+  copy.onclick = async (event) => {
+    event.preventDefault();
+    try { await navigator.clipboard.writeText(text); copy.textContent = "copied"; }
+    catch { copy.textContent = "select + ⌘C"; }
+    setTimeout(() => { copy.textContent = "copy"; }, 1400);
+  };
+  box.appendChild(pre); box.appendChild(copy);
+  return box;
+}
+
+/* A collapsible JSON tree. Objects and arrays fold; primitives are typed and coloured. */
+function jsonNode(key, value, depth) {
+  const keySpan = () => {
+    const fragment = document.createDocumentFragment();
+    if (key !== null) {
+      fragment.appendChild(el("span", "k", key));
+      fragment.appendChild(document.createTextNode(": "));
+    }
+    return fragment;
+  };
+  const leafWith = (cls, text) => {
+    const leaf = el("div", "leaf");
+    leaf.appendChild(keySpan());
+    leaf.appendChild(el("span", cls, text));
+    return leaf;
+  };
+  if (value === null) return leafWith("z", "null");
+  if (typeof value === "string") return leafWith("s", JSON.stringify(value));
+  if (typeof value === "number") return leafWith("n", String(value));
+  if (typeof value === "boolean") return leafWith("b", String(value));
+
+  const isArray = Array.isArray(value);
+  const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+  if (!entries.length) return leafWith("z", isArray ? "[]" : "{}");
+
+  const branch = el("details");
+  if (depth < 2) branch.open = true;
+  const summary = el("summary");
+  summary.appendChild(keySpan());
+  summary.appendChild(el("span", "hint", isArray ? `[${entries.length}]` : `{${entries.length}}`));
+  branch.appendChild(summary);
+  for (const [k, v] of entries) branch.appendChild(jsonNode(String(k), v, depth + 1));
+  return branch;
+}
+
+function jsonTree(container, value) {
+  const bar = el("div", "jt-bar");
+  const tree = el("div", "jt");
+  const expand = el("button", "", "expand all");
+  const collapse = el("button", "", "collapse all");
+  const copy = el("button", "", "copy json");
+  expand.onclick = () => tree.querySelectorAll("details").forEach(d => d.open = true);
+  collapse.onclick = () => tree.querySelectorAll("details").forEach(d => d.open = false);
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(value, null, 2)); copy.textContent = "copied"; }
+    catch { copy.textContent = "no clipboard"; }
+    setTimeout(() => { copy.textContent = "copy json"; }, 1400);
+  };
+  bar.appendChild(expand); bar.appendChild(collapse); bar.appendChild(copy);
+  container.appendChild(bar);
+  tree.appendChild(jsonNode(null, value, 0));
+  container.appendChild(tree);
+}
+
+/* A voice transcript arrives as flat "speaker: text" lines; draw it as the conversation it was. */
+function transcriptNode(spoken) {
+  const talk = el("div", "talk");
+  let current = null;
+  for (const line of String(spoken).split("\n")) {
+    const match = line.match(/^(assistant|user|agent|customer|caller)\s*:\s*(.*)$/i);
+    if (match) {
+      const speaker = /^(assistant|agent)$/i.test(match[1]) ? "agent" : "caller";
+      current = el("div", "line " + speaker);
+      current.appendChild(el("span", "spk", speaker === "agent" ? "agent under test" : "simulated caller"));
+      current.appendChild(document.createTextNode(match[2]));
+      talk.appendChild(current);
+    } else if (current && line.trim()) {
+      current.appendChild(document.createTextNode("\n" + line));
+    }
+  }
+  if (!talk.children.length) return codeBlock(String(spoken), { wrap: true });
+  return talk;
+}
+
+function callsNode(calls) {
+  const list = el("ul", "calls");
+  for (const call of calls || []) {
+    const kind = /-> refused/.test(call) ? "refused" : /-> crashed/.test(call) ? "crashed" : "ok";
+    list.appendChild(el("li", kind, call));
+  }
+  return list;
+}
+
+function dataTable(columns, rows, { tall = false } = {}) {
+  const wrap = el("div", tall ? "scroll-xy" : "scroll-x");
+  const grid = el("table");
+  const head = el("thead"); grid.appendChild(head);
+  const headRow = el("tr"); head.appendChild(headRow);
+  for (const col of columns) headRow.appendChild(el("th", "", col));
+  const tbody = el("tbody"); grid.appendChild(tbody);
+  for (const row of rows) {
+    const line = el("tr");
+    for (const col of columns) line.appendChild(el("td", "", String(row[col] ?? "")));
+    tbody.appendChild(line);
+  }
+  wrap.appendChild(grid);
+  return { wrap, tbody };
+}
+
+/* ---------------- tabs ---------------- */
+
+/* One tab per stage. The simulator prompt and the sub-goal catalogue are products of the
+   environment stage, so they live inside it rather than in a tab of their own — a separate tab
+   made the environment look like it was only a database. */
+const TABS = [
+  { key: "contract", label: "Contract" },
+  { key: "world", label: "Environment" },
+  { key: "scenarios", label: "Scenarios" },
+  { key: "runs", label: "Runs" },
+];
+
+function renderTabs() {
+  const bar = $("tabs");
+  bar.replaceChildren();
+  for (const tab of TABS) {
+    const button = el("button", "tab" + (tab.key === activeTab ? " on" : ""), tab.label);
+    const have = status.have || {};
+    const count = tab.key === "scenarios" ? have.scenarios
+      : tab.key === "contract" ? (have.contract ? "✓" : "")
+      : tab.key === "world" ? (have.world ? "✓" : "")
+      : (have.runs || "");
+    if (count) button.appendChild(el("span", "n", String(count)));
+    button.onclick = () => setTab(tab.key);
+    bar.appendChild(button);
+  }
+}
+
+async function loadTab() {
+  const body = $("preview");
+  body.replaceChildren();
+  try {
+    if (activeTab === "contract") await tabContract(body);
+    if (activeTab === "world") await tabWorld(body);
+    if (activeTab === "scenarios") await tabScenarios(body);
+    if (activeTab === "runs") await tabRuns(body);
+  } catch (failed) {
+    pane(body, "Hm").appendChild(el("p", "empty", `could not load this tab: ${failed.message}`));
+  }
+}
+
+/* ----- contract ----- */
+
+async function tabContract(body) {
+  const data = await fetch("/api/contract").then(r => r.json());
+  if (!data.agent) {
+    emptyPane(body, "Contract", "Nothing yet. Point the harness at an agent and it will read the source and write down what is verifiably true.");
+    return;
+  }
+
+  if (data.one_liner) pane(body, data.agent, "what this agent is").appendChild(el("p", "subline", data.one_liner));
+
+  const toolsPane = pane(body, "Tools", `${(data.tools || []).length} the agent really has — click one for its arguments`);
+  for (const tool of data.tools || []) {
+    const bits = [el("span", "title", tool.name), el("span", "spacer"),
+                  el("span", "meta", (tool.args || []).join(", ") || "no arguments")];
+    const card = xcard(toolsPane, bits);
+    if (tool.description) field(card, "what it does", el("p", "subline", tool.description));
+    if ((tool.args || []).length) {
+      const rows = tool.args.map(arg => ({
+        Argument: arg,
+        Type: (tool.arg_types || {})[arg] || "",
+        "Permitted values": Array.isArray((tool.arg_values || {})[arg]) ? (tool.arg_values || {})[arg].join(", ") : "",
+      }));
+      field(card, "arguments", dataTable(["Argument", "Type", "Permitted values"], rows).wrap);
+    }
+  }
+
+  if ((data.dependencies || []).length) {
+    const deps = pane(body, "What it depends on", "the environment stage builds each of these");
+    const rows = data.dependencies.map(one => ({
+      Name: one.name,
+      Kind: one.kind || "",
+      Provides: one.what || "",
+      "Used by": (one.used_by || []).join(", "),
+    }));
+    deps.appendChild(dataTable(["Name", "Kind", "Provides", "Used by"], rows).wrap);
+  }
+  if ((data.hard_constraints || []).length) {
+    const rules = pane(body, "Hard rules", "told to the agent, graded afterwards");
+    const list = el("ul", "rule-list");
+    for (const rule of data.hard_constraints) list.appendChild(el("li", "", rule));
+    rules.appendChild(list);
+  }
+  if ((data.real_use_cases || []).length) {
+    const uses = pane(body, "Use cases", "what it is actually for");
+    const list = el("ul", "rule-list");
+    for (const use of data.real_use_cases) list.appendChild(el("li", "", use));
+    uses.appendChild(list);
+  }
+  if ((data.anti_hallucination || []).length) {
+    const anti = pane(body, "Does not exist", "plausible names later stages must never use");
+    const list = el("ul", "rule-list");
+    for (const no of data.anti_hallucination) list.appendChild(el("li", "", no));
+    anti.appendChild(list);
+  }
+  if ((data.open_questions || []).length) {
+    const open = pane(body, "Open questions", "what the source did not settle");
+    const list = el("ul", "rule-list");
+    for (const q of data.open_questions) list.appendChild(el("li", "", q));
+    open.appendChild(list);
+  }
+  if ((data.amendments || []).length) {
+    const box = pane(body, "Amendments", "changed after reading, each with its reason");
+    for (const line of data.amendments) box.appendChild(el("div", "amended", line));
+  }
+
+  jsonTree(pane(body, "The whole contract", "contract.json, as written"), data);
+}
+
+/* ----- world ----- */
+
+async function tabWorld(body) {
+  const [data, goals] = await Promise.all([
+    fetch("/api/world").then(r => r.json()),
+    fetch("/api/subgoals").then(r => r.json()).catch(() => ({ sub_goals: [] })),
+  ]);
+  if (!(data.tables || []).length) {
+    emptyPane(body, "Environment",
+      "Not built yet. This stage builds whatever the agent's tools act on — a database, a service, whatever it depends on — so every call it makes gets a truthful answer, including a truthful refusal.");
+    return;
+  }
+
+  if (data.notes) pane(body, "Builder's notes").appendChild(el("p", "subline", data.notes));
+
+  const dataPane = pane(body, "The data", `${data.tables.length} tables — click one to see its rows`);
+  for (const table of data.tables) {
+    const bits = [el("span", "title", table.name), el("span", "spacer"),
+                  el("span", "meta", `${table.count} rows`)];
+    const card = xcard(dataPane, bits, table.count > 0 && table.count <= 4);
+    const { wrap, tbody } = dataTable(table.columns, table.rows, { tall: table.rows.length > 12 });
+    if (table.rows.length > 5) {
+      const filter = el("input", "filter");
+      filter.placeholder = `filter ${table.count} rows…`;
+      filter.oninput = () => {
+        const needle = filter.value.toLowerCase();
+        for (const row of tbody.children) {
+          row.hidden = needle && !row.textContent.toLowerCase().includes(needle);
+        }
+      };
+      card.appendChild(filter);
+    }
+    card.appendChild(wrap);
+    if (table.count > table.rows.length) card.appendChild(el("p", "empty", `showing ${table.rows.length} of ${table.count}`));
+  }
+
+  if ((data.handlers || []).length) {
+    const handlersPane = pane(body, "The tools", "one handler per tool — the code that can say no");
+    for (const handler of data.handlers) {
+      const refusals = (handler.source.match(/raise ToolError/g) || []).length;
+      const bits = [el("span", "title", handler.name), el("span", "spacer"),
+                    el("span", "meta", `${handler.source.split("\n").length} lines · ${refusals} refusal${refusals === 1 ? "" : "s"}`)];
+      xcard(handlersPane, bits).appendChild(codeBlock(handler.source));
+    }
+  }
+
+  if ((data.sequences || []).length) {
+    const seqPane = pane(body, "Declared sequences", "flows where state must carry across calls");
+    for (const sequence of data.sequences) {
+      const bits = [el("span", "title", sequence.name), el("span", "spacer"),
+                    el("span", "meta", `${(sequence.calls || []).length} calls`)];
+      const card = xcard(seqPane, bits);
+      const list = el("ul", "steps");
+      for (const step of sequence.calls || []) {
+        const item = el("li");
+        item.appendChild(el("span", "tool", step.tool + (step.expect === "refusal" ? "  (must refuse)" : "")));
+        item.appendChild(el("span", "args", JSON.stringify(step.arguments || {})));
+        list.appendChild(item);
+      }
+      field(card, "calls", list);
+      if (Object.keys(sequence.expect_state || {}).length) {
+        const expects = el("div");
+        jsonTree(expects, sequence.expect_state);
+        field(card, "state afterwards must show", expects);
+      }
+    }
+  }
+
+  // The simulator prompt and the sub-goal catalogue are this stage's output too.
+  if (goals.simulator_prompt) {
+    const box = pane(body, "The simulated person", "written once; each scenario fills its slot");
+    const card = xcard(box, [el("span", "title", "simulator prompt"), el("span", "spacer"),
+      el("span", "meta", `${goals.simulator_prompt.split("\n").length} lines`)]);
+    card.appendChild(codeBlock(goals.simulator_prompt, { wrap: true }));
+  }
+
+  if ((goals.sub_goals || []).length) {
+    const settled = goals.sub_goals.filter(g => g.settled_by === "code").length;
+    const goalsPane = pane(body, "Sub-goals",
+      `${goals.sub_goals.length} shared across every scenario, ${settled} settled by code`);
+    for (const goal of goals.sub_goals) {
+      const byCode = goal.settled_by === "code";
+      const bits = [el("span", "title", goal.name),
+                    el("span", "tag " + (byCode ? "code" : "judge"), byCode ? "code" : "judged"),
+                    el("span", "spacer"), el("span", "meta", (goal.what || "").slice(0, 60))];
+      const card = xcard(goalsPane, bits);
+      field(card, "what it means", el("p", "subline", goal.what));
+      if (goal.check) field(card, "the check, in code", codeBlock(goal.check));
+      if (goal.judged) field(card, "what a judge must decide", el("p", "subline", goal.judged));
+    }
+  }
+}
+
+/* ----- scenarios ----- */
+
+async function tabScenarios(body) {
+  const [written, runs] = await Promise.all([
+    fetch("/api/scenarios").then(r => r.json()),
+    fetch("/api/runs").then(r => r.json()).catch(() => []),
+  ]);
+  if (!written.length) {
+    emptyPane(body, "Scenarios",
+      "None written yet. Each one owns a folder: what it changes, whether the world is ready for it, and one runnable file per check.",
+      status.have && status.have.world ? "write 5 scenarios" : null, "write 5 scenarios for this agent");
+    return;
+  }
+  const ranByName = {};
+  for (const run of runs || []) ranByName[run.scenario] = run;
+
+  const validated = written.filter(s => s.validated).length;
+  pane(body, "Scenarios",
+    `${validated} of ${written.length} validated — only these are ever run`);
+
+  for (const scenario of written) {
+    const ran = ranByName[scenario.name];
+    const bits = [
+      el("span", "tag " + (scenario.validated ? "pass" : scenario.validated === null ? "soft" : "fail"),
+        scenario.validated ? "validated" : scenario.validated === null ? "unchecked" : "not ready"),
+      el("span", "title", scenario.name),
+    ];
+    if (scenario.use_case) bits.push(el("span", "tag soft", scenario.use_case));
+    if (ran) bits.push(el("span", "tag " + (ran.passed ? "pass" : "fail"), ran.passed ? "ran: pass" : "ran: fail"));
+    bits.push(el("span", "spacer"));
+    bits.push(el("span", "meta",
+      `${(scenario.solution || []).length}-step solution · ${(scenario.checks || []).length} checks`));
+    const card = xcard(body, bits, !scenario.validated);
+
+    // the three gates, as the green light
+    const gates = el("div", "gates");
+    const names = { ready: "world is ready", solvable: "solution passes", not_vacuous: "checks can fail" };
+    for (const key of ["ready", "solvable", "not_vacuous"]) {
+      const held = (scenario.gates || {})[key];
+      const light = el("span", "gate " + (held === true ? "on" : held === false ? "off" : "unknown"));
+      light.appendChild(el("span", "bulb", held === true ? "✓" : held === false ? "✗" : "?"));
+      light.appendChild(el("span", "", names[key]));
+      gates.appendChild(light);
+    }
+    field(card, "validation", gates);
+    if (scenario.why) card.appendChild(el("div", "problem", scenario.why));
+
+    field(card, "the person is told", el("blockquote", "", scenario.instruction));
+    if (scenario.tests) field(card, "what this tests", el("p", "subline", scenario.tests));
+
+    if (Object.keys(scenario.variables || {}).length) {
+      const rows = Object.entries(scenario.variables).map(([slot, value]) => ({ Slot: slot, Value: String(value) }));
+      field(card, "fills the prompt's slots", dataTable(["Slot", "Value"], rows).wrap);
+    }
+
+    const steps = el("ul", "steps");
+    for (const step of scenario.solution || []) {
+      const item = el("li");
+      item.appendChild(el("span", "tool", step.tool));
+      item.appendChild(el("span", "args", JSON.stringify(step.arguments || {})));
+      steps.appendChild(item);
+    }
+    field(card, "the reference solution — proves it can be passed, never run against the agent", steps);
+
+    const checks = el("div", "chips-row");
+    for (const one of scenario.checks || []) {
+      const chip = el("span", "tag " + (one.settled_by === "code" ? "code" : "judge"), one.name);
+      chip.title = one.what || "";
+      checks.appendChild(chip);
+    }
+    field(card, "graded against", checks);
+
+    // its files, each openable
+    if ((scenario.files || []).length) {
+      const files = el("div", "chips-row");
+      for (const name of scenario.files) {
+        const open = el("button", "chip", name);
+        open.onclick = async (event) => {
+          event.preventDefault();
+          const already = card.querySelector(".file-view");
+          if (already) already.remove();
+          const got = await fetch(
+            `/api/scenario-file?name=${encodeURIComponent(scenario.name)}&path=${encodeURIComponent(name)}`
+          ).then(r => r.json()).catch(() => ({}));
+          const shown = el("div", "field file-view");
+          shown.appendChild(el("span", "k", name));
+          shown.appendChild(codeBlock(got.source || got.error || "(empty)"));
+          card.appendChild(shown);
+        };
+        files.appendChild(open);
+      }
+      field(card, `its folder — ${scenario.folder || ""}`, files);
+    }
+
+    if (ran) {
+      const jump = el("button", "chip", "see its run →");
+      jump.onclick = (event) => { event.preventDefault(); setTab("runs"); };
+      card.appendChild(jump);
+    }
+  }
+}
+
+/* ----- runs ----- */
+
+/* Two shapes land in runs.json: the live-call record (settled/judged/calls) and the older
+   local-run record (checkpoints/transcript/actions). Both deserve their whole story shown. */
+function normalizeRun(run) {
+  if (run.settled) {
+    return {
+      scenario: run.scenario, passed: run.passed, met: run.met, of: run.of,
+      checks: (run.settled || []).map(one => ({
+        name: one.name, passed: one.held, why: one.said, broken: one.broken, kind: "code",
+      })),
+      judged: run.judged || [], calls: run.calls || [], problems: run.problems || [],
+      transcript: run.transcript || "", instruction: run.instruction || "", live: true,
+    };
+  }
+  return {
+    scenario: run.scenario, passed: run.passed,
+    met: run.met !== undefined ? run.met : (run.checkpoints || []).filter(c => c.passed).length,
+    of: run.of !== undefined ? run.of : (run.checkpoints || []).length,
+    checks: (run.checkpoints || []).map(check => ({
+      name: check.name, passed: check.passed, why: check.detail, kind: check.kind || "",
+    })),
+    judged: [], calls: [], problems: [],
+    transcript: run.transcript || "", actions: run.actions || "",
+    turns: run.turns, ended: run.ended, live: false,
+  };
+}
+
+async function tabRuns(body) {
+  const data = await fetch("/api/runs").then(r => r.json());
+  if (!data.length) {
+    emptyPane(body, "Runs", "Nothing has been run yet. A run restores the world, wires the agent's own tools to it, and grades from what is left behind.",
+      status.have && status.have.scenarios ? "run one scenario" : null, "run the first scenario");
+    return;
+  }
+
+  const passed = data.filter(run => run.passed).length;
+  const summary = pane(body, "Results", `${passed} of ${data.length} passed`);
+  const filters = el("div", "chips-row");
+  for (const key of ["all", "passed", "failed"]) {
+    const button = el("button", "tag " + (key === "failed" ? "fail" : key === "passed" ? "pass" : "soft") + (runsFilter === key ? "" : " off"), key);
+    button.onclick = () => { runsFilter = key; loadTab(); };
+    filters.appendChild(button);
+  }
+  summary.appendChild(filters);
+
+  const shown = data.filter(run => runsFilter === "all" || (runsFilter === "passed") === !!run.passed);
+  if (!shown.length) summary.appendChild(el("p", "empty", `no ${runsFilter} runs`));
+
+  for (const raw of shown) {
+    const run = normalizeRun(raw);
+    const bits = [
+      el("span", "tag " + (run.passed ? "pass" : "fail"), run.passed ? "pass" : "fail"),
+      el("span", "title", run.scenario),
+      el("span", "spacer"),
+      el("span", "meta", `${run.met}/${run.of} settled by code`
+        + (run.judged.length ? ` · ${run.judged.length} judged` : "")
+        + (run.live ? " · live call" : run.turns ? ` · ${run.turns} turns` : "")),
+    ];
+    const card = xcard(body, bits, !run.passed || shown.length === 1);
+
+    if (run.instruction) field(card, "the caller was told", el("blockquote", "", run.instruction));
+
+    const checks = el("ul", "checks");
+    for (const check of run.checks) {
+      const item = el("li");
+      item.appendChild(el("span", "cbox" + (check.broken ? " hmm" : check.passed ? "" : " no"),
+        check.broken ? "!" : check.passed ? "✓" : "✗"));
+      if (check.kind) item.appendChild(el("span", "kind", check.kind));
+      const claim = el("span", "claim", check.name);
+      if (!check.passed && check.why) claim.appendChild(el("span", "why", check.why));
+      item.appendChild(claim);
+      checks.appendChild(item);
+    }
+    for (const name of run.judged) {
+      const item = el("li");
+      item.appendChild(el("span", "cbox hmm", "?"));
+      item.appendChild(el("span", "kind", "judged"));
+      item.appendChild(el("span", "claim", `${name} — not settled by code`));
+      checks.appendChild(item);
+    }
+    field(card, "the sub-goals", checks);
+
+    for (const problem of run.problems) card.appendChild(el("div", "problem", problem));
+
+    if (run.calls.length) field(card, "what the agent actually did", callsNode(run.calls));
+    if (run.actions) field(card, "what the agent actually did", codeBlock(run.actions, { wrap: true }));
+    if (run.transcript) field(card, "the conversation", transcriptNode(run.transcript));
+  }
+}
+
+/* ---------------- the stream ---------------- */
+
+function bubbleYou(text) {
+  const msg = el("div", "msg you");
+  msg.appendChild(el("div", "who", "you"));
+  msg.appendChild(el("div", "bubble", text));
+  $("thread").appendChild(msg);
+}
+
+function newHarnessMsg() {
+  const msg = el("div", "msg");
+  msg.appendChild(el("div", "who", "harness"));
+  $("thread").appendChild(msg);
+  return msg;
+}
+
+/* Something has to appear the instant you press send. The first token can be twenty seconds
+   away while a stage reads a repository, and an empty screen in that gap reads as broken. */
+function newThinking(msg, label) {
+  const strip = el("div", "thinking");
+  const dots = el("span", "dots");
+  dots.appendChild(el("i")); dots.appendChild(el("i")); dots.appendChild(el("i"));
+  strip.appendChild(dots);
+  strip.appendChild(el("span", "what", label));
+  const clock = el("span", "elapsed", "0s");
+  strip.appendChild(clock);
+  msg.appendChild(strip);
+  const started = Date.now();
+  const tick = setInterval(() => {
+    clock.textContent = Math.round((Date.now() - started) / 1000) + "s";
+  }, 1000);
+  return {
+    node: strip,
+    say(text) { strip.querySelector(".what").textContent = text; },
+    stop() { clearInterval(tick); strip.remove(); },
+  };
+}
+
+function scrollDown() { const t = $("thread"); t.scrollTop = t.scrollHeight; }
+
+async function streamFrom(url, body) {
+  sending = true; $("send").disabled = true; setSending(true);
+  $("stop").hidden = false;
+  const msg = newHarnessMsg();
+  const thinking = newThinking(msg, url.endsWith("/run") ? "running the scenarios" : "thinking");
+  let prose = null;      // current text paragraph
+  let work = null;       // current work strip
+  let openRow = null;    // tool row awaiting its result
+
+  const ensureWork = () => { if (!work) { work = el("div", "work"); msg.appendChild(work); } return work; };
+
+  const handle = (event) => {
+    if (event.kind === "tool") {
+      thinking.say((event.detail || {}).label || event.tool);
+    } else if (event.kind === "exchange") {
+      thinking.say("the conversation is running");
+    } else if (event.kind === "result_card") {
+      thinking.say("grading");
+    } else if (event.kind === "text" || event.kind === "result") {
+      thinking.say("working");
+    }
+    if (thinking.node.parentNode) msg.appendChild(thinking.node);  // keep it last
+
+    if (event.kind === "text") {
+      if (!prose) { prose = el("p", "prose", ""); prose.dataset.raw = ""; msg.appendChild(prose); }
+      prose.dataset.raw += event.text;
+      prose.textContent = prose.dataset.raw;
+      work = null; openRow = null;
+    } else if (event.kind === "tool") {
+      const detail = event.detail || {};
+      const row = el("div", "row busy");
+      row.appendChild(el("span", "mark", "◌"));
+      row.appendChild(el("span", "what", detail.label || event.tool));
+      if (detail.target) row.appendChild(el("span", "said", detail.target));
+      ensureWork().appendChild(row);
+      openRow = row; prose = null;
+    } else if (event.kind === "result") {
+      const failed = event.detail && event.detail.is_error;
+      const row = openRow || (() => { const r = el("div", "row"); r.appendChild(el("span", "mark")); r.appendChild(el("span", "said")); ensureWork().appendChild(r); return r; })();
+      row.classList.remove("busy");
+      row.classList.add(failed ? "refused" : "ok");
+      row.querySelector(".mark").textContent = failed ? "✗" : "✓";
+      /* The headline on the row, the rest folded underneath. A result like check_world says
+         "20/25 probes passed" and then names all five failures; showing only the first line
+         hides the only part that tells you what to do about it. */
+      const lines = (event.text || "").split("\n");
+      row.appendChild(el("span", "said", " " + lines[0].slice(0, 160)));
+      const rest = lines.slice(1).filter(line => line.trim()).join("\n");
+      if (rest) {
+        const more = el("details", "more");
+        more.appendChild(el("summary", "", `${lines.length - 1} more lines`));
+        more.appendChild(el("pre", "", rest));
+        if (failed || /\bfail|probe|not saved|not kept|refused\b/i.test(event.text || "")) {
+          more.open = true;   // anything that went wrong is open by default
+        }
+        row.parentNode.insertBefore(more, row.nextSibling);
+      }
+      openRow = null;
+    } else if (event.kind === "exchange") {
+      const speaker = (event.detail || {}).speaker || "";
+      const line = el("p", "exchange");
+      line.appendChild(el("span", "lbl", speaker));
+      line.appendChild(document.createTextNode(event.text));
+      msg.appendChild(line);
+      prose = null; work = null;
+    } else if (event.kind === "result_card") {
+      const detail = event.detail || {};
+      const line = el("p", "verdict-line " + (detail.passed ? "pass" : "fail"),
+        `${detail.passed ? "✓" : "✗"} ${detail.scenario} · ${detail.met}/${detail.of} checkpoints`);
+      msg.appendChild(line);
+      prose = null; work = null;
+    } else if (event.kind === "artifact") {
+      // Something landed on disk: the pane on the right is now stale.
+      loadTab();
+    } else if (event.kind === "done") {
+      const detail = event.detail || {};
+      if (detail.error) msg.appendChild(el("div", "error-line", detail.error));
+      /* The turn is over: promote every streamed paragraph from plain text to markdown. */
+      for (const paragraph of msg.querySelectorAll(".prose:not(.md)")) {
+        if (paragraph.dataset.raw && /[*#`]|^\s*[-*\d]/m.test(paragraph.dataset.raw)) {
+          paragraph.replaceWith(renderMd(paragraph.dataset.raw));
+        }
+      }
+      prose = null; work = null; openRow = null;
+    } else if (event.kind === "status") {
+      status = event.detail || status;
+      renderAll();
+    }
+    scrollDown();
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const why = await response.json().catch(() => ({}));
+      msg.appendChild(el("div", "error-line", why.error || `request failed (${response.status})`));
+    } else {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut;
+        while ((cut = buffer.indexOf("\n\n")) >= 0) {
+          const chunk = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
+          if (chunk.startsWith("data: ")) {
+            try { handle(JSON.parse(chunk.slice(6))); } catch (e) { /* partial */ }
+          }
+        }
+      }
+    }
+  } catch (failed) {
+    msg.appendChild(el("div", "error-line", `lost the server: ${failed.message}`));
+  }
+  thinking.stop();
+  $("stop").hidden = true;
+  sending = false; $("send").disabled = false; setSending(false);
+  $("input").focus();
+  scrollDown();
+}
+
+function send(text) {
+  if (sending) return;
+  const trimmed = text.trim();
+  if (trimmed) bubbleYou(trimmed);
+  streamFrom("/api/say", { text: trimmed });
+}
+
+function runScenarios(only) {
+  if (sending) return;
+  bubbleYou(only ? `run ${only}` : "run the scenarios");
+  setTab("runs");
+  streamFrom("/api/run", { text: only });
+}
+
+/* ---------------- wiring ---------------- */
+
+$("new-session").onclick = () => newSession();
+$("del-session").onclick = () => deleteSession();
+$("send").onclick = () => { const box = $("input"); send(box.value); box.value = ""; };
+function setSending(on) { $("send").textContent = on ? "…" : "Send"; }
+
+$("stop").onclick = async () => {
+  $("stop").disabled = true;
+  await fetch("/api/stop", { method: "POST" }).catch(() => {});
+  $("stop").disabled = false;
+};
+$("input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    const box = $("input"); send(box.value); box.value = "";
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "/" && document.activeElement !== $("input") &&
+      !/^(input|textarea|select)$/i.test(document.activeElement.tagName)) {
+    event.preventDefault();
+    $("input").focus();
+  }
+});
+
+async function waitWhileBusy() {
+  /* A refresh during a long stage must not look idle, and must not start anything: an empty
+     message means "move to the next stage", so auto-sending one here would quietly kick off
+     work nobody asked for and reject whatever gets typed next. */
+  const msg = newHarnessMsg();
+  const thinking = newThinking(msg, `still working on the ${status.stage} stage`);
+  sending = true; $("send").disabled = true; setSending(true);
+  $("stop").hidden = false;
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1500));
+    status = await fetch("/api/status").then(r => r.json()).catch(() => status);
+    if (!status.busy) break;
+  }
+  thinking.stop(); msg.remove();
+  $("stop").hidden = true;
+  sending = false; $("send").disabled = false; setSending(false);
+  renderAll();
+}
+
+(async function boot() {
+  status = await fetch("/api/status").then(r => r.json());
+  // The conversation is read back from the session's folder, so refreshing shows what was
+  // already said rather than an empty page with a half-filled workspace beside it.
+  await restore();
+  renderAll();
+  if (status.busy) { await waitWhileBusy(); return; }
+  // Nothing is sent on load. Reloading must not advance a stage nobody asked to advance, and
+  // must not spend a model call to be greeted.
+  if (!status.session) {
+    const msg = newHarnessMsg();
+    msg.appendChild(el("p", "prose",
+      "No session yet. Press \u201c+ new\u201d to start one, then tell me which agent to test and where its code lives."));
+  } else if (!(status.have || {}).contract && !(await fetch("/api/history").then(r => r.json())).messages.length) {
+    const msg = newHarnessMsg();
+    msg.appendChild(el("p", "prose",
+      "Which agent would you like to test? Tell me where its code lives."));
+  }
+})();
+</script>
+</body>
+</html>

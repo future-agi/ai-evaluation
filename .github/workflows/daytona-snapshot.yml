@@ -1,0 +1,79 @@
+name: Daytona snapshot
+
+# The snapshot is the immutable base runtime (see scripts/daytona-snapshot.sh).
+# Publishing is manual (controlled release cadence: bump the version when the
+# base runtime or the ALK guest changes). PRs/pushes that touch the runtime run
+# a dry-run that parses the Dockerfile + build context without publishing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      snapshot_name:
+        description: "Published snapshot name (e.g. alk-hosted-v7)"
+        required: true
+        type: string
+      cpu:
+        description: "vCPU"
+        required: false
+        default: "4"
+        type: string
+      memory_gib:
+        description: "RAM (GiB)"
+        required: false
+        default: "8"
+        type: string
+      disk_gib:
+        description: "Disk (GiB; org max is 10)"
+        required: false
+        default: "10"
+        type: string
+  pull_request:
+    paths:
+      - "Dockerfile.hosted"
+      - "src/fi/alk/harness/**"
+      - "pyproject.toml"
+      - "scripts/daytona-snapshot.sh"
+      - ".github/workflows/daytona-snapshot.yml"
+  push:
+    branches:
+      - feat/hosted-harness-e2e-runtime
+      - main
+    paths:
+      - "Dockerfile.hosted"
+      - "src/fi/alk/harness/**"
+      - "pyproject.toml"
+
+jobs:
+  validate:
+    # Dry run: parse the Dockerfile + build context via the Daytona SDK. No
+    # publish, no secret -- safe on PRs from forks.
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate snapshot build (dry run)
+        env:
+          SNAP_DRY_RUN: "1"
+        run: ./scripts/daytona-snapshot.sh dry-run
+
+  publish:
+    # Manual only: build + publish the named snapshot, then surface name+digest.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Publish snapshot
+        env:
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          DAYTONA_API_URL: ${{ vars.DAYTONA_API_URL }}
+          DAYTONA_TARGET: ${{ vars.DAYTONA_TARGET }}
+          SNAP_CPU: ${{ inputs.cpu }}
+          SNAP_MEM: ${{ inputs.memory_gib }}
+          SNAP_DISK: ${{ inputs.disk_gib }}
+        run: ./scripts/daytona-snapshot.sh "${{ inputs.snapshot_name }}"
