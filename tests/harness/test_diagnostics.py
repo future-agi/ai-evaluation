@@ -83,6 +83,22 @@ def test_unknown_code_requires_explicit_taxonomy_change() -> None:
         diagnostic_policy("new_unclassified_failure")
 
 
+@pytest.mark.parametrize(
+    ("code", "owner"),
+    [
+        ("source_model_fingerprint_mismatch", RepairOwner.COMPILER),
+        ("generated_column_authored", RepairOwner.COMPILER),
+        ("value_shape_mismatch", RepairOwner.COMPILER),
+        ("unknown_table", RepairOwner.AUTHORING),
+        ("unknown_column", RepairOwner.AUTHORING),
+    ],
+)
+def test_every_world_ir_structural_failure_has_closed_policy(
+    code: str, owner: RepairOwner
+) -> None:
+    assert diagnostic_policy(code).owner is owner
+
+
 def test_direct_construction_cannot_override_policy_or_fingerprint() -> None:
     valid = HarnessDiagnostic.create(
         stage=HarnessStage.BUILDING_ENVIRONMENT,

@@ -73,6 +73,31 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.COMPILER,
             repair_strategy="recompile_with_discovered_type",
         ),
+        "source_model_fingerprint_mismatch": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="regenerate_world_from_current_source_model",
+        ),
+        "generated_column_authored": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="mark_generated_column_absent",
+        ),
+        "value_shape_mismatch": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="normalize_value_to_discovered_type",
+        ),
+        "unknown_table": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="remove_unverified_table",
+        ),
+        "unknown_column": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="remove_unverified_column",
+        ),
         "required_value_missing": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,
