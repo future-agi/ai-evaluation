@@ -46,6 +46,7 @@ from .sources import (
     supported,
 )
 from .understand import open_stage, understand
+from .world_ir import ValueState, WorldIR, WorldValue, validate_world_ir
 
 __all__ = [
     "AgentContract",
@@ -72,6 +73,9 @@ __all__ = [
     "Stage",
     "ToolSpec",
     "Turn",
+    "ValueState",
+    "WorldIR",
+    "WorldValue",
     "artifact_dir",
     "load_skill",
     "load_bundle",
@@ -87,4 +91,5 @@ __all__ = [
     "understand",
     "validate_contract",
     "validate_scenario",
+    "validate_world_ir",
 ]
