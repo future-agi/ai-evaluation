@@ -744,7 +744,6 @@ async def _auto(args: argparse.Namespace) -> int:
 
     def emit(event_type: str, stage: str, **payload: Any) -> None:
         nonlocal event_sequence
-        # The harness's own stage announcements are the trace's timeline; see observability.
         observability.stage_event(event_type, stage, payload)
         events.write(
             CanonicalEvent.create(

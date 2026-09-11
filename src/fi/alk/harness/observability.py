@@ -1,12 +1,9 @@
-"""Emit a hosted harness run to Observe.
+"""Emit a hosted harness run to Observe: one session per job, a span per stage and per scenario,
+with the model and tool calls each stage made nested inside it.
 
-One session per job, a span per pipeline stage and per scenario, and whatever the model
-instrumentors record nested inside. Every job reports into the platform's own account, never the
-customer's, so tenancy travels as attributes instead. Identifiers only: no transcripts, prompts or
-credentials are set here.
-
-Environment: HARNESS_OBSERVABILITY (off/false/0/no disables), FI_API_KEY, FI_SECRET_KEY,
-FI_BASE_URL, FI_HARNESS_PROJECT.
+Every job reports into the platform's own account, so tenancy travels as attributes. Identifiers
+only. Configured by HARNESS_OBSERVABILITY, FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL and
+FI_HARNESS_PROJECT; absent credentials mean untraced, and every failure here is swallowed.
 """
 
 from __future__ import annotations
@@ -26,7 +23,6 @@ _context: dict[str, Any] = {}
 
 
 def enabled() -> bool:
-    """Off switch, so tracing can be stopped without removing the account credentials."""
     if os.getenv("HARNESS_OBSERVABILITY", "").strip().lower() in _OFF:
         return False
     return bool(os.getenv("FI_API_KEY") and os.getenv("FI_SECRET_KEY"))
@@ -59,8 +55,7 @@ def begin(job_id: str, run_id: str, context: Mapping[str, Any] | None = None) ->
             verbose=False,
         )
         _instrument(_provider)
-        # FITracer, not the raw tracer: session, user, metadata and tags ride on baggage and only
-        # the SDK's wrapper writes them onto a span.
+        # Only FITracer writes the baggage-carried session, user, metadata and tags onto a span.
         _tracer = FITracer(_provider.get_tracer(__name__))
         _session.enter_context(using_session(job_id))
         organization = str(_context.get("organization_id") or "")
@@ -74,7 +69,7 @@ def begin(job_id: str, run_id: str, context: Mapping[str, Any] | None = None) ->
 
 
 def stage_event(event_type: str, name: str, payload: Mapping[str, Any] | None = None) -> None:
-    """Turn the harness's own stage announcements into spans, so the trace is its real pipeline."""
+    """Drive stage spans from the harness's own stage announcements."""
     if _tracer is None:
         return
     with contextlib.suppress(Exception):
@@ -90,7 +85,6 @@ def stage_event(event_type: str, name: str, payload: Mapping[str, Any] | None = 
 
 
 def stage(name: str) -> None:
-    """A stage boundary reported outside the pipeline's own events."""
     if _tracer is None:
         return
     with contextlib.suppress(Exception):
@@ -99,7 +93,6 @@ def stage(name: str) -> None:
 
 @contextlib.contextmanager
 def scenario(key: str, index: int) -> Iterator[Any]:
-    """One scenario, so a failure can be read against the run it belongs to."""
     if _tracer is None:
         yield None
         return
@@ -121,7 +114,6 @@ def scenario(key: str, index: int) -> Iterator[Any]:
 
 
 def record(span: Any, **attributes: Any) -> None:
-    """Attach an outcome to a span opened here."""
     if span is None:
         return
     with contextlib.suppress(Exception):
@@ -145,8 +137,6 @@ def end() -> None:
 
 
 def _open_stage(name: str) -> None:
-    """Start the stage span and make it current, so the model and tool calls it performs nest
-    underneath it rather than arriving as unrelated roots."""
     global _stage_span, _stage_token
     from opentelemetry import context as otel_context
     from opentelemetry import trace as otel_trace
@@ -156,6 +146,7 @@ def _open_stage(name: str) -> None:
     _stage_span.set_attribute("gen_ai.span.kind", "CHAIN")
     _stage_span.set_attribute("harness.stage", name)
     _apply_context(_stage_span)
+    # Current, so the stage's model and tool calls nest inside it rather than arriving as roots.
     _stage_token = otel_context.attach(otel_trace.set_span_in_context(_stage_span))
 
 

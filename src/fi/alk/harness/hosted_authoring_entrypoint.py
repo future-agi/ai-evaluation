@@ -91,7 +91,7 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
         )
 
 
-# Platform-owned and unprefixed, so read from the raw channel rather than the SIMULATOR_ view.
+# Unprefixed, so read from the raw channel rather than the SIMULATOR_ view.
 _OBSERVABILITY_PASSTHROUGH = {
     "FI_API_KEY",
     "FI_BASE_URL",
