@@ -91,8 +91,7 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
         )
 
 
-# Observe configuration is platform-owned and arrives unprefixed, so it is exported from the raw
-# channel rather than the SIMULATOR_-canonicalized view the model providers read.
+# Platform-owned and unprefixed, so read from the raw channel rather than the SIMULATOR_ view.
 _OBSERVABILITY_PASSTHROUGH = {
     "FI_API_KEY",
     "FI_BASE_URL",
@@ -109,11 +108,7 @@ def _configure_observability_environment(all_values: dict[str, str]) -> None:
 
 
 def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
-    """The ids authoring should report under, read from the job document it was handed.
-
-    Authoring runs as its own process and is given no identifiers of its own, so without this its
-    spans would land in Observe unattached to the job they belong to.
-    """
+    """The ids authoring reports under. It is a separate process and is handed none of its own."""
     for candidate in forwarded:
         if candidate.startswith("-"):
             continue
