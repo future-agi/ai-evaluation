@@ -122,9 +122,20 @@ def _end_stage() -> None:
 
 
 def _instrument(provider: Any) -> None:
-    """Turn on whichever model instrumentors the image actually ships."""
+    """Turn on whichever instrumentors the image actually ships.
+
+    The first two cover the harness's own two stage backends, so authoring, scenario writing and
+    the judge are recorded whichever model a job runs on. The rest are there for agents and tools
+    that reach a provider directly.
+
+    ``traceai-google-adk`` is deliberately absent: it pins ``google-genai<2``, while ``google-adk``
+    2.7 requires ``google-genai>=2.12``, so it cannot be installed here. Until that pin widens, an
+    ADK run is recorded at the model call rather than as an agent-and-tool tree.
+    """
     for module, name in (
         ("traceai_google_genai", "GoogleGenAIInstrumentor"),
+        ("traceai_claude_agent_sdk", "ClaudeAgentInstrumentor"),
+        ("traceai_google_adk", "GoogleADKInstrumentor"),
         ("traceai_litellm", "LiteLLMInstrumentor"),
         ("traceai_openai", "OpenAIInstrumentor"),
         ("traceai_anthropic", "AnthropicInstrumentor"),
