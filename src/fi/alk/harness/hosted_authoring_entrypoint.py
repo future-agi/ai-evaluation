@@ -13,11 +13,13 @@ import os
 import sys
 from pathlib import Path
 
+from . import observability
 from .authoring_entrypoint import main as authoring_main
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
 _ADC_PATH = Path("/work/.authoring-credentials/google.json")
 _TARGET_SECRETS_PATH = Path("/run/futureagi/authoring-target-secrets.json")
+_SIMULATOR_SECRETS_PATH = Path("/run/futureagi/simulator-secrets.json")
 _PASSTHROUGH = {
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
@@ -90,10 +92,52 @@ def _configure_generation_environment(values: dict[str, str]) -> None:
         )
 
 
+# Unprefixed, so read from the raw channel rather than the SIMULATOR_ view.
+_OBSERVABILITY_PASSTHROUGH = {
+    "FI_API_KEY",
+    "FI_BASE_URL",
+    "FI_HARNESS_PROJECT",
+    "FI_SECRET_KEY",
+    "HARNESS_OBSERVABILITY",
+}
+
+
+def _configure_observability_environment(all_values: dict[str, str]) -> None:
+    # Read without consuming: the run process loads and deletes this file, and needs it intact.
+    values = dict(all_values)
+    try:
+        body = json.loads(_SIMULATOR_SECRETS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        body = {}
+    if isinstance(body, dict):
+        values.update({str(k): str(v) for k, v in body.items() if v not in (None, "")})
+    for name in _OBSERVABILITY_PASSTHROUGH:
+        if values.get(name):
+            os.environ[name] = values[name]
+
+
+def _authoring_job_context(forwarded: list[str]) -> tuple[str, str, dict]:
+    """The ids authoring reports under. It is a separate process and is handed none of its own."""
+    for candidate in forwarded:
+        if candidate.startswith("-"):
+            continue
+        try:
+            body = json.loads(Path(candidate).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(body, dict) or "job_id" not in body:
+            continue
+        telemetry = (body.get("metadata") or {}).get("telemetry") or {}
+        return str(body.get("job_id") or ""), str(body.get("run_id") or ""), telemetry
+    return "", "", {}
+
+
+
 def main(argv: list[str] | None = None) -> int:
     all_values = _load_values(_SECRETS_PATH)
     values = _platform_simulator_values(all_values)
     _configure_generation_environment(values)
+    _configure_observability_environment(all_values)
     target_values = {
         name: all_values[name]
         for name in ("RETELL_API_KEY", "VAPI_API_KEY")
@@ -106,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         _TARGET_SECRETS_PATH.chmod(0o600)
         forwarded.extend(["--target-secrets", str(_TARGET_SECRETS_PATH)])
+    job_id, run_id, telemetry = _authoring_job_context(forwarded)
+    if job_id:
+        observability.begin(job_id, run_id, telemetry)
+        observability.stage("authoring")
     try:
         from .authoring_runtime_validation import RuntimeValidationError
         from .outbound import redact_outbound_text
@@ -120,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             # EX_CONFIG: deterministic generated-environment failure, not retryable infra.
             return 78
     finally:
+        observability.end()
         try:
             _ADC_PATH.unlink(missing_ok=True)
         except OSError:
