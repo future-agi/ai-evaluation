@@ -23,7 +23,14 @@ from .config import (
     provider_env,
     read_only_session,
 )
-from .contract import AgentContract, Runtime, RuntimeInterface, ToolSpec, validate_contract
+from .contract import (
+    AgentContract,
+    Runtime,
+    RuntimeInterface,
+    ToolSpec,
+    validate_contract,
+)
+from .diagnostics import DiagnosticLocation, HarnessDiagnostic, RepairOwner
 from .job import ExecutionMode, HarnessJob, HarnessStage
 from .scenario import Scenario, validate_scenario
 from .session import Stage, Turn
@@ -44,14 +51,17 @@ __all__ = [
     "AgentSource",
     "Conversation",
     "DEFAULT_MODEL",
+    "DiagnosticLocation",
     "EnvironmentBundle",
     "EnvironmentPlan",
     "ExecutionMode",
     "GitHubSource",
     "HarnessJob",
+    "HarnessDiagnostic",
     "HarnessStage",
     "ProviderSource",
     "RepoSource",
+    "RepairOwner",
     "Runtime",
     "RuntimeInterface",
     "Scenario",
