@@ -34,6 +34,7 @@ from .diagnostics import DiagnosticLocation, HarnessDiagnostic, RepairOwner
 from .job import ExecutionMode, HarnessJob, HarnessStage
 from .scenario import Scenario, validate_scenario
 from .session import Stage, Turn
+from .source_model import LogicalType, SourceModel
 from .sources import (
     AgentSource,
     GitHubSource,
@@ -59,6 +60,7 @@ __all__ = [
     "HarnessJob",
     "HarnessDiagnostic",
     "HarnessStage",
+    "LogicalType",
     "ProviderSource",
     "RepoSource",
     "RepairOwner",
@@ -66,6 +68,7 @@ __all__ = [
     "RuntimeInterface",
     "Scenario",
     "SpecSource",
+    "SourceModel",
     "Stage",
     "ToolSpec",
     "Turn",
