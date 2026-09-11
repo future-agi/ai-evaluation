@@ -17,7 +17,9 @@ Everything is environment-driven, so a deployment decides without a code change:
 
     HARNESS_OBSERVABILITY     off/false/0/no disables it outright, whatever else is set
     FI_API_KEY/FI_SECRET_KEY  which account the run reports into; absent means untraced
-    FI_BASE_URL               which instance receives it
+    FI_BASE_URL               which instance receives it, including the collector's own port
+                              (for example https://<host>:4318); spans post to its
+                              /tracer/v1/traces
     FI_HARNESS_PROJECT        which project it lands in, defaulting to hosted-harness
 
 The module holds process state because the guest handles exactly one job per process.
