@@ -252,15 +252,24 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
     except SyntaxError:
         return []
     aliases: dict[str, str] = {}
+    imports: dict[str, str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "livekit.plugins":
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
             for item in node.names:
-                aliases[item.asname or item.name] = item.name
+                local = item.asname or item.name
+                imports[local] = f"{module}.{item.name}" if module else item.name
+                if module == "livekit.plugins":
+                    aliases[local] = item.name
         elif isinstance(node, ast.Import):
             for item in node.names:
+                local = item.asname or item.name.split(".")[0]
+                imports[local] = item.name
                 prefix = "livekit.plugins."
                 if item.name.startswith(prefix):
-                    aliases[item.asname or item.name] = item.name[len(prefix) :].split(".")[0]
+                    aliases[item.asname or item.name] = item.name[len(prefix) :].split(
+                        "."
+                    )[0]
 
     found: set[tuple[str, str]] = set()
     for node in ast.walk(tree):
@@ -272,6 +281,8 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
         parts = path.split(".")
         provider = aliases.get(parts[0], parts[-2] if len(parts) > 1 else "")
         constructor = parts[-1]
+        imported_path = imports.get(parts[0], parts[0])
+        resolved_path = ".".join([imported_path, *parts[1:]])
         if provider in _LIVEKIT_PROVIDER_CREDENTIALS and constructor in {
             "LLM",
             "STT",
@@ -282,7 +293,11 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
                 found.add((name, f"sdk:livekit.plugins.{provider}"))
         if provider == "google" and constructor in {"LLM", "STT", "TTS"}:
             vertex = next(
-                (keyword.value for keyword in node.keywords if keyword.arg == "vertexai"),
+                (
+                    keyword.value
+                    for keyword in node.keywords
+                    if keyword.arg == "vertexai"
+                ),
                 None,
             )
             if isinstance(vertex, ast.Constant) and vertex.value is True:
@@ -292,6 +307,30 @@ def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
                     "GOOGLE_CLOUD_PROJECT",
                 ):
                     found.add((name, "sdk:livekit.plugins.google.vertex"))
+        # LangChain and Google's first-party SDKs resolve Application Default Credentials
+        # internally, so customer code commonly reads only project/location and never calls
+        # getenv for the credential file itself. Recognize the constructor and explicit Vertex
+        # mode without importing or executing submitted code.
+        vertex = next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "vertexai"),
+            None,
+        )
+        is_explicit_vertex_client = (
+            resolved_path == "langchain_google_genai.ChatGoogleGenerativeAI"
+            and isinstance(vertex, ast.Constant)
+            and vertex.value is True
+        ) or (
+            resolved_path in {"google.genai.Client", "genai.Client"}
+            and isinstance(vertex, ast.Constant)
+            and vertex.value is True
+        )
+        if is_explicit_vertex_client:
+            for name in (
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+                "GOOGLE_CLOUD_PROJECT",
+            ):
+                found.add((name, f"sdk:{resolved_path}.vertex"))
     return sorted(found)
 
 
@@ -386,8 +425,7 @@ def discover_credentials(
                     # placeholders stay required because SDKs commonly consume them without
                     # an explicit getenv call in customer code.
                     required=(
-                        not usable_default
-                        and _kind(name) is RequirementKind.SECRET
+                        not usable_default and _kind(name) is RequirementKind.SECRET
                     ),
                     declared_default=usable_default,
                 )
@@ -585,7 +623,15 @@ def _credential_choices(
     present_options = [
         option for option in google_options if all(name in by_name for name in option)
     ]
-    if len(present_options) < 2:
+    google_names = {
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+    }
+    if len(present_options) < 2 or not any(
+        any(name in google_names for name in option) for option in present_options
+    ):
         return []
     configured = {
         RequirementStatus.CONFIGURED,

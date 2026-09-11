@@ -102,7 +102,10 @@ llm = google.LLM(model="gemini-2.5-flash", vertexai=True,
     )
 
     assert missing["DEEPGRAM_API_KEY"].status is RequirementStatus.MISSING
-    assert missing["GOOGLE_APPLICATION_CREDENTIALS_JSON"].status is RequirementStatus.MISSING
+    assert (
+        missing["GOOGLE_APPLICATION_CREDENTIALS_JSON"].status
+        is RequirementStatus.MISSING
+    )
     assert missing["GOOGLE_CLOUD_PROJECT"].status is RequirementStatus.MISSING
     assert missing_manifest.credential_choices[0].options == [
         ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
@@ -409,6 +412,67 @@ project = os.getenv("GOOGLE_CLOUD_PROJECT")
         ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
     ]
     assert configured.ready
+
+
+def test_langchain_vertex_constructor_discovers_adc_consumed_by_sdk(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        """
+import os
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+provider = os.getenv("LLM_PROVIDER") or "vertex"
+project = os.getenv("GOOGLE_CLOUD_PROJECT")
+model = ChatGoogleGenerativeAI(
+    model=os.getenv("MODEL_NAME") or "gemini-2.5-flash",
+    project=project,
+    vertexai=True,
+)
+if provider == "openai_compatible":
+    key = os.getenv("AGENTCC_API_KEY") or os.getenv("OPENAI_API_KEY")
+""",
+    )
+
+    missing = discover_credentials(tmp_path)
+    configured = discover_credentials(
+        tmp_path,
+        provided_environment=[
+            "LLM_PROVIDER",
+            "GOOGLE_APPLICATION_CREDENTIALS_JSON",
+            "GOOGLE_CLOUD_PROJECT",
+        ],
+    )
+
+    assert not missing.ready
+    assert configured.ready
+    assert any(
+        requirement.environment_name == "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+        and "sdk:langchain_google_genai.ChatGoogleGenerativeAI.vertex"
+        in requirement.detected_from
+        for requirement in configured.requirements
+    )
+
+
+def test_non_google_model_alternatives_do_not_form_google_auth_choice(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "agent.py",
+        """
+import os
+provider = os.getenv("LLM_PROVIDER")
+openai_key = os.getenv("OPENAI_API_KEY")
+agentcc_key = os.getenv("AGENTCC_API_KEY")
+""",
+    )
+
+    manifest = discover_credentials(tmp_path)
+
+    assert manifest.credential_choices == []
 
 
 @pytest.mark.parametrize(
