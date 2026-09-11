@@ -152,6 +152,33 @@ def scenario(key: str, index: int) -> Iterator[Any]:
                 span.end()
 
 
+def stage_event(event_type: str, name: str, payload: Mapping[str, Any] | None = None) -> None:
+    """Drive stage spans from the harness's own stage events.
+
+    The authoring pipeline already announces every stage it enters, leaves and fails. Reading those
+    rather than inventing a second set means the trace is the harness's real pipeline: understanding
+    the agent, generating and building the environment, writing and validating scenarios, and so on.
+    """
+    global _stage_span
+    if _tracer is None:
+        return
+    with contextlib.suppress(Exception):
+        if event_type.endswith(".started"):
+            stage(name)
+            return
+        if not event_type.endswith((".completed", ".failed")):
+            return
+        if _stage_span is None:
+            return
+        status = (payload or {}).get("status")
+        record(
+            _stage_span,
+            stage_outcome="failed" if event_type.endswith(".failed") else "completed",
+            stage_status=status,
+        )
+        _end_stage()
+
+
 def record(span: Any, **attributes: Any) -> None:
     """Attach an outcome to a span already opened here. Silent when untraced."""
     if span is None:

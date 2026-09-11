@@ -180,6 +180,12 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_VERTEX_LOCATION",
         "CARTESIA_API_KEY",
         "DEEPGRAM_API_KEY",
+        # Observe configuration. The account is the platform's own, never the customer's, and the
+        # switch has to travel or a deployment cannot turn tracing off for a run it already started.
+        "FI_API_KEY",
+        "FI_BASE_URL",
+        "FI_HARNESS_PROJECT",
+        "FI_SECRET_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
@@ -187,6 +193,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_GENAI_USE_VERTEXAI",
         "HARNESS_BACKGROUND_NOISE_VOLUME",
+        "HARNESS_OBSERVABILITY",
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",

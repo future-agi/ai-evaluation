@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import spend
+from . import observability
 from .build import open_stage as build_stage
 from .build import opening as build_opening
 from .build import require_buildable
@@ -743,6 +744,8 @@ async def _auto(args: argparse.Namespace) -> int:
 
     def emit(event_type: str, stage: str, **payload: Any) -> None:
         nonlocal event_sequence
+        # The harness's own stage announcements are the trace's timeline; see observability.
+        observability.stage_event(event_type, stage, payload)
         events.write(
             CanonicalEvent.create(
                 run_id=job.run_id,
