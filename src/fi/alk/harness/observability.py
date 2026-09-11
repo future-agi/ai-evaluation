@@ -21,6 +21,7 @@ _provider: Any = None
 _tracer: Any = None
 _session = contextlib.ExitStack()
 _stage_span: Any = None
+_stage_token: Any = None
 _context: dict[str, Any] = {}
 
 
@@ -144,16 +145,28 @@ def end() -> None:
 
 
 def _open_stage(name: str) -> None:
-    global _stage_span
+    """Start the stage span and make it current, so the model and tool calls it performs nest
+    underneath it rather than arriving as unrelated roots."""
+    global _stage_span, _stage_token
+    from opentelemetry import context as otel_context
+    from opentelemetry import trace as otel_trace
+
     _end_stage()
     _stage_span = _tracer.start_span(f"harness.stage.{name}")
     _stage_span.set_attribute("gen_ai.span.kind", "CHAIN")
     _stage_span.set_attribute("harness.stage", name)
     _apply_context(_stage_span)
+    _stage_token = otel_context.attach(otel_trace.set_span_in_context(_stage_span))
 
 
 def _end_stage() -> None:
-    global _stage_span
+    global _stage_span, _stage_token
+    if _stage_token is not None:
+        with contextlib.suppress(Exception):
+            from opentelemetry import context as otel_context
+
+            otel_context.detach(_stage_token)
+        _stage_token = None
     if _stage_span is not None:
         _stage_span.end()
         _stage_span = None
