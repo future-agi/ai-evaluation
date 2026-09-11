@@ -97,17 +97,28 @@ def scenario(key: str, index: int) -> Iterator[Any]:
         yield None
         return
     span = None
+    token = None
     try:
+        from opentelemetry import context as otel_context
+        from opentelemetry import trace as otel_trace
+
         span = _tracer.start_span(f"harness.scenario.{key}")
         span.set_attribute("gen_ai.span.kind", "CHAIN")
         span.set_attribute("harness.scenario.key", key)
         span.set_attribute("harness.scenario.index", index)
         _apply_context(span)
+        # Current for this task only, so the scenario's own model and tool calls nest inside it.
+        token = otel_context.attach(otel_trace.set_span_in_context(span))
     except Exception:
         span = None
     try:
         yield span
     finally:
+        with contextlib.suppress(Exception):
+            if token is not None:
+                from opentelemetry import context as otel_context
+
+                otel_context.detach(token)
         with contextlib.suppress(Exception):
             if span is not None:
                 span.end()
