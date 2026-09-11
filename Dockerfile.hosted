@@ -78,7 +78,7 @@ WORKDIR /opt/alk
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260910-provider-black-box-r66
+ARG ALK_HOSTED_SOURCE_REVISION=20260911-observability-adk
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -87,8 +87,13 @@ COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
 ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+# The ADK instrumentor is installed without its declared dependencies: it still pins
+# google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. Resolving it
+# normally would either fail the build or hold the image back a major version. An absent or
+# broken instrumentor is skipped at runtime, so a failure here costs tracing, never a run.
 RUN --mount=type=cache,target=/root/.cache/pip \
     /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' \
+    && /opt/alk-venv/bin/pip install --no-deps 'traceai-google-adk>=0.1.5' \
     && chmod -R a-w /opt/alk /opt/alk-venv
 
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \

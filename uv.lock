@@ -14,9 +14,6 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
-[manifest]
-overrides = [{ name = "google-genai", specifier = ">=2.12.1,<3" }]
-
 [[package]]
 name = "a2a-sdk"
 version = "1.1.0"
@@ -84,7 +81,6 @@ dependencies = [
     { name = "rich" },
     { name = "rouge-score" },
     { name = "traceai-claude-agent-sdk" },
-    { name = "traceai-google-adk" },
     { name = "traceai-google-genai" },
     { name = "typer" },
 ]
@@ -214,7 +210,6 @@ requires-dist = [
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.10.0,<3" },
     { name = "torch", marker = "extra == 'nli'", specifier = ">=2.10.0,<3" },
     { name = "traceai-claude-agent-sdk", specifier = ">=0.1.0" },
-    { name = "traceai-google-adk", specifier = ">=0.1.5" },
     { name = "traceai-google-genai", specifier = ">=0.1.0" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=5.2.0,<6" },
     { name = "transformers", marker = "extra == 'nli'", specifier = ">=5.2.0,<6" },
@@ -6882,20 +6877,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8a/79/8034257a2591f6b997cac2f0eeed778802d9192cf6f6f6583ac47e452191/traceai_claude_agent_sdk-0.1.0.tar.gz", hash = "sha256:7be6fcb638ad67fd57a3484eb618b66e7f5f8de1baceaea9b16db27035dffb4d", size = 20092, upload-time = "2026-03-10T13:50:41.49Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/50/3457bb1d071b7111ce3e1c3bb3454a4673001be59ee07942173101051673/traceai_claude_agent_sdk-0.1.0-py3-none-any.whl", hash = "sha256:0c123cac2f45171f94045daecd8a56b3b465a58d25a4b5e722de0517bcc95235", size = 23737, upload-time = "2026-03-10T13:50:39.911Z" },
-]
-
-[[package]]
-name = "traceai-google-adk"
-version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fi-instrumentation-otel" },
-    { name = "google-adk" },
-    { name = "google-genai" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/f0/7a76a917d76736c8ad59e21b44e64cc5cd77d21c680c5ed2de21079f7f61/traceai_google_adk-0.1.5.tar.gz", hash = "sha256:f4b2099b55836f81f770a462f9661e5305fe3e81945b38b5ad13747578898c10", size = 9193, upload-time = "2026-05-15T11:42:17.239Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/4d/3b4ffe3ab5a6b1c07566283e10fc9eda95b0946285d1fb9a401e9e15b913/traceai_google_adk-0.1.5-py3-none-any.whl", hash = "sha256:afa883fef3c187fbef270a388e55c2d0184aa6d256185ca275b254c97ee4d5ec", size = 9367, upload-time = "2026-05-15T11:42:15.717Z" },
 ]
 
 [[package]]

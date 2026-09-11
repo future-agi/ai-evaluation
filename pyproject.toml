@@ -36,7 +36,6 @@ dependencies = [
   "claude-agent-sdk>=0.2.139",
   "fi-instrumentation-otel>=0.1.16",
   "traceai-google-genai>=0.1.0",
-  "traceai-google-adk>=0.1.5",
   "gepa>=0.0.17",
   # 2.8 imports newer otel semconv than the livekit-agents pin allows
   "google-adk>=2.7.1,<2.8",
@@ -206,8 +205,3 @@ markers = [
 skips = ["B404", "B603", "B607"]
 exclude_dirs = ["tests"]
 
-[tool.uv]
-# traceai-google-adk still pins google-genai<2, but google-adk 2.7 requires >=2.12 and the
-# instrumentor works against it. Without this override the two cannot be installed together and
-# an ADK stage goes unrecorded.
-override-dependencies = ["google-genai>=2.12.1,<3"]
