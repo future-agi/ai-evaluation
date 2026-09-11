@@ -1987,7 +1987,9 @@ async def run_job(
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
 
-        observability.begin(job.job_id, job.run_id)
+        observability.begin(
+            job.job_id, job.run_id, (job.metadata or {}).get("telemetry")
+        )
 
         if job.seed is None:
             logger.warning(

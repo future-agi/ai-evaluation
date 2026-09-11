@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
+from . import observability
 from .job import FailureDomain, HarnessStage
 from .judge import judge as _judge
 from .outbound import (
@@ -1418,6 +1419,20 @@ class _PendingRetryReceipt:
     outcome: "_Retry"
 
 
+def _record_scenario(span: Any, receipt: Any, context: Any) -> None:
+    """Put the scenario's verdict on its span, so a trace answers what happened without a receipt."""
+    if span is None or receipt is None:
+        return
+    failure = getattr(receipt, "failure", None)
+    observability.record(
+        span,
+        status=getattr(receipt, "status", None),
+        failure_code=getattr(failure, "code", None),
+        failure_domain=getattr(failure, "domain", None),
+        world_index=getattr(context, "world_index", None),
+        attempt=getattr(context, "attempt", None),
+    )
+
 class HostedScheduler:
     """Drains a job's scenario list across a `WorldPool`, one asyncio task per scenario — lease()
     blocking when the pool is saturated is what caps concurrency at W, so nothing here re-derives
@@ -1482,9 +1497,13 @@ class HostedScheduler:
                     return
                 context = _ScenarioContext()
                 try:
-                    results[index] = await self._run_scenario(
-                        scenario, index, abort_holder=abort_holder, context=context
-                    )
+                    with observability.scenario(
+                        str(getattr(scenario, "key", "") or index), index
+                    ) as span:
+                        results[index] = await self._run_scenario(
+                            scenario, index, abort_holder=abort_holder, context=context
+                        )
+                        _record_scenario(span, results[index], context)
                 except NoWorldsAvailable as exc:
                     abort_holder[0] = _abort_from_no_worlds(exc)
                 except _FATAL_OUTBOUND:
