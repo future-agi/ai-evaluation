@@ -3090,6 +3090,61 @@ def test_apply_seed_file_postgres_env_keeps_path_and_adds_pgpassword(
     assert "PATH" in kwargs["env"]
 
 
+def test_apply_seed_file_imports_sqlite_world_without_psql(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = tmp_path / "seed" / "world.sqlite"
+    world.parent.mkdir()
+    world.write_bytes(b"sqlite fixture")
+    credentials = pr.EngineCredentials(username="harness", password="pw")
+    calls: list[dict[str, Any]] = []
+
+    def import_world(file: Path, **kwargs: Any) -> None:
+        calls.append({"file": file, **kwargs})
+
+    monkeypatch.setattr(pr, "apply_postgres_sqlite_world", import_world)
+
+    def unexpected_psql(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("typed SQLite worlds must not be passed to psql")
+
+    pr.apply_seed_file(
+        pr.ManagedEngine.POSTGRES,
+        world,
+        port=14000,
+        dbname="baseline",
+        credentials=credentials,
+        process_name="postgres",
+        sync_run=unexpected_psql,
+        source_digest="sha256:" + "a" * 64,
+    )
+
+    assert calls == [
+        {
+            "file": world,
+            "port": 14000,
+            "dbname": "baseline",
+            "credentials": credentials,
+            "source_digest": "sha256:" + "a" * 64,
+        }
+    ]
+
+
+def test_apply_seed_file_requires_provenance_for_typed_world(tmp_path: Path) -> None:
+    world = tmp_path / "world.sqlite"
+    world.write_bytes(b"sqlite fixture")
+
+    with pytest.raises(pr.ProcessRuntimeError, match="internal_source_digest_missing"):
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+        )
+
+
 def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> None:
     seed_file = tmp_path / "cache" / "seed.txt"
     seed_file.parent.mkdir(parents=True)

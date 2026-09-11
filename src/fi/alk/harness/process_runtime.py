@@ -35,6 +35,7 @@ import secrets
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -2563,6 +2564,42 @@ def redis_seed_argv(*, port: int) -> list[str]:
     return ["redis-cli", "-h", "localhost", "-p", str(port)]
 
 
+def apply_postgres_sqlite_world(
+    file: Path,
+    *,
+    port: int,
+    dbname: str,
+    credentials: EngineCredentials,
+    source_digest: str,
+) -> None:
+    """Inspect the migrated database, import legacy rows semantically, and bind inserts."""
+
+    try:
+        import psycopg
+    except (
+        ImportError
+    ) as exc:  # pragma: no cover - snapshot dependency is tested at build time.
+        raise RuntimeError("generic_pipeline_dependency_missing: psycopg") from exc
+
+    from .compile.postgres import apply_postgres, compile_postgres
+    from .source_schema.postgres import inspect_postgres
+    from .world_import.sqlite import import_sqlite_world
+
+    uri = f"file:{file.resolve()}?mode=ro"
+    with psycopg.connect(
+        host="localhost",
+        port=port,
+        user=credentials.username,
+        password=credentials.password,
+        dbname=dbname,
+    ) as postgres:
+        source = inspect_postgres(postgres, source_digest=source_digest)
+        with sqlite3.connect(uri, uri=True) as sqlite:
+            imported = import_sqlite_world(sqlite, source)
+        compiled = compile_postgres(source, imported.world)
+        apply_postgres(postgres, compiled)
+
+
 def apply_seed_file(
     engine: ManagedEngine,
     file: Path,
@@ -2575,6 +2612,7 @@ def apply_seed_file(
     user: int | None = None,
     group: int | None = None,
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
+    source_digest: str | None = None,
 ) -> None:
     """Applies one migration/seed file, per §2c: "applied in listed order." `postgres` shells out
     to a psql-style command (`-f`, so a large schema file streams rather than loading into this
@@ -2599,6 +2637,32 @@ def apply_seed_file(
                 "postgres requires generated credentials to seed",
                 process=process_name,
             )
+        if file.suffix.lower() == ".sqlite":
+            if source_digest is None:
+                raise ProcessRuntimeError(
+                    "seed",
+                    "internal_source_digest_missing",
+                    "generic PostgreSQL world import requires source provenance",
+                    process=process_name,
+                )
+            try:
+                apply_postgres_sqlite_world(
+                    file,
+                    port=port,
+                    dbname=dbname,
+                    credentials=credentials,
+                    source_digest=source_digest,
+                )
+            except Exception as exc:
+                code = str(getattr(exc, "code", "generic_world_import_failed"))
+                raise ProcessRuntimeError(
+                    "seed",
+                    "seed_failed",
+                    f"{code}: semantic world import failed",
+                    process=process_name,
+                    domain=FailureDomain.ENVIRONMENT,
+                ) from exc
+            return
         argv = postgres_seed_argv(
             port=port, dbname=dbname, user=credentials.username, file=file
         )
@@ -2677,6 +2741,7 @@ def apply_store_seed(
     user: int | None = None,
     group: int | None = None,
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
+    source_digest: str | None = None,
 ) -> None:
     """§2c: "migrations then seed_files... applied in listed order" — migrations always precede
     seed_files, regardless of how many files either list holds, and each list keeps its own
@@ -2693,6 +2758,7 @@ def apply_store_seed(
             user=user,
             group=group,
             rabbitmq_import=rabbitmq_import,
+            source_digest=source_digest,
         )
 
 
@@ -3494,6 +3560,7 @@ def _freeze_one_store(
             user=handle.uid,
             group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
+            source_digest=manifest.provenance.source_digest,
         )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
@@ -3829,6 +3896,7 @@ def _seal_world_store(
             user=handle.uid,
             group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
+            source_digest=manifest.provenance.source_digest,
         )
     return handle
 

@@ -653,6 +653,10 @@ def _verify_reserved_names(bundle_dir: Path, manifest: EnvironmentBundleV2) -> N
             path = root / relative_path
             if not path.is_file():
                 continue  # reported by `_verify_seed_files_on_disk_and_listed`
+            if path.suffix.lower() != ".sql":
+                # Typed world artifacts are data, not executable SQL identifiers. Their schema
+                # is validated by the runtime importer after source migrations have run.
+                continue
             text = path.read_text(encoding="utf-8", errors="replace")
             # Strip `--`-to-EOL and `/* ... */` comments before scanning (F9, p4-round1-review) —
             # a generated seed file's own note about the reservation ("-- never create

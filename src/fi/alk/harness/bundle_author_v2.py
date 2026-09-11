@@ -685,6 +685,41 @@ def _adopted_seed_sql(
     return "", []
 
 
+def _generic_postgres_seed_artifacts(
+    authoring: Path,
+    staging: Path,
+    *,
+    source: Path,
+    contract: dict[str, Any],
+    prefix: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Package source schema and semantic rows separately for runtime catalogue inspection."""
+
+    source_schemas = _source_schema_paths(source, contract=contract)
+    world = authoring / "world.sqlite"
+    if not source_schemas:
+        raise BundleAuthorError(
+            "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
+        )
+    if not world.is_file():
+        raise BundleAuthorError(
+            "generic_pipeline_world_ir_required: compatibility mode requires world.sqlite"
+        )
+    seed = staging / "seed"
+    schema_path = seed / "source-schema.sql"
+    schema_path.write_text(
+        prefix + "\n".join(path.read_text(encoding="utf-8") for path in source_schemas),
+        encoding="utf-8",
+    )
+    world_path = seed / "world.sqlite"
+    shutil.copy2(world, world_path)
+    adopted = [
+        f"source/{path.relative_to(source.resolve()).as_posix()}"
+        for path in source_schemas
+    ] + ["world.sqlite"]
+    return ["seed/source-schema.sql"], ["seed/world.sqlite"], adopted
+
+
 def _compose_path(source: Path) -> Path | None:
     matches = [source / name for name in _COMPOSE_NAMES if (source / name).is_file()]
     if len(matches) > 1:
@@ -1603,7 +1638,6 @@ def author_bundle_v2(
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
-        seed_path = seed_dir / "world.sql"
         prefix = (
             "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
             "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
@@ -1611,23 +1645,35 @@ def author_bundle_v2(
             "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
             "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
         )
-        schema, adopted_seed = _adopted_seed_sql(
-            authoring_root,
-            source=source_root,
-            contract=contract_body,
-        )
-        seed_path.write_text(prefix + schema, encoding="utf-8")
-        migrations = ["seed/world.sql"]
+        generic_pipeline = job.metadata.get("generic_harness_v1") is True
+        if generic_pipeline:
+            migrations, seed_files, adopted_seed = _generic_postgres_seed_artifacts(
+                authoring_root,
+                temporary,
+                source=source_root,
+                contract=contract_body,
+                prefix=prefix,
+            )
+        else:
+            seed_path = seed_dir / "world.sql"
+            schema, adopted_seed = _adopted_seed_sql(
+                authoring_root,
+                source=source_root,
+                contract=contract_body,
+            )
+            seed_path.write_text(prefix + schema, encoding="utf-8")
+            migrations = ["seed/world.sql"]
+            seed_files = []
         store = StoreEntry(
             capability="world_db",
             migrations=migrations,
-            seed_files=[],
+            seed_files=seed_files,
             baseline=StoreBaseline(
                 strategy=BaselineStrategy.TEMPLATE_DATABASE,
                 inputs_digest=compute_inputs_digest(
                     temporary,
                     migrations,
-                    [],
+                    seed_files,
                     engine=ManagedEngine.POSTGRES,
                     version="16",
                 ),
@@ -1728,11 +1774,17 @@ def author_bundle_v2(
                 + adopted_catalogue
                 + adopted_seed
                 + adopted_chat_files,
-                generated_files=["manifest.json", "seed/world.sql"],
+                generated_files=["manifest.json"]
+                + (
+                    ["seed/source-schema.sql", "seed/world.sqlite"]
+                    if generic_pipeline
+                    else ["seed/world.sql"]
+                ),
             ),
             metadata={
                 "packaging": plan.packaging,
                 "environment_plan_version": "2",
+                **({"generic_harness": "v1"} if generic_pipeline else {}),
                 **(
                     {
                         "provider_connect_only": {

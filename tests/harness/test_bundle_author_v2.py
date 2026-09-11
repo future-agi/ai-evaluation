@@ -25,6 +25,7 @@ def _job(
     with_secrets: bool = False,
     scenario_count: int = 1,
     secret_aliases: tuple[str, ...] = ("LIVEKIT_API_KEY",),
+    metadata: dict[str, object] | None = None,
 ) -> HarnessJob:
     secret_refs = {}
     if with_secrets:
@@ -46,6 +47,7 @@ def _job(
             "source": {"kind": "archive", "archive_artifact_id": "source-1"},
             "agent": {"connector": connector, "secret_refs": secret_refs},
             "scenario_count": scenario_count,
+            "metadata": metadata or {},
             "runtime": {
                 "isolation": "dedicated_vm",
                 "cpu_units": 2,
@@ -1060,6 +1062,63 @@ def test_adopted_source_schema_applies_defaults_for_authored_nulls(
     seed_sql = (output / "seed" / "world.sql").read_text(encoding="utf-8")
     assert 'INSERT INTO "call_attempts" ("call_id")' in seed_sql
     assert '"room_name", "recording_url", "updated_at", "optional_note"' not in seed_sql
+
+
+def test_generic_pipeline_packages_source_schema_and_world_separately(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, tags TEXT[] NOT NULL);\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute("CREATE TABLE users (id TEXT, tags TEXT)")
+        database.execute(
+            "INSERT INTO users VALUES (?, ?)",
+            ("user-1", '["priority"]'),
+        )
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    store = manifest.seed.stores[0]
+    assert store.migrations == ["seed/source-schema.sql"]
+    assert store.seed_files == ["seed/world.sqlite"]
+    assert manifest.metadata["generic_harness"] == "v1"
+    schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE users" in schema
+    assert "user-1" not in schema
+    with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
+        assert copied.execute("SELECT tags FROM users").fetchone() == ('["priority"]',)
+    preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+
+
+def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+
+    with pytest.raises(BundleAuthorError, match="source_schema_required"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
 
 
 def test_bundle_preserves_sqlite_unique_constraints_for_upserts(tmp_path: Path) -> None:
