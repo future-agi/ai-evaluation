@@ -81,19 +81,22 @@ WORKDIR /opt/alk
 ARG ALK_HOSTED_SOURCE_REVISION=20260911-authoring-channel-fix
 LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
 COPY pyproject.toml README.md ./
-COPY src ./src
-COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
 
 ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
-# The ADK instrumentor is installed without its declared dependencies: it still pins
-# google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. Resolving it
-# normally would either fail the build or hold the image back a major version. An absent or
-# broken instrumentor is skipped at runtime, so a failure here costs tracing, never a run.
+# Third-party install keyed on pyproject alone, against a stub package, so editing guest source
+# cannot invalidate it. --no-deps instrumentor: it pins google-genai<2, google-adk needs >=2.12.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' \
+    mkdir -p src/fi && : > src/fi/__init__.py \
+    && /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' \
     && /opt/alk-venv/bin/pip install --no-deps 'traceai-google-adk>=0.1.5' \
+    && rm -rf src
+
+COPY src ./src
+COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/alk-venv/bin/pip install --no-deps '.[livekit,harness-ui,harness-stores]' \
     && chmod -R a-w /opt/alk /opt/alk-venv
 
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \

@@ -35,7 +35,6 @@ classifiers = [
 dependencies = [
   "claude-agent-sdk>=0.2.139",
   "fi-instrumentation-otel>=0.1.16",
-  "traceai-google-genai>=0.1.0",
   "gepa>=0.0.17",
   # 2.8 imports newer otel semconv than the livekit-agents pin allows
   "google-adk>=2.7.1,<2.8",
@@ -63,7 +62,6 @@ dependencies = [
   "rich>=13.0.0",
   "rouge-score>=0.1.2",
   "typer>=0.9.0,<1.0.0",
-  "traceai-claude-agent-sdk>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -204,4 +202,3 @@ markers = [
 # exceptions carry inline `# nosec <ID> — <reason>`.
 skips = ["B404", "B603", "B607"]
 exclude_dirs = ["tests"]
-

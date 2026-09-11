@@ -80,8 +80,6 @@ dependencies = [
     { name = "retell-sdk" },
     { name = "rich" },
     { name = "rouge-score" },
-    { name = "traceai-claude-agent-sdk" },
-    { name = "traceai-google-genai" },
     { name = "typer" },
 ]
 
@@ -209,8 +207,6 @@ requires-dist = [
     { name = "sentence-transformers", marker = "extra == 'embeddings'", specifier = ">=5.2.3,<6" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.10.0,<3" },
     { name = "torch", marker = "extra == 'nli'", specifier = ">=2.10.0,<3" },
-    { name = "traceai-claude-agent-sdk", specifier = ">=0.1.0" },
-    { name = "traceai-google-genai", specifier = ">=0.1.0" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=5.2.0,<6" },
     { name = "transformers", marker = "extra == 'nli'", specifier = ">=5.2.0,<6" },
     { name = "typer", specifier = ">=0.9.0,<1.0.0" },
@@ -6862,34 +6858,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/06/b3/36c8ecf72e8925200671613332db156d84b99b3aee742a41c1938ebb0808/tqdm-4.68.1.tar.gz", hash = "sha256:fc163d96b287bd031e1aa24421ce4411b25559bd0a1be4fe649bdaa4d2c02bf5", size = 171236, upload-time = "2026-06-05T17:23:15.267Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/47/aa/218a0eb34de1f753c83e4d0d1c8e7c4cef27f20dcb8342e024f63a80dc86/tqdm-4.68.1-py3-none-any.whl", hash = "sha256:fea4a90e4023f764914569f7802a297277c5ab1a66be5144143e142e1a4031d8", size = 78354, upload-time = "2026-06-05T17:23:13.654Z" },
-]
-
-[[package]]
-name = "traceai-claude-agent-sdk"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fi-instrumentation-otel" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-instrumentation" },
-    { name = "opentelemetry-sdk" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8a/79/8034257a2591f6b997cac2f0eeed778802d9192cf6f6f6583ac47e452191/traceai_claude_agent_sdk-0.1.0.tar.gz", hash = "sha256:7be6fcb638ad67fd57a3484eb618b66e7f5f8de1baceaea9b16db27035dffb4d", size = 20092, upload-time = "2026-03-10T13:50:41.49Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/50/3457bb1d071b7111ce3e1c3bb3454a4673001be59ee07942173101051673/traceai_claude_agent_sdk-0.1.0-py3-none-any.whl", hash = "sha256:0c123cac2f45171f94045daecd8a56b3b465a58d25a4b5e722de0517bcc95235", size = 23737, upload-time = "2026-03-10T13:50:39.911Z" },
-]
-
-[[package]]
-name = "traceai-google-genai"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fi-instrumentation-otel" },
-    { name = "google-genai" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/10/91/7a37efcc5e310cf0df96b2616056f1cdbfd0af2530d423f2f6855747f1b6/traceai_google_genai-0.1.2.tar.gz", hash = "sha256:646e5f25f02a3b42e3541a2191b785245d1c25ecd9aaf65005f6c96a780b2626", size = 13923, upload-time = "2026-03-10T13:54:10.995Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/e7/51e31b426e51527038ca34deb7c9ddd95d56bdcbfb1b08ccb62726ba5423/traceai_google_genai-0.1.2-py3-none-any.whl", hash = "sha256:b123558398db6f8f5f98eb47f5865f9e52ea644994c0ccaaf78255ca957bc2a4", size = 17937, upload-time = "2026-03-10T13:54:09.595Z" },
 ]
 
 [[package]]
