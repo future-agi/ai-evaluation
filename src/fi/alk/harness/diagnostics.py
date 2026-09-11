@@ -78,6 +78,11 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.AUTHORING,
             repair_strategy="request_targeted_data_patch",
         ),
+        "explicit_null_not_allowed": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="mark_value_absent_or_author_non_null_value",
+        ),
         "source_default_suppressed": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.COMPILER,
@@ -97,6 +102,16 @@ _POLICIES = MappingProxyType(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,
             repair_strategy="add_source_consistent_related_record",
+        ),
+        "unique_key_duplicate": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="author_unique_key_value",
+        ),
+        "constraint_value_invalid": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="author_constraint_valid_value",
         ),
         "seed_order_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
