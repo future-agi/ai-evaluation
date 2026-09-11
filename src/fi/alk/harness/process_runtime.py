@@ -2586,6 +2586,7 @@ def apply_postgres_sqlite_world(
         raise RuntimeError("generic_pipeline_dependency_missing: psycopg") from exc
 
     from .compile.postgres import PostgresCompileError, apply_postgres, compile_postgres
+    from .diagnostic_adapters.postgres import diagnose_postgres_error
     from .diagnostic_adapters.world_ir import diagnose_world_ir_error
     from .source_schema.postgres import inspect_postgres
     from .world_import.sqlite import SQLiteWorldImportError, import_sqlite_world
@@ -2659,7 +2660,22 @@ def apply_postgres_sqlite_world(
                     ),
                 )
             ) from error
-        apply_postgres(postgres, compiled)
+        try:
+            apply_postgres(postgres, compiled)
+        except Exception as error:
+            raise GenericWorldSeedError(
+                (
+                    diagnose_postgres_error(
+                        error,
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="postgres_seed",
+                        evidence_refs=(
+                            "artifact://world-ir",
+                            "artifact://source-model",
+                        ),
+                    ),
+                )
+            ) from error
 
 
 class GenericWorldSeedError(ValueError):

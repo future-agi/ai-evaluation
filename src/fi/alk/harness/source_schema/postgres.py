@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..source_model import (
+    CheckConstraint,
     ForeignKey,
     LogicalType,
     SourceColumn,
@@ -14,6 +15,18 @@ from ..source_model import (
     SourceTable,
     UnsupportedSourceConstruct,
 )
+
+_CHECKS_SQL = """
+SELECT cls.relname AS table_name,
+       con.conname AS constraint_name,
+       pg_catalog.pg_get_constraintdef(con.oid, true) AS expression
+  FROM pg_catalog.pg_constraint con
+  JOIN pg_catalog.pg_class cls ON cls.oid = con.conrelid
+  JOIN pg_catalog.pg_namespace namespace ON namespace.oid = cls.relnamespace
+ WHERE namespace.nspname = %s
+   AND con.contype = 'c'
+ ORDER BY cls.relname, con.conname
+"""
 
 _COLUMNS_SQL = """
 SELECT cls.relname AS table_name,
@@ -281,6 +294,23 @@ def _foreign_keys(connection: Any, schema: str) -> dict[str, tuple[ForeignKey, .
     return {table: tuple(keys) for table, keys in tables.items()}
 
 
+def _check_constraints(
+    connection: Any, schema: str
+) -> dict[str, tuple[CheckConstraint, ...]]:
+    checks: dict[str, list[CheckConstraint]] = defaultdict(list)
+    for row in _execute_rows(connection, _CHECKS_SQL, (schema,)):
+        checks[str(row["table_name"])].append(
+            CheckConstraint(
+                name=str(row["constraint_name"]),
+                expression=str(row["expression"]),
+            )
+        )
+    return {
+        table: tuple(sorted(items, key=lambda item: item.name))
+        for table, items in checks.items()
+    }
+
+
 def inspect_postgres(
     connection: Any,
     *,
@@ -296,6 +326,7 @@ def inspect_postgres(
     columns = _columns(connection, schema, enums, unsupported)
     primary, unique = _indexes(connection, schema, unsupported)
     foreign = _foreign_keys(connection, schema)
+    checks = _check_constraints(connection, schema)
     tables = tuple(
         SourceTable(
             name=table,
@@ -303,6 +334,7 @@ def inspect_postgres(
             primary_key=primary.get(table, ()),
             unique_keys=unique.get(table, ()),
             foreign_keys=foreign.get(table, ()),
+            check_constraints=checks.get(table, ()),
         )
         for table, table_columns in sorted(columns.items())
     )

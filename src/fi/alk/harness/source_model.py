@@ -49,6 +49,15 @@ class ForeignKey(BaseModel):
         return self
 
 
+class CheckConstraint(BaseModel):
+    """A source-owned predicate retained for provenance and database enforcement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1)
+    expression: str = Field(min_length=1)
+
+
 class SourceColumn(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -87,6 +96,7 @@ class SourceTable(BaseModel):
     primary_key: tuple[str, ...] = ()
     unique_keys: tuple[tuple[str, ...], ...] = ()
     foreign_keys: tuple[ForeignKey, ...] = ()
+    check_constraints: tuple[CheckConstraint, ...] = ()
 
     @model_validator(mode="after")
     def _keys_reference_columns(self) -> "SourceTable":
@@ -102,6 +112,13 @@ class SourceTable(BaseModel):
             raise ValueError("source_table_key_column_unknown: " + ", ".join(unknown))
         if any(not key for key in self.unique_keys):
             raise ValueError("source_unique_key_empty")
+        if self.check_constraints != tuple(
+            sorted(self.check_constraints, key=lambda item: item.name)
+        ):
+            raise ValueError("source_check_constraints_not_canonical")
+        check_names = [item.name for item in self.check_constraints]
+        if len(check_names) != len(set(check_names)):
+            raise ValueError("source_check_constraint_name_duplicate")
         return self
 
 
@@ -238,6 +255,7 @@ def _source_model_fingerprint(raw: dict[str, object]) -> str:
 
 
 __all__ = [
+    "CheckConstraint",
     "SOURCE_MODEL_SCHEMA_VERSION",
     "ForeignKey",
     "LogicalType",

@@ -23,6 +23,16 @@ class Cursor:
 class CatalogueConnection:
     def execute(self, statement: str, params: tuple[Any, ...]) -> Cursor:
         assert params == ("public",)
+        if "con.contype = 'c'" in statement:
+            return Cursor(
+                [
+                    {
+                        "table_name": "rides",
+                        "constraint_name": "rides_status_check",
+                        "expression": "CHECK ((status <> 'accepted'))",
+                    }
+                ]
+            )
         if "pg_catalog.pg_enum" in statement:
             return Cursor(
                 [
@@ -176,6 +186,8 @@ def test_postgres_inspection_preserves_native_types_and_relations() -> None:
     assert events.foreign_keys[0].referenced_table == "rides"
     assert events.foreign_keys[0].on_delete == "CASCADE"
     assert events.foreign_keys[0].deferrable is True
+    assert rides.check_constraints[0].name == "rides_status_check"
+    assert "status" in rides.check_constraints[0].expression
     assert model.unsupported == ()
 
 
@@ -212,6 +224,7 @@ def test_postgres_inspection_against_real_catalogues() -> None:
                 id uuid PRIMARY KEY,
                 tenant_id uuid NOT NULL,
                 rider_id bigint NOT NULL,
+                CHECK (rider_id > 0),
                 FOREIGN KEY (tenant_id, rider_id)
                     REFERENCES riders (tenant_id, rider_id)
                     ON UPDATE CASCADE ON DELETE RESTRICT DEFERRABLE
@@ -234,3 +247,5 @@ def test_postgres_inspection_against_real_catalogues() -> None:
     assert rides.foreign_keys[0].columns == ("tenant_id", "rider_id")
     assert rides.foreign_keys[0].on_update == "CASCADE"
     assert rides.foreign_keys[0].on_delete == "RESTRICT"
+    assert len(rides.check_constraints) == 1
+    assert "rider_id" in rides.check_constraints[0].expression
