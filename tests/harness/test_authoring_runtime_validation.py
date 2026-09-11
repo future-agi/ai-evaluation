@@ -10,6 +10,8 @@ from fi.alk.harness.authoring_runtime_validation import (
     validate_once,
 )
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.diagnostics import HarnessDiagnostic
+from fi.alk.harness.job import HarnessStage
 
 
 def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
@@ -93,6 +95,21 @@ def test_infrastructure_failure_does_not_trigger_data_repair(tmp_path):
                 None, tmp_path, tmp_path, validate=validate, repair=repair
             )
         )
+
+
+def test_runtime_validation_error_carries_structured_diagnostics() -> None:
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="required value missing",
+    )
+
+    error = RuntimeValidationError(
+        "environment", "safe summary", diagnostics=(diagnostic,)
+    )
+
+    assert error.diagnostics == (diagnostic,)
 
 
 @pytest.mark.parametrize("bad_setup", [False, True])

@@ -16,8 +16,9 @@ from pathlib import Path
 
 
 class RuntimeValidationError(RuntimeError):
-    def __init__(self, phase: str, detail: str):
+    def __init__(self, phase: str, detail: str, *, diagnostics=()):
         self.phase = phase
+        self.diagnostics = tuple(diagnostics)
         super().__init__(detail)
 
 
@@ -182,6 +183,7 @@ async def validate_once(
                 outbound.redact_outbound_text(
                     str(exc), extra_secret_values=secret_values
                 ),
+                diagnostics=exc.diagnostics,
             ) from None
         except Exception as exc:
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
@@ -192,6 +194,7 @@ async def validate_once(
                 outbound.redact_outbound_text(
                     f"{type(exc).__name__}: {exc}", extra_secret_values=secret_values
                 ),
+                diagnostics=tuple(getattr(exc, "diagnostics", ())),
             ) from None
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

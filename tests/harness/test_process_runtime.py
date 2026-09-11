@@ -3145,6 +3145,43 @@ def test_apply_seed_file_requires_provenance_for_typed_world(tmp_path: Path) -> 
         )
 
 
+def test_apply_seed_file_preserves_structured_world_diagnostics(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fi.alk.harness.diagnostics import DiagnosticLocation, HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    world = tmp_path / "world.sqlite"
+    world.write_bytes(b"sqlite fixture")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_import",
+        code="array_shape_mismatch",
+        message="array is malformed",
+        location=DiagnosticLocation(table="users", column="tags"),
+    )
+
+    def reject(*args: Any, **kwargs: Any) -> None:
+        raise pr.GenericWorldSeedError((diagnostic,))
+
+    monkeypatch.setattr(pr, "apply_postgres_sqlite_world", reject)
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            world,
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="postgres",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="sha256:" + "a" * 64,
+        )
+
+    assert raised.value.diagnostics == (diagnostic,)
+    assert "array is malformed" not in str(raised.value)
+
+
 def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> None:
     seed_file = tmp_path / "cache" / "seed.txt"
     seed_file.parent.mkdir(parents=True)

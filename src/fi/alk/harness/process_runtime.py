@@ -62,7 +62,9 @@ from .bundle_v2 import (
     SourceProcess,
     StoreEntry,
 )
+from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .job import FailureDomain
+from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
 from .provider_import import (
     ProviderImportError,
@@ -116,11 +118,13 @@ class ProcessRuntimeError(RuntimeError):
         *,
         process: str | None = None,
         domain: FailureDomain | None = None,
+        diagnostics: tuple[HarnessDiagnostic, ...] = (),
     ) -> None:
         self.stage = stage
         self.code = code
         self.process = process
         self.domain = domain
+        self.diagnostics = diagnostics
         located = f" ({process})" if process else ""
         super().__init__(f"{stage}/{code}{located}: {message}")
 
@@ -2581,9 +2585,11 @@ def apply_postgres_sqlite_world(
     ) as exc:  # pragma: no cover - snapshot dependency is tested at build time.
         raise RuntimeError("generic_pipeline_dependency_missing: psycopg") from exc
 
-    from .compile.postgres import apply_postgres, compile_postgres
+    from .compile.postgres import PostgresCompileError, apply_postgres, compile_postgres
+    from .diagnostic_adapters.world_ir import diagnose_world_ir_error
     from .source_schema.postgres import inspect_postgres
-    from .world_import.sqlite import import_sqlite_world
+    from .world_import.sqlite import SQLiteWorldImportError, import_sqlite_world
+    from .world_ir import WorldIRValidationError
 
     uri = f"file:{file.resolve()}?mode=ro"
     with psycopg.connect(
@@ -2594,10 +2600,75 @@ def apply_postgres_sqlite_world(
         dbname=dbname,
     ) as postgres:
         source = inspect_postgres(postgres, source_digest=source_digest)
-        with sqlite3.connect(uri, uri=True) as sqlite:
-            imported = import_sqlite_world(sqlite, source)
-        compiled = compile_postgres(source, imported.world)
+        unsupported = tuple(
+            HarnessDiagnostic.create(
+                stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                component=item.component,
+                code="unsupported_source_construct",
+                message=f"unsupported source construct: {item.code}",
+                location=DiagnosticLocation(source_path=item.location)
+                if item.location
+                else None,
+                evidence_refs=("artifact://source-model",),
+            )
+            for item in source.unsupported
+        )
+        if unsupported:
+            raise GenericWorldSeedError(unsupported)
+        try:
+            with sqlite3.connect(uri, uri=True) as sqlite:
+                imported = import_sqlite_world(sqlite, source)
+            compiled = compile_postgres(source, imported.world)
+        except SQLiteWorldImportError as error:
+            normalized_code = {
+                "array_value_invalid": "array_shape_mismatch",
+                "unknown_table": "unknown_table",
+                "unknown_column": "unknown_column",
+            }.get(error.code, "value_shape_mismatch")
+            raise GenericWorldSeedError(
+                (
+                    HarnessDiagnostic.create(
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="world_import",
+                        code=normalized_code,
+                        message=f"legacy world value could not be normalized: {error.code}",
+                        location=DiagnosticLocation(
+                            table=error.table, column=error.column
+                        ),
+                        evidence_refs=(
+                            "artifact://world-ir",
+                            "artifact://source-model",
+                        ),
+                    ),
+                )
+            ) from error
+        except WorldIRValidationError as error:
+            raise GenericWorldSeedError(diagnose_world_ir_error(error)) from error
+        except PostgresCompileError as error:
+            raise GenericWorldSeedError(
+                (
+                    HarnessDiagnostic.create(
+                        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                        component="postgres_compiler",
+                        code=error.code,
+                        message=error.message,
+                        evidence_refs=(
+                            "artifact://world-ir",
+                            "artifact://source-model",
+                        ),
+                    ),
+                )
+            ) from error
         apply_postgres(postgres, compiled)
+
+
+class GenericWorldSeedError(ValueError):
+    """Structured semantic seed rejection; never contains authored values."""
+
+    def __init__(self, diagnostics: tuple[HarnessDiagnostic, ...]) -> None:
+        self.diagnostics = diagnostics
+        summary = ", ".join(sorted({item.code for item in diagnostics}))
+        super().__init__(f"generic_world_invalid: {summary}")
 
 
 def apply_seed_file(
@@ -2655,12 +2726,14 @@ def apply_seed_file(
                 )
             except Exception as exc:
                 code = str(getattr(exc, "code", "generic_world_import_failed"))
+                diagnostics = tuple(getattr(exc, "diagnostics", ()))
                 raise ProcessRuntimeError(
                     "seed",
                     "seed_failed",
                     f"{code}: semantic world import failed",
                     process=process_name,
                     domain=FailureDomain.ENVIRONMENT,
+                    diagnostics=diagnostics,
                 ) from exc
             return
         argv = postgres_seed_argv(
