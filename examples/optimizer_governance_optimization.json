@@ -1,0 +1,1459 @@
+{
+  "agent": {
+    "responses": [
+      {
+        "content": "Inspecting the optimizer society trace before trusting the selected agent architecture.",
+        "tool_calls": [
+          {
+            "arguments": {},
+            "id": "trace_status",
+            "name": "optimizer_trace_status"
+          },
+          {
+            "arguments": {
+              "min_score": 0.7
+            },
+            "id": "proposal_list",
+            "name": "list_optimizer_proposals"
+          }
+        ]
+      },
+      {
+        "content": "Checking critic, synthesis, and steward roles plus their proposal credit.",
+        "tool_calls": [
+          {
+            "arguments": {
+              "role": "vidura"
+            },
+            "id": "critic_role",
+            "name": "inspect_optimizer_role"
+          },
+          {
+            "arguments": {
+              "role": "sangha"
+            },
+            "id": "synthesis_role",
+            "name": "inspect_optimizer_role"
+          },
+          {
+            "arguments": {
+              "role": "dharma_steward"
+            },
+            "id": "steward_role",
+            "name": "inspect_optimizer_role"
+          }
+        ]
+      },
+      {
+        "content": "Checking candidate selection and governance gates before promotion.",
+        "tool_calls": [
+          {
+            "arguments": {
+              "candidate_id": "c_steward"
+            },
+            "id": "best_candidate",
+            "name": "inspect_optimizer_candidate"
+          },
+          {
+            "arguments": {},
+            "id": "governance",
+            "name": "inspect_optimizer_governance"
+          }
+        ]
+      },
+      {
+        "content": "The optimized trace proves a governed optimizer society with role diversity, mediator review, contract gates, rollback, search locality, dependency audit, diagnostics, role credit, critique, synthesis, steward selection, and metric-bound search paths.",
+        "tool_calls": []
+      }
+    ],
+    "type": "scripted"
+  },
+  "evaluation": {
+    "agent_report": {
+      "config": {
+        "allow_extra_tool_arguments": true,
+        "available_tools": [
+          "optimizer_trace_status",
+          "list_optimizer_proposals",
+          "inspect_optimizer_role",
+          "inspect_optimizer_candidate",
+          "inspect_optimizer_governance"
+        ],
+        "expected_result": "The optimized trace proves a governed optimizer society with critique, synthesis, steward selection, mediator review, contract gates, rollback, locality, dependency audit, diagnostics, role credit, and metric-bound search paths.",
+        "metric_weights": {
+          "final_response_quality": 2.0,
+          "optimizer_trace_coverage": 6.0,
+          "optimizer_trace_quality": 10.0,
+          "tool_selection_accuracy": 2.0
+        },
+        "optimizer_trace_quality": {
+          "max_duplicate_candidate_count": 0,
+          "min_best_score": 0.98,
+          "min_credit_entries": 5,
+          "min_governance_checks": 6,
+          "min_governance_pass_rate": 1.0,
+          "min_proposal_count": 5,
+          "min_role_count": 5,
+          "min_round_count": 3,
+          "require_contract_gate": true,
+          "require_critique": true,
+          "require_dependency_audit": true,
+          "require_diagnostics": true,
+          "require_governance": true,
+          "require_locality": true,
+          "require_mediator": true,
+          "require_role_diversity": true,
+          "require_role_graph": true,
+          "require_rollback": true,
+          "require_steward": true,
+          "require_synthesis": true,
+          "required_archetypes": [
+            "coverage_synthesis",
+            "adversarial_critic",
+            "mediator",
+            "governance_steward",
+            "memory_lineage"
+          ],
+          "required_best_role": "dharma_steward",
+          "required_governance_signals": [
+            "role_diversity",
+            "mediator_review",
+            "contract_gate",
+            "rollback_check",
+            "search_locality",
+            "dependency_audit"
+          ],
+          "required_roles": [
+            "sangha",
+            "vidura",
+            "krishna",
+            "dharma_steward",
+            "smriti"
+          ],
+          "required_search_paths": [
+            "multi_agent.handoff.contract",
+            "multi_agent.review.enabled",
+            "memory.shared_case_summary",
+            "policy.reconciliation.mode",
+            "tools.evidence_capture",
+            "security.adversarial_review"
+          ],
+          "required_signals": [
+            "optimizer",
+            "society_trace",
+            "proposal",
+            "candidate",
+            "evaluation",
+            "score",
+            "credit",
+            "diagnostic",
+            "search_path",
+            "best_candidate"
+          ]
+        },
+        "required_artifact_types": [
+          "trace"
+        ],
+        "required_optimizer_trace": [
+          "optimizer_trace",
+          "society_trace",
+          "optimizer",
+          "role",
+          "role_graph",
+          "proposal",
+          "candidate",
+          "evaluation",
+          "score",
+          "round",
+          "diagnostic",
+          "search_path",
+          "credit",
+          "best_candidate",
+          "critique",
+          "synthesis",
+          "steward",
+          "governance",
+          "role_diversity",
+          "mediator_review",
+          "contract_gate",
+          "rollback_check",
+          "search_locality",
+          "dependency_audit"
+        ],
+        "required_tools": [
+          "optimizer_trace_status",
+          "list_optimizer_proposals",
+          "inspect_optimizer_role",
+          "inspect_optimizer_candidate",
+          "inspect_optimizer_governance"
+        ],
+        "success_criteria": [
+          "role diversity",
+          "mediator review",
+          "contract gates",
+          "rollback",
+          "search locality",
+          "dependency audit",
+          "diagnostics",
+          "role credit",
+          "metric-bound search paths"
+        ],
+        "task_description": "Optimize the optimizer trace from a weak one-role seed into a governed multi-role society trace for architecture/config optimization."
+      },
+      "threshold": 0.9
+    }
+  },
+  "name": "optimizer-governance-optimization",
+  "optimization": {
+    "optimizer": {
+      "auto_diagnose": false,
+      "include_seed": true,
+      "max_candidates": 3
+    },
+    "target": {
+      "base_config": {
+        "simulation": {
+          "environments": [
+            {
+              "data": {
+                "best_candidate_id": "c_seed",
+                "diagnostics": [],
+                "final_score": 0.42,
+                "governance": {
+                  "checks": []
+                },
+                "name": "seed-optimizer-trace",
+                "optimizer": "AgentOptimizer",
+                "proposals": [
+                  {
+                    "candidate_id": "c_seed",
+                    "patch": {},
+                    "role": "manifest_seed",
+                    "role_archetype": "baseline",
+                    "role_kind": "baseline",
+                    "round": 1,
+                    "score": 0.42
+                  }
+                ],
+                "roles": [
+                  {
+                    "archetype": "baseline",
+                    "name": "manifest_seed",
+                    "proposal_kind": "baseline"
+                  }
+                ],
+                "rounds": [
+                  {
+                    "decision": "seed",
+                    "round": 1
+                  }
+                ],
+                "search_paths": []
+              },
+              "type": "optimizer_trace"
+            }
+          ]
+        }
+      },
+      "layers": [
+        "multi_agent",
+        "orchestration",
+        "planner",
+        "security",
+        "evaluator"
+      ],
+      "metadata": {
+        "cookbook": "optimizer-governance-optimization",
+        "migrated_from": [
+          "agent-opt/examples/optimize_society_role_graph_strategy.py",
+          "agent-opt/internal-docs/optimizer-governance-trace-research.md"
+        ],
+        "source": "fi.alk.optimize.build_optimizer_governance_optimization_manifest",
+        "task_kind": "optimizer_governance"
+      },
+      "name": "optimizer-governance-optimization",
+      "search_space": {
+        "simulation.environments": [
+          [
+            {
+              "data": {
+                "best_candidate_id": "c_seed",
+                "diagnostics": [],
+                "final_score": 0.42,
+                "governance": {
+                  "checks": []
+                },
+                "name": "seed-optimizer-trace",
+                "optimizer": "AgentOptimizer",
+                "proposals": [
+                  {
+                    "candidate_id": "c_seed",
+                    "patch": {},
+                    "role": "manifest_seed",
+                    "role_archetype": "baseline",
+                    "role_kind": "baseline",
+                    "round": 1,
+                    "score": 0.42
+                  }
+                ],
+                "roles": [
+                  {
+                    "archetype": "baseline",
+                    "name": "manifest_seed",
+                    "proposal_kind": "baseline"
+                  }
+                ],
+                "rounds": [
+                  {
+                    "decision": "seed",
+                    "round": 1
+                  }
+                ],
+                "search_paths": []
+              },
+              "type": "optimizer_trace"
+            }
+          ],
+          [
+            {
+              "data": {
+                "best_candidate_id": "c_steward",
+                "diagnostics": [
+                  {
+                    "component": "multi_agent",
+                    "evidence": "Loose handoff contract and missing review reduced multi-agent coordination quality.",
+                    "failure_mode": "coordination_failure",
+                    "harness_layer": "execution",
+                    "suggested_metrics": [
+                      "optimizer_trace_quality",
+                      "multi_agent_coordination_quality"
+                    ],
+                    "suggested_paths": [
+                      "multi_agent.handoff.contract",
+                      "multi_agent.review.enabled"
+                    ]
+                  },
+                  {
+                    "component": "security",
+                    "evidence": "Missing red-team review reduced promotion confidence.",
+                    "failure_mode": "adversarial_resilience",
+                    "harness_layer": "governance",
+                    "suggested_metrics": [
+                      "adversarial_resilience"
+                    ],
+                    "suggested_paths": [
+                      "security.adversarial_review"
+                    ]
+                  }
+                ],
+                "final_score": 0.99,
+                "governance": {
+                  "authority_weights": [
+                    {
+                      "candidate_id": "c_seed",
+                      "in_scope": true,
+                      "role": "sangha",
+                      "weight": 1.0
+                    },
+                    {
+                      "candidate_id": "c_vidura",
+                      "in_scope": true,
+                      "role": "vidura",
+                      "weight": 1.0
+                    },
+                    {
+                      "candidate_id": "c_smriti",
+                      "in_scope": true,
+                      "role": "smriti",
+                      "weight": 1.0
+                    },
+                    {
+                      "candidate_id": "c_krishna",
+                      "in_scope": true,
+                      "role": "krishna",
+                      "weight": 1.0
+                    }
+                  ],
+                  "checks": [
+                    {
+                      "evidence": {
+                        "roles": [
+                          "dharma_steward",
+                          "krishna",
+                          "sangha",
+                          "smriti",
+                          "vidura"
+                        ]
+                      },
+                      "name": "role_diversity",
+                      "passed": true,
+                      "reason": "multiple independent proposal roles reduce single-strategy collapse"
+                    },
+                    {
+                      "evidence": {
+                        "role_kinds": [
+                          "critic",
+                          "critique",
+                          "mediation",
+                          "mediator",
+                          "memory",
+                          "steward",
+                          "synthesis",
+                          "synthesizer"
+                        ]
+                      },
+                      "name": "topology_adaptation",
+                      "passed": true,
+                      "reason": "role graph or role-kind metadata records the optimizer topology"
+                    },
+                    {
+                      "evidence": {
+                        "roles": [
+                          "critic",
+                          "critique",
+                          "dharma_steward",
+                          "krishna",
+                          "mediation",
+                          "mediator",
+                          "memory",
+                          "sangha",
+                          "smriti",
+                          "steward",
+                          "synthesis",
+                          "synthesizer",
+                          "vidura"
+                        ]
+                      },
+                      "name": "adversarial_review",
+                      "passed": true,
+                      "reason": "critic or adversary role challenges candidate changes"
+                    },
+                    {
+                      "evidence": {
+                        "roles": [
+                          "critic",
+                          "critique",
+                          "dharma_steward",
+                          "krishna",
+                          "mediation",
+                          "mediator",
+                          "memory",
+                          "sangha",
+                          "smriti",
+                          "steward",
+                          "synthesis",
+                          "synthesizer",
+                          "vidura"
+                        ]
+                      },
+                      "name": "mediator_review",
+                      "passed": true,
+                      "reason": "synthesis role combines compatible local repairs"
+                    },
+                    {
+                      "evidence": {
+                        "roles": [
+                          "critic",
+                          "critique",
+                          "dharma_steward",
+                          "krishna",
+                          "mediation",
+                          "mediator",
+                          "memory",
+                          "sangha",
+                          "smriti",
+                          "steward",
+                          "synthesis",
+                          "synthesizer",
+                          "vidura"
+                        ]
+                      },
+                      "name": "steward_review",
+                      "passed": true,
+                      "reason": "steward role tests minimality and process safety"
+                    },
+                    {
+                      "evidence": {
+                        "credit_roles": [
+                          "dharma_steward",
+                          "krishna",
+                          "sangha",
+                          "smriti",
+                          "vidura"
+                        ]
+                      },
+                      "name": "credit_assignment",
+                      "passed": true,
+                      "reason": "role credit ledger connects outcomes to proposal sources"
+                    },
+                    {
+                      "evidence": {
+                        "patched_paths": [
+                          "memory.shared_case_summary",
+                          "multi_agent.handoff.contract",
+                          "multi_agent.review.enabled",
+                          "policy.reconciliation.mode",
+                          "security.adversarial_review",
+                          "tools.evidence_capture"
+                        ],
+                        "search_paths": [
+                          "memory.shared_case_summary",
+                          "multi_agent.handoff.contract",
+                          "multi_agent.review.enabled",
+                          "policy.reconciliation.mode",
+                          "security.adversarial_review",
+                          "tools.evidence_capture"
+                        ]
+                      },
+                      "name": "search_locality",
+                      "passed": true,
+                      "reason": "candidate patches stay inside diagnosed search paths"
+                    },
+                    {
+                      "evidence": {
+                        "diagnostics": [
+                          {
+                            "component": "multi_agent",
+                            "evidence": "Loose handoff contract and missing review reduced multi-agent coordination quality.",
+                            "failure_mode": "coordination_failure",
+                            "harness_layer": "execution",
+                            "suggested_metrics": [
+                              "optimizer_trace_quality",
+                              "multi_agent_coordination_quality"
+                            ],
+                            "suggested_paths": [
+                              "multi_agent.handoff.contract",
+                              "multi_agent.review.enabled"
+                            ]
+                          },
+                          {
+                            "component": "security",
+                            "evidence": "Missing red-team review reduced promotion confidence.",
+                            "failure_mode": "adversarial_resilience",
+                            "harness_layer": "governance",
+                            "suggested_metrics": [
+                              "adversarial_resilience"
+                            ],
+                            "suggested_paths": [
+                              "security.adversarial_review"
+                            ]
+                          }
+                        ],
+                        "search_paths": [
+                          "memory.shared_case_summary",
+                          "multi_agent.handoff.contract",
+                          "multi_agent.review.enabled",
+                          "policy.reconciliation.mode",
+                          "security.adversarial_review",
+                          "tools.evidence_capture"
+                        ]
+                      },
+                      "name": "contract_gate",
+                      "passed": true,
+                      "reason": "policy/security/contract paths are tied to diagnosed failures"
+                    },
+                    {
+                      "evidence": {
+                        "has_steward": true
+                      },
+                      "name": "rollback_check",
+                      "passed": true,
+                      "reason": "steward or parent lineage supports rollback/minimality audit"
+                    },
+                    {
+                      "evidence": {
+                        "best_candidate_id": "c_steward",
+                        "final_score": 0.99
+                      },
+                      "name": "terminal_selection",
+                      "passed": true,
+                      "reason": "trace names the selected candidate and final score"
+                    },
+                    {
+                      "evidence": {
+                        "backend_lineage": [
+                          "SocietyAgentOptimizer"
+                        ],
+                        "leave_one_backend_dependency": null
+                      },
+                      "name": "dependency_audit",
+                      "passed": true,
+                      "reason": "multi-backend runs should expose dependency or backend-lineage evidence"
+                    },
+                    {
+                      "evidence": {
+                        "chambers": {
+                          "sabha": {
+                            "declared_budget": 4,
+                            "evaluations_used": 3,
+                            "roles": [
+                              "sangha",
+                              "krishna",
+                              "dharma_steward"
+                            ]
+                          },
+                          "samiti": {
+                            "declared_budget": 4,
+                            "evaluations_used": 2,
+                            "roles": [
+                              "vidura",
+                              "smriti"
+                            ]
+                          }
+                        }
+                      },
+                      "name": "chamber_budgets_declared",
+                      "passed": true,
+                      "reason": "every chamber declares its evaluation budget per round"
+                    },
+                    {
+                      "evidence": {
+                        "classes": [
+                          "badhita",
+                          "savyabhichara"
+                        ],
+                        "rejection_count": 2
+                      },
+                      "name": "rejections_classed",
+                      "passed": true,
+                      "reason": "every recorded rejection carries a closed-vocabulary class"
+                    },
+                    {
+                      "evidence": {
+                        "nirnaya_count": 1
+                      },
+                      "name": "nirnaya_recorded",
+                      "passed": true,
+                      "reason": "the steward decision is recorded with a complete justification"
+                    },
+                    {
+                      "evidence": {
+                        "selected_candidates": [
+                          "c_steward"
+                        ]
+                      },
+                      "name": "proposals_never_averaged",
+                      "passed": true,
+                      "reason": "selection is single-lineage: one decided candidate, never an average"
+                    },
+                    {
+                      "evidence": {
+                        "authority_weight_count": 4
+                      },
+                      "name": "specialist_authority_respected",
+                      "passed": true,
+                      "reason": "specialist proposals inside their path prefixes carry full authority; out-of-scope counter-proposals carry half"
+                    },
+                    {
+                      "evidence": {
+                        "ledger_rounds": [
+                          {
+                            "diagnoses_pooled": 2,
+                            "persisted_via": "AgentSocialMemoryOptimizer",
+                            "pooled_from_candidates": 2,
+                            "round": 1
+                          },
+                          {
+                            "diagnoses_pooled": 3,
+                            "persisted_via": "AgentSocialMemoryOptimizer",
+                            "pooled_from_candidates": 3,
+                            "round": 2
+                          }
+                        ]
+                      },
+                      "name": "society_ledger_pooled_across_candidates",
+                      "passed": true,
+                      "reason": "the round ledger pools diagnoses across all evaluated candidates, not just the round winner"
+                    }
+                  ],
+                  "critique_operators": [],
+                  "nirnaya": [
+                    {
+                      "decision": "promote_candidate",
+                      "frozen_rows_closed": 5,
+                      "justification": {
+                        "hetu": "All six explicit governance checks pass and no frozen row regresses under the declared setting.",
+                        "nigamana": "Promote c_steward: admissible evidence covers every searched path at score 0.99.",
+                        "pratijna": "c_steward is the minimal governed candidate that closes every required metric.",
+                        "udaharana": "c_krishna closed the same metrics but carries an extra unproven change rejected by the steward.",
+                        "upanaya": "c_steward applies the same reconciliation with the unproven change removed."
+                      },
+                      "rejected_alternatives": [
+                        {
+                          "candidate_id": "c_krishna",
+                          "hetvabhasa_class": "satpratipaksha"
+                        }
+                      ],
+                      "replay_verdict": "all_rows_closed",
+                      "round": 3,
+                      "selected_candidate_id": "c_steward"
+                    }
+                  ],
+                  "rejections": [
+                    {
+                      "candidate_id": "c_duplicate_probe",
+                      "detail": "duplicate patch on multi_agent.review.enabled does not discriminate candidates",
+                      "hetvabhasa_class": "savyabhichara",
+                      "round": 2
+                    },
+                    {
+                      "candidate_id": "c_frozen_row_break",
+                      "detail": "frozen-row replay failure: row task_completion regressed below its frozen floor (tarka)",
+                      "hetvabhasa_class": "badhita",
+                      "round": 3
+                    }
+                  ],
+                  "signals": [
+                    "adversarial_review",
+                    "chamber_budgets_declared",
+                    "contract_gate",
+                    "credit_assignment",
+                    "dependency_audit",
+                    "governance",
+                    "mediator_review",
+                    "nirnaya_recorded",
+                    "proposals_never_averaged",
+                    "rejections_classed",
+                    "role_diversity",
+                    "rollback_check",
+                    "search_locality",
+                    "society_ledger_pooled_across_candidates",
+                    "specialist_authority_respected",
+                    "steward_review",
+                    "terminal_selection",
+                    "topology_adaptation"
+                  ],
+                  "summary": {
+                    "governance_check_count": 17,
+                    "governance_pass_rate": 1.0,
+                    "governance_passed_count": 17,
+                    "has_contract_gate": true,
+                    "has_declared_budget": true,
+                    "has_dependency_audit": true,
+                    "has_external_ranking": true,
+                    "has_governance": true,
+                    "has_guna_axes": true,
+                    "has_hetvabhasa_rejections": true,
+                    "has_layer_locality": true,
+                    "has_locality": true,
+                    "has_mediator": true,
+                    "has_nirnaya": true,
+                    "has_nyaya_justifications": true,
+                    "has_role_diversity": true,
+                    "has_rollback": true,
+                    "has_staged_conditioning": true,
+                    "has_two_chamber": true
+                  }
+                },
+                "kind": "optimizer_society_trace",
+                "ledger": [
+                  {
+                    "diagnoses_pooled": 2,
+                    "persisted_via": "AgentSocialMemoryOptimizer",
+                    "pooled_from_candidates": 2,
+                    "round": 1
+                  },
+                  {
+                    "diagnoses_pooled": 3,
+                    "persisted_via": "AgentSocialMemoryOptimizer",
+                    "pooled_from_candidates": 3,
+                    "round": 2
+                  }
+                ],
+                "metadata": {
+                  "backend_lineage": [
+                    "SocietyAgentOptimizer"
+                  ],
+                  "best_candidate_id": "c_steward",
+                  "chambers": {
+                    "sabha": {
+                      "declared_budget": 4,
+                      "evaluations_used": 3,
+                      "roles": [
+                        "sangha",
+                        "krishna",
+                        "dharma_steward"
+                      ]
+                    },
+                    "samiti": {
+                      "declared_budget": 4,
+                      "evaluations_used": 2,
+                      "roles": [
+                        "vidura",
+                        "smriti"
+                      ]
+                    }
+                  },
+                  "eval_budget": 8,
+                  "governance": {
+                    "checks": [
+                      {
+                        "name": "role_diversity",
+                        "passed": true,
+                        "reason": "Five distinct roles proposed or reviewed candidates."
+                      },
+                      {
+                        "name": "mediator_review",
+                        "passed": true,
+                        "reason": "Mediator role reconciled competing changes."
+                      },
+                      {
+                        "name": "contract_gate",
+                        "passed": true,
+                        "reason": "Final candidate uses explicit handoff policy."
+                      },
+                      {
+                        "name": "rollback_check",
+                        "passed": true,
+                        "reason": "Best candidate id and parent lineage are retained."
+                      },
+                      {
+                        "name": "search_locality",
+                        "passed": true,
+                        "reason": "All patches stay within diagnosed search paths."
+                      },
+                      {
+                        "name": "dependency_audit",
+                        "passed": true,
+                        "reason": "Policy, tool, memory, and security dependencies are listed."
+                      }
+                    ]
+                  },
+                  "guna_mix": {
+                    "rajas": 0.34,
+                    "sattva": 0.66,
+                    "tamas": 0.5
+                  },
+                  "inspiration": "human society, psychology, and dharma role metadata; candidate acceptance remains metric-based",
+                  "layer_locality": {
+                    "execution": [
+                      "multi_agent.handoff.contract",
+                      "multi_agent.review.enabled"
+                    ],
+                    "governance": [
+                      "security.adversarial_review"
+                    ]
+                  },
+                  "ledger_rounds": [
+                    {
+                      "diagnoses_pooled": 2,
+                      "persisted_via": "AgentSocialMemoryOptimizer",
+                      "pooled_from_candidates": 2,
+                      "round": 1
+                    },
+                    {
+                      "diagnoses_pooled": 3,
+                      "persisted_via": "AgentSocialMemoryOptimizer",
+                      "pooled_from_candidates": 3,
+                      "round": 2
+                    }
+                  ],
+                  "nirnaya": [
+                    {
+                      "decision": "promote_candidate",
+                      "frozen_rows_closed": 5,
+                      "justification": {
+                        "hetu": "All six explicit governance checks pass and no frozen row regresses under the declared setting.",
+                        "nigamana": "Promote c_steward: admissible evidence covers every searched path at score 0.99.",
+                        "pratijna": "c_steward is the minimal governed candidate that closes every required metric.",
+                        "udaharana": "c_krishna closed the same metrics but carries an extra unproven change rejected by the steward.",
+                        "upanaya": "c_steward applies the same reconciliation with the unproven change removed."
+                      },
+                      "rejected_alternatives": [
+                        {
+                          "candidate_id": "c_krishna",
+                          "hetvabhasa_class": "satpratipaksha"
+                        }
+                      ],
+                      "replay_verdict": "all_rows_closed",
+                      "round": 3,
+                      "selected_candidate_id": "c_steward"
+                    }
+                  ],
+                  "optimizer": "SocietyAgentOptimizer",
+                  "ranking_source": "evaluation_suite",
+                  "rejections": [
+                    {
+                      "candidate_id": "c_duplicate_probe",
+                      "detail": "duplicate patch on multi_agent.review.enabled does not discriminate candidates",
+                      "hetvabhasa_class": "savyabhichara",
+                      "round": 2
+                    },
+                    {
+                      "candidate_id": "c_frozen_row_break",
+                      "detail": "frozen-row replay failure: row task_completion regressed below its frozen floor (tarka)",
+                      "hetvabhasa_class": "badhita",
+                      "round": 3
+                    }
+                  ],
+                  "role_graph": [
+                    {
+                      "archetype": "coverage_synthesis",
+                      "chamber": "sabha",
+                      "guna": {
+                        "rajas": 0.2,
+                        "sattva": 0.9,
+                        "tamas": 0.3
+                      },
+                      "name": "sangha",
+                      "path_prefixes": [
+                        "multi_agent"
+                      ],
+                      "proposal_kind": "synthesis"
+                    },
+                    {
+                      "archetype": "adversarial_critic",
+                      "chamber": "samiti",
+                      "guna": {
+                        "rajas": 0.7,
+                        "sattva": 0.5,
+                        "tamas": 0.4
+                      },
+                      "name": "vidura",
+                      "path_prefixes": [
+                        "security"
+                      ],
+                      "proposal_kind": "critique"
+                    },
+                    {
+                      "archetype": "mediator",
+                      "chamber": "sabha",
+                      "guna": {
+                        "rajas": 0.3,
+                        "sattva": 0.8,
+                        "tamas": 0.4
+                      },
+                      "name": "krishna",
+                      "path_prefixes": [
+                        "multi_agent",
+                        "policy",
+                        "tools"
+                      ],
+                      "proposal_kind": "mediation"
+                    },
+                    {
+                      "archetype": "governance_steward",
+                      "chamber": "sabha",
+                      "guna": {
+                        "rajas": 0.1,
+                        "sattva": 0.5,
+                        "tamas": 0.9
+                      },
+                      "name": "dharma_steward",
+                      "path_prefixes": [],
+                      "proposal_kind": "steward"
+                    },
+                    {
+                      "archetype": "memory_lineage",
+                      "chamber": "samiti",
+                      "guna": {
+                        "rajas": 0.4,
+                        "sattva": 0.6,
+                        "tamas": 0.5
+                      },
+                      "name": "smriti",
+                      "path_prefixes": [
+                        "memory"
+                      ],
+                      "proposal_kind": "memory"
+                    }
+                  ],
+                  "search_paths": [
+                    "multi_agent.handoff.contract",
+                    "multi_agent.review.enabled",
+                    "memory.shared_case_summary",
+                    "policy.reconciliation.mode",
+                    "tools.evidence_capture",
+                    "security.adversarial_review"
+                  ],
+                  "selection": "tournament",
+                  "source": "agent-learning-kit",
+                  "staged_conditioning": {
+                    "orthogonal_chambers": true,
+                    "stages": {
+                      "component_text": {
+                        "paths": [],
+                        "phase": 1
+                      },
+                      "global_repolish": {
+                        "paths": [
+                          "multi_agent.handoff.contract",
+                          "multi_agent.review.enabled",
+                          "memory.shared_case_summary",
+                          "policy.reconciliation.mode",
+                          "tools.evidence_capture",
+                          "security.adversarial_review"
+                        ],
+                        "phase": 3
+                      },
+                      "structural_config": {
+                        "paths": [
+                          "multi_agent.handoff.contract",
+                          "multi_agent.review.enabled",
+                          "memory.shared_case_summary",
+                          "policy.reconciliation.mode",
+                          "tools.evidence_capture"
+                        ],
+                        "phase": 2
+                      }
+                    }
+                  },
+                  "strategy": "society_role_graph",
+                  "target_name": "governed-society-optimizer-trace"
+                },
+                "name": "governed-society-optimizer-trace",
+                "optimizer": "SocietyAgentOptimizer",
+                "proposals": [
+                  {
+                    "candidate_id": "c_seed",
+                    "id": "c_seed",
+                    "metadata": {
+                      "justification": {
+                        "hetu": "Baseline keeps loose handoff and missing evidence capture.",
+                        "nigamana": "Expected admissible evidence delta: optimizer_trace_quality closes at its floor with the patch applied.",
+                        "pratijna": "Patching multi_agent.handoff.contract improves the governed optimizer trace.",
+                        "udaharana": "Prior candidate c_seed closed its metrics after an in-scope patch on the same diagnosed paths.",
+                        "upanaya": "Candidate c_seed applies the same rule inside the sangha role's declared path scope."
+                      }
+                    },
+                    "parent_ids": [],
+                    "patch": {
+                      "multi_agent.handoff.contract": "loose"
+                    },
+                    "reason": "Baseline keeps loose handoff and missing evidence capture.",
+                    "role": "sangha",
+                    "role_archetype": "coverage_synthesis",
+                    "role_kind": "synthesizer",
+                    "round": 1,
+                    "score": 0.55,
+                    "search_paths": [
+                      "multi_agent.handoff.contract"
+                    ]
+                  },
+                  {
+                    "candidate_id": "c_vidura",
+                    "id": "c_vidura",
+                    "metadata": {
+                      "justification": {
+                        "hetu": "Critic adds red-team review for adversarial resilience.",
+                        "nigamana": "Expected admissible evidence delta: optimizer_trace_quality closes at its floor with the patch applied.",
+                        "pratijna": "Patching security.adversarial_review improves the governed optimizer trace.",
+                        "udaharana": "Prior candidate c_seed closed its metrics after an in-scope patch on the same diagnosed paths.",
+                        "upanaya": "Candidate c_vidura applies the same rule inside the vidura role's declared path scope."
+                      }
+                    },
+                    "parent_ids": [
+                      "c_seed"
+                    ],
+                    "patch": {
+                      "security.adversarial_review": "red_team"
+                    },
+                    "reason": "Critic adds red-team review for adversarial resilience.",
+                    "role": "vidura",
+                    "role_archetype": "adversarial_critic",
+                    "role_kind": "critic",
+                    "round": 1,
+                    "score": 0.72,
+                    "search_paths": [
+                      "security.adversarial_review"
+                    ]
+                  },
+                  {
+                    "candidate_id": "c_smriti",
+                    "id": "c_smriti",
+                    "metadata": {
+                      "justification": {
+                        "hetu": "Memory role adds shared case summary and provenance.",
+                        "nigamana": "Expected admissible evidence delta: optimizer_trace_quality closes at its floor with the patch applied.",
+                        "pratijna": "Patching memory.shared_case_summary improves the governed optimizer trace.",
+                        "udaharana": "Prior candidate c_vidura closed its metrics after an in-scope patch on the same diagnosed paths.",
+                        "upanaya": "Candidate c_smriti applies the same rule inside the smriti role's declared path scope."
+                      }
+                    },
+                    "parent_ids": [
+                      "c_vidura"
+                    ],
+                    "patch": {
+                      "memory.shared_case_summary": true
+                    },
+                    "reason": "Memory role adds shared case summary and provenance.",
+                    "role": "smriti",
+                    "role_archetype": "memory_lineage",
+                    "role_kind": "memory",
+                    "round": 2,
+                    "score": 0.81,
+                    "search_paths": [
+                      "memory.shared_case_summary"
+                    ]
+                  },
+                  {
+                    "candidate_id": "c_krishna",
+                    "id": "c_krishna",
+                    "metadata": {
+                      "justification": {
+                        "hetu": "Mediator reconciles policy, tools, and handoff constraints.",
+                        "nigamana": "Expected admissible evidence delta: optimizer_trace_quality closes at its floor with the patch applied.",
+                        "pratijna": "Patching multi_agent.review.enabled, policy.reconciliation.mode, tools.evidence_capture improves the governed optimizer trace.",
+                        "udaharana": "Prior candidate c_smriti closed its metrics after an in-scope patch on the same diagnosed paths.",
+                        "upanaya": "Candidate c_krishna applies the same rule inside the krishna role's declared path scope."
+                      }
+                    },
+                    "parent_ids": [
+                      "c_smriti"
+                    ],
+                    "patch": {
+                      "multi_agent.review.enabled": true,
+                      "policy.reconciliation.mode": "evidence_weighted",
+                      "tools.evidence_capture": true
+                    },
+                    "reason": "Mediator reconciles policy, tools, and handoff constraints.",
+                    "role": "krishna",
+                    "role_archetype": "mediator",
+                    "role_kind": "mediator",
+                    "round": 2,
+                    "score": 0.91,
+                    "search_paths": [
+                      "multi_agent.review.enabled",
+                      "policy.reconciliation.mode",
+                      "tools.evidence_capture"
+                    ]
+                  },
+                  {
+                    "candidate_id": "c_steward",
+                    "id": "c_steward",
+                    "metadata": {
+                      "justification": {
+                        "hetu": "Steward selects the locally bounded governed candidate.",
+                        "nigamana": "Expected admissible evidence delta: optimizer_trace_quality closes at its floor with the patch applied.",
+                        "pratijna": "Patching memory.shared_case_summary, multi_agent.handoff.contract, multi_agent.review.enabled, policy.reconciliation.mode, security.adversarial_review, tools.evidence_capture improves the governed optimizer trace.",
+                        "udaharana": "Prior candidate c_krishna closed its metrics after an in-scope patch on the same diagnosed paths.",
+                        "upanaya": "Candidate c_steward applies the same rule inside the dharma_steward role's declared path scope."
+                      }
+                    },
+                    "parent_ids": [
+                      "c_krishna"
+                    ],
+                    "patch": {
+                      "memory.shared_case_summary": true,
+                      "multi_agent.handoff.contract": "explicit_policy",
+                      "multi_agent.review.enabled": true,
+                      "policy.reconciliation.mode": "evidence_weighted",
+                      "security.adversarial_review": "red_team",
+                      "tools.evidence_capture": true
+                    },
+                    "reason": "Steward selects the locally bounded governed candidate.",
+                    "role": "dharma_steward",
+                    "role_archetype": "governance_steward",
+                    "role_kind": "steward",
+                    "round": 3,
+                    "score": 0.99,
+                    "search_paths": [
+                      "memory.shared_case_summary",
+                      "multi_agent.handoff.contract",
+                      "multi_agent.review.enabled",
+                      "policy.reconciliation.mode",
+                      "security.adversarial_review",
+                      "tools.evidence_capture"
+                    ]
+                  }
+                ],
+                "role_credit": [
+                  {
+                    "best_candidate_id": "c_steward",
+                    "best_score": 0.99,
+                    "evaluated_count": 1,
+                    "proposal_count": 1,
+                    "role": "dharma_steward",
+                    "search_paths": [
+                      "memory.shared_case_summary",
+                      "multi_agent.handoff.contract",
+                      "multi_agent.review.enabled",
+                      "policy.reconciliation.mode",
+                      "security.adversarial_review",
+                      "tools.evidence_capture"
+                    ]
+                  },
+                  {
+                    "best_candidate_id": "c_krishna",
+                    "best_score": 0.91,
+                    "evaluated_count": 1,
+                    "proposal_count": 1,
+                    "role": "krishna",
+                    "search_paths": [
+                      "multi_agent.review.enabled",
+                      "policy.reconciliation.mode",
+                      "tools.evidence_capture"
+                    ]
+                  },
+                  {
+                    "best_candidate_id": "c_seed",
+                    "best_score": 0.55,
+                    "evaluated_count": 1,
+                    "proposal_count": 1,
+                    "role": "sangha",
+                    "search_paths": [
+                      "multi_agent.handoff.contract"
+                    ]
+                  },
+                  {
+                    "best_candidate_id": "c_smriti",
+                    "best_score": 0.81,
+                    "evaluated_count": 1,
+                    "proposal_count": 1,
+                    "role": "smriti",
+                    "search_paths": [
+                      "memory.shared_case_summary"
+                    ]
+                  },
+                  {
+                    "best_candidate_id": "c_vidura",
+                    "best_score": 0.72,
+                    "evaluated_count": 1,
+                    "proposal_count": 1,
+                    "role": "vidura",
+                    "search_paths": [
+                      "security.adversarial_review"
+                    ]
+                  }
+                ],
+                "roles": [
+                  {
+                    "archetype": "coverage_synthesis",
+                    "chamber": "sabha",
+                    "guna": {
+                      "rajas": 0.2,
+                      "sattva": 0.9,
+                      "tamas": 0.3
+                    },
+                    "name": "sangha",
+                    "path_prefixes": [
+                      "multi_agent"
+                    ],
+                    "proposal_kind": "synthesis"
+                  },
+                  {
+                    "archetype": "adversarial_critic",
+                    "chamber": "samiti",
+                    "guna": {
+                      "rajas": 0.7,
+                      "sattva": 0.5,
+                      "tamas": 0.4
+                    },
+                    "name": "vidura",
+                    "path_prefixes": [
+                      "security"
+                    ],
+                    "proposal_kind": "critique"
+                  },
+                  {
+                    "archetype": "mediator",
+                    "chamber": "sabha",
+                    "guna": {
+                      "rajas": 0.3,
+                      "sattva": 0.8,
+                      "tamas": 0.4
+                    },
+                    "name": "krishna",
+                    "path_prefixes": [
+                      "multi_agent",
+                      "policy",
+                      "tools"
+                    ],
+                    "proposal_kind": "mediation"
+                  },
+                  {
+                    "archetype": "governance_steward",
+                    "chamber": "sabha",
+                    "guna": {
+                      "rajas": 0.1,
+                      "sattva": 0.5,
+                      "tamas": 0.9
+                    },
+                    "name": "dharma_steward",
+                    "path_prefixes": [],
+                    "proposal_kind": "steward"
+                  },
+                  {
+                    "archetype": "memory_lineage",
+                    "chamber": "samiti",
+                    "guna": {
+                      "rajas": 0.4,
+                      "sattva": 0.6,
+                      "tamas": 0.5
+                    },
+                    "name": "smriti",
+                    "path_prefixes": [
+                      "memory"
+                    ],
+                    "proposal_kind": "memory"
+                  }
+                ],
+                "rounds": [
+                  {
+                    "decision": "critic probes risky baseline",
+                    "round": 1
+                  },
+                  {
+                    "decision": "mediator merges memory, policy, and tools",
+                    "round": 2
+                  },
+                  {
+                    "decision": "steward selects governed candidate",
+                    "round": 3
+                  }
+                ],
+                "search_paths": [
+                  "memory.shared_case_summary",
+                  "multi_agent.handoff.contract",
+                  "multi_agent.review.enabled",
+                  "policy.reconciliation.mode",
+                  "security.adversarial_review",
+                  "tools.evidence_capture"
+                ],
+                "signals": [
+                  "adversarial_review",
+                  "archetype",
+                  "best_candidate",
+                  "candidate",
+                  "chamber_budgets_declared",
+                  "contract_gate",
+                  "credit",
+                  "credit_assignment",
+                  "critique",
+                  "dependency_audit",
+                  "diagnostic",
+                  "evaluation",
+                  "governance",
+                  "mediator_review",
+                  "nirnaya_recorded",
+                  "optimizer",
+                  "proposal",
+                  "proposals_never_averaged",
+                  "rejections_classed",
+                  "role",
+                  "role_diversity",
+                  "role_graph",
+                  "rollback_check",
+                  "score",
+                  "search_locality",
+                  "search_path",
+                  "society_ledger_pooled_across_candidates",
+                  "society_trace",
+                  "specialist_authority_respected",
+                  "steward",
+                  "steward_review",
+                  "stop",
+                  "synthesis",
+                  "terminal_selection",
+                  "topology_adaptation"
+                ],
+                "strategy": "society_role_graph",
+                "summary": {
+                  "best_candidate_id": "c_steward",
+                  "diagnostic_count": 2,
+                  "duplicate_candidate_count": 0,
+                  "evaluation_count": 5,
+                  "final_score": 0.99,
+                  "governance_check_count": 17,
+                  "governance_pass_rate": 1.0,
+                  "governance_passed_count": 17,
+                  "has_contract_gate": true,
+                  "has_critique": true,
+                  "has_declared_budget": true,
+                  "has_dependency_audit": true,
+                  "has_external_ranking": true,
+                  "has_governance": true,
+                  "has_guna_axes": true,
+                  "has_hetvabhasa_rejections": true,
+                  "has_layer_locality": true,
+                  "has_locality": true,
+                  "has_mediator": true,
+                  "has_nirnaya": true,
+                  "has_nyaya_justifications": true,
+                  "has_role_diversity": true,
+                  "has_role_graph": true,
+                  "has_rollback": true,
+                  "has_staged_conditioning": true,
+                  "has_steward": true,
+                  "has_synthesis": true,
+                  "has_two_chamber": true,
+                  "proposal_count": 5,
+                  "role_count": 5,
+                  "role_credit_count": 5,
+                  "round_count": 3,
+                  "search_path_count": 6,
+                  "terminal_status": "completed"
+                }
+              },
+              "type": "optimizer_trace"
+            }
+          ]
+        ]
+      }
+    },
+    "threshold": 0.9
+  },
+  "required_env": [
+    "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "dataset": [
+      {
+        "outcome": "The optimized trace proves a governed optimizer society with critique, synthesis, steward selection, mediator review, contract gates, rollback, locality, dependency audit, diagnostics, role credit, and metric-bound search paths.",
+        "persona": {
+          "name": "Dev",
+          "role": "optimization-owner"
+        },
+        "situation": "Dev needs a multi-interaction optimizer trace that explains which roles proposed changes, which candidate won, how credit was assigned, and which governance checks passed before promoting an agent architecture."
+      }
+    ],
+    "name": "optimizer-governance-optimization"
+  },
+  "simulation": {
+    "auto_execute_tools": true,
+    "engine": "local_text",
+    "environments": [
+      {
+        "data": {
+          "best_candidate_id": "c_seed",
+          "diagnostics": [],
+          "final_score": 0.42,
+          "governance": {
+            "checks": []
+          },
+          "name": "seed-optimizer-trace",
+          "optimizer": "AgentOptimizer",
+          "proposals": [
+            {
+              "candidate_id": "c_seed",
+              "patch": {},
+              "role": "manifest_seed",
+              "role_archetype": "baseline",
+              "role_kind": "baseline",
+              "round": 1,
+              "score": 0.42
+            }
+          ],
+          "roles": [
+            {
+              "archetype": "baseline",
+              "name": "manifest_seed",
+              "proposal_kind": "baseline"
+            }
+          ],
+          "rounds": [
+            {
+              "decision": "seed",
+              "round": 1
+            }
+          ],
+          "search_paths": []
+        },
+        "type": "optimizer_trace"
+      }
+    ],
+    "max_turns": 4,
+    "min_turns": 4
+  },
+  "version": "agent-learning.optimization.v1"
+}

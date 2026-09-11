@@ -1,0 +1,879 @@
+{
+  "experiment": {
+    "ablations": [
+      {
+        "ablations": [
+          "a1_no_zpd"
+        ],
+        "arm": "practice_loop",
+        "budget_match": true,
+        "mean_best_found": 0.9375,
+        "mean_plasticity": 0.295833,
+        "mean_retention": 1.0,
+        "mean_stability": 1.0,
+        "per_fixture": [
+          {
+            "ablations": [
+              "a1_no_zpd"
+            ],
+            "arm": "practice_loop",
+            "best_found": 0.8125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"repeat_calle"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.2875,
+            "learn_score": 0.8125,
+            "mean_post": 0.8125,
+            "mean_pre": 0.8125,
+            "plasticity": 0.2875,
+            "retention_after_interference": 1.0,
+            "seed": 14369112341544055609,
+            "stability": 1.0,
+            "total_metered_budget": 177
+          },
+          {
+            "ablations": [
+              "a1_no_zpd"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"commit_trans"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.2875,
+            "learn_score": 1.0,
+            "mean_post": 1.0,
+            "mean_pre": 1.0,
+            "plasticity": 0.2875,
+            "retention_after_interference": 1.0,
+            "seed": 9506178651454983480,
+            "stability": 1.0,
+            "total_metered_budget": 177
+          },
+          {
+            "ablations": [
+              "a1_no_zpd"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"policy_escal"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.3125,
+            "learn_score": 1.0,
+            "mean_post": 1.0,
+            "mean_pre": 1.0,
+            "plasticity": 0.3125,
+            "retention_after_interference": 1.0,
+            "seed": 11955771241536733116,
+            "stability": 1.0,
+            "total_metered_budget": 217
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 1.0,
+          "refund_desk": 1.0,
+          "tool_world_ops": 1.0
+        },
+        "standing_detection_any": true,
+        "total_metered_budget": 217
+      },
+      {
+        "ablations": [
+          "a2_no_spacing"
+        ],
+        "arm": "practice_loop",
+        "budget_match": true,
+        "mean_best_found": 0.9375,
+        "mean_plasticity": 0.654167,
+        "mean_retention": 0.797596,
+        "mean_stability": 0.722222,
+        "per_fixture": [
+          {
+            "ablations": [
+              "a2_no_spacing"
+            ],
+            "arm": "practice_loop",
+            "best_found": 0.8125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"repeat_calle"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.65,
+            "learn_score": 0.8125,
+            "mean_post": 0.61875,
+            "mean_pre": 0.8125,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.761538,
+            "seed": 14369112341544055609,
+            "stability": 0.666667,
+            "total_metered_budget": 208
+          },
+          {
+            "ablations": [
+              "a2_no_spacing"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"commit_trans"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.6625,
+            "learn_score": 1.0,
+            "mean_post": 0.81875,
+            "mean_pre": 1.0,
+            "plasticity": 0.6625,
+            "retention_after_interference": 0.81875,
+            "seed": 9506178651454983480,
+            "stability": 0.75,
+            "total_metered_budget": 208
+          },
+          {
+            "ablations": [
+              "a2_no_spacing"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"policy_escal"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.65,
+            "learn_score": 1.0,
+            "mean_post": 0.8125,
+            "mean_pre": 1.0,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.8125,
+            "seed": 11955771241536733116,
+            "stability": 0.75,
+            "total_metered_budget": 248
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 0.8125,
+          "refund_desk": 0.761538,
+          "tool_world_ops": 0.81875
+        },
+        "standing_detection_any": true,
+        "total_metered_budget": 248
+      },
+      {
+        "ablations": [
+          "a3_no_consolidation"
+        ],
+        "arm": "practice_loop",
+        "budget_match": true,
+        "mean_best_found": 0.9375,
+        "mean_plasticity": 0.654167,
+        "mean_retention": 0.797596,
+        "mean_stability": 0.722222,
+        "per_fixture": [
+          {
+            "ablations": [
+              "a3_no_consolidation"
+            ],
+            "arm": "practice_loop",
+            "best_found": 0.8125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no regression to detect (interference did not flip a guarded cell)",
+              "within_bound": true
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.65,
+            "learn_score": 0.8125,
+            "mean_post": 0.61875,
+            "mean_pre": 0.8125,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.761538,
+            "seed": 14369112341544055609,
+            "stability": 0.666667,
+            "total_metered_budget": 208
+          },
+          {
+            "ablations": [
+              "a3_no_consolidation"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no regression to detect (interference did not flip a guarded cell)",
+              "within_bound": true
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.6625,
+            "learn_score": 1.0,
+            "mean_post": 0.81875,
+            "mean_pre": 1.0,
+            "plasticity": 0.6625,
+            "retention_after_interference": 0.81875,
+            "seed": 9506178651454983480,
+            "stability": 0.75,
+            "total_metered_budget": 208
+          },
+          {
+            "ablations": [
+              "a3_no_consolidation"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no regression to detect (interference did not flip a guarded cell)",
+              "within_bound": true
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.65,
+            "learn_score": 1.0,
+            "mean_post": 0.8125,
+            "mean_pre": 1.0,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.8125,
+            "seed": 11955771241536733116,
+            "stability": 0.75,
+            "total_metered_budget": 248
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 0.8125,
+          "refund_desk": 0.761538,
+          "tool_world_ops": 0.81875
+        },
+        "standing_detection_any": false,
+        "total_metered_budget": 248
+      },
+      {
+        "ablations": [
+          "a4_no_calibration"
+        ],
+        "arm": "practice_loop",
+        "budget_match": true,
+        "mean_best_found": 0.9375,
+        "mean_plasticity": 0.295833,
+        "mean_retention": 1.0,
+        "mean_stability": 1.0,
+        "per_fixture": [
+          {
+            "ablations": [
+              "a4_no_calibration"
+            ],
+            "arm": "practice_loop",
+            "best_found": 0.8125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"repeat_calle"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.2875,
+            "learn_score": 0.8125,
+            "mean_post": 0.8125,
+            "mean_pre": 0.8125,
+            "plasticity": 0.2875,
+            "retention_after_interference": 1.0,
+            "seed": 14369112341544055609,
+            "stability": 1.0,
+            "total_metered_budget": 209
+          },
+          {
+            "ablations": [
+              "a4_no_calibration"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"commit_trans"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.2875,
+            "learn_score": 1.0,
+            "mean_post": 1.0,
+            "mean_pre": 1.0,
+            "plasticity": 0.2875,
+            "retention_after_interference": 1.0,
+            "seed": 9506178651454983480,
+            "stability": 1.0,
+            "total_metered_budget": 177
+          },
+          {
+            "ablations": [
+              "a4_no_calibration"
+            ],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"policy_escal"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.3125,
+            "learn_score": 1.0,
+            "mean_post": 1.0,
+            "mean_pre": 1.0,
+            "plasticity": 0.3125,
+            "retention_after_interference": 1.0,
+            "seed": 11955771241536733116,
+            "stability": 1.0,
+            "total_metered_budget": 217
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 1.0,
+          "refund_desk": 1.0,
+          "tool_world_ops": 1.0
+        },
+        "standing_detection_any": true,
+        "total_metered_budget": 217
+      }
+    ],
+    "arms": [
+      {
+        "ablations": [],
+        "arm": "practice_loop",
+        "budget_match": true,
+        "mean_best_found": 0.9375,
+        "mean_plasticity": 0.295833,
+        "mean_retention": 1.0,
+        "mean_stability": 1.0,
+        "per_fixture": [
+          {
+            "ablations": [],
+            "arm": "practice_loop",
+            "best_found": 0.8125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"repeat_calle"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.2875,
+            "learn_score": 0.8125,
+            "mean_post": 0.8125,
+            "mean_pre": 0.8125,
+            "plasticity": 0.2875,
+            "retention_after_interference": 1.0,
+            "seed": 14369112341544055609,
+            "stability": 1.0,
+            "total_metered_budget": 177
+          },
+          {
+            "ablations": [],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"commit_trans"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.2875,
+            "learn_score": 1.0,
+            "mean_post": 1.0,
+            "mean_pre": 1.0,
+            "plasticity": 0.2875,
+            "retention_after_interference": 1.0,
+            "seed": 9506178651454983480,
+            "stability": 1.0,
+            "total_metered_budget": 177
+          },
+          {
+            "ablations": [],
+            "arm": "practice_loop",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": true,
+              "flipped_rows": [
+                "deck_{\"intent\": \"policy_escal"
+              ],
+              "latency_rounds": 1,
+              "within_bound": true
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.3125,
+            "learn_score": 1.0,
+            "mean_post": 1.0,
+            "mean_pre": 1.0,
+            "plasticity": 0.3125,
+            "retention_after_interference": 1.0,
+            "seed": 11955771241536733116,
+            "stability": 1.0,
+            "total_metered_budget": 217
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 1.0,
+          "refund_desk": 1.0,
+          "tool_world_ops": 1.0
+        },
+        "standing_detection_any": true,
+        "total_metered_budget": 217
+      },
+      {
+        "ablations": [],
+        "arm": "gepa",
+        "budget_match": true,
+        "mean_best_found": 0.822917,
+        "mean_plasticity": 0.654167,
+        "mean_retention": 0.864395,
+        "mean_stability": 0.805556,
+        "per_fixture": [
+          {
+            "ablations": [],
+            "arm": "gepa",
+            "best_found": 0.83125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.6375,
+            "learn_score": 0.83125,
+            "mean_post": 0.64375,
+            "mean_pre": 0.83125,
+            "plasticity": 0.6375,
+            "retention_after_interference": 0.774436,
+            "seed": 15907053422568350491,
+            "stability": 0.666667,
+            "total_metered_budget": 256
+          },
+          {
+            "ablations": [],
+            "arm": "gepa",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.6625,
+            "learn_score": 1.0,
+            "mean_post": 0.81875,
+            "mean_pre": 1.0,
+            "plasticity": 0.6625,
+            "retention_after_interference": 0.81875,
+            "seed": 14457775773263712098,
+            "stability": 0.75,
+            "total_metered_budget": 256
+          },
+          {
+            "ablations": [],
+            "arm": "gepa",
+            "best_found": 0.6375,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.6625,
+            "learn_score": 0.6375,
+            "mean_post": 0.6375,
+            "mean_pre": 0.6375,
+            "plasticity": 0.6625,
+            "retention_after_interference": 1.0,
+            "seed": 1879255710097593503,
+            "stability": 1.0,
+            "total_metered_budget": 256
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 1.0,
+          "refund_desk": 0.774436,
+          "tool_world_ops": 0.81875
+        },
+        "standing_detection_any": false,
+        "total_metered_budget": 256
+      },
+      {
+        "ablations": [],
+        "arm": "tpe",
+        "budget_match": true,
+        "mean_best_found": 0.75625,
+        "mean_plasticity": 0.65,
+        "mean_retention": 0.924812,
+        "mean_stability": 0.888889,
+        "per_fixture": [
+          {
+            "ablations": [],
+            "arm": "tpe",
+            "best_found": 0.83125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.6375,
+            "learn_score": 0.83125,
+            "mean_post": 0.64375,
+            "mean_pre": 0.83125,
+            "plasticity": 0.6375,
+            "retention_after_interference": 0.774436,
+            "seed": 1837138769683000294,
+            "stability": 0.666667,
+            "total_metered_budget": 256
+          },
+          {
+            "ablations": [],
+            "arm": "tpe",
+            "best_found": 0.625,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.6625,
+            "learn_score": 0.625,
+            "mean_post": 0.625,
+            "mean_pre": 0.625,
+            "plasticity": 0.6625,
+            "retention_after_interference": 1.0,
+            "seed": 834796218509449539,
+            "stability": 1.0,
+            "total_metered_budget": 256
+          },
+          {
+            "ablations": [],
+            "arm": "tpe",
+            "best_found": 0.8125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.65,
+            "learn_score": 0.8125,
+            "mean_post": 0.8125,
+            "mean_pre": 0.8125,
+            "plasticity": 0.65,
+            "retention_after_interference": 1.0,
+            "seed": 12168634629994943045,
+            "stability": 1.0,
+            "total_metered_budget": 256
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 1.0,
+          "refund_desk": 0.774436,
+          "tool_world_ops": 1.0
+        },
+        "standing_detection_any": false,
+        "total_metered_budget": 256
+      },
+      {
+        "ablations": [],
+        "arm": "society",
+        "budget_match": true,
+        "mean_best_found": 0.94375,
+        "mean_plasticity": 0.654167,
+        "mean_retention": 0.799389,
+        "mean_stability": 0.722222,
+        "per_fixture": [
+          {
+            "ablations": [],
+            "arm": "society",
+            "best_found": 0.83125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.65,
+            "learn_score": 0.83125,
+            "mean_post": 0.6375,
+            "mean_pre": 0.83125,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.766917,
+            "seed": 5543662478020497419,
+            "stability": 0.666667,
+            "total_metered_budget": 256
+          },
+          {
+            "ablations": [],
+            "arm": "society",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.6625,
+            "learn_score": 1.0,
+            "mean_post": 0.81875,
+            "mean_pre": 1.0,
+            "plasticity": 0.6625,
+            "retention_after_interference": 0.81875,
+            "seed": 15462134863766392952,
+            "stability": 0.75,
+            "total_metered_budget": 256
+          },
+          {
+            "ablations": [],
+            "arm": "society",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.65,
+            "learn_score": 1.0,
+            "mean_post": 0.8125,
+            "mean_pre": 1.0,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.8125,
+            "seed": 14549480294158311312,
+            "stability": 0.75,
+            "total_metered_budget": 256
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 0.8125,
+          "refund_desk": 0.766917,
+          "tool_world_ops": 0.81875
+        },
+        "standing_detection_any": false,
+        "total_metered_budget": 256
+      },
+      {
+        "ablations": [],
+        "arm": "bandit",
+        "budget_match": true,
+        "mean_best_found": 0.94375,
+        "mean_plasticity": 0.654167,
+        "mean_retention": 0.799389,
+        "mean_stability": 0.722222,
+        "per_fixture": [
+          {
+            "ablations": [],
+            "arm": "bandit",
+            "best_found": 0.83125,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "refund_desk",
+            "generalization": 0.65,
+            "learn_score": 0.83125,
+            "mean_post": 0.6375,
+            "mean_pre": 0.83125,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.766917,
+            "seed": 3724781864917433167,
+            "stability": 0.666667,
+            "total_metered_budget": 108
+          },
+          {
+            "ablations": [],
+            "arm": "bandit",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "tool_world_ops",
+            "generalization": 0.6625,
+            "learn_score": 1.0,
+            "mean_post": 0.81875,
+            "mean_pre": 1.0,
+            "plasticity": 0.6625,
+            "retention_after_interference": 0.81875,
+            "seed": 14546460687933486309,
+            "stability": 0.75,
+            "total_metered_budget": 108
+          },
+          {
+            "ablations": [],
+            "arm": "bandit",
+            "best_found": 1.0,
+            "budget_match": true,
+            "declared_total_budget": 256,
+            "detection_latency": {
+              "detected": false,
+              "latency_rounds": null,
+              "note": "no consolidation store \u2014 no standing detection (promotion-veto only)",
+              "within_bound": false
+            },
+            "fixture": "escalation_ladder",
+            "generalization": 0.65,
+            "learn_score": 1.0,
+            "mean_post": 0.8125,
+            "mean_pre": 1.0,
+            "plasticity": 0.65,
+            "retention_after_interference": 0.8125,
+            "seed": 14691568644457929657,
+            "stability": 0.75,
+            "total_metered_budget": 162
+          }
+        ],
+        "retention_by_fixture": {
+          "escalation_ladder": 0.8125,
+          "refund_desk": 0.766917,
+          "tool_world_ops": 0.81875
+        },
+        "standing_detection_any": false,
+        "total_metered_budget": 162
+      }
+    ],
+    "budget_match": true,
+    "equal_total_budget": 256,
+    "fixtures": [
+      "refund_desk",
+      "tool_world_ops",
+      "escalation_ladder"
+    ],
+    "headline_metric": "retention_after_interference",
+    "key_comparison": {
+      "a2_no_spacing_retention": 0.797596,
+      "a3_no_consolidation_retention": 0.797596,
+      "note": "spaced-regression-replay shows a retention lift vs no-consolidation at equal budget; consolidation is load-bearing on these fixtures",
+      "practice_retention": 1.0,
+      "retention_lift_vs_a2_no_spacing": 0.202404,
+      "retention_lift_vs_a3_no_consolidation": 0.202404,
+      "supports_paper": true,
+      "verdict": "LIFT_REAL",
+      "vs_search_arms": {
+        "bandit": 0.799389,
+        "gepa": 0.864395,
+        "society": 0.799389,
+        "tpe": 0.924812
+      }
+    },
+    "metered_budgets_observed": [
+      162,
+      217,
+      248,
+      256
+    ],
+    "seed": 42
+  },
+  "kind": "agent-learning.practice-capstone-result.v1"
+}

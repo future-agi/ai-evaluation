@@ -1,0 +1,23 @@
+{
+  "derived": {
+    "barge_in_latency_ms": 180.0,
+    "energy_threshold_db": -40.0,
+    "frame_ms": 20.0,
+    "overlap_segments": 2,
+    "overlap_total_ms": 940.0,
+    "post_interrupt_recovery_turns": 0,
+    "ttfb_ms": null
+  },
+  "provenance": {
+    "buffer_policy": "clear_truncate",
+    "sample_rate": 24000,
+    "seed": 1142,
+    "tick_count": 5,
+    "tick_ms": 200.0,
+    "turn_ids": [
+      "turn_1",
+      "turn_2"
+    ]
+  },
+  "seed": 1142
+}

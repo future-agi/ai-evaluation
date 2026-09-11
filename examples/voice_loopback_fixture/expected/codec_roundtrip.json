@@ -1,0 +1,35 @@
+{
+  "agent": {
+    "codec": "g711_ulaw",
+    "packet_loss": {
+      "burst_ms": 100.0,
+      "loss_avg": 0.02,
+      "loss_realized": 0.0,
+      "model": "gilbert_elliott",
+      "seed": 1143
+    },
+    "resampled_to_hz": 8000,
+    "seed": 1143,
+    "source_rate_hz": 24000
+  },
+  "applied": true,
+  "codec": "g711_ulaw",
+  "packet_loss_model": "gilbert_elliott",
+  "profile": "g711_ulaw_8k_ge",
+  "resampled_to_hz": 8000,
+  "seed": 1142,
+  "source_rate_hz": 24000,
+  "user": {
+    "codec": "g711_ulaw",
+    "packet_loss": {
+      "burst_ms": 100.0,
+      "loss_avg": 0.02,
+      "loss_realized": 0.06,
+      "model": "gilbert_elliott",
+      "seed": 1142
+    },
+    "resampled_to_hz": 8000,
+    "seed": 1142,
+    "source_rate_hz": 24000
+  }
+}

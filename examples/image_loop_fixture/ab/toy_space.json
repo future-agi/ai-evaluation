@@ -1,0 +1,15 @@
+{
+  "name": "image-loop-ab",
+  "eval_budget_per_arm": 6,
+  "seed": 1142,
+  "held_out_battery": ["vqa_scene", "chart_synthetic", "document_rendered"],
+  "arms": {
+    "loop_on": {"anchored_loss": 0.31, "perception_bypass_canary_holds": true},
+    "loop_off": {"anchored_loss": 0.54, "perception_bypass_canary_holds": true}
+  },
+  "expected": {
+    "loop_improves": true,
+    "canary_holds": true,
+    "note": "the loop arm improves the deterministic-anchored loss on the held-out battery vs the no-loop arm at equal budget, with the perception-bypass canary holding (the STRONG-paper capstone, credential-free)"
+  }
+}

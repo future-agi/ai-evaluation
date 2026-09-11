@@ -1,0 +1,96 @@
+{
+  "datasets": [
+    {
+      "cases": [
+        {
+          "expected": {
+            "response": "native proof closes"
+          },
+          "id": "langgraph-workflow_trace-regression-case-1",
+          "input": {
+            "observability": {
+              "failures": [
+                "The langgraph workflow trace target is unoptimized."
+              ],
+              "framework": "langgraph",
+              "run_id": "langgraph-workflow_trace-run-1",
+              "source": "local_fixture"
+            }
+          },
+          "tags": [
+            "regression",
+            "workflow_trace"
+          ]
+        }
+      ],
+      "framework": "langgraph",
+      "metadata": {
+        "cookbook": "sdk-optimizer-profile-matrix"
+      },
+      "name": "optimizer-profile-matrix-langgraph-workflow_trace-regression",
+      "source": "local_fixture"
+    },
+    {
+      "cases": [
+        {
+          "expected": {
+            "response": "native proof closes"
+          },
+          "id": "llamaindex-prompt-regression-case-1",
+          "input": {
+            "observability": {
+              "failures": [
+                "The llamaindex prompt target is unoptimized."
+              ],
+              "framework": "llamaindex",
+              "run_id": "llamaindex-prompt-run-1",
+              "source": "local_fixture"
+            }
+          },
+          "tags": [
+            "regression",
+            "prompt"
+          ]
+        }
+      ],
+      "framework": "llamaindex",
+      "metadata": {
+        "cookbook": "sdk-optimizer-profile-matrix"
+      },
+      "name": "optimizer-profile-matrix-llamaindex-prompt-regression",
+      "source": "local_fixture"
+    },
+    {
+      "cases": [
+        {
+          "expected": {
+            "response": "native proof closes"
+          },
+          "id": "langchain-framework_method-regression-case-1",
+          "input": {
+            "observability": {
+              "failures": [
+                "The langchain framework method target is unoptimized."
+              ],
+              "framework": "langchain",
+              "run_id": "langchain-framework_method-run-1",
+              "source": "local_fixture"
+            }
+          },
+          "tags": [
+            "regression",
+            "framework_method"
+          ]
+        }
+      ],
+      "framework": "langchain",
+      "metadata": {
+        "cookbook": "sdk-optimizer-profile-matrix"
+      },
+      "name": "optimizer-profile-matrix-langchain-framework_method-regression",
+      "source": "local_fixture"
+    }
+  ],
+  "description": "Canonical deterministic regression dataset fixture for the regression_replay optimizer-profile-matrix cells. The facade builder _matrix_regression_replay_dataset emits the same rows parameterized by cell axes; this committed copy pins the shape.",
+  "kind": "agent-learning.regression-replay-dataset-fixture.v1"
+}

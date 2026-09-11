@@ -1,0 +1,75 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-pipecat-simulation",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "framework-pipecat-simulation",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Asha",
+          "role": "voice-agent-owner"
+        },
+        "situation": "Asha needs a Pipecat-style voice pipeline simulated through the generic framework adapter.",
+        "outcome": "The Pipecat-style pipeline completes with voice framework runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "pipecat",
+    "target": "framework_shims.py:build_pipecat_pipeline",
+    "factory": true,
+    "trace_runtime": true,
+    "metadata": {
+      "cookbook": "multi-framework-simulation"
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "modality": "voice",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "pipecat",
+          "spans": [
+            {
+              "id": "pipecat_pipeline",
+              "name": "pipeline.process",
+              "input": "voice handoff",
+              "output": "completed",
+              "tool_calls": [
+                {
+                  "name": "framework_trace_status"
+                }
+              ],
+              "signals": [
+                "voice",
+                "frame",
+                "tool"
+              ]
+            }
+          ],
+          "adapter_required_signals": [
+            "voice",
+            "frame",
+            "tool"
+          ],
+          "adapter_required_mappings": {
+            "tool": [
+              "tool_name"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}

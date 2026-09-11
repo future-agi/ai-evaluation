@@ -1,0 +1,10 @@
+{
+  "outcome": "The question is answered.",
+  "persona": {
+    "language": "en",
+    "mood": "neutral",
+    "name": "Sam",
+    "role": "caller"
+  },
+  "situation": "Routine billing question."
+}

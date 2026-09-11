@@ -1,58 +1,41 @@
 name: Feature request
-description: Propose a new metric, guardrail, or capability for ai-evaluation.
-labels: ["enhancement", "needs-triage"]
+description: Propose a new workflow, adapter, evaluator, optimizer, or release gate.
+title: "[Feature]: "
+labels: ["enhancement"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        For big proposals (new framework integrations, API surface changes), consider opening a [Discussion](https://github.com/orgs/future-agi/discussions) first — it's easier to iterate on design before a PR exists.
-
-  - type: dropdown
-    id: package
-    attributes:
-      label: Which package(s) does this touch?
-      multiple: true
-      options:
-        - ai-evaluation (Python)
-        - "@future-agi/ai-evaluation (TypeScript)"
-        - Not sure
-    validations:
-      required: true
-
   - type: textarea
     id: problem
     attributes:
-      label: What problem does this solve?
-      description: What are you trying to do, and what's getting in your way?
+      label: Problem
+      description: What developer workflow should become easier or more robust?
     validations:
       required: true
-
   - type: textarea
-    id: solution
+    id: proposal
     attributes:
-      label: Proposed solution
-      description: What should the SDK do? A rough API sketch is worth a thousand words.
+      label: Proposal
+      description: Describe the requested API, CLI, example, or gate.
     validations:
       required: true
-
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives considered
-      description: What have you tried? Why doesn't it work well enough?
-
   - type: dropdown
-    id: contribution
+    id: surface
     attributes:
-      label: Are you willing to open a PR?
+      label: Surface
       options:
-        - "Yes — I'd like to implement this"
-        - "Maybe — I could help with parts"
-        - "No — hoping someone else picks it up"
+        - simulate
+        - evals
+        - optimize
+        - redteam
+        - suite
+        - TypeScript SDK
+        - release/readiness
+        - documentation
     validations:
       required: true
-
   - type: textarea
-    id: extra
+    id: proof
     attributes:
-      label: Anything else?
+      label: Suggested Proof
+      description: What test, cookbook, or release gate should prove this works?
+    validations:
+      required: false

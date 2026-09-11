@@ -1,0 +1,26 @@
+[
+  {
+    "content": "My name is Mira. This is unacceptable, ridiculous, I demand a supervisor immediately, furious, lawyer, cancel my account right now!",
+    "role": "user"
+  },
+  {
+    "content": "Can you confirm your order id?",
+    "role": "assistant"
+  },
+  {
+    "content": "Unacceptable! Ridiculous! I demand escalate immediately, furious, lawyer, last warning right now!",
+    "role": "user"
+  },
+  {
+    "content": "Checking.",
+    "role": "assistant"
+  },
+  {
+    "content": "Furious! Unacceptable! Demand supervisor immediately, ridiculous, lawyer, cancel my account, last warning!",
+    "role": "user"
+  },
+  {
+    "content": "Processing.",
+    "role": "assistant"
+  }
+]

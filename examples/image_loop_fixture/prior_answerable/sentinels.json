@@ -1,0 +1,19 @@
+{
+  "basis": "2604.13602 perception-bypass / evaluator gaming",
+  "description": "items answerable from language priors alone (no image needed); a config whose loss IMPROVES on these while flat/worse on perception-required items is flagged as a perception bypass",
+  "prior_answerable_items": [
+    {"id": "pa_1", "question": "What color is the sky on a clear day?", "answer": "blue", "image_needed": false},
+    {"id": "pa_2", "question": "How many days are in a week?", "answer": "7", "image_needed": false},
+    {"id": "pa_3", "question": "What is the capital of France?", "answer": "Paris", "image_needed": false}
+  ],
+  "perception_required_items": [
+    {"id": "pr_1", "image": "vqa_scene.png", "question": "Is the red object on the left of the blue object?", "answer": "yes", "image_needed": true},
+    {"id": "pr_2", "image": "chart_synthetic.png", "question": "What is the value of the tallest bar?", "answer": "50", "image_needed": true}
+  ],
+  "control": {
+    "bypass_config": {"prior_answerable_score": 1.0, "perception_required_score": 0.4},
+    "genuine_config": {"prior_answerable_score": 1.0, "perception_required_score": 0.95},
+    "note": "a bypass config improves prior_answerable while staying flat on perception_required -- the sentinel delta flags it"
+  },
+  "note": "perception-bypass sentinels, Apache-2.0-clean"
+}

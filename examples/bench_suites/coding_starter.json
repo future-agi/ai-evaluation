@@ -1,0 +1,55 @@
+{
+  "description": "Out-of-the-box coding benchmark: each task carries a held-out check oracle (executed against the candidate, never imported by it) and a reference solution. Scored in artifact_in mode; deterministic + credential-free.",
+  "kind": "agent-learning.bench-suite.v1",
+  "language": "python",
+  "modality": "coding",
+  "name": "coding_starter",
+  "tasks": [
+    {
+      "canary": "agent-learning-bench-canary:DO-NOT-TRAIN-ON-THIS-SUITE",
+      "checks": "import solution\n\ndef check_base():\n    assert solution.fib(0) == 0\n    assert solution.fib(1) == 1\n\ndef check_small():\n    assert solution.fib(5) == 5\n\ndef check_larger():\n    assert solution.fib(10) == 55\n",
+      "difficulty": "easy",
+      "entrypoint": "solution",
+      "guards": {
+        "min_guard_count": 1,
+        "oracle_held_out": true,
+        "sentinel": "a no-op or fake-success candidate must fail the held-out checks"
+      },
+      "id": "fibonacci",
+      "instruction": "Implement a function fib(n) that returns the nth Fibonacci number where fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, ...",
+      "reference_solution": "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
+      "timeout_s": 10
+    },
+    {
+      "canary": "agent-learning-bench-canary:DO-NOT-TRAIN-ON-THIS-SUITE",
+      "checks": "import solution\n\ndef check_fizz():\n    assert solution.fizzbuzz(3) == 'Fizz'\n    assert solution.fizzbuzz(9) == 'Fizz'\n\ndef check_buzz():\n    assert solution.fizzbuzz(5) == 'Buzz'\n\ndef check_fizzbuzz():\n    assert solution.fizzbuzz(15) == 'FizzBuzz'\n\ndef check_plain():\n    assert solution.fizzbuzz(7) == '7'\n",
+      "difficulty": "easy",
+      "entrypoint": "solution",
+      "guards": {
+        "min_guard_count": 1,
+        "oracle_held_out": true,
+        "sentinel": "a no-op or fake-success candidate must fail the held-out checks"
+      },
+      "id": "fizzbuzz",
+      "instruction": "Implement fizzbuzz(n): return 'Fizz' if n is divisible by 3, 'Buzz' if divisible by 5, 'FizzBuzz' if divisible by both, otherwise the string form of n.",
+      "reference_solution": "def fizzbuzz(n):\n    if n % 15 == 0:\n        return 'FizzBuzz'\n    if n % 3 == 0:\n        return 'Fizz'\n    if n % 5 == 0:\n        return 'Buzz'\n    return str(n)\n",
+      "timeout_s": 10
+    },
+    {
+      "canary": "agent-learning-bench-canary:DO-NOT-TRAIN-ON-THIS-SUITE",
+      "checks": "import solution\n\ndef check_simple():\n    assert solution.is_palindrome('racecar') is True\n\ndef check_phrase():\n    assert solution.is_palindrome('A man, a plan, a canal: Panama') is True\n\ndef check_empty():\n    assert solution.is_palindrome('') is True\n\ndef check_negative():\n    assert solution.is_palindrome('hello') is False\n",
+      "difficulty": "medium",
+      "entrypoint": "solution",
+      "guards": {
+        "min_guard_count": 1,
+        "oracle_held_out": true,
+        "sentinel": "a no-op or fake-success candidate must fail the held-out checks"
+      },
+      "id": "is_palindrome",
+      "instruction": "Implement is_palindrome(s): return True if s reads the same forwards and backwards, ignoring case and any non-alphanumeric characters; otherwise False.",
+      "reference_solution": "def is_palindrome(s):\n    cleaned = [c.lower() for c in s if c.isalnum()]\n    return cleaned == cleaned[::-1]\n",
+      "timeout_s": 10
+    }
+  ],
+  "version": "1"
+}

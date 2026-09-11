@@ -1,0 +1,60 @@
+{
+  "agent": {
+    "content": "done",
+    "type": "scripted"
+  },
+  "evaluation": {
+    "enabled": false
+  },
+  "name": "g3w",
+  "scenario": {
+    "dataset": [
+      {
+        "outcome": "win",
+        "persona": {
+          "name": "Q"
+        },
+        "situation": "s"
+      }
+    ],
+    "goal": {
+      "states": [
+        "won"
+      ],
+      "success_state": "won"
+    },
+    "name": "g3w",
+    "verification": {
+      "checks": [
+        {
+          "kind": "world_success_condition",
+          "name": "won",
+          "rung": "turn"
+        }
+      ]
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "environments": [
+      {
+        "initial_state": {
+          "phase": "closed"
+        },
+        "name": "w",
+        "success_conditions": [
+          {
+            "must": {
+              "phase": "closed"
+            },
+            "name": "won"
+          }
+        ],
+        "type": "world_contract"
+      }
+    ],
+    "max_turns": 2,
+    "min_turns": 1
+  },
+  "version": "agent-learning.run.v1"
+}

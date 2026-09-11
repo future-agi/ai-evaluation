@@ -1,0 +1,272 @@
+{
+  "version": "agent-learning.optimization.v1",
+  "name": "multimodal-image-optimization",
+  "required_env": [
+    "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "multimodal-image-optimization",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Mina",
+          "role": "vision-eval-owner"
+        },
+        "situation": "Mina needs a multimodal receipt agent harness that grounds the answer in local image evidence before approving a refund.",
+        "outcome": "Because therefore receipt image shows paid Contoso receipt total $42.00 approve refund."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "responses": [
+      {
+        "content": "First, because therefore receipt image shows paid Contoso receipt total $42.00 approve refund.",
+        "tool_calls": [
+          {
+            "id": "list_images",
+            "name": "list_images",
+            "arguments": {}
+          },
+          {
+            "id": "inspect_receipt",
+            "name": "inspect_image",
+            "arguments": {
+              "id": "receipt_image"
+            }
+          }
+        ]
+      },
+      {
+        "content": "Next, because therefore receipt image shows paid Contoso receipt total $42.00 approve refund.",
+        "tool_calls": []
+      },
+      {
+        "content": "Because therefore receipt image shows paid Contoso receipt total $42.00 approve refund.",
+        "tool_calls": []
+      }
+    ]
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 3,
+    "min_turns": 3,
+    "auto_execute_tools": true
+  },
+  "evaluation": {
+    "agent_report": {
+      "threshold": 0.9,
+      "config": {
+        "task_description": "Because therefore receipt image shows paid Contoso receipt total $42.00 approve refund.",
+        "expected_result": "Because therefore receipt image shows paid Contoso receipt total $42.00 approve refund.",
+        "success_criteria": [
+          "receipt image",
+          "paid Contoso receipt",
+          "total is $42.00",
+          "approve refund"
+        ],
+        "required_tools": [
+          "list_images",
+          "inspect_image"
+        ],
+        "required_artifact_types": [
+          "image"
+        ],
+        "artifact_grounding_checks": [
+          {
+            "id": "receipt_image_grounding",
+            "artifact_id": "receipt_image",
+            "artifact_type": "image",
+            "answer_terms": [
+              "paid Contoso receipt",
+              "$42.00"
+            ],
+            "support_terms": [
+              "Contoso",
+              "$42.00",
+              "paid"
+            ],
+            "forbidden_answer_terms": [
+              "$420.00",
+              "unpaid"
+            ],
+            "require_all_answer_terms": true,
+            "require_all_support_terms": true
+          }
+        ],
+        "artifact_semantic_checks": [
+          {
+            "id": "receipt_image_semantics",
+            "artifact_id": "receipt_image",
+            "artifact_type": "image",
+            "expected_fields": {
+              "ocr_text": "Contoso receipt total $42.00 paid",
+              "layout": {
+                "merchant": "Contoso",
+                "total": "$42.00",
+                "status": "paid"
+              }
+            },
+            "answer_fields": {
+              "layout.merchant": [
+                "Contoso"
+              ],
+              "layout.total": [
+                "$42.00"
+              ],
+              "layout.status": [
+                "paid"
+              ]
+            },
+            "forbidden_answer_terms": [
+              "$420.00",
+              "unpaid"
+            ]
+          }
+        ],
+        "trajectory_templates": [
+          {
+            "name": "receipt-image-faithfulness",
+            "goal": {
+              "final_contains": [
+                "receipt image",
+                "paid Contoso receipt",
+                "total $42.00",
+                "approve refund"
+              ],
+              "final_not_contains": [
+                "$420.00",
+                "unpaid"
+              ]
+            },
+            "multimodal": {
+              "required_artifacts": [
+                {
+                  "id": "receipt_image",
+                  "type": "image"
+                }
+              ],
+              "claims": [
+                {
+                  "artifact_id": "receipt_image",
+                  "artifact_type": "image",
+                  "claim": "paid Contoso receipt total $42.00",
+                  "support_terms": [
+                    "Contoso",
+                    "$42.00",
+                    "paid"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "optimization": {
+    "threshold": 0.9,
+    "target": {
+      "name": "multimodal-image-harness",
+      "layers": [
+        "perception",
+        "evaluator",
+        "harness"
+      ],
+      "base_config": {
+        "simulation": {
+          "environments": [
+            {
+              "type": "image",
+              "data": {
+                "images": {
+                  "receipt_image": {
+                    "uri": "data:image/png;base64,iVBORw0KGgo=",
+                    "description": "Weak receipt image fixture without OCR or labels.",
+                    "metadata": {
+                      "candidate": "weak"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "search_space": {
+        "simulation.environments": [
+          [
+            {
+              "type": "image",
+              "data": {
+                "images": {
+                  "receipt_image": {
+                    "uri": "data:image/png;base64,iVBORw0KGgo=",
+                    "description": "Weak receipt image fixture without OCR or labels.",
+                    "metadata": {
+                      "candidate": "weak"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          [
+            {
+              "type": "multimodal_image",
+              "data": {
+                "images": {
+                  "receipt_image": {
+                    "uri": "data:image/png;base64,iVBORw0KGgo=",
+                    "description": "Contoso receipt image: total $42.00, status paid, refund eligible.",
+                    "labels": [
+                      "receipt",
+                      "Contoso",
+                      "total $42.00",
+                      "paid",
+                      "refund eligible"
+                    ],
+                    "data": {
+                      "ocr_text": "Contoso receipt total $42.00 paid",
+                      "layout": {
+                        "merchant": "Contoso",
+                        "total": "$42.00",
+                        "status": "paid"
+                      },
+                      "risk": {
+                        "tampering_detected": false
+                      }
+                    },
+                    "metadata": {
+                      "candidate": "hardened",
+                      "id": "receipt_image",
+                      "kind": "receipt_image",
+                      "source": "local_fixture"
+                    }
+                  }
+                },
+                "state": {
+                  "vision_harness": "receipt_grounding"
+                }
+              }
+            }
+          ]
+        ]
+      },
+      "objective": "Maximize local multimodal image evidence before approving a refund.",
+      "metrics": [
+        "artifact_coverage",
+        "artifact_grounding_quality",
+        "artifact_semantics_quality",
+        "agent_goal_accuracy",
+        "multimodal_faithfulness",
+        "tool_selection_accuracy"
+      ]
+    },
+    "optimizer": {
+      "max_candidates": 3,
+      "include_seed": true,
+      "auto_diagnose": false
+    }
+  }
+}

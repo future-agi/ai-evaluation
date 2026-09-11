@@ -1,0 +1,13 @@
+schema_version: "1"
+provider:
+  type: vapi
+  scope: world
+  process: agent
+  public_capability: target_http
+  event_path: /provider/events
+  tool_path: /provider/tools
+  required_secrets: [VAPI_API_KEY]
+  provision:
+    command: [python, provider_target.py, provision]
+  destroy:
+    command: [python, provider_target.py, destroy]

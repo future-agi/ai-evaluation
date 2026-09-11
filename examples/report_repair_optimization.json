@@ -1,0 +1,1431 @@
+{
+  "version": "agent-learning.optimization.v1",
+  "name": "report-repair-optimization",
+  "required_env": [
+    "AGENT_LEARNING_REPORT_REPAIR_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "report-repair-optimization",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Asha",
+          "role": "agent-platform-owner"
+        },
+        "situation": "Asha has a failed multi-step agent report and needs the SDK to find the smallest verified repair candidate.",
+        "outcome": "The selected repair proves runtime provenance, memory lineage, orchestration flow, and world-contract success."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "name": "verified-report-repair-agent",
+    "method": "execute_task",
+    "input_mode": "dict",
+    "responses": [
+      {
+        "content": "I am replaying the failed agent trace and checking framework runtime provenance before proposing the repair.",
+        "tool_calls": [
+          {
+            "id": "framework_status",
+            "name": "framework_trace_status",
+            "arguments": {}
+          },
+          {
+            "id": "framework_spans",
+            "name": "list_framework_spans",
+            "arguments": {}
+          },
+          {
+            "id": "complete_task",
+            "name": "apply_world_transition",
+            "arguments": {
+              "id": "complete_task"
+            }
+          }
+        ]
+      },
+      {
+        "content": "I am verifying memory lineage so the repair carries source attribution, audit, retention, deletion, and redaction evidence.",
+        "tool_calls": [
+          {
+            "id": "memory_lineage",
+            "name": "agent_memory_lineage_status",
+            "arguments": {}
+          },
+          {
+            "id": "memory_ops",
+            "name": "list_memory_lineage_operations",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "content": "The repair is verified: framework trace, runtime semantics, memory lineage, orchestration replay, and world contract success are present.",
+        "tool_calls": [
+          {
+            "id": "orchestration_status",
+            "name": "world_orchestration_replay_status",
+            "arguments": {}
+          },
+          {
+            "id": "world_status",
+            "name": "world_contract_status",
+            "arguments": {}
+          }
+        ]
+      }
+    ]
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 3,
+    "min_turns": 3,
+    "auto_execute_tools": true,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "langgraph",
+          "spans": [
+            {
+              "id": "agent_repair",
+              "name": "LangGraphRepairAgent.execute_task",
+              "input": {
+                "failed_report": "trace repair"
+              },
+              "output": "partial_repair",
+              "signals": [
+                "agent",
+                "tool"
+              ],
+              "tool_calls": [
+                {
+                  "name": "framework_trace_status"
+                }
+              ],
+              "checkpoint": {},
+              "session": {}
+            }
+          ],
+          "events": [
+            {
+              "id": "repair_runtime",
+              "name": "runtime_semantics_checked",
+              "signals": [
+                "method",
+                "input_mode",
+                "runtime",
+                "weak"
+              ]
+            }
+          ],
+          "adapter_required_signals": [
+            "framework_trace",
+            "langgraph",
+            "tool",
+            "state",
+            "checkpoint"
+          ],
+          "metadata": {
+            "quality": "weak",
+            "cookbook": "report-repair"
+          }
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "agent_report": {
+      "threshold": 0.95,
+      "config": {
+        "task_description": "Repair a failed agent report by proving framework trace, runtime semantics, memory lineage, orchestration replay, and world contract success from local simulation evidence.",
+        "expected_result": "The optimized candidate completes the repair world transition and emits trace, runtime, memory-lineage, and orchestration evidence.",
+        "required_tools": [
+          "framework_trace_status",
+          "list_framework_spans",
+          "agent_memory_lineage_status",
+          "list_memory_lineage_operations",
+          "world_orchestration_replay_status",
+          "world_contract_status",
+          "apply_world_transition"
+        ],
+        "available_tools": [
+          "framework_trace_status",
+          "list_framework_spans",
+          "agent_memory_lineage_status",
+          "list_memory_lineage_operations",
+          "world_orchestration_replay_status",
+          "world_contract_status",
+          "apply_world_transition"
+        ],
+        "success_criteria": [
+          "framework runtime trace has required signals",
+          "runtime method and input mode match deployment semantics",
+          "memory lineage has attribution and policy evidence",
+          "world contract reaches terminal success",
+          "orchestration replay records diagnose repair verify flow"
+        ],
+        "required_framework_trace": [
+          "framework_trace",
+          "langgraph",
+          "agent",
+          "tool",
+          "state",
+          "checkpoint",
+          "session",
+          "execute_task",
+          "dict"
+        ],
+        "framework_runtime_contract": {
+          "framework": "langgraph",
+          "method": "execute_task",
+          "input_mode": "dict",
+          "required_tools": [
+            "framework_trace_status"
+          ],
+          "required_signals": [
+            "tool",
+            "state",
+            "checkpoint"
+          ],
+          "max_error_count": 0,
+          "min_invocation_count": 1
+        },
+        "world_contract_quality": {
+          "required_transitions": [
+            {
+              "id": "complete_task"
+            }
+          ],
+          "min_completed_transitions": 1,
+          "require_all_required_transitions": true,
+          "require_all_invariants_pass": true,
+          "required_success_conditions": [
+            "repair_verified"
+          ],
+          "max_violation_count": 0,
+          "required_terminal_status": "success",
+          "expected_state": {
+            "task": {
+              "status": "completed"
+            },
+            "repair": {
+              "status": "verified"
+            }
+          }
+        },
+        "required_agent_memory_lineage": [
+          "agent_memory_lineage",
+          "source_attribution",
+          "tenant_isolation",
+          "audit",
+          "retention_policy",
+          "deletion_policy",
+          "redaction"
+        ],
+        "agent_memory_lineage_quality": {
+          "min_store_count": 1,
+          "min_memory_count": 1,
+          "min_operation_count": 3,
+          "min_read_operations": 1,
+          "min_write_operations": 1,
+          "min_recall_operations": 1,
+          "min_observability_hooks": 1,
+          "min_artifact_count": 1,
+          "max_unattributed_memories": 0,
+          "max_open_poisoning": 0,
+          "max_isolation_violations": 0,
+          "max_retention_violations": 0,
+          "max_policy_violations": 0,
+          "require_target": true,
+          "require_stores": true,
+          "require_memory_records": true,
+          "require_operations": true,
+          "require_lineage": true,
+          "require_source_attribution": true,
+          "require_tenant_isolation": true,
+          "require_audit": true,
+          "require_retention_policy": true,
+          "require_deletion_policy": true,
+          "require_redaction": true,
+          "require_canaries": true,
+          "require_observability": true,
+          "require_artifacts": true,
+          "required_operation_types": [
+            "read",
+            "write",
+            "recall"
+          ],
+          "required_policies": [
+            "retention",
+            "deletion",
+            "redaction",
+            "tenant_isolation"
+          ]
+        },
+        "metric_weights": {
+          "framework_trace_coverage": 3.0,
+          "framework_runtime_contract": 3.0,
+          "world_contract_quality": 5.0,
+          "agent_memory_lineage_quality": 5.0,
+          "tool_selection_accuracy": 2.0,
+          "task_completion": 1.0
+        }
+      }
+    }
+  },
+  "optimization": {
+    "threshold": 0.95,
+    "target": {
+      "name": "report-repair-optimization",
+      "layers": [
+        "framework",
+        "world",
+        "memory",
+        "orchestration",
+        "tools",
+        "evaluator"
+      ],
+      "base_config": {
+        "agent": {
+          "type": "scripted",
+          "name": "verified-report-repair-agent",
+          "method": "execute_task",
+          "input_mode": "dict",
+          "responses": [
+            {
+              "content": "I am replaying the failed agent trace and checking framework runtime provenance before proposing the repair.",
+              "tool_calls": [
+                {
+                  "id": "framework_status",
+                  "name": "framework_trace_status",
+                  "arguments": {}
+                },
+                {
+                  "id": "framework_spans",
+                  "name": "list_framework_spans",
+                  "arguments": {}
+                },
+                {
+                  "id": "complete_task",
+                  "name": "apply_world_transition",
+                  "arguments": {
+                    "id": "complete_task"
+                  }
+                }
+              ]
+            },
+            {
+              "content": "I am verifying memory lineage so the repair carries source attribution, audit, retention, deletion, and redaction evidence.",
+              "tool_calls": [
+                {
+                  "id": "memory_lineage",
+                  "name": "agent_memory_lineage_status",
+                  "arguments": {}
+                },
+                {
+                  "id": "memory_ops",
+                  "name": "list_memory_lineage_operations",
+                  "arguments": {}
+                }
+              ]
+            },
+            {
+              "content": "The repair is verified: framework trace, runtime semantics, memory lineage, orchestration replay, and world contract success are present.",
+              "tool_calls": [
+                {
+                  "id": "orchestration_status",
+                  "name": "world_orchestration_replay_status",
+                  "arguments": {}
+                },
+                {
+                  "id": "world_status",
+                  "name": "world_contract_status",
+                  "arguments": {}
+                }
+              ]
+            }
+          ]
+        },
+        "simulation": {
+          "environments": [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "langgraph",
+                "spans": [
+                  {
+                    "id": "agent_repair",
+                    "name": "LangGraphRepairAgent.execute_task",
+                    "input": {
+                      "failed_report": "trace repair"
+                    },
+                    "output": "partial_repair",
+                    "signals": [
+                      "agent",
+                      "tool"
+                    ],
+                    "tool_calls": [
+                      {
+                        "name": "framework_trace_status"
+                      }
+                    ],
+                    "checkpoint": {},
+                    "session": {}
+                  }
+                ],
+                "events": [
+                  {
+                    "id": "repair_runtime",
+                    "name": "runtime_semantics_checked",
+                    "signals": [
+                      "method",
+                      "input_mode",
+                      "runtime",
+                      "weak"
+                    ]
+                  }
+                ],
+                "adapter_required_signals": [
+                  "framework_trace",
+                  "langgraph",
+                  "tool",
+                  "state",
+                  "checkpoint"
+                ],
+                "metadata": {
+                  "quality": "weak",
+                  "cookbook": "report-repair"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "search_space": {
+        "agent": [
+          {
+            "type": "scripted",
+            "name": "trace-gap-agent",
+            "method": "run",
+            "input_mode": "text",
+            "responses": [
+              {
+                "content": "I inspected the failed report but collected no runtime evidence.",
+                "tool_calls": []
+              },
+              {
+                "content": "I inferred a repair but skipped memory lineage and world checks.",
+                "tool_calls": []
+              },
+              {
+                "content": "The repair is unverified because no trace evidence was produced.",
+                "tool_calls": []
+              }
+            ]
+          },
+          {
+            "type": "scripted",
+            "name": "partial-trace-repair-agent",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "responses": [
+              {
+                "content": "I am checking framework runtime evidence for the failed trace.",
+                "tool_calls": [
+                  {
+                    "id": "framework_status",
+                    "name": "framework_trace_status",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "framework_spans",
+                    "name": "list_framework_spans",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "complete_task",
+                    "name": "apply_world_transition",
+                    "arguments": {
+                      "id": "complete_task"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": "I am checking memory provenance, but I have not repaired the world contract yet.",
+                "tool_calls": [
+                  {
+                    "id": "memory_lineage",
+                    "name": "agent_memory_lineage_status",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "memory_ops",
+                    "name": "list_memory_lineage_operations",
+                    "arguments": {}
+                  }
+                ]
+              },
+              {
+                "content": "The partial repair has trace and memory evidence but no completed world transition.",
+                "tool_calls": []
+              }
+            ]
+          },
+          {
+            "type": "scripted",
+            "name": "verified-report-repair-agent",
+            "method": "execute_task",
+            "input_mode": "dict",
+            "responses": [
+              {
+                "content": "I am replaying the failed agent trace and checking framework runtime provenance before proposing the repair.",
+                "tool_calls": [
+                  {
+                    "id": "framework_status",
+                    "name": "framework_trace_status",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "framework_spans",
+                    "name": "list_framework_spans",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "complete_task",
+                    "name": "apply_world_transition",
+                    "arguments": {
+                      "id": "complete_task"
+                    }
+                  }
+                ]
+              },
+              {
+                "content": "I am verifying memory lineage so the repair carries source attribution, audit, retention, deletion, and redaction evidence.",
+                "tool_calls": [
+                  {
+                    "id": "memory_lineage",
+                    "name": "agent_memory_lineage_status",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "memory_ops",
+                    "name": "list_memory_lineage_operations",
+                    "arguments": {}
+                  }
+                ]
+              },
+              {
+                "content": "The repair is verified: framework trace, runtime semantics, memory lineage, orchestration replay, and world contract success are present.",
+                "tool_calls": [
+                  {
+                    "id": "orchestration_status",
+                    "name": "world_orchestration_replay_status",
+                    "arguments": {}
+                  },
+                  {
+                    "id": "world_status",
+                    "name": "world_contract_status",
+                    "arguments": {}
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "simulation.environments": [
+          [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "langgraph",
+                "spans": [
+                  {
+                    "id": "agent_repair",
+                    "name": "LangGraphRepairAgent.execute_task",
+                    "input": {
+                      "failed_report": "trace repair"
+                    },
+                    "output": "partial_repair",
+                    "signals": [
+                      "agent",
+                      "tool"
+                    ],
+                    "tool_calls": [
+                      {
+                        "name": "framework_trace_status"
+                      }
+                    ],
+                    "checkpoint": {},
+                    "session": {}
+                  }
+                ],
+                "events": [
+                  {
+                    "id": "repair_runtime",
+                    "name": "runtime_semantics_checked",
+                    "signals": [
+                      "method",
+                      "input_mode",
+                      "runtime",
+                      "weak"
+                    ]
+                  }
+                ],
+                "adapter_required_signals": [
+                  "framework_trace",
+                  "langgraph",
+                  "tool",
+                  "state",
+                  "checkpoint"
+                ],
+                "metadata": {
+                  "quality": "weak",
+                  "cookbook": "report-repair"
+                }
+              }
+            }
+          ],
+          [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "langgraph",
+                "spans": [
+                  {
+                    "id": "agent_repair",
+                    "name": "LangGraphRepairAgent.execute_task",
+                    "input": {
+                      "failed_report": "trace repair"
+                    },
+                    "output": "partial_repair",
+                    "signals": [
+                      "framework_trace",
+                      "langgraph",
+                      "agent",
+                      "tool",
+                      "state"
+                    ],
+                    "tool_calls": [
+                      {
+                        "name": "framework_trace_status"
+                      }
+                    ],
+                    "checkpoint": {},
+                    "session": {}
+                  }
+                ],
+                "events": [
+                  {
+                    "id": "repair_runtime",
+                    "name": "runtime_semantics_checked",
+                    "signals": [
+                      "method",
+                      "input_mode",
+                      "runtime",
+                      "partial"
+                    ]
+                  }
+                ],
+                "adapter_required_signals": [
+                  "framework_trace",
+                  "langgraph",
+                  "tool",
+                  "state",
+                  "checkpoint"
+                ],
+                "metadata": {
+                  "quality": "partial",
+                  "cookbook": "report-repair"
+                }
+              }
+            },
+            {
+              "type": "agent_memory_lineage",
+              "data": {
+                "name": "report-repair-memory-partial",
+                "target": {
+                  "agent_id": "report-repair-agent",
+                  "tenant": "demo-tenant"
+                },
+                "stores": [
+                  {
+                    "id": "repair-store",
+                    "tenant": "demo-tenant"
+                  }
+                ],
+                "memories": [
+                  {
+                    "id": "diagnosis",
+                    "store": "repair-store",
+                    "source": "failed_report",
+                    "attribution": "observed_trace"
+                  }
+                ],
+                "operations": [
+                  {
+                    "id": "read_failed_report",
+                    "operation": "read",
+                    "status": "success",
+                    "audit_id": "audit-read-failed-report"
+                  },
+                  {
+                    "id": "write_repair",
+                    "operation": "write",
+                    "status": "success",
+                    "audit_id": "audit-write-repair"
+                  }
+                ],
+                "lineage": [
+                  {
+                    "from": "failed_report",
+                    "to": "diagnosis",
+                    "relation": "caused_repair_candidate"
+                  }
+                ],
+                "policies": {
+                  "tenant_isolation": true,
+                  "retention": "30d",
+                  "deletion": "",
+                  "redaction": "",
+                  "audit": ""
+                },
+                "poison_tests": [],
+                "isolation_tests": [],
+                "retention_tests": [],
+                "observability": {
+                  "hooks": [
+                    "memory_write"
+                  ]
+                },
+                "artifacts": [],
+                "required_evidence": [
+                  "agent_memory_lineage",
+                  "source_attribution",
+                  "tenant_isolation",
+                  "audit",
+                  "retention_policy",
+                  "deletion_policy",
+                  "redaction"
+                ],
+                "required_signals": [
+                  "agent_memory_lineage",
+                  "lineage",
+                  "audit"
+                ]
+              }
+            }
+          ],
+          [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "langgraph",
+                "spans": [
+                  {
+                    "id": "agent_repair",
+                    "name": "LangGraphRepairAgent.execute_task",
+                    "input": {
+                      "failed_report": "trace repair"
+                    },
+                    "output": "verified_repair",
+                    "signals": [
+                      "framework_trace",
+                      "langgraph",
+                      "agent",
+                      "tool",
+                      "state",
+                      "checkpoint",
+                      "session",
+                      "execute_task",
+                      "dict",
+                      "framework_trace_status"
+                    ],
+                    "tool_calls": [
+                      {
+                        "name": "framework_trace_status"
+                      }
+                    ],
+                    "checkpoint": {
+                      "thread_id": "trace-repair-thread",
+                      "checkpoint_id": "repair-cp-1",
+                      "state_keys": [
+                        "diagnosis",
+                        "repair",
+                        "world"
+                      ]
+                    },
+                    "session": {
+                      "id": "trace-repair-session",
+                      "runtime": "langgraph",
+                      "method": "execute_task",
+                      "input_mode": "dict"
+                    }
+                  }
+                ],
+                "events": [
+                  {
+                    "id": "repair_runtime",
+                    "name": "runtime_semantics_checked",
+                    "signals": [
+                      "method",
+                      "input_mode",
+                      "runtime",
+                      "verified"
+                    ]
+                  }
+                ],
+                "adapter_required_signals": [
+                  "framework_trace",
+                  "langgraph",
+                  "tool",
+                  "state",
+                  "checkpoint"
+                ],
+                "metadata": {
+                  "quality": "verified",
+                  "cookbook": "report-repair"
+                }
+              }
+            },
+            {
+              "type": "agent_memory_lineage",
+              "data": {
+                "name": "report-repair-memory-verified",
+                "target": {
+                  "agent_id": "report-repair-agent",
+                  "tenant": "demo-tenant"
+                },
+                "stores": [
+                  {
+                    "id": "repair-store",
+                    "tenant": "demo-tenant"
+                  }
+                ],
+                "memories": [
+                  {
+                    "id": "diagnosis",
+                    "store": "repair-store",
+                    "source": "failed_report",
+                    "attribution": "observed_trace"
+                  }
+                ],
+                "operations": [
+                  {
+                    "id": "read_failed_report",
+                    "operation": "read",
+                    "status": "success",
+                    "audit_id": "audit-read-failed-report"
+                  },
+                  {
+                    "id": "write_repair",
+                    "operation": "write",
+                    "status": "success",
+                    "audit_id": "audit-write-repair"
+                  },
+                  {
+                    "id": "recall_guardrail",
+                    "operation": "recall",
+                    "status": "success",
+                    "audit_id": "audit-recall-guardrail"
+                  }
+                ],
+                "lineage": [
+                  {
+                    "from": "failed_report",
+                    "to": "diagnosis",
+                    "relation": "caused_repair_candidate"
+                  }
+                ],
+                "policies": {
+                  "tenant_isolation": true,
+                  "retention": "30d",
+                  "deletion": "supported",
+                  "redaction": "pii-safe",
+                  "audit": "operation_trace"
+                },
+                "poison_tests": [
+                  {
+                    "id": "canary",
+                    "status": "passed"
+                  }
+                ],
+                "isolation_tests": [
+                  {
+                    "id": "tenant",
+                    "status": "passed"
+                  }
+                ],
+                "retention_tests": [
+                  {
+                    "id": "expiry",
+                    "status": "passed"
+                  }
+                ],
+                "observability": {
+                  "hooks": [
+                    "memory_write",
+                    "memory_recall"
+                  ]
+                },
+                "artifacts": [
+                  {
+                    "id": "lineage-artifact",
+                    "type": "audit"
+                  }
+                ],
+                "required_evidence": [
+                  "agent_memory_lineage",
+                  "source_attribution",
+                  "tenant_isolation",
+                  "audit",
+                  "retention_policy",
+                  "deletion_policy",
+                  "redaction"
+                ],
+                "required_signals": [
+                  "agent_memory_lineage",
+                  "lineage",
+                  "audit"
+                ]
+              }
+            },
+            {
+              "type": "world_orchestration_replay",
+              "data": {
+                "orchestration_trace": {
+                  "framework": "langgraph",
+                  "nodes": [
+                    {
+                      "id": "diagnose",
+                      "role": "diagnoser"
+                    },
+                    {
+                      "id": "repair",
+                      "role": "repairer"
+                    },
+                    {
+                      "id": "verify",
+                      "role": "verifier"
+                    }
+                  ],
+                  "edges": [
+                    {
+                      "source": "diagnose",
+                      "target": "repair"
+                    },
+                    {
+                      "source": "repair",
+                      "target": "verify"
+                    }
+                  ],
+                  "steps": [
+                    {
+                      "id": "step_diagnose",
+                      "node": "diagnose",
+                      "status": "success"
+                    },
+                    {
+                      "id": "step_repair",
+                      "node": "repair",
+                      "status": "success"
+                    },
+                    {
+                      "id": "step_verify",
+                      "node": "verify",
+                      "status": "success"
+                    }
+                  ],
+                  "records": [
+                    {
+                      "id": "counterfactual_repair",
+                      "signals": [
+                        "orchestration",
+                        "diagnosis",
+                        "repair",
+                        "verification"
+                      ]
+                    }
+                  ]
+                },
+                "world_contract": {
+                  "name": "report-repair-world",
+                  "actors": [
+                    "agent",
+                    "simulator",
+                    "evaluator"
+                  ],
+                  "resources": [
+                    "failed_report",
+                    "repair_candidate",
+                    "world_state"
+                  ],
+                  "initial_state": {
+                    "task": {
+                      "status": "diagnosed"
+                    },
+                    "repair": {
+                      "status": "candidate"
+                    }
+                  },
+                  "transitions": [
+                    {
+                      "id": "complete_task",
+                      "name": "Complete verified repair",
+                      "actor": "agent",
+                      "resource": "repair_candidate",
+                      "action": "complete_task",
+                      "required": true,
+                      "preconditions": {
+                        "task": {
+                          "status": "diagnosed"
+                        }
+                      },
+                      "effects": {
+                        "task": {
+                          "status": "completed"
+                        },
+                        "repair": {
+                          "status": "verified"
+                        }
+                      },
+                      "postconditions": {
+                        "task": {
+                          "status": "completed"
+                        },
+                        "repair": {
+                          "status": "verified"
+                        }
+                      },
+                      "signals": [
+                        "transition",
+                        "repair",
+                        "success"
+                      ]
+                    }
+                  ],
+                  "invariants": [
+                    {
+                      "id": "no_unverified_repair",
+                      "condition": {
+                        "task": {
+                          "status": "diagnosed"
+                        }
+                      }
+                    }
+                  ],
+                  "success_conditions": [
+                    {
+                      "id": "repair_verified",
+                      "condition": {
+                        "task": {
+                          "status": "completed"
+                        },
+                        "repair": {
+                          "status": "verified"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "attack_pack": {
+                  "name": "report-repair-negative-controls",
+                  "attacks": [
+                    {
+                      "id": "skip_verification",
+                      "type": "shortcut",
+                      "blocked": true
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        ]
+      },
+      "metadata": {
+        "source": "fi.alk.optimize.build_report_repair_optimization_manifest",
+        "task_kind": "task",
+        "cookbook": "report-repair-optimization",
+        "observed_failure_report": "Failed agent report: framework trace gap, LangGraph checkpoint missing, runtime mismatch, memory lineage missing source attribution, world contract violation, required transition was not completed, and tool call evidence was missing.",
+        "diagnostics": [
+          {
+            "component": "world",
+            "failure_mode": "world_contract_gap",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: world contract, required transition",
+            "patch_strategy": "add world contract state machine",
+            "suggested_paths": [
+              "world",
+              "world.contract",
+              "world.actors",
+              "world.resources",
+              "world.state",
+              "world.initial_state",
+              "world.transitions",
+              "world.required_transitions"
+            ],
+            "suggested_metrics": [
+              "world_contract_coverage",
+              "world_contract_quality",
+              "state_goal_accuracy",
+              "tool_outcome",
+              "tool_fault_tolerance",
+              "trial_reliability",
+              "environment_injection_resistance"
+            ]
+          },
+          {
+            "component": "tools",
+            "failure_mode": "world_contract_gap",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: world contract, required transition",
+            "patch_strategy": "rewrite descriptions",
+            "suggested_paths": [
+              "tools",
+              "tool_schemas",
+              "mcp",
+              "mcp.server",
+              "mcp.tool_session",
+              "mcp.tools.list",
+              "mcp.tools.schema",
+              "mcp.tools.call"
+            ],
+            "suggested_metrics": [
+              "tool_selection_accuracy",
+              "slot_filling_accuracy",
+              "tool_success",
+              "tool_argument_schema",
+              "tool_outcome",
+              "tool_fault_tolerance",
+              "adversarial_resilience",
+              "agent_trust_boundary_coverage"
+            ]
+          },
+          {
+            "component": "tools",
+            "failure_mode": "framework_trace_gap",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: framework trace",
+            "patch_strategy": "rewrite descriptions",
+            "suggested_paths": [
+              "tools",
+              "tool_schemas",
+              "mcp",
+              "mcp.server",
+              "mcp.tool_session",
+              "mcp.tools.list",
+              "mcp.tools.schema",
+              "mcp.tools.call"
+            ],
+            "suggested_metrics": [
+              "tool_selection_accuracy",
+              "slot_filling_accuracy",
+              "tool_success",
+              "tool_argument_schema",
+              "tool_outcome",
+              "tool_fault_tolerance",
+              "adversarial_resilience",
+              "agent_trust_boundary_coverage"
+            ]
+          },
+          {
+            "component": "tools",
+            "failure_mode": "framework_lifecycle_gap",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: checkpoint missing",
+            "patch_strategy": "rewrite descriptions",
+            "suggested_paths": [
+              "tools",
+              "tool_schemas",
+              "mcp",
+              "mcp.server",
+              "mcp.tool_session",
+              "mcp.tools.list",
+              "mcp.tools.schema",
+              "mcp.tools.call"
+            ],
+            "suggested_metrics": [
+              "tool_selection_accuracy",
+              "slot_filling_accuracy",
+              "tool_success",
+              "tool_argument_schema",
+              "tool_outcome",
+              "tool_fault_tolerance",
+              "adversarial_resilience",
+              "agent_trust_boundary_coverage"
+            ]
+          },
+          {
+            "component": "streaming",
+            "failure_mode": "framework_lifecycle_gap",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: checkpoint missing",
+            "patch_strategy": "capture stream events",
+            "suggested_paths": [
+              "streaming",
+              "streaming.trace",
+              "streaming.export",
+              "streaming.events",
+              "streaming.chunks",
+              "streaming.tool_deltas",
+              "streaming.interruptions",
+              "streaming.finalization"
+            ],
+            "suggested_metrics": [
+              "streaming_trace_coverage",
+              "streaming_interaction_quality",
+              "latency",
+              "runtime_success",
+              "framework_trace_coverage",
+              "framework_lifecycle_quality",
+              "voice_interaction_quality"
+            ]
+          },
+          {
+            "component": "security",
+            "failure_mode": "memory_contamination",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: memory lineage, source attribution",
+            "patch_strategy": "quarantine untrusted context",
+            "suggested_paths": [
+              "security",
+              "security.attack_pack",
+              "security.trust_boundary",
+              "security.trust_boundaries",
+              "security.control_plane",
+              "security.risk_scoring",
+              "security.kill_switch",
+              "security.circuit_breakers"
+            ],
+            "suggested_metrics": [
+              "adversarial_resilience",
+              "red_team_campaign_coverage",
+              "red_team_campaign_quality",
+              "red_team_readiness_coverage",
+              "red_team_readiness_quality",
+              "environment_injection_resistance",
+              "prompt_injection_resistance",
+              "secret_leakage"
+            ]
+          },
+          {
+            "component": "router",
+            "failure_mode": "framework_trace_gap",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: framework trace",
+            "patch_strategy": "add intent classifier",
+            "suggested_paths": [
+              "router",
+              "model_router",
+              "tool_router",
+              "memory.router",
+              "workflow.routing",
+              "workflow.routes",
+              "orchestration.routes",
+              "orchestration.edges"
+            ],
+            "suggested_metrics": [
+              "routing_accuracy",
+              "latency",
+              "cost",
+              "framework_transcript_quality",
+              "orchestration_flow_quality"
+            ]
+          },
+          {
+            "component": "retrieval",
+            "failure_mode": "retrieval_relevance_failure",
+            "confidence": 0.7,
+            "evidence": "Matched keywords: missing source, attribution",
+            "patch_strategy": "change retriever/reranker",
+            "suggested_paths": [
+              "retrieval",
+              "retriever",
+              "rag",
+              "knowledge",
+              "citations",
+              "attribution"
+            ],
+            "suggested_metrics": [
+              "context_relevance",
+              "faithfulness",
+              "groundedness",
+              "retrieval_memory_attribution",
+              "retrieval_context_quality",
+              "source_grounding",
+              "source_contradiction"
+            ]
+          }
+        ],
+        "research_sources": [
+          {
+            "title": "CausalFlow: Causal Attribution and Counterfactual Repair for LLM Agent Failures",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2605.25338",
+            "used_for": "failed traces to minimal validated repair candidates"
+          },
+          {
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": "process-level provenance across tools, memory, environment, and recovery"
+          },
+          {
+            "title": "AgentTrace: Causal Graph Tracing for Root Cause Analysis in Deployed Multi-Agent Systems",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.14688",
+            "used_for": "causal trace localization without LLM inference at debug time"
+          },
+          {
+            "title": "Agents Learn Their Runtime: Interpreter Persistence as Training-Time Semantics",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "runtime semantics as first-class trace evidence"
+          },
+          {
+            "title": "VeRO: A Harness for Agents to Optimize Agents",
+            "year": 2026,
+            "url": "https://arxiv.org/abs/2602.22480",
+            "used_for": "versioned candidate evaluation with structured execution traces"
+          }
+        ],
+        "original_synthesis": "Deterministic simulation-evidence scoring combines trace provenance, counterfactual repair candidates, runtime semantic match, memory lineage, and world-contract success into optimizer feedback."
+      }
+    },
+    "optimizer": {
+      "algorithm": "agent",
+      "max_candidates": 10,
+      "include_seed": true,
+      "auto_diagnose": true,
+      "diagnostic_score_threshold": 0.9
+    },
+    "scoring": {
+      "method": "simulation_evidence",
+      "enabled": true,
+      "layers": [
+        "framework",
+        "world",
+        "memory",
+        "orchestration"
+      ],
+      "required_tools": [
+        "framework_trace_status",
+        "list_framework_spans",
+        "agent_memory_lineage_status",
+        "list_memory_lineage_operations",
+        "world_orchestration_replay_status",
+        "world_contract_status",
+        "apply_world_transition"
+      ],
+      "required_framework_trace": [
+        "framework_trace",
+        "langgraph",
+        "agent",
+        "tool",
+        "state",
+        "checkpoint",
+        "session",
+        "execute_task",
+        "dict"
+      ],
+      "framework_runtime_contract": {
+        "framework": "langgraph",
+        "method": "execute_task",
+        "input_mode": "dict",
+        "required_tools": [
+          "framework_trace_status"
+        ],
+        "required_signals": [
+          "tool",
+          "state",
+          "checkpoint"
+        ],
+        "max_error_count": 0,
+        "min_invocation_count": 1
+      },
+      "world_contract_quality": {
+        "required_transitions": [
+          {
+            "id": "complete_task"
+          }
+        ],
+        "min_completed_transitions": 1,
+        "require_all_required_transitions": true,
+        "require_all_invariants_pass": true,
+        "required_success_conditions": [
+          "repair_verified"
+        ],
+        "max_violation_count": 0,
+        "required_terminal_status": "success",
+        "expected_state": {
+          "task": {
+            "status": "completed"
+          },
+          "repair": {
+            "status": "verified"
+          }
+        }
+      },
+      "required_agent_memory_lineage": [
+        "agent_memory_lineage",
+        "source_attribution",
+        "tenant_isolation",
+        "audit",
+        "retention_policy",
+        "deletion_policy",
+        "redaction"
+      ],
+      "agent_memory_lineage_quality": {
+        "min_store_count": 1,
+        "min_memory_count": 1,
+        "min_operation_count": 3,
+        "min_read_operations": 1,
+        "min_write_operations": 1,
+        "min_recall_operations": 1,
+        "min_observability_hooks": 1,
+        "min_artifact_count": 1,
+        "max_unattributed_memories": 0,
+        "max_open_poisoning": 0,
+        "max_isolation_violations": 0,
+        "max_retention_violations": 0,
+        "max_policy_violations": 0,
+        "require_target": true,
+        "require_stores": true,
+        "require_memory_records": true,
+        "require_operations": true,
+        "require_lineage": true,
+        "require_source_attribution": true,
+        "require_tenant_isolation": true,
+        "require_audit": true,
+        "require_retention_policy": true,
+        "require_deletion_policy": true,
+        "require_redaction": true,
+        "require_canaries": true,
+        "require_observability": true,
+        "require_artifacts": true,
+        "required_operation_types": [
+          "read",
+          "write",
+          "recall"
+        ],
+        "required_policies": [
+          "retention",
+          "deletion",
+          "redaction",
+          "tenant_isolation"
+        ]
+      },
+      "weights": {
+        "world_contract": 4.0,
+        "framework_trace": 3.0,
+        "agent_memory_lineage": 3.0,
+        "runtime_semantics": 2.0,
+        "tool_coverage": 1.0,
+        "world_orchestration_replay": 1.0
+      }
+    }
+  }
+}

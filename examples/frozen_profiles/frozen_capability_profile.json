@@ -1,0 +1,99 @@
+{
+  "contract_digest": "31245a5fb20a54fa0ef89506d18cbbf02e424b11d542cb7294d8a07172c55018",
+  "frozen_at": "2026-06-11T00:00:00Z",
+  "kind": "agent-learning.frozen-capability-profile.v1",
+  "rows": [
+    {
+      "capability": "messages",
+      "floor": 1.0,
+      "framework": "langgraph",
+      "metric": "adapter_contract_coverage",
+      "row_id": "row_48763e12efcf1f82",
+      "security": false,
+      "setting": {
+        "driver": "deterministic_scripted",
+        "engine": "local_text",
+        "eval_budget": 8,
+        "required_env": [
+          "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+        ],
+        "target_kind": "whole_agent"
+      },
+      "source": "agent-learning.framework-adapter-capability-profile.v1"
+    },
+    {
+      "capability": "messages",
+      "floor": 0.9,
+      "framework": "langgraph",
+      "metric": "task_completion",
+      "row_id": "row_8583f2f37fd135fb",
+      "security": false,
+      "setting": {
+        "driver": "deterministic_scripted",
+        "engine": "local_text",
+        "eval_budget": 8,
+        "required_env": [
+          "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+        ],
+        "target_kind": "whole_agent"
+      },
+      "source": "agent-learning.framework-adapter-capability-profile.v1"
+    },
+    {
+      "capability": "messages",
+      "floor": 1.0,
+      "framework": "livekit",
+      "metric": "adapter_contract_coverage",
+      "row_id": "row_db8f0a16535cc61a",
+      "security": false,
+      "setting": {
+        "driver": "deterministic_scripted",
+        "engine": "local_text",
+        "eval_budget": 8,
+        "required_env": [
+          "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+        ],
+        "target_kind": "whole_agent"
+      },
+      "source": "agent-learning.framework-adapter-capability-profile.v1"
+    },
+    {
+      "capability": "messages",
+      "floor": 0.9,
+      "framework": "livekit",
+      "metric": "task_completion",
+      "row_id": "row_42ee3f0771ed0626",
+      "security": false,
+      "setting": {
+        "driver": "deterministic_scripted",
+        "engine": "local_text",
+        "eval_budget": 8,
+        "required_env": [
+          "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+        ],
+        "target_kind": "whole_agent"
+      },
+      "source": "agent-learning.framework-adapter-capability-profile.v1"
+    },
+    {
+      "capability": "stored_injection_resilience",
+      "floor": 1.0,
+      "framework": "all",
+      "metric": "redteam_pass_rate",
+      "row_id": "row_e0ce762255cf667e",
+      "security": true,
+      "setting": {
+        "driver": "deterministic_scripted",
+        "engine": "local_text",
+        "eval_budget": 8,
+        "required_env": [
+          "AGENT_LEARNING_SDK_CAPABILITY_FREEZE_EXAMPLE_KEY"
+        ],
+        "target_kind": "whole_agent"
+      },
+      "source": "redteam.stored_injection_readiness"
+    }
+  ],
+  "setting_digest": "40c44136dddcdf9f7eaf551d887ca98703484e2f98fef694b98dc2708e952921",
+  "source_manifest_ref": "examples/sdk_capability_freeze_regression.py"
+}

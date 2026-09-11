@@ -1,0 +1,89 @@
+{
+  "constraints": {
+    "declared_tools": [
+      "reschedule"
+    ],
+    "max_user_knowledge": [],
+    "observable_state": {}
+  },
+  "coverage": {
+    "delegation_obligations": [],
+    "intents": [
+      "reschedule"
+    ],
+    "personas": [
+      "sha256:7b5542327e159953e98e98c11790d6606b834c8418be309ddd966bab21333266"
+    ],
+    "perturbations": [
+      "latency"
+    ],
+    "tool_obligations": [
+      "allow:reschedule"
+    ]
+  },
+  "dataset": [
+    {
+      "behavior_policy": {
+        "cooperation_bounds": 0.705,
+        "disclosure_policy": 0.5828,
+        "escalation_schedule": [
+          0.0,
+          0.08,
+          0.16,
+          0.24,
+          0.32,
+          0.4
+        ],
+        "interruption_propensity": 0.29,
+        "patience_curve": [
+          1.0,
+          0.928,
+          0.856,
+          0.784,
+          0.712,
+          0.64
+        ],
+        "repair_propensity": 0.69
+      },
+      "identity": {
+        "demographics": {},
+        "name": "Priya",
+        "role": "customer",
+        "style_notes": []
+      },
+      "knowledge": [
+        {
+          "disclosure": "on_request",
+          "key": "appointment_code",
+          "value": "APT-77"
+        },
+        {
+          "disclosure": "on_request",
+          "key": "phone",
+          "value": "555-2020"
+        }
+      ],
+      "outcome": "The appointment is confirmed.",
+      "persona": {
+        "name": "Priya",
+        "role": "customer"
+      },
+      "provenance": {
+        "calibrated": false,
+        "evidence_class": "hand_written",
+        "pin": {},
+        "representativeness_claim": "none"
+      },
+      "situation": "I want to confirm my appointment.",
+      "temperament": {
+        "rajas": 0.4,
+        "sattva": 0.7,
+        "tamas": 0.2
+      },
+      "version": "sha256:7b5542327e159953e98e98c11790d6606b834c8418be309ddd966bab21333266"
+    }
+  ],
+  "kind": "task",
+  "name": "cov-b",
+  "version": "sha256:d329d5fc13c8ae70e8293d2058f67ab680a694f513627555ad05d69b8413a798"
+}

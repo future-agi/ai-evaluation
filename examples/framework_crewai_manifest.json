@@ -1,0 +1,49 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-crewai-simulation",
+  "required_env": ["AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"],
+  "scenario": {
+    "name": "framework-crewai-simulation",
+    "dataset": [
+      {
+        "persona": {"name": "Leela", "role": "crew-owner"},
+        "situation": "Leela needs a CrewAI-style crew simulated through the generic framework adapter.",
+        "outcome": "The CrewAI-style crew completes with manager and worker runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "crewai",
+    "target": "framework_shims.py:build_crewai_crew",
+    "factory": true,
+    "trace_runtime": true,
+    "metadata": {"cookbook": "multi-framework-simulation"}
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "crewai",
+          "spans": [
+            {
+              "id": "crewai_crew",
+              "name": "Crew.kickoff",
+              "input": "crew workflow",
+              "output": "completed",
+              "tool_calls": [{"name": "framework_trace_status"}],
+              "signals": ["crew", "role", "tool"]
+            }
+          ],
+          "adapter_required_signals": ["crew", "role", "tool"],
+          "adapter_required_mappings": {"tool": ["tool_name"]}
+        }
+      }
+    ]
+  },
+  "evaluation": {"enabled": false}
+}

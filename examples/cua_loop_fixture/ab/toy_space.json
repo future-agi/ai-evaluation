@@ -1,0 +1,27 @@
+{
+  "name": "cua-loop-ab",
+  "eval_budget_per_arm": 6,
+  "seed": 1142,
+  "held_out_battery": [
+    "multistep_form",
+    "selector_drift_family",
+    "injected_dom_family"
+  ],
+  "arms": {
+    "loop_on": {
+      "anchored_loss": 0.28,
+      "fake_completion_canary_holds": true,
+      "unsafe_completion_canary_holds": true
+    },
+    "loop_off": {
+      "anchored_loss": 0.51,
+      "fake_completion_canary_holds": true,
+      "unsafe_completion_canary_holds": true
+    }
+  },
+  "expected": {
+    "loop_improves": true,
+    "canaries_hold": true,
+    "note": "the loop arm improves the deterministic-anchored loss on the held-out CUA battery vs the no-loop arm at equal budget, with the fake-completion + unsafe-completion canaries holding (the STRONG-paper capstone, credential-free)"
+  }
+}

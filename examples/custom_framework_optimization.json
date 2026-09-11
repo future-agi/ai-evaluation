@@ -1,0 +1,199 @@
+{
+  "version": "agent-learning.optimization.v1",
+  "name": "custom-framework-adapter-optimization",
+  "required_env": [
+    "AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "custom-framework-adapter-optimization",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Nia",
+          "role": "framework-owner"
+        },
+        "situation": "Nia needs a proprietary refund orchestrator optimized through a custom framework adapter.",
+        "outcome": "The optimizer selects the adapter method and payload shape that produce tool evidence and framework runtime trace conformance."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "custom_refund_orchestrator",
+    "target": "framework_shims.py:build_custom_refund_orchestrator",
+    "factory": true,
+    "method": "run",
+    "input_mode": "text",
+    "trace_runtime": true,
+    "metadata": {
+      "cookbook": "multi-framework-simulation"
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "custom_refund_orchestrator",
+          "spans": [
+            {
+              "id": "custom_refund_orchestrator",
+              "name": "CustomRefundOrchestrator.execute_task",
+              "input": "refund workflow",
+              "output": "approved",
+              "tool_calls": [
+                {
+                  "name": "framework_trace_status"
+                }
+              ],
+              "signals": [
+                "planner",
+                "tool",
+                "policy"
+              ]
+            }
+          ],
+          "adapter_required_signals": [
+            "planner",
+            "tool",
+            "policy"
+          ],
+          "adapter_required_mappings": {
+            "tool": [
+              "tool_name"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "agent_report": {
+      "threshold": 0.9,
+      "config": {
+        "task_description": "Optimize a bring-your-own custom framework adapter for a proprietary refund orchestrator.",
+        "expected_result": "The selected adapter runs execute_task with dict input, emits framework_trace_status tool evidence, and records framework runtime conformance for the custom_refund_orchestrator framework.",
+        "required_tools": [
+          "framework_trace_status"
+        ],
+        "available_tools": [
+          "framework_trace_status"
+        ],
+        "success_criteria": [
+          "custom_refund_orchestrator runtime trace is present",
+          "execute_task is the invoked adapter method",
+          "dict is the invoked adapter input mode",
+          "framework_trace_status tool evidence is emitted"
+        ],
+        "required_framework_trace": [
+          "framework_trace",
+          "custom_refund_orchestrator",
+          "planner",
+          "tool",
+          "policy",
+          "framework_trace_status"
+        ],
+        "required_framework_runtime": [
+          "framework_runtime",
+          "method",
+          "input",
+          "output",
+          "tool",
+          "metadata"
+        ],
+        "framework_runtime_contract": {
+          "framework": "custom_refund_orchestrator",
+          "method": "execute_task",
+          "input_mode": "dict",
+          "required_tools": [
+            "framework_trace_status"
+          ],
+          "required_signals": [
+            "method",
+            "input",
+            "output",
+            "tool",
+            "metadata"
+          ],
+          "max_error_count": 0,
+          "min_invocation_count": 1
+        },
+        "metric_weights": {
+          "framework_runtime_contract": 10.0,
+          "framework_runtime_coverage": 4.0,
+          "framework_trace_coverage": 2.0,
+          "tool_selection_accuracy": 4.0,
+          "task_completion": 1.0,
+          "final_response_quality": 1.0
+        }
+      }
+    }
+  },
+  "optimization": {
+    "threshold": 0.9,
+    "target": {
+      "name": "custom-framework-adapter",
+      "layers": [
+        "framework",
+        "harness",
+        "evaluator"
+      ],
+      "base_config": {
+        "agent": {
+          "type": "framework",
+          "framework": "custom_refund_orchestrator",
+          "target": "framework_shims.py:build_custom_refund_orchestrator",
+          "factory": true,
+          "method": "run",
+          "input_mode": "text",
+          "trace_runtime": true,
+          "metadata": {
+            "cookbook": "multi-framework-simulation"
+          }
+        }
+      },
+      "search_space": {
+        "agent": [
+          {
+            "type": "framework",
+            "framework": "custom_refund_orchestrator",
+            "target": "framework_shims.py:build_custom_refund_orchestrator",
+            "factory": true,
+            "method": "run",
+            "input_mode": "text",
+            "trace_runtime": true,
+            "metadata": {
+              "cookbook": "multi-framework-simulation"
+            }
+          },
+          {
+            "type": "framework",
+            "framework": "custom_refund_orchestrator",
+            "target": "framework_shims.py:build_custom_refund_orchestrator",
+            "factory": true,
+            "method": "execute_task",
+            "input_mode": "dict",
+            "trace_runtime": true,
+            "metadata": {
+              "cookbook": "multi-framework-simulation"
+            }
+          }
+        ]
+      },
+      "metadata": {
+        "cookbook": "custom_framework_optimization",
+        "expected_best_method": "execute_task",
+        "expected_best_input_mode": "dict"
+      }
+    },
+    "optimizer": {
+      "algorithm": "agent",
+      "max_candidates": 3,
+      "include_seed": true,
+      "auto_diagnose": false
+    }
+  }
+}

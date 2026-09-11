@@ -1,0 +1,9 @@
+{
+  "image": "chart_synthetic.png",
+  "question": "What is the value of the tallest bar?",
+  "answer": "50",
+  "anchor": "chart_accuracy",
+  "relaxed_tolerance": 0.05,
+  "bars": {"a": 30, "b": 50, "c": 20},
+  "note": "synthetic bar chart, programmatically rendered, Apache-2.0-clean"
+}

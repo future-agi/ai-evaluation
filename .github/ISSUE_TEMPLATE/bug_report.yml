@@ -1,65 +1,35 @@
 name: Bug report
-description: Something is broken in a Python or TypeScript SDK package.
-labels: ["bug", "needs-triage"]
+description: Report a reproducible problem in Agent Learning Kit.
+title: "[Bug]: "
+labels: ["bug"]
 body:
-  - type: markdown
+  - type: textarea
+    id: summary
     attributes:
-      value: |
-        Before filing: check [open issues](https://github.com/future-agi/ai-evaluation/issues) and [Discussions](https://github.com/orgs/future-agi/discussions) — your question may already be answered.
-
-  - type: dropdown
-    id: package
-    attributes:
-      label: Affected package
-      options:
-        - ai-evaluation (Python)
-        - "@future-agi/ai-evaluation (TypeScript)"
-        - Not sure
+      label: Summary
+      description: What failed?
     validations:
       required: true
-
-  - type: input
-    id: version
+  - type: textarea
+    id: reproduce
     attributes:
-      label: Package version
-      placeholder: "e.g. ai-evaluation==1.1.0 or @future-agi/ai-evaluation@1.0.0"
+      label: Reproduction
+      description: Commands, manifest, code, or example needed to reproduce.
+      placeholder: |
+        uv run ...
+        agent-learn ...
     validations:
       required: true
-
   - type: textarea
-    id: description
+    id: expected
     attributes:
-      label: What happened?
-      description: A clear description of the bug. What did you expect, and what did you get instead?
+      label: Expected Behavior
     validations:
       required: true
-
   - type: textarea
-    id: repro
-    attributes:
-      label: Minimal reproduction
-      description: The shortest self-contained code that shows the problem. Remove any real API keys.
-      render: python
-    validations:
-      required: true
-
-  - type: textarea
-    id: error
-    attributes:
-      label: Error output / stack trace
-      render: shell
-
-  - type: textarea
-    id: env
+    id: environment
     attributes:
       label: Environment
-      description: Python version, Node version, OS, gateway version or cloud vs self-hosted.
-      placeholder: |
-        Python 3.11.9 / Node 20.12.0
-        macOS 14.4 / Ubuntu 22.04
-        Gateway: Future AGI Cloud (gateway.futureagi.com) / self-hosted v0.9.1
-
-  - type: textarea
-    id: extra
-    attributes:
-      label: Anything else?
+      description: Python, Node, OS, package version, and relevant extras.
+    validations:
+      required: false

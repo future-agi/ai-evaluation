@@ -1,14 +1,16 @@
 {
-  "name": "futureagi-sdk",
-  "version": "0.1.1",
-  "description": "FutureAGI SDK",
-  "main": "index.js",
+  "name": "agent-learning-kit-typescript-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript workspace for the unified Future AGI agent-learning-kit SDK.",
+  "license": "Apache-2.0",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "pnpm --filter @future-agi/agent-learning-kit build",
+    "test": "pnpm --filter @future-agi/agent-learning-kit test",
+    "typecheck": "pnpm --filter @future-agi/agent-learning-kit typecheck"
   },
   "dependencies": {
-    "@future-agi/ai-evaluation": "workspace:*",
-    "uuid": "^11.1.0"
+    "@future-agi/agent-learning-kit": "workspace:*"
   },
-  "author": "FutureAGI"
+  "packageManager": "pnpm@8.15.0"
 }

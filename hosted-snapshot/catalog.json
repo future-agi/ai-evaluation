@@ -1,0 +1,28 @@
+{
+  "schema_version": "futureagi.hosted-snapshot-catalog.v1",
+  "runtimes": {
+    "python": ["3.11", "3.12", "3.13"],
+    "node": ["20", "22"]
+  },
+  "binaries": ["git", "ffmpeg"],
+  "engines": {
+    "postgres": {
+      "version": "16",
+      "role": "harness",
+      "database": "w<N>",
+      "strategies": ["template_database", "datadir_copy"]
+    },
+    "redis": {
+      "version": "7",
+      "role": null,
+      "database": null,
+      "strategies": ["datadir_copy", "empty"]
+    },
+    "rabbitmq": {
+      "version": "3.13",
+      "role": "harness",
+      "database": null,
+      "strategies": ["datadir_copy"]
+    }
+  }
+}

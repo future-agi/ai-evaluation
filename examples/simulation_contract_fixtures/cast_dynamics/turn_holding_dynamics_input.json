@@ -1,0 +1,10 @@
+{
+  "at": {
+    "turn": 1
+  },
+  "event": "counterpart_message",
+  "payload": {
+    "responds_to": "user",
+    "text": "hi"
+  }
+}

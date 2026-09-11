@@ -1,0 +1,74 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-langgraph-simulation",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "framework-langgraph-simulation",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Riya",
+          "role": "orchestration-owner"
+        },
+        "situation": "Riya needs a LangGraph-style state graph simulated through the generic framework adapter.",
+        "outcome": "The LangGraph-style graph completes with stateful framework runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "langgraph",
+    "target": "framework_shims.py:build_langgraph_agent",
+    "factory": true,
+    "trace_runtime": true,
+    "metadata": {
+      "cookbook": "multi-framework-simulation"
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "langgraph",
+          "spans": [
+            {
+              "id": "langgraph_node",
+              "name": "refund_graph.ainvoke",
+              "input": "refund workflow",
+              "output": "completed",
+              "tool_calls": [
+                {
+                  "name": "framework_trace_status"
+                }
+              ],
+              "signals": [
+                "model",
+                "tool",
+                "state"
+              ]
+            }
+          ],
+          "adapter_required_signals": [
+            "model",
+            "tool",
+            "state"
+          ],
+          "adapter_required_mappings": {
+            "tool": [
+              "tool_name"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}

@@ -1,0 +1,547 @@
+{
+  "version": "agent-learning.optimization.v1",
+  "name": "multi-agent-framework-handoff-optimization",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_AGENT_FRAMEWORK_HANDOFF_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "multi-agent-framework-handoff-optimization",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Integration Lead",
+          "role": "multi-agent-platform-owner"
+        },
+        "situation": "The team needs to optimize a captured multi-agent handoff harness that proves OpenAI Agents, AutoGen, CrewAI, and LangGraph traces carry enough evidence for Future AGI simulation, observability, evals, red teaming, and optimization.",
+        "outcome": "The selected candidate proves framework transcript quality, room-level handoff contracts, review, reconciliation, checkpoint lineage, and source-grounded final-answer evidence across all four frameworks."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "responses": [
+      {
+        "content": "Inspecting captured framework transcript evidence before optimizing the handoff harness.",
+        "tool_calls": [
+          {
+            "id": "framework_status",
+            "name": "framework_trace_status",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "content": "Replaying the platform handoff contract through the simulated multi-agent room.",
+        "tool_calls": [
+          {
+            "id": "handoff_retriever",
+            "name": "handoff",
+            "arguments": {
+              "to": "retriever",
+              "task": "Collect the current refund policy evidence and preserve citation context.",
+              "reason": "source grounding is required before final answer",
+              "context": {
+                "doc_id": "doc_refund_2026",
+                "world_state": "refund_case_open"
+              }
+            }
+          },
+          {
+            "id": "review_critic",
+            "name": "request_review",
+            "arguments": {
+              "reviewer": "critic",
+              "target": "framework handoff and refund policy answer",
+              "criteria": [
+                "policy",
+                "handoff",
+                "checkpoint",
+                "source"
+              ],
+              "context": {
+                "frameworks": [
+                  "openai_agents",
+                  "autogen",
+                  "crewai",
+                  "langgraph"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "content": "The optimized candidate proves cross-framework handoff quality across OpenAI Agents, AutoGen, CrewAI, and LangGraph with review, reconciliation, source grounding, and checkpoint lineage: openai_agents transcript includes retrieval handoff and critic review; autogen transcript includes planner/researcher/reviewer group handoff; crewai transcript includes manager/analyst/qa crew handoff; langgraph transcript includes graph checkpoint lineage and critic reconciliation; multi-agent room handoff contract, review, and reconciliation all pass.",
+        "tool_calls": [
+          {
+            "id": "reconcile_answer",
+            "name": "reconcile",
+            "arguments": {
+              "summary": "approved refund answer reconciled across captured framework handoffs",
+              "decision": "ship complete cross-framework handoff harness",
+              "accepted_source": "critic",
+              "conflicts": [],
+              "participants": [
+                "planner",
+                "retriever",
+                "critic"
+              ]
+            }
+          },
+          {
+            "id": "room_status_after",
+            "name": "room_status",
+            "arguments": {}
+          }
+        ]
+      }
+    ]
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 3,
+    "min_turns": 3,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "openai_agents",
+          "events": [
+            {
+              "id": "weak-oa-001",
+              "type": "message",
+              "method": "message",
+              "speaker": "triage_agent",
+              "message_text": "Weak seed has only one message and no handoff."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "agent_report": {
+      "threshold": 0.9,
+      "config": {
+        "task_description": "Optimize the captured multi-agent framework handoff harness.",
+        "expected_result": "The optimized candidate proves cross-framework handoff quality across OpenAI Agents, AutoGen, CrewAI, and LangGraph with review, reconciliation, source grounding, and checkpoint lineage.",
+        "required_tools": [
+          "framework_trace_status",
+          "room_status",
+          "handoff",
+          "request_review",
+          "reconcile"
+        ],
+        "success_criteria": [
+          "openai_agents transcript includes retrieval handoff and critic review",
+          "autogen transcript includes planner/researcher/reviewer group handoff",
+          "crewai transcript includes manager/analyst/qa crew handoff",
+          "langgraph transcript includes graph checkpoint lineage and critic reconciliation",
+          "multi-agent room handoff contract, review, and reconciliation all pass"
+        ],
+        "required_framework_trace": [
+          "framework_trace",
+          "openai_agents",
+          "autogen",
+          "crewai",
+          "langgraph",
+          "handoff",
+          "tool",
+          "state"
+        ],
+        "framework_transcript_quality": {
+          "required_event_methods": [
+            "message",
+            "handoff",
+            "tool_call",
+            "task_started",
+            "crew_handoff",
+            "task_completed",
+            "checkpoints",
+            "values",
+            "final_answer"
+          ],
+          "required_nodes": [
+            "triage_agent",
+            "retrieval_agent",
+            "critic_agent",
+            "planner",
+            "researcher",
+            "reviewer",
+            "manager",
+            "analyst",
+            "qa",
+            "retriever",
+            "critic"
+          ],
+          "required_subgraphs": [
+            "refund_subgraph"
+          ],
+          "expected_tool_sequence": [
+            "retrieve_documents",
+            "read_document",
+            "cite_sources",
+            "retrieve_documents"
+          ],
+          "required_speakers": [
+            "triage_agent",
+            "retrieval_agent",
+            "critic_agent",
+            "planner",
+            "researcher",
+            "reviewer",
+            "manager",
+            "analyst",
+            "qa",
+            "retriever",
+            "critic"
+          ],
+          "min_turns": 18,
+          "expected_messages": [
+            {
+              "speaker": "triage_agent",
+              "contains": [
+                "current policy grounding"
+              ]
+            },
+            {
+              "speaker": "qa",
+              "contains": [
+                "approved refund answer"
+              ]
+            },
+            {
+              "speaker": "critic",
+              "contains": [
+                "completed graph"
+              ]
+            }
+          ],
+          "expected_handoffs": [
+            {
+              "from": "triage_agent",
+              "to": "retrieval_agent",
+              "task_contains": [
+                "current refund policy"
+              ]
+            },
+            {
+              "from": "retrieval_agent",
+              "to": "critic_agent",
+              "task_contains": [
+                "Review"
+              ]
+            },
+            {
+              "from": "planner",
+              "to": "researcher",
+              "task_contains": [
+                "refund policy evidence"
+              ]
+            },
+            {
+              "from": "manager",
+              "to": "analyst",
+              "task_contains": [
+                "refund eligibility"
+              ]
+            },
+            {
+              "from": "planner",
+              "to": "retriever",
+              "task_contains": [
+                "current refund policy"
+              ]
+            }
+          ],
+          "required_tools_by_speaker": {
+            "retrieval_agent": [
+              "retrieve_documents"
+            ],
+            "researcher": [
+              "read_document"
+            ],
+            "analyst": [
+              "cite_sources"
+            ],
+            "retriever": [
+              "retrieve_documents"
+            ]
+          },
+          "output_contains": [
+            "approved refund answer"
+          ],
+          "require_termination": true,
+          "termination_contains": [
+            "completed"
+          ],
+          "expected_state": {
+            "case": {
+              "status": "resolved"
+            },
+            "handoff": {
+              "reviewed": true
+            }
+          },
+          "min_checkpoints": 1,
+          "required_checkpoint_ids": [
+            "ckpt-retrieval"
+          ],
+          "required_checkpoint_namespaces": [
+            "refund_subgraph"
+          ],
+          "required_sessions": [
+            "refund-thread-2026"
+          ],
+          "expected_checkpoint_state": {
+            "case": {
+              "status": "resolved"
+            },
+            "handoff": {
+              "reviewed": true
+            }
+          },
+          "require_checkpoint_parent": true,
+          "allow_errors": false
+        },
+        "required_multi_agent_trace": [
+          "trace",
+          "role",
+          "handoff",
+          "review_requested",
+          "reconciled"
+        ],
+        "required_multi_agent_roles": [
+          "planner",
+          "retriever",
+          "critic"
+        ],
+        "expected_multi_agent_handoffs": [
+          {
+            "to": "retriever",
+            "task_contains": "current refund policy",
+            "reason_contains": "source grounding",
+            "context_keys": [
+              "doc_id",
+              "world_state"
+            ],
+            "contract_matched": true
+          }
+        ],
+        "expected_multi_agent_reviews": [
+          {
+            "reviewer": "critic",
+            "target_contains": "framework handoff",
+            "criteria": [
+              "policy",
+              "handoff",
+              "checkpoint",
+              "source"
+            ]
+          }
+        ],
+        "expected_multi_agent_reconciliation": {
+          "summary_contains": "approved refund answer",
+          "accepted_source": "critic",
+          "conflicts_empty": true
+        },
+        "metric_weights": {
+          "framework_trace_coverage": 3.0,
+          "framework_transcript_quality": 10.0,
+          "multi_agent_trace_coverage": 4.0,
+          "multi_agent_coordination_quality": 7.0,
+          "tool_selection_accuracy": 2.0,
+          "task_completion": 2.0
+        }
+      }
+    }
+  },
+  "optimization": {
+    "threshold": 0.9,
+    "target": {
+      "name": "multi-agent-framework-handoff",
+      "layers": [
+        "framework",
+        "multi_agent",
+        "orchestration",
+        "memory"
+      ],
+      "base_config": {
+        "simulation": {
+          "environments": [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "openai_agents",
+                "events": [
+                  {
+                    "id": "weak-oa-001",
+                    "type": "message",
+                    "method": "message",
+                    "speaker": "triage_agent",
+                    "message_text": "Weak seed has only one message and no handoff."
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "search_space": {
+        "simulation.environments": [
+          [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "openai_agents",
+                "events": [
+                  {
+                    "id": "weak-oa-001",
+                    "type": "message",
+                    "method": "message",
+                    "speaker": "triage_agent",
+                    "message_text": "Weak seed has only one message and no handoff."
+                  }
+                ]
+              }
+            }
+          ],
+          [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "openai_agents",
+                "export_source": "fixtures/framework_transcripts/openai_agents.jsonl"
+              }
+            },
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "autogen",
+                "export_source": "fixtures/framework_transcripts/autogen.jsonl"
+              }
+            }
+          ],
+          [
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "openai_agents",
+                "export_source": "fixtures/framework_transcripts/openai_agents.jsonl"
+              }
+            },
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "autogen",
+                "export_source": "fixtures/framework_transcripts/autogen.jsonl"
+              }
+            },
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "crewai",
+                "export_source": "fixtures/framework_transcripts/crewai.jsonl"
+              }
+            },
+            {
+              "type": "framework_trace",
+              "data": {
+                "framework": "langgraph",
+                "export_source": "fixtures/framework_transcripts/langgraph.jsonl"
+              }
+            },
+            {
+              "type": "multi_agent_room",
+              "data": {
+                "participants": {
+                  "planner": {
+                    "name": "planner",
+                    "role": "triage planner"
+                  },
+                  "retriever": {
+                    "name": "retriever",
+                    "role": "policy evidence retriever"
+                  },
+                  "critic": {
+                    "name": "critic",
+                    "role": "grounding reviewer"
+                  }
+                },
+                "handoff_contracts": {
+                  "retriever": {
+                    "requires_reason": true,
+                    "required_context_keys": [
+                      "doc_id",
+                      "world_state"
+                    ],
+                    "required_task_terms": [
+                      "refund policy"
+                    ],
+                    "forbidden_terms": [
+                      "guess"
+                    ]
+                  }
+                },
+                "expected_handoffs": [
+                  {
+                    "to": "retriever",
+                    "task_contains": "current refund policy",
+                    "reason_contains": "source grounding",
+                    "context_keys": [
+                      "doc_id",
+                      "world_state"
+                    ],
+                    "contract_matched": true
+                  }
+                ],
+                "expected_reviews": [
+                  {
+                    "reviewer": "critic",
+                    "target_contains": "framework handoff",
+                    "criteria": [
+                      "policy",
+                      "handoff",
+                      "checkpoint",
+                      "source"
+                    ]
+                  }
+                ],
+                "expected_reconciliation": {
+                  "summary_contains": "approved refund answer",
+                  "accepted_source": "critic",
+                  "conflicts_empty": true
+                },
+                "state": {
+                  "case": {
+                    "status": "resolved"
+                  }
+                },
+                "allow_unknown_roles": false
+              }
+            }
+          ]
+        ]
+      },
+      "metadata": {
+        "source": "agent-learning-kit",
+        "cookbook": "multi-agent-framework-handoff-optimization"
+      }
+    },
+    "optimizer": {
+      "algorithm": "evolution",
+      "population_size": 4,
+      "generations": 1,
+      "elite_count": 1,
+      "mutation_rate": 0.0,
+      "crossover_rate": 0.0,
+      "max_mutations_per_candidate": 1,
+      "tournament_size": 2,
+      "seed": 20260605,
+      "include_seed": true,
+      "auto_diagnose": false,
+      "target_score": 0.98,
+      "mutation_library": false
+    }
+  }
+}

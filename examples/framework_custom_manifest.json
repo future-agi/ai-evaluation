@@ -1,0 +1,76 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-custom-simulation",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "framework-custom-simulation",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Nia",
+          "role": "framework-owner"
+        },
+        "situation": "Nia needs a proprietary refund orchestrator simulated through a custom framework adapter.",
+        "outcome": "The custom orchestrator completes with framework runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "custom_refund_orchestrator",
+    "target": "framework_shims.py:build_custom_refund_orchestrator",
+    "factory": true,
+    "method": "execute_task",
+    "input_mode": "dict",
+    "trace_runtime": true,
+    "metadata": {
+      "cookbook": "multi-framework-simulation"
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "custom_refund_orchestrator",
+          "spans": [
+            {
+              "id": "custom_refund_orchestrator",
+              "name": "CustomRefundOrchestrator.execute_task",
+              "input": "refund workflow",
+              "output": "approved",
+              "tool_calls": [
+                {
+                  "name": "framework_trace_status"
+                }
+              ],
+              "signals": [
+                "planner",
+                "tool",
+                "policy"
+              ]
+            }
+          ],
+          "adapter_required_signals": [
+            "planner",
+            "tool",
+            "policy"
+          ],
+          "adapter_required_mappings": {
+            "tool": [
+              "tool_name"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}

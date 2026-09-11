@@ -1,0 +1,43 @@
+{
+  "name": "multistep-form-checkout",
+  "note": "A synthetic multi-step form flow (programmatically-rendered DOM, Apache-2.0-clean, committed). Known deterministic terminal state. Long-horizon step_efficiency + state_match drill (avg CUA episode 20-35 steps).",
+  "url": "https://shop.example.test/checkout/step-1",
+  "expected_url": "https://shop.example.test/confirmation",
+  "expected_order_id": "ord_123",
+  "steps": [
+    {"step": 1, "dom": "<form id='shipping'><input name='name'/><button data-testid='next'>Next</button></form>", "action": {"name": "browser_type", "selector": "input[name='name']"}},
+    {"step": 2, "dom": "<form id='payment'><input name='card'/><button data-testid='next'>Next</button></form>", "action": {"name": "browser_type", "selector": "input[name='card']"}},
+    {"step": 3, "dom": "<form id='review'><button data-testid='place-order'>Place order</button></form>", "action": {"name": "browser_click", "selector": "button[data-testid='place-order']"}}
+  ],
+  "summary": {
+    "local_executable_fixture": true,
+    "requires_external_service": false,
+    "case_count": 1,
+    "passed_case_count": 1,
+    "snapshot_count": 3,
+    "current_snapshot_has_dom": true,
+    "current_snapshot_has_screenshot": true,
+    "refreshed_snapshot": true,
+    "region_count": 2,
+    "prompt_injection_surface_count": 1,
+    "action_replay_count": 3,
+    "successful_action_count": 3,
+    "matched_action_count": 3,
+    "selector_match_count": 3,
+    "blocked_action_count": 0,
+    "failed_action_count": 0,
+    "prompt_injection_touched_count": 0,
+    "mutation_count": 1,
+    "screenshot_diff_count": 1,
+    "layout_shift_present": true,
+    "storage_present": true,
+    "runtime_event_count": 2,
+    "performance_entry_count": 2,
+    "network_request_count": 2,
+    "url_match": true,
+    "final_state_match": true,
+    "order_id_match": true,
+    "required_tools": ["browser_snapshot", "browser_click", "browser_type"],
+    "successful_tool_names": ["browser_snapshot", "browser_click", "browser_type"]
+  }
+}

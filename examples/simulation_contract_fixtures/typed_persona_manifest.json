@@ -1,0 +1,28 @@
+{
+  "agent": {
+    "content": "done",
+    "type": "scripted"
+  },
+  "evaluation": {
+    "enabled": false
+  },
+  "name": "typed",
+  "scenario": {
+    "dataset": [
+      {
+        "behavior_policy": {},
+        "outcome": "o",
+        "persona": {
+          "name": "T"
+        },
+        "situation": "s"
+      }
+    ],
+    "name": "typed"
+  },
+  "simulation": {
+    "max_turns": 1,
+    "min_turns": 1
+  },
+  "version": "agent-learning.run.v1"
+}

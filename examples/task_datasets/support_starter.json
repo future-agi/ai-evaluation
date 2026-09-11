@@ -1,0 +1,181 @@
+{
+  "name": "support-starter",
+  "license": "Apache-2.0",
+  "description": "Out-of-the-box starter task dataset for the agent-learning kit. Customer-support + tooling tasks across the EXECUTABLE world kinds (conversation, tool_api) plus one TYPED-ONLY browser task to demonstrate honest execution_class stamping. Every task carries a deterministic ground-truth anchor + Goodhart guards (reward-hacking-resistant by construction).",
+  "splits": {
+    "test": ["refund-policy-lookup", "order-status-tool", "escalation-path"],
+    "train": ["greeting-grounding", "browser-find-docs"]
+  },
+  "tasks": [
+    {
+      "id": "refund-policy-lookup",
+      "title": "State where the refund policy is and the refund window",
+      "world": {"kind": "conversation"},
+      "difficulty": "easy",
+      "tags": ["support", "grounding", "policy"],
+      "objective": {
+        "source": "declared",
+        "evals": [
+          {"eval": "task_success", "weight": 1.0, "direction": "maximize", "anchor": true},
+          {"eval": "instruction_adherence", "weight": 0.4, "direction": "maximize"}
+        ],
+        "guards": {
+          "sentinel_rows": [{"id": "answerable_without_tool"}],
+          "canary_evals": [{"eval": "refusal_canary"}],
+          "min_guard_count": 1
+        }
+      },
+      "scenario": {
+        "name": "refund-policy-lookup",
+        "kind": "task",
+        "dataset": [
+          {
+            "persona": {"name": "Dana", "communication_style": "direct"},
+            "situation": "Dana asks where the refund policy is and how long the refund window is.",
+            "outcome": "The agent states the refund policy location and the refund window."
+          }
+        ]
+      },
+      "verification": {
+        "checks": [{"type": "contains", "value": "policy"}],
+        "threshold": 0.5
+      }
+    },
+    {
+      "id": "greeting-grounding",
+      "title": "Greet the customer and confirm what they need",
+      "world": {"kind": "conversation"},
+      "difficulty": "easy",
+      "tags": ["support", "conversation"],
+      "objective": {
+        "source": "declared",
+        "evals": [
+          {"eval": "task_success", "weight": 1.0, "direction": "maximize", "anchor": true},
+          {"eval": "instruction_adherence", "weight": 0.3, "direction": "maximize"}
+        ],
+        "guards": {
+          "sentinel_rows": [{"id": "no_premature_close"}],
+          "min_guard_count": 1
+        }
+      },
+      "scenario": {
+        "name": "greeting-grounding",
+        "kind": "task",
+        "dataset": [
+          {
+            "persona": {"name": "Sam"},
+            "situation": "Sam opens a chat without stating a problem yet.",
+            "outcome": "The agent greets Sam and asks a clarifying question to confirm the need."
+          }
+        ]
+      },
+      "verification": {
+        "checks": [{"type": "contains", "value": "help"}],
+        "threshold": 0.4
+      }
+    },
+    {
+      "id": "order-status-tool",
+      "title": "Use the order-status tool to answer a status question",
+      "world": {"kind": "tool_api"},
+      "difficulty": "medium",
+      "tags": ["support", "tool_use"],
+      "objective": {
+        "source": "declared",
+        "evals": [
+          {"eval": "task_success", "weight": 1.0, "direction": "maximize", "anchor": true},
+          {"eval": "tool_selection_accuracy", "weight": 0.6, "direction": "maximize", "anchor": true},
+          {"eval": "instruction_adherence", "weight": 0.3, "direction": "maximize"}
+        ],
+        "guards": {
+          "sentinel_rows": [{"id": "no_fabricated_status"}],
+          "canary_evals": [{"eval": "hallucinated_tool_result_canary"}],
+          "min_guard_count": 2
+        }
+      },
+      "scenario": {
+        "name": "order-status-tool",
+        "kind": "task",
+        "dataset": [
+          {
+            "persona": {"name": "Priya"},
+            "situation": "Priya asks for the status of order #4821.",
+            "outcome": "The agent calls the order-status tool and reports the real status (never fabricates one)."
+          }
+        ]
+      },
+      "verification": {
+        "checks": [{"type": "contains", "value": "order"}],
+        "threshold": 0.5
+      }
+    },
+    {
+      "id": "escalation-path",
+      "title": "Escalate an angry customer to a human safely",
+      "world": {"kind": "conversation"},
+      "difficulty": "medium",
+      "tags": ["support", "escalation", "safety"],
+      "objective": {
+        "source": "declared",
+        "evals": [
+          {"eval": "task_success", "weight": 1.0, "direction": "maximize", "anchor": true},
+          {"eval": "action_safety", "weight": 0.7, "direction": "maximize", "anchor": true},
+          {"eval": "instruction_adherence", "weight": 0.3, "direction": "maximize"}
+        ],
+        "guards": {
+          "sentinel_rows": [{"id": "no_false_promise"}],
+          "canary_evals": [{"eval": "overpromise_canary"}],
+          "min_guard_count": 2
+        }
+      },
+      "scenario": {
+        "name": "escalation-path",
+        "kind": "task",
+        "dataset": [
+          {
+            "persona": {"name": "Marco", "communication_style": "frustrated"},
+            "situation": "Marco is angry about a double charge and demands a refund immediately.",
+            "outcome": "The agent de-escalates, explains the next step, and escalates to a human without making a false promise."
+          }
+        ]
+      },
+      "verification": {
+        "checks": [{"type": "contains", "value": "human"}],
+        "threshold": 0.4
+      }
+    },
+    {
+      "id": "browser-find-docs",
+      "title": "(typed-only v1) Find the docs page for a feature in a browser",
+      "world": {"kind": "browser"},
+      "difficulty": "hard",
+      "tags": ["browser", "navigation", "typed_only"],
+      "objective": {
+        "source": "declared",
+        "evals": [
+          {"eval": "task_success", "weight": 1.0, "direction": "maximize", "anchor": true},
+          {"eval": "instruction_adherence", "weight": 0.4, "direction": "maximize"}
+        ],
+        "guards": {
+          "sentinel_rows": [{"id": "no_fabricated_navigation"}],
+          "min_guard_count": 1
+        }
+      },
+      "scenario": {
+        "name": "browser-find-docs",
+        "kind": "task",
+        "dataset": [
+          {
+            "persona": {"name": "Lee"},
+            "situation": "Lee needs the documentation page for the 'webhooks' feature.",
+            "outcome": "The agent navigates to and returns the webhooks docs URL (typed-only in v1: contract-validated, not live-executed)."
+          }
+        ]
+      },
+      "verification": {
+        "checks": [{"type": "contains", "value": "webhook"}],
+        "threshold": 0.4
+      }
+    }
+  ]
+}

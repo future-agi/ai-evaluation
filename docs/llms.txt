@@ -1,0 +1,140 @@
+# Agent Learning Kit — docs index
+
+> Every page below is backed by an executable twin in `examples/` and admitted
+> by the `docs_executability` release gate. Page metadata is the YAML
+> frontmatter at the top of each file — the frontmatter IS the manifest twin.
+
+## Quickstart
+- [Golden path: the CI spine](docs/quickstart/golden-path-ci.md): twin=none kind=agent-learning.run.v1
+- [Golden path: first optimization](docs/quickstart/golden-path-optimize.md): twin=none kind=agent-learning.optimization.v1
+- [Golden path: first red-team gate](docs/quickstart/golden-path-redteam.md): twin=none kind=agent-learning.redteam.v1
+- [Golden path: first simulation run](docs/quickstart/golden-path-run.md): twin=none kind=agent-learning.run.v1
+
+## Eval
+- [Artifact evals](docs/eval/artifact-evals.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.artifact-evaluation.v1
+- [Coding benchmark: score candidate code against a held-out oracle](docs/eval/benchmark-coding.md): twin=examples/bench_coding_quickstart.py kind=none
+- [Command-graded benchmark: a held-out grader runs after the candidate is killed](docs/eval/benchmark-command-graded.md): twin=examples/bench_command_graded.py kind=none
+- [Benchmark harness: one Task↔Verifier contract, three control modes, one Result](docs/eval/benchmark-overview.md): twin=examples/bench_overview.py kind=none
+- [Pull / RL benchmark: the agent drives a live environment via reset/step](docs/eval/benchmark-pull-rl.md): twin=examples/bench_pull_rl.py kind=none
+- [Bench sandboxes: where candidate code actually runs](docs/eval/benchmark-sandboxes.md): twin=examples/bench_sandboxes.py kind=none
+- [Voice benchmark: score a voice episode on a temporal contract](docs/eval/benchmark-voice.md): twin=examples/bench_voice.py kind=none
+- [Write a bench suite: author your own coding tasks with a held-out oracle](docs/eval/benchmark-write-a-suite.md): twin=examples/bench_custom_suite.py kind=none
+- [Eval hooks](docs/eval/eval-hooks.md): twin=examples/sdk_evaluation_hook_optimization.py kind=agent-learning.optimization.v1
+- [Eval suites](docs/eval/eval-suites.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
+- [Evaluate any task](docs/eval/evaluate-any-task.md): twin=examples/sdk_task_evaluation.py kind=agent-learning.eval.v1
+- [Judge reliability](docs/eval/judge-reliability.md): twin=examples/sdk_judge_reliability_evaluation.py kind=agent-learning.eval.v1
+- [Task evidence](docs/eval/task-evidence.md): twin=examples/sdk_task_evaluation_synthesis.py kind=agent-learning.artifact-evaluation.v1
+
+## Simulate
+- [CUA loop: the deterministic browser/computer-use substrate, credential-free](docs/simulate/cua-loop.md): twin=examples/sdk_cua_loop.py kind=agent-learning.run.v1
+- [Your First Simulation Run](docs/simulate/first-run.md): twin=examples/sdk_agent_integration_simulation.py kind=agent-learning.run.v1
+- [Image loop: the deterministic multimodal substrate, credential-free](docs/simulate/image-loop.md): twin=examples/sdk_image_loop.py kind=agent-learning.run.v1
+- [Memory: simulate the layer that persists between sessions](docs/simulate/memory.md): twin=examples/sdk_framework_adapter_memory_trace.py kind=agent-learning.run.v1
+- [Multi-Agent: rooms, handoffs, and coordination evidence](docs/simulate/multi-agent.md): twin=examples/sdk_multi_agent_room_probe_optimization.py kind=agent-learning.run.v1
+- [Multimodal Image: simulate grounding, not just looking](docs/simulate/multimodal-image.md): twin=examples/sdk_framework_adapter_browser_cua_trace.py kind=agent-learning.run.v1
+- [Orchestration: simulate the graph, not just the agents](docs/simulate/orchestration.md): twin=examples/sdk_framework_adapter_orchestration_trace.py kind=agent-learning.run.v1
+- [Persona Fidelity: did the simulated user behave as declared?](docs/simulate/persona-fidelity.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.persona-calibration.v1
+- [Persona & Scenario Studio: typed test cases you can measure](docs/simulate/persona-scenario-studio.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.persona-library.v1
+- [The Regression Lifecycle: baseline, compare, promote, replay, shrink](docs/simulate/regression-lifecycle.md): twin=examples/sdk_regression_artifact_suite.py kind=agent-learning.baseline.v1
+- [Simulate Any Framework](docs/simulate/simulate-any-framework.md): twin=examples/sdk_multi_framework_simulation.py kind=agent-learning.suite.v1
+- [The Simulation Spine — One Spec, One Runner](docs/simulate/spec-and-runner.md): twin=examples/sdk_spec_runner_quickstart.py kind=none
+- [Voice loopback: the deterministic audio channel, credential-free](docs/simulate/voice-loopback.md): twin=examples/sdk_voice_loopback.py kind=agent-learning.run.v1
+- [Voice and Realtime: simulate the session before you dial it](docs/simulate/voice-realtime.md): twin=examples/sdk_framework_adapter_realtime_trace.py kind=agent-learning.run.v1
+- [Worlds and Hooks: simulate against executable state](docs/simulate/worlds-and-hooks.md): twin=examples/sdk_world_hooks_optimization.py kind=agent-learning.optimization.v1
+
+## Optimize
+- [Agent Control Plane: optimizing trust boundaries and autonomy](docs/optimize/agent-control-plane.md): twin=examples/sdk_agent_control_plane_optimization.py kind=agent-learning.optimization.v1
+- [Backend Routing: evidence-cited defaults, never a cage](docs/optimize/backend-routing.md): twin=examples/sdk_optimizer_profile_matrix.py kind=agent-learning.optimizer-routing-table.v1
+- [Behavior and Collaboration: optimizing how agents act together](docs/optimize/behavior-and-collaboration.md): twin=examples/sdk_multi_agent_room_probe_optimization.py kind=agent-learning.optimization.v1
+- [Capability-Profile Freezing: the frozen rows a winner must not break](docs/optimize/capability-profile-freezing.md): twin=examples/sdk_capability_freeze_regression.py kind=agent-learning.optimization.v1
+- [CUA improvement loop: the 13D Practice Loop on browser/computer-use](docs/optimize/cua-improvement.md): twin=examples/sdk_cua_improvement.py kind=agent-learning.practice-report.v1
+- [Eval-Suite Optimization](docs/optimize/eval-suite-optimization.md): twin=examples/sdk_evaluation_hook_probe_optimization.py kind=agent-learning.eval-optimization.v1
+- [Optimizer Governance: the steward's veto](docs/optimize/governance.md): twin=examples/sdk_optimizer_governance_optimization.py kind=agent-learning.optimization.v1
+- [Image improvement loop: the 13D Practice Loop on image](docs/optimize/image-improvement.md): twin=examples/sdk_image_improvement.py kind=agent-learning.practice-report.v1
+- [Memory Targets: optimizing what the agent retains](docs/optimize/memory-targets.md): twin=examples/sdk_memory_target_optimization.py kind=agent-learning.optimization.v1
+- [Multi-Agent Targets: optimizing the room, not the agent](docs/optimize/multi-agent-targets.md): twin=examples/sdk_multi_agent_target_optimization.py kind=agent-learning.optimization.v1
+- [The Optimization Lifecycle](docs/optimize/optimization-lifecycle.md): twin=examples/sdk_task_world_optimization.py kind=agent-learning.optimization.v1
+- [Optimize Any Agent](docs/optimize/optimize-any-agent.md): twin=examples/sdk_target_optimization.py kind=agent-learning.optimization.v1
+- [Optimizer Portfolio: choosing the optimizer with evidence](docs/optimize/optimizer-portfolio.md): twin=examples/sdk_optimizer_portfolio_optimization.py kind=agent-learning.optimization.v1
+- [Optimizer Profile Matrix: 33 declared cells, per-cell winners only](docs/optimize/optimizer-profile-matrix.md): twin=examples/sdk_optimizer_profile_matrix.py kind=agent-learning.optimization.v1
+- [Society of Agents: optimization as a sabha](docs/optimize/society-of-agents.md): twin=examples/sdk_redteam_society_optimization.py kind=agent-learning.optimization.v1
+- [Voice improvement loop: the 13D Practice Loop on voice](docs/optimize/voice-improvement.md): twin=examples/sdk_voice_improvement.py kind=agent-learning.practice-report.v1
+- [Workflow Profile Matrix: one workflow target, six frameworks](docs/optimize/workflow-profile-matrix.md): twin=examples/sdk_workflow_target_profile_matrix.py kind=agent-learning.optimization.v1
+- [World-Model Optimization](docs/optimize/world-model.md): twin=examples/sdk_world_hooks_optimization.py kind=agent-learning.optimization.v1
+
+## Redteam
+- [The adaptive red-team loop](docs/redteam/adaptive-loop.md): twin=examples/sdk_redteam_adaptive_loop_optimization.py kind=agent-learning.optimization.v1
+- [Attack evolution and shrink](docs/redteam/attack-evolution-shrink.md): twin=examples/sdk_redteam_attack_evolution_optimization.py kind=agent-learning.attack-evolution-shrink.v1
+- [Autonomous red-teaming in a task world](docs/redteam/autonomous-task-world.md): twin=examples/sdk_task_world_optimization.py kind=agent-learning.optimization.v1
+- [Campaign optimization: searching over the attack matrix](docs/redteam/campaign-optimization.md): twin=examples/sdk_redteam_society_optimization.py kind=agent-learning.optimization.v1
+- [Causal attribution for red-team findings](docs/redteam/causal-attribution.md): twin=examples/sdk_redteam_causal_attribution_optimization.py kind=agent-learning.optimization.v1
+- [Red-team corpora: benchmark rows as campaign evidence](docs/redteam/corpus.md): twin=examples/sdk_redteam_attack_evolution_optimization.py kind=agent-learning.redteam.v1
+- [Your first red-team campaign](docs/redteam/first-campaign.md): twin=examples/sdk_redteam_adaptive_loop_optimization.py kind=agent-learning.redteam.v1
+- [Long-horizon red-teaming](docs/redteam/long-horizon.md): twin=examples/sdk_redteam_causal_attribution_optimization.py kind=agent-learning.redteam.v1
+- [Persona-Conditioned Attacks: in-character is the attack quality](docs/redteam/persona-conditioned-attacks.md): twin=examples/sdk_persona_scenario_studio.py kind=agent-learning.redteam.v1
+- [Promote findings to regressions](docs/redteam/promote-to-regression.md): twin=examples/sdk_redteam_readiness_certification_optimization.py kind=agent-learning.regression-promotion.v1
+- [Red-Team Anything](docs/redteam/red-team-anything.md): twin=examples/sdk_redteam_adaptive_loop_optimization.py kind=agent-learning.redteam.v1
+- [Stored Prompt Injection: cross-session red-teaming](docs/redteam/stored-prompt-injection.md): twin=examples/sdk_memory_layer_probe_optimization.py kind=agent-learning.run.v1
+- [Voice attack corpus: the voice channel joins the gated matrix](docs/redteam/voice-attack-corpus.md): twin=examples/sdk_voice_redteam_campaign.py kind=agent-learning.redteam.v1
+- [Voice composed campaigns: persona × signal search and the A/B harness](docs/redteam/voice-composed-campaigns.md): twin=examples/sdk_voice_redteam_campaign.py kind=agent-learning.optimization.v1
+
+## Frameworks
+- [A2A: offline framework-adapter simulation](docs/frameworks/a2a.md): twin=examples/sdk_framework_adapter_cert_a2a.py kind=agent-learning.run.v1
+- [Agno: offline framework-adapter simulation](docs/frameworks/agno.md): twin=examples/sdk_framework_adapter_cert_agno.py kind=agent-learning.run.v1
+- [AutoGen: offline framework-adapter simulation](docs/frameworks/autogen.md): twin=examples/sdk_framework_adapter_message_history.py kind=agent-learning.run.v1
+- [Bedrock: offline framework-adapter simulation](docs/frameworks/bedrock.md): twin=examples/sdk_framework_adapter_cert_bedrock.py kind=agent-learning.run.v1
+- [BeeAI: offline framework-adapter simulation](docs/frameworks/beeai.md): twin=examples/sdk_framework_adapter_cert_beeai.py kind=agent-learning.run.v1
+- [Browser Use: offline framework-adapter simulation](docs/frameworks/browser-use.md): twin=examples/sdk_framework_adapter_browser_cua_trace.py kind=agent-learning.run.v1
+- [Cerebras: offline framework-adapter simulation](docs/frameworks/cerebras.md): twin=examples/sdk_framework_adapter_cert_cerebras.py kind=agent-learning.run.v1
+- [Claude Agent SDK: offline framework-adapter simulation](docs/frameworks/claude_agent_sdk.md): twin=examples/sdk_framework_adapter_cert_claude_agent_sdk.py kind=agent-learning.run.v1
+- [Cohere: offline framework-adapter simulation](docs/frameworks/cohere.md): twin=examples/sdk_framework_adapter_cert_cohere.py kind=agent-learning.run.v1
+- [CrewAI: offline framework-adapter simulation](docs/frameworks/crewai.md): twin=examples/sdk_framework_adapter_keyword_inputs.py kind=agent-learning.run.v1
+- [Custom frameworks: offline framework-adapter simulation](docs/frameworks/custom.md): twin=examples/sdk_framework_adapter_discovery.py kind=agent-learning.run.v1
+- [DeepSeek: offline framework-adapter simulation](docs/frameworks/deepseek.md): twin=examples/sdk_framework_adapter_cert_deepseek.py kind=agent-learning.run.v1
+- [Fireworks: offline framework-adapter simulation](docs/frameworks/fireworks.md): twin=examples/sdk_framework_adapter_cert_fireworks.py kind=agent-learning.run.v1
+- [Google ADK: offline framework-adapter simulation](docs/frameworks/google_adk.md): twin=examples/sdk_framework_adapter_cert_google_adk.py kind=agent-learning.run.v1
+- [Hugging Face: offline framework-adapter simulation](docs/frameworks/huggingface.md): twin=examples/sdk_framework_adapter_cert_huggingface.py kind=agent-learning.run.v1
+- [Instructor: offline framework-adapter simulation](docs/frameworks/instructor.md): twin=examples/sdk_framework_adapter_cert_instructor.py kind=agent-learning.run.v1
+- [LangChain: offline framework-adapter simulation](docs/frameworks/langchain.md): twin=examples/sdk_framework_adapter_langchain_invoke_promotion.py kind=agent-learning.run.v1
+- [LangGraph: offline framework-adapter simulation](docs/frameworks/langgraph.md): twin=examples/sdk_framework_adapter_langgraph_ainvoke_promotion.py kind=agent-learning.run.v1
+- [LiteLLM: offline framework-adapter simulation](docs/frameworks/litellm.md): twin=examples/sdk_framework_adapter_cert_litellm.py kind=agent-learning.run.v1
+- [LiveKit: offline framework-adapter simulation](docs/frameworks/livekit.md): twin=examples/sdk_framework_adapter_livekit_run_session_promotion.py kind=agent-learning.run.v1
+- [LlamaIndex: offline framework-adapter simulation](docs/frameworks/llamaindex.md): twin=examples/sdk_framework_adapter_probe.py kind=agent-learning.run.v1
+- [MCP: offline framework-adapter simulation](docs/frameworks/mcp.md): twin=examples/sdk_framework_adapter_mcp_tool_session.py kind=agent-learning.run.v1
+- [Ollama: offline framework-adapter simulation](docs/frameworks/ollama.md): twin=examples/sdk_framework_adapter_cert_ollama.py kind=agent-learning.run.v1
+- [OpenAI Agents: offline framework-adapter simulation](docs/frameworks/openai-agents.md): twin=examples/sdk_framework_adapter_handoff_transcript.py kind=agent-learning.run.v1
+- [OpenEnv: compatibility inputs for environment replay](docs/frameworks/openenv.md): twin=examples/sdk_framework_adapter_openenv_trace.py kind=agent-learning.run.v1
+- [Pipecat: offline framework-adapter simulation](docs/frameworks/pipecat.md): twin=examples/sdk_framework_adapter_pipecat_process_promotion.py kind=agent-learning.run.v1
+- [Portkey: offline framework-adapter simulation](docs/frameworks/portkey.md): twin=examples/sdk_framework_adapter_cert_portkey.py kind=agent-learning.run.v1
+- [Profile: Handoff transcript](docs/frameworks/profiles/handoff_transcript.md): twin=examples/sdk_framework_adapter_handoff_transcript.py kind=agent-learning.run.v1
+- [Framework-adapter IO profiles](docs/frameworks/profiles/index.md): twin=none kind=none
+- [Profile: Message history](docs/frameworks/profiles/message_history.md): twin=examples/sdk_framework_adapter_message_history.py kind=agent-learning.run.v1
+- [Profile: Nested method](docs/frameworks/profiles/nested_method.md): twin=examples/sdk_framework_adapter_nested_method.py kind=agent-learning.run.v1
+- [Profile: Streaming](docs/frameworks/profiles/streaming.md): twin=examples/sdk_framework_adapter_streaming.py kind=agent-learning.run.v1
+- [Profile: Typed output](docs/frameworks/profiles/typed_output.md): twin=examples/sdk_framework_adapter_typed_output.py kind=agent-learning.run.v1
+- [PydanticAI: offline framework-adapter simulation](docs/frameworks/pydantic-ai.md): twin=examples/sdk_multi_framework_simulation.py kind=agent-learning.run.v1
+- [SmolAgents: offline framework-adapter simulation](docs/frameworks/smolagents.md): twin=examples/sdk_framework_adapter_cert_smolagents.py kind=agent-learning.run.v1
+- [Strands: offline framework-adapter simulation](docs/frameworks/strands.md): twin=examples/sdk_framework_adapter_cert_strands.py kind=agent-learning.run.v1
+- [Together: offline framework-adapter simulation](docs/frameworks/together.md): twin=examples/sdk_framework_adapter_cert_together.py kind=agent-learning.run.v1
+- [Vector stores: offline retrieval-hook simulation](docs/frameworks/vector-stores.md): twin=examples/sdk_retrieval_hook_optimization.py kind=agent-learning.run.v1
+- [xAI: offline framework-adapter simulation](docs/frameworks/xai.md): twin=examples/sdk_framework_adapter_cert_xai.py kind=agent-learning.run.v1
+
+## Prove
+- [Account sync: keyed, explicit, metadata by default](docs/prove/account-sync.md): twin=examples/sdk_account_sync.py kind=agent-learning.run.v1
+- [Artifact Actions: every result knows its next step](docs/prove/actions.md): twin=examples/sdk_agent_integration_optimization.py kind=agent-learning.optimization.v1
+- [Benchmark in CI: gate a merge on an honest pass_rate](docs/prove/benchmark-in-ci.md): twin=examples/bench_ci_gate.py kind=none
+- [Capability Catalogs: pin what your pipeline assumes](docs/prove/capabilities.md): twin=examples/sdk_framework_adapter_capability_profiles.py kind=agent-learning.run.v1
+- [Observability: evidence that makes artifacts replayable](docs/prove/observability.md): twin=examples/sdk_framework_adapter_trace_export.py kind=agent-learning.optimization.v1
+- [Practice loop (search-backed): spaced regression replay that never weakens the veto](docs/prove/practice-loop.md): twin=examples/sdk_practice_loop.py kind=agent-learning.practice-loop.v1
+- [Release-Check in Your CI: a verdict you can re-run](docs/prove/release-check-in-your-ci.md): twin=examples/sdk_trinity_stack_probe_optimization.py kind=agent-learning.release-check.v1
+- [Run ledger: every run leaves a verifiable local row](docs/prove/run-ledger.md): twin=examples/sdk_run_ledger.py kind=agent-learning.run.v1
+- [Simulation contract: one typed world, every builder lifts into it](docs/prove/simulation-contract.md): twin=examples/sdk_simulation_contract.py kind=agent-learning.simulation.v1
+- [The Trinity Suite: one manifest, one verdict](docs/prove/trinity-suite.md): twin=examples/sdk_framework_adapter_trinity_suite.py kind=agent-learning.suite.v1
+- [Trust Certificates: promotion verdicts you can verify later](docs/prove/trust-certificates.md): twin=examples/sdk_redteam_readiness_certification_optimization.py kind=agent-learning.suite.v1
+
+## Reference
+- [Cookbook Index](docs/cookbooks/index.md): twin=none kind=none
+- [Agent Learning Kit Documentation](docs/index.md): twin=none kind=none
+- [Artifact Reference](docs/reference/artifacts.md): twin=none kind=none
+- [CLI Reference](docs/reference/cli.md): twin=none kind=none
+- [Configuration Reference](docs/reference/configure.md): twin=none kind=none

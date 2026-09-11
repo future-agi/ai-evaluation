@@ -1,0 +1,56 @@
+{
+  "behavior_policy": {
+    "cooperation_bounds": 0.705,
+    "disclosure_policy": 0.5828,
+    "escalation_schedule": [
+      0.0,
+      0.08,
+      0.16,
+      0.24,
+      0.32,
+      0.4
+    ],
+    "interruption_propensity": 0.29,
+    "patience_curve": [
+      1.0,
+      0.928,
+      0.856,
+      0.784,
+      0.712,
+      0.64
+    ],
+    "repair_propensity": 0.69
+  },
+  "identity": {
+    "demographics": {},
+    "name": "Anya",
+    "role": "customer",
+    "style_notes": []
+  },
+  "knowledge": [
+    {
+      "disclosure": "on_request",
+      "key": "appointment_code",
+      "value": "APT-88"
+    }
+  ],
+  "outcome": "The appointment is confirmed.",
+  "persona": {
+    "name": "Anya",
+    "retest_jitter": true,
+    "role": "customer"
+  },
+  "provenance": {
+    "calibrated": false,
+    "evidence_class": "hand_written",
+    "pin": {},
+    "representativeness_claim": "none"
+  },
+  "situation": "I want to confirm my appointment.",
+  "temperament": {
+    "rajas": 0.4,
+    "sattva": 0.7,
+    "tamas": 0.2
+  },
+  "version": "sha256:f839283a4abe88e3d819825d99e2b75d7fb413a8a64a8f5933c3dc7b7a7540aa"
+}

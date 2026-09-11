@@ -1,0 +1,7 @@
+{
+  "image": "document_rendered.png",
+  "ground_truth_text": "INVOICE 2026 TOTAL 142 PAID YES",
+  "anchor": "ocr_accuracy",
+  "metric": "anls",
+  "note": "rendered text page, programmatically generated, Apache-2.0-clean"
+}

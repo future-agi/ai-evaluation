@@ -1,0 +1,50 @@
+{
+  "description": "Hardened, multi-language coding benchmark (artifact-graded): the candidate produces a program; a HELD-OUT grader runs it after and emits the verdict via exit code + reward file. Robust to verdict forgery and oracle reads. Run with sandbox=docker for untrusted code.",
+  "grading": "command",
+  "kind": "agent-learning.bench-suite.v1",
+  "modality": "coding",
+  "name": "coding_command_starter",
+  "tasks": [
+    {
+      "canary": "agent-learning-bench-canary:DO-NOT-TRAIN-ON-THIS-SUITE",
+      "grader_cmd": "python3 \"$GRADER_DIR/grade.py\"",
+      "grader_files": {
+        "grade.py": "import json, os, subprocess\nGD = os.environ['GRADER_DIR']\nspec = json.load(open(os.path.join(GD, 'spec.json')))\nchecks, ok = {}, True\nfor i, case in enumerate(spec['cases']):\n    try:\n        p = subprocess.run(['sh', '-c', spec['cmd']], input=case.get('stdin', ''),\n                           capture_output=True, text=True, timeout=5)\n        got = p.stdout.strip()\n    except Exception:\n        got = '<error>'\n    passed = got == str(case['expected'])\n    checks['case_%d' % i] = passed\n    ok = ok and passed\njson.dump({'score': 1 if ok else 0, 'checks': checks},\n          open(os.path.join(GD, 'reward.json'), 'w'))\nraise SystemExit(0 if ok else 1)\n",
+        "spec.json": "{\"cmd\": \"python3 solution.py\", \"cases\": [{\"stdin\": \"2 3\", \"expected\": \"5\"}, {\"stdin\": \"10 20\", \"expected\": \"30\"}, {\"stdin\": \"-4 4\", \"expected\": \"0\"}]}"
+      },
+      "guards": {
+        "min_guard_count": 1,
+        "oracle_held_out": true,
+        "sentinel": "candidate cannot read held-out cases or forge the grader verdict"
+      },
+      "id": "sum-stdin-python",
+      "instruction": "Write solution.py: read two integers from stdin (space-separated), print their sum.",
+      "language": "python",
+      "reference_files": {
+        "solution.py": "import sys\na, b = map(int, sys.stdin.read().split())\nprint(a + b)\n"
+      },
+      "timeout_s": 15
+    },
+    {
+      "canary": "agent-learning-bench-canary:DO-NOT-TRAIN-ON-THIS-SUITE",
+      "grader_cmd": "python3 \"$GRADER_DIR/grade.py\"",
+      "grader_files": {
+        "grade.py": "import json, os, subprocess\nGD = os.environ['GRADER_DIR']\nspec = json.load(open(os.path.join(GD, 'spec.json')))\nchecks, ok = {}, True\nfor i, case in enumerate(spec['cases']):\n    try:\n        p = subprocess.run(['sh', '-c', spec['cmd']], input=case.get('stdin', ''),\n                           capture_output=True, text=True, timeout=5)\n        got = p.stdout.strip()\n    except Exception:\n        got = '<error>'\n    passed = got == str(case['expected'])\n    checks['case_%d' % i] = passed\n    ok = ok and passed\njson.dump({'score': 1 if ok else 0, 'checks': checks},\n          open(os.path.join(GD, 'reward.json'), 'w'))\nraise SystemExit(0 if ok else 1)\n",
+        "spec.json": "{\"cmd\": \"bash solution.sh\", \"cases\": [{\"stdin\": \"hello\", \"expected\": \"HELLO\"}, {\"stdin\": \"Agent Learning Kit\", \"expected\": \"AGENT LEARNING KIT\"}]}"
+      },
+      "guards": {
+        "min_guard_count": 1,
+        "oracle_held_out": true,
+        "sentinel": "candidate cannot read held-out cases or forge the grader verdict"
+      },
+      "id": "shout-bash",
+      "instruction": "Write solution.sh: read a line from stdin, print it uppercased.",
+      "language": "bash",
+      "reference_files": {
+        "solution.sh": "read line\necho \"$line\" | tr '[:lower:]' '[:upper:]'\n"
+      },
+      "timeout_s": 15
+    }
+  ],
+  "version": "1"
+}

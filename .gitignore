@@ -1,68 +1,23 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv-*/
 *.py[cod]
-
-# C extensions
-*.so
-
-# IDEs
-.idea/
-.vscode/
-
-# Packages
-*.egg
-*.egg-info
-.eggs/
-# build
-parts
-bin
-var
-sdist
-dist
-develop-eggs
-.installed.cfg
-lib
-lib64
-
-# Installer logs
-pip-log.txt
-
-# Unit test / coverage reports
-.coverage
-.tox
-nosetests.xml
-
-# Complexity
-output/*.html
-output/*/index.html
-
-# Sphinx
-docs/_build
-
-# Cookiecutter
-output/
-
-.workon
-
-**.wav
-**.joblib
-
-**/__pycache__
-
-#Excel files
-*.xlsx
-#csv files
-*.csv
-#virtual environments
-**/.venv
-**/env
-**/.env
-*.DS_Store
-*.pdf
-**/.fi
-**/.pytest_cache
-planning/
-manual-testing/
-
-
-# typescript    
+*.egg-info/
 node_modules/
-package-lock.json
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+!**/.env.example
+artifacts/
+!src/fi/simulate/artifacts/
+!src/fi/simulate/artifacts/*.py
+examples/artifacts/
+
+# Daytona snapshot SDK venv (scripts/daytona-snapshot.sh)
+.venv-daytona/

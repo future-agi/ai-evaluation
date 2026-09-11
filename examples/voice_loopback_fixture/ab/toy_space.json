@@ -1,0 +1,11 @@
+{
+  "name": "voice-loop-vs-no-loop",
+  "search_space": {
+    "voice.tts.rate": [0.9, 1.0, 1.1],
+    "voice.endpointing.threshold": [200, 400],
+    "agent.instructions": ["Be concise.", "Confirm every value."]
+  },
+  "eval_budget_per_arm": 4,
+  "seeds": [1142, 2207],
+  "arms": ["loop_on", "loop_off"]
+}

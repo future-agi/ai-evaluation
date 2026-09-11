@@ -1,0 +1,15 @@
+{
+  "name": "voice-billing-composed-ab",
+  "eval_budget_per_arm": 6,
+  "seeds": [7, 11, 13],
+  "voice_surfaces": ["asr_front_end", "stored_voice"],
+  "persona_space": {
+    "temperament.rajas": [0.3, 0.6, 0.9],
+    "behavior_policy.interruption_propensity": [0.1, 0.4, 0.7]
+  },
+  "signal_space": {
+    "operator": ["homophone", "code_switch", "near_dup"],
+    "rate": [0.05, 0.15, 0.3],
+    "seed": [7]
+  }
+}

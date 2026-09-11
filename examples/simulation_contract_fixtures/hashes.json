@@ -1,0 +1,88 @@
+{
+  "S1_task": "sha256:1ca1b5e973106a8ad2bbf270d5a009551d492fbebe88c62b6b08a7e0002a4475",
+  "S4_browser_cua": "sha256:e5ea949d0e4f511555b813667236f307a29850c55307aed6d12fadaac48950e7",
+  "S4_multimodal": "sha256:582c87023f32d3de70cd33c8974cd80c02641c2ae190be9458bb55875bdfa4a2",
+  "S4_realtime": "sha256:ac95411296f5f9f0187633f9b78b88dcdd2109d416b197ff4e4f2d251000ac3d",
+  "S5_social_memory": "sha256:71ce48b4671b41ee23306989727ba6c9a8cdfe4847af9c0cf80fe1d18df8f4f8",
+  "S5_world_fw_memory": "sha256:ea4abb21ba97473317b3803d5282d8c19e3c43b61bb8f9b748a68018ea893c5c",
+  "S6_autonomous_redteam": "sha256:37c4ba114e21bea92f55f70ccf9842b786b4a2f58dac1997afc47d22a7b57bb6",
+  "S6_stateful_world": "sha256:2a4d9873f08fa2521239475a32f68b7e5a951cdf461adc615c59b076f4185221",
+  "S6_world_model": "sha256:59808633bcc79cbfcf097045634f5a514643902388e88170e878a43d6dbb4dad",
+  "S7_openenv": "sha256:c44a0ec6165f70b8eeab2d4365066a475af4fdc1e8ae59352ec6ee5281aeadaa",
+  "_drifted_row": {
+    "recompute_payload": {
+      "admission": {
+        "fidelity_floors": {}
+      },
+      "clock": {
+        "horizon": {},
+        "model": "turn"
+      },
+      "dynamics": [],
+      "episodes": {
+        "count": 1,
+        "persistence": "fresh",
+        "settle": []
+      },
+      "kind": "agent-learning.simulation.v1",
+      "metadata": {},
+      "name": "m",
+      "personas": [
+        {
+          "behavior_policy": {
+            "cooperation_bounds": 0.8,
+            "disclosure_policy": 0.7,
+            "escalation_schedule": [
+              0.0
+            ],
+            "interruption_propensity": 0.1,
+            "patience_curve": [
+              1.0
+            ],
+            "repair_propensity": 0.5
+          },
+          "knowledge": [],
+          "outcome": "done",
+          "persona": {
+            "name": "A"
+          },
+          "situation": "s",
+          "version": "sha256:e0771c681b402f4c206873ba72475b6c389b321aae67b21a78890a25f9bc3633"
+        }
+      ],
+      "provenance": {},
+      "scenarios": [
+        {
+          "cast": [
+            {
+              "persona": "sha256:e0771c681b402f4c206873ba72475b6c389b321aae67b21a78890a25f9bc3633",
+              "role": "user"
+            }
+          ],
+          "casting": "each",
+          "weight": 1.0
+        }
+      ],
+      "version": "sha256:57d59356b1f95257e67aaa28d0926fc4dd6b19f63ac017715a423458065faffc",
+      "world": {
+        "environments": [],
+        "kind": "tool_api",
+        "policies": [],
+        "reset_semantics": "stateless_fixture",
+        "rung": 1,
+        "spec": {},
+        "state_consistency": "shared_programmatic",
+        "tools": [
+          {
+            "mock": {
+              "level": "static_fixture"
+            },
+            "name": "t",
+            "required_env": []
+          }
+        ]
+      }
+    },
+    "stored_hash": "sha256:57d59356b1f95257e67aaa28d0926fc4dd6b19f63ac017715a423458065faffc"
+  }
+}

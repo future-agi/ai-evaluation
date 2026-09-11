@@ -1,0 +1,34 @@
+{
+  "kind": "agent-learning.practice-capstone-fixture.v1",
+  "name": "tool_world_ops",
+  "description": "Deterministic local stateful-tool-world simulation (WorldContractEnvironment lineage). Obligation cells over tool/world obligations; the latent skill model rewards the config whose value matches each cell's required transition policy. The interference family re-uses the orchestration + tooling paths, so optimizing the interference cells silently regresses the primary tool-world closures unless the spaced deck re-tests them. Offline, seeded, credential-free.",
+  "search_space": {
+    "agent.orchestration.plan_depth": ["shallow", "medium", "deep"],
+    "agent.tools.apply_world_transition.guard": ["none", "precondition", "hoare"],
+    "agent.tools.read_state.mock": ["static_fixture", "recorded_replay"],
+    "agent.instructions.retry_policy": ["never", "once", "bounded"]
+  },
+  "harness_layer_by_path": {
+    "agent.orchestration.plan_depth": "orchestration",
+    "agent.tools.apply_world_transition.guard": "tooling",
+    "agent.tools.read_state.mock": "tooling",
+    "agent.instructions.retry_policy": "instructions"
+  },
+  "primary_cells": [
+    {"intent": "commit_transaction", "persona": "ops_operator", "perturbation": null,
+     "path": "agent.tools.apply_world_transition.guard", "required_value": "hoare", "base_difficulty": 0.45},
+    {"intent": "multi_step_plan", "persona": "ops_operator", "perturbation": "tool_error_rate_up",
+     "path": "agent.orchestration.plan_depth", "required_value": "deep", "base_difficulty": 0.6},
+    {"intent": "read_then_act", "persona": "ops_operator", "perturbation": null,
+     "path": "agent.tools.read_state.mock", "required_value": "recorded_replay", "base_difficulty": 0.4},
+    {"intent": "recover_from_fault", "persona": "ops_operator", "perturbation": "tool_error_rate_up",
+     "path": "agent.instructions.retry_policy", "required_value": "bounded", "base_difficulty": 0.55}
+  ],
+  "interference_cells": [
+    {"intent": "fast_path_query", "persona": "ops_operator", "perturbation": null,
+     "path": "agent.orchestration.plan_depth", "required_value": "shallow", "base_difficulty": 0.35},
+    {"intent": "idempotent_write", "persona": "ops_operator", "perturbation": null,
+     "path": "agent.tools.apply_world_transition.guard", "required_value": "precondition", "base_difficulty": 0.5}
+  ],
+  "interference_strength": 0.7
+}

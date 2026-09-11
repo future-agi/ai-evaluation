@@ -1,0 +1,9 @@
+{
+  "evals": [
+    {
+      "eval": "agent_report"
+    }
+  ],
+  "guards": {},
+  "source": "declared"
+}

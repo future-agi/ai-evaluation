@@ -1,0 +1,52 @@
+{
+  "results": [
+    {
+      "artifacts": [],
+      "audio_combined_path": null,
+      "audio_input_path": null,
+      "audio_output_path": null,
+      "evaluation": null,
+      "events": [],
+      "messages": [
+        {
+          "content": "My name is Maya. Maya needs a unified Agent Learning Kit run artifact. I want this outcome: The unified run command returns a stable payload.",
+          "role": "user"
+        },
+        {
+          "content": "The unified Agent Learning Kit run command executed successfully.",
+          "role": "assistant"
+        }
+      ],
+      "metadata": {
+        "engine": "local_text",
+        "environment": {
+          "adapters": []
+        },
+        "environment_state": {},
+        "modality": "text",
+        "scenario_name": "local-agent-run",
+        "stop_reason": "outcome_satisfied",
+        "thread_id": "local-agent-run-0",
+        "tools": [],
+        "turn_count": 1
+      },
+      "persona": {
+        "attack": null,
+        "behavior_policy": null,
+        "identity": null,
+        "knowledge": [],
+        "outcome": "The unified run command returns a stable payload.",
+        "persona": {
+          "name": "Maya",
+          "role": "sdk-owner"
+        },
+        "provenance": null,
+        "situation": "Maya needs a unified Agent Learning Kit run artifact.",
+        "temperament": null,
+        "version": null
+      },
+      "tool_calls": [],
+      "transcript": "User: My name is Maya. Maya needs a unified Agent Learning Kit run artifact. I want this outcome: The unified run command returns a stable payload.\nAgent: The unified Agent Learning Kit run command executed successfully."
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "S1_task": {
+    "builder": "S1_task",
+    "equal": true,
+    "original_digest": "sha256:1ca1b5e973106a8ad2bbf270d5a009551d492fbebe88c62b6b08a7e0002a4475",
+    "rederived_digest": "sha256:1ca1b5e973106a8ad2bbf270d5a009551d492fbebe88c62b6b08a7e0002a4475",
+    "world_kind": "conversation"
+  },
+  "S4_browser_cua": {
+    "builder": "S4_browser_cua",
+    "equal": true,
+    "original_digest": "sha256:e5ea949d0e4f511555b813667236f307a29850c55307aed6d12fadaac48950e7",
+    "rederived_digest": "sha256:e5ea949d0e4f511555b813667236f307a29850c55307aed6d12fadaac48950e7",
+    "world_kind": "browser"
+  },
+  "S4_multimodal": {
+    "builder": "S4_multimodal",
+    "equal": true,
+    "original_digest": "sha256:582c87023f32d3de70cd33c8974cd80c02641c2ae190be9458bb55875bdfa4a2",
+    "rederived_digest": "sha256:582c87023f32d3de70cd33c8974cd80c02641c2ae190be9458bb55875bdfa4a2",
+    "world_kind": "tool_api"
+  },
+  "S4_realtime": {
+    "builder": "S4_realtime",
+    "equal": true,
+    "original_digest": "sha256:ac95411296f5f9f0187633f9b78b88dcdd2109d416b197ff4e4f2d251000ac3d",
+    "rederived_digest": "sha256:ac95411296f5f9f0187633f9b78b88dcdd2109d416b197ff4e4f2d251000ac3d",
+    "world_kind": "voice_telephony"
+  },
+  "S5_social_memory": {
+    "builder": "S5_social_memory",
+    "equal": true,
+    "original_digest": "sha256:71ce48b4671b41ee23306989727ba6c9a8cdfe4847af9c0cf80fe1d18df8f4f8",
+    "rederived_digest": "sha256:71ce48b4671b41ee23306989727ba6c9a8cdfe4847af9c0cf80fe1d18df8f4f8",
+    "world_kind": "tool_api"
+  },
+  "S5_world_fw_memory": {
+    "builder": "S5_world_fw_memory",
+    "equal": true,
+    "original_digest": "sha256:ea4abb21ba97473317b3803d5282d8c19e3c43b61bb8f9b748a68018ea893c5c",
+    "rederived_digest": "sha256:ea4abb21ba97473317b3803d5282d8c19e3c43b61bb8f9b748a68018ea893c5c",
+    "world_kind": "tool_api"
+  },
+  "S6_autonomous_redteam": {
+    "builder": "S6_autonomous_redteam",
+    "equal": true,
+    "original_digest": "sha256:37c4ba114e21bea92f55f70ccf9842b786b4a2f58dac1997afc47d22a7b57bb6",
+    "rederived_digest": "sha256:37c4ba114e21bea92f55f70ccf9842b786b4a2f58dac1997afc47d22a7b57bb6",
+    "world_kind": "tool_api"
+  },
+  "S6_stateful_world": {
+    "builder": "S6_stateful_world",
+    "equal": true,
+    "original_digest": "sha256:2a4d9873f08fa2521239475a32f68b7e5a951cdf461adc615c59b076f4185221",
+    "rederived_digest": "sha256:2a4d9873f08fa2521239475a32f68b7e5a951cdf461adc615c59b076f4185221",
+    "world_kind": "tool_api"
+  },
+  "S6_world_model": {
+    "builder": "S6_world_model",
+    "equal": true,
+    "original_digest": "sha256:59808633bcc79cbfcf097045634f5a514643902388e88170e878a43d6dbb4dad",
+    "rederived_digest": "sha256:59808633bcc79cbfcf097045634f5a514643902388e88170e878a43d6dbb4dad",
+    "world_kind": "tool_api"
+  },
+  "S7_openenv": {
+    "builder": "S7_openenv",
+    "equal": true,
+    "original_digest": "sha256:c44a0ec6165f70b8eeab2d4365066a475af4fdc1e8ae59352ec6ee5281aeadaa",
+    "rederived_digest": "sha256:c44a0ec6165f70b8eeab2d4365066a475af4fdc1e8ae59352ec6ee5281aeadaa",
+    "world_kind": "tool_api"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "every_artifact_carries_budget_consumed": true,
+  "ledger": {
+    "by_phase": {
+      "assess": 4
+    },
+    "consumed": 4,
+    "remaining": 36,
+    "total": 40
+  },
+  "no_budget_rejected_at_build": true
+}

@@ -1,0 +1,105 @@
+FROM node:20-bookworm-slim AS node20
+FROM node:22-bookworm-slim AS node22
+FROM python:3.11-slim-bookworm AS python311
+FROM python:3.13-slim-bookworm AS python313
+FROM python:3.14-slim-bookworm AS python314
+FROM rabbitmq:3.13.7-management AS rabbitmq313
+FROM ghcr.io/astral-sh/uv:latest AS uvbin
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates curl ffmpeg git gnupg iptables libcap2-bin \
+      postgresql-16 procps python3-pip python3.12 python3.12-venv \
+      redis-server slirp4netns socat uidmap xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=node20 /usr/local/bin/node /opt/node20/bin/node
+COPY --from=node20 /usr/local/lib/node_modules/npm /opt/node20/lib/node_modules/npm
+COPY --from=node22 /usr/local/bin/node /opt/node22/bin/node
+COPY --from=node22 /usr/local/lib/node_modules/npm /opt/node22/lib/node_modules/npm
+# Keep alternate interpreters at the prefix they were compiled for. Copying the same tree under
+# /opt makes the executable start, but every venv it creates still searches /usr/local for the
+# standard library and fails before it can import ``encodings``.
+COPY --from=python311 /usr/local/bin/python3.11 /usr/local/bin/python3.11
+COPY --from=python311 /usr/local/include/python3.11 /usr/local/include/python3.11
+COPY --from=python311 /usr/local/lib/ /usr/local/lib/
+COPY --from=python313 /usr/local/bin/python3.13 /usr/local/bin/python3.13
+COPY --from=python313 /usr/local/include/python3.13 /usr/local/include/python3.13
+COPY --from=python313 /usr/local/lib/ /usr/local/lib/
+COPY --from=python314 /usr/local/bin/python3.14 /usr/local/bin/python3.14
+COPY --from=python314 /usr/local/include/python3.14 /usr/local/include/python3.14
+COPY --from=python314 /usr/local/lib/ /usr/local/lib/
+COPY --from=rabbitmq313 /opt/rabbitmq /opt/rabbitmq
+RUN rm -f /opt/rabbitmq/etc/rabbitmq/enabled_plugins /etc/rabbitmq/enabled_plugins || true
+COPY --from=rabbitmq313 /opt/erlang /opt/erlang
+COPY --from=uvbin /uv /uvx /usr/local/bin/
+
+RUN python3.12 -m venv /opt/alk-venv \
+    && ln -s /opt/node22/bin/node /usr/local/bin/node \
+    && printf '#!/bin/sh\nexec /opt/node20/bin/node /opt/node20/lib/node_modules/npm/bin/npm-cli.js "$@"\n' > /usr/local/bin/npm20 \
+    && printf '#!/bin/sh\nexec /opt/node22/bin/node /opt/node22/lib/node_modules/npm/bin/npm-cli.js "$@"\n' > /usr/local/bin/npm22 \
+    && ln -s /opt/node20/bin/node /usr/local/bin/node20 \
+    && ln -s /opt/node22/bin/node /usr/local/bin/node22 \
+    && ln -s /usr/lib/postgresql/16/bin/postgres /usr/local/bin/postgres \
+    && ln -s /usr/lib/postgresql/16/bin/initdb /usr/local/bin/initdb \
+    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmq-server "$@"\n' > /usr/local/bin/rabbitmq-server \
+    && printf '#!/bin/sh\nexec /opt/rabbitmq/sbin/rabbitmqctl "$@"\n' > /usr/local/bin/rabbitmqctl \
+    && chmod 0755 /usr/local/bin/npm20 /usr/local/bin/npm22 /usr/local/bin/rabbitmq-server /usr/local/bin/rabbitmqctl
+
+# Catalog entries are executable promises. Fail the snapshot build if either alternate Python
+# cannot create and execute a writable project-local venv.
+RUN python3.11 -m venv /tmp/python311-smoke \
+    && /tmp/python311-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 11)' \
+    && python3.13 -m venv /tmp/python313-smoke \
+    && /tmp/python313-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 13)' \
+    && python3.14 -m venv /tmp/python314-smoke \
+    && /tmp/python314-smoke/bin/python -c 'import encodings, sys; assert sys.version_info[:2] == (3, 14)' \
+    && rm -rf /tmp/python311-smoke /tmp/python313-smoke /tmp/python314-smoke
+
+RUN groupadd --gid 2000 svc-control \
+    && useradd --uid 2000 --gid 2000 --create-home --shell /bin/bash svc-control \
+    && groupadd --gid 2001 svc-agent \
+    && useradd --uid 2001 --gid 2001 --create-home --shell /usr/sbin/nologin svc-agent \
+    && groupadd --gid 2002 svc-tools \
+    && useradd --uid 2002 --gid 2002 --create-home --shell /usr/sbin/nologin svc-tools \
+    && groupadd --gid 2003 svc-data \
+    && useradd --uid 2003 --gid 2003 --create-home --shell /usr/sbin/nologin svc-data \
+    && echo 'svc-control:100000:65536' >> /etc/subuid \
+    && echo 'svc-control:100000:65536' >> /etc/subgid \
+    && install -d -o svc-control -g svc-control -m 0755 /work /work/artifacts \
+    && install -d -o svc-control -g svc-control -m 0700 /run/futureagi /run/user/2000 \
+    && install -d -o root -g root -m 0755 /opt/alk
+
+WORKDIR /opt/alk
+# Daytona's direct-image builder can reuse an image when only build-context
+# files change.  Bump this source revision whenever guest code changes so a
+# hosted test cannot silently execute an older installed ALK.
+ARG ALK_HOSTED_SOURCE_REVISION=20260911-authoring-channel-fix
+LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
+
+ENV PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=10 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+# The ADK instrumentor is installed without its declared dependencies: it still pins
+# google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. Resolving it
+# normally would either fail the build or hold the image back a major version. An absent or
+# broken instrumentor is skipped at runtime, so a failure here costs tracing, never a run.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' \
+    && /opt/alk-venv/bin/pip install --no-deps 'traceai-google-adk>=0.1.5' \
+    && chmod -R a-w /opt/alk /opt/alk-venv
+
+ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    XDG_RUNTIME_DIR=/run/user/2000
+
+USER svc-control
+WORKDIR /work
+CMD ["sleep", "infinity"]

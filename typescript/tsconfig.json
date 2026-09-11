@@ -1,7 +1,6 @@
 {
-    "files": [],
-    "references": [
-      { "path": "./futureagi" },
-      { "path": "./ai-evaluation" }
-    ]
-  } 
+  "files": [],
+  "references": [
+    { "path": "./agent-learning-kit" }
+  ]
+}

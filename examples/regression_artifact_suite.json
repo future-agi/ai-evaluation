@@ -1,0 +1,67 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "agent-learning-regression-artifact-suite",
+  "description": "Run CI artifact lifecycle jobs: baseline, compare, report, promote-to-regression, and replay.",
+  "required_capabilities": {
+    "commands": [
+      "baseline",
+      "compare",
+      "report",
+      "promote_to_regression",
+      "replay"
+    ],
+    "result_kinds": [
+      "agent_learning.baseline.v1",
+      "agent_learning.compare.v1",
+      "agent_learning.report.v1",
+      "agent_learning.regression_promotion.v1",
+      "agent_learning.replay.v1"
+    ],
+    "metrics": [
+      "compare_score_delta",
+      "compare_new_findings",
+      "compare_new_error_findings",
+      "replay_pass_rate"
+    ]
+  },
+  "jobs": [
+    {
+      "id": "baseline-current-run",
+      "command": "baseline",
+      "path": "regression_artifacts/current-run.json",
+      "name": "current-run-baseline"
+    },
+    {
+      "id": "compare-baseline-to-current",
+      "command": "compare",
+      "baseline": "regression_artifacts/baseline-run.json",
+      "current": "regression_artifacts/current-run.json",
+      "name": "compare-baseline-to-current",
+      "min_score_delta": 0.0,
+      "max_new_findings": 0,
+      "max_new_error_findings": 0
+    },
+    {
+      "id": "report-current-run",
+      "command": "report",
+      "path": "regression_artifacts/current-run.json",
+      "name": "current-run-report"
+    },
+    {
+      "id": "promote-redteam-finding",
+      "command": "promote_to_regression",
+      "path": "regression_artifacts/redteam-finding.json",
+      "name": "promoted-redteam-regression",
+      "min_level": "warning",
+      "max_findings": 1
+    },
+    {
+      "id": "replay-regression-manifest",
+      "command": "replay",
+      "manifests": [
+        "regression_artifacts/replay-manifest.json"
+      ],
+      "name": "regression-replay"
+    }
+  ]
+}

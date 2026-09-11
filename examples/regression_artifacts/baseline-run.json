@@ -1,0 +1,37 @@
+{
+  "schema_version": "agent-learning.cli.v1",
+  "name": "baseline-run",
+  "status": "passed",
+  "exit_code": 0,
+  "summary": {
+    "case_count": 1,
+    "score": 1.0,
+    "metric_averages": {
+      "policy_score": 1.0
+    }
+  },
+  "evaluation": {
+    "score": 1.0,
+    "passed": true,
+    "cases": [
+      {
+        "index": 0,
+        "score": 1.0,
+        "passed": true,
+        "metrics": [
+          {
+            "name": "policy_score",
+            "score": 1.0
+          }
+        ],
+        "findings": []
+      }
+    ],
+    "summary": {
+      "metric_averages": {
+        "policy_score": 1.0
+      },
+      "findings": []
+    }
+  }
+}

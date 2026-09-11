@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS calls (id integer PRIMARY KEY, city text NOT NULL);
+INSERT INTO calls VALUES (1, 'Mumbai') ON CONFLICT (id) DO NOTHING;

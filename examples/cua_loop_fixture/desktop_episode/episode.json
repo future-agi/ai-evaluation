@@ -1,0 +1,17 @@
+{
+  "name": "desktop-episode-grounding-step",
+  "note": "A synthetic desktop screenshot/episode fixture with grounding/step ground-truth (NOT full task success). The cua_surface=desktop grounding/step credential-free rung (9C-A7b). grounding_step_accuracy is a GENUINELY NEW deterministic computation (it does NOT exist in score_browser_cua_probe_result): the fraction of steps whose predicted action target matches the ground-truth target (element id, OR coordinate within tolerance).",
+  "tolerance_px": 8,
+  "steps": [
+    {"step": 1, "predicted": {"target_id": "menu_file"}, "ground_truth": {"target_id": "menu_file"}},
+    {"step": 2, "predicted": {"target_id": "menu_save"}, "ground_truth": {"target_id": "menu_save"}},
+    {"step": 3, "predicted": {"coordinate": [120, 240]}, "ground_truth": {"coordinate": [124, 243]}},
+    {"step": 4, "predicted": {"target_id": "dialog_ok"}, "ground_truth": {"target_id": "dialog_ok"}}
+  ],
+  "expected": {
+    "grounding_step_accuracy": 1.0,
+    "matched_steps": 4,
+    "total_steps": 4,
+    "note": "all four predicted targets match the ground-truth (step 3 within the 8px tolerance)"
+  }
+}

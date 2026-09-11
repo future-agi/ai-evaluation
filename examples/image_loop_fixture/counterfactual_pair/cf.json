@@ -1,0 +1,16 @@
+{
+  "pair": ["a.png", "b.png"],
+  "question": "Is the red object on the left?",
+  "answer_a": "yes",
+  "answer_b": "no",
+  "minimal_edit": "the red and blue objects are swapped left<->right; the right answer flips",
+  "basis": "2606.02578 perceptual-counterfactual",
+  "control": {
+    "perceiving_config_score_a": 1.0,
+    "perceiving_config_score_b": 0.0,
+    "bypass_config_score_a": 1.0,
+    "bypass_config_score_b": 1.0,
+    "note": "a genuinely-perceiving config DROPS its score on the counterfactual twin (1.0 -> 0.0); a perception-bypassing config does NOT drop (1.0 -> 1.0) -- that is the tell"
+  },
+  "note": "minimally-edited perceptual-counterfactual pair, Apache-2.0-clean"
+}

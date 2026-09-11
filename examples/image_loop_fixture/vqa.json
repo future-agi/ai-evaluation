@@ -1,0 +1,12 @@
+{
+  "image": "vqa_scene.png",
+  "question": "Is the red object on the left of the blue object?",
+  "answer": "yes",
+  "binary_ground_truth": true,
+  "anchor": "task_success",
+  "grounding": {
+    "claim": "the red square is positioned to the left of the blue blob",
+    "support_terms": ["red", "square", "left", "blue", "blob"]
+  },
+  "note": "synthetic multi-object scene, AgentVista-shaped, Apache-2.0-clean"
+}

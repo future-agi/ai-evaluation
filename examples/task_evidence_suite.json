@@ -1,0 +1,32 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "agent-learning-task-evidence-suite",
+  "required_capabilities": {
+    "commands": [
+      "eval_task"
+    ],
+    "result_kinds": [
+      "agent-learning.artifact-evaluation.v1"
+    ],
+    "environment_state_keys": [
+      "task_evidence",
+      "framework_runtime",
+      "world_contract"
+    ],
+    "metrics": [
+      "task_completion",
+      "tool_selection_accuracy",
+      "world_contract_quality"
+    ]
+  },
+  "jobs": [
+    {
+      "id": "refund-task-evidence",
+      "command": "eval-task",
+      "path": "task_evidence.json",
+      "config": "task_evidence_eval_config.json",
+      "threshold": 0.85,
+      "name": "agent-learning-task-evidence"
+    }
+  ]
+}

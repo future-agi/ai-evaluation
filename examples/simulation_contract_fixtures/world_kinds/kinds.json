@@ -1,0 +1,38 @@
+{
+  "browser": {
+    "derived_legacy_rung1": true,
+    "executable_contract_native": false,
+    "kind": "browser",
+    "validation_only": false
+  },
+  "code_exec": {
+    "derived_legacy_rung1": false,
+    "executable_contract_native": false,
+    "kind": "code_exec",
+    "validation_only": true
+  },
+  "computer_use": {
+    "derived_legacy_rung1": false,
+    "executable_contract_native": false,
+    "kind": "computer_use",
+    "validation_only": true
+  },
+  "conversation": {
+    "derived_legacy_rung1": false,
+    "executable_contract_native": true,
+    "kind": "conversation",
+    "validation_only": false
+  },
+  "tool_api": {
+    "derived_legacy_rung1": false,
+    "executable_contract_native": true,
+    "kind": "tool_api",
+    "validation_only": false
+  },
+  "voice_telephony": {
+    "derived_legacy_rung1": true,
+    "executable_contract_native": false,
+    "kind": "voice_telephony",
+    "validation_only": false
+  }
+}

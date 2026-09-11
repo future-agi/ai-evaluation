@@ -1,0 +1,11 @@
+{
+  "all_rows_replayed": true,
+  "records_due_count": 0,
+  "rows_replayed": [
+    "frozen_1",
+    "row_a",
+    "row_b",
+    "row_c"
+  ],
+  "schedule_filtered": false
+}

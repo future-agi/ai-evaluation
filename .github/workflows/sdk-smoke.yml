@@ -1,0 +1,62 @@
+name: SDK smoke
+
+# Least-privilege token: install + test only.
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  clean-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: python -m pip install .
+      - name: Run doctor
+        run: agent-learn doctor --quiet
+      - name: Run local text simulation
+        env:
+          AGENT_LEARNING_RUN_EXAMPLE_KEY: smoke
+        run: >-
+          agent-learn simulation run examples/run_manifest.json
+          --output smoke-report.json --quiet
+      - name: Verify simulation report
+        run: >-
+          python -c "import json, pathlib;
+          report=json.loads(pathlib.Path('smoke-report.json').read_text());
+          assert report['status'] == 'ran' and report['report']['results']"
+      - name: Install test dependencies
+        # Pin livekit-agents to the version the runner image ships
+        # (Dockerfile.simulation-runner); an unpinned install resolves a
+        # newer release whose usage schema the engine does not target.
+        run: >-
+          python -m pip install '.[livekit]' pytest pytest-asyncio
+          'livekit-agents==1.5.17'
+          'livekit-plugins-cartesia==1.5.17'
+          'livekit-plugins-deepgram==1.5.17'
+          'livekit-plugins-google==1.5.17'
+          'livekit-plugins-openai==1.5.17'
+          'livekit-plugins-silero==1.5.17'
+      - name: Run engine + dispatch + acceptance tests
+        # Scoped to the suites this PR adds/relies on. The broader tests/ tree has
+        # pre-existing failures unrelated to the voice engine (CLI golden-path,
+        # init presets, plus test_config_and_facades hangs) — track those
+        # separately so this gate stays green and meaningful.
+        run: >-
+          python -m pytest -q
+          tests/runtime/test_livekit_engine.py
+          tests/runtime/test_manifest_engine_dispatch.py
+          tests/test_acceptance_regressions.py
+          tests/runtime/test_voice_environment.py
+          tests/test_retell_endpoint.py
+          tests/test_retell_transport_validation.py
+          tests/test_call_originator_factory.py
+          tests/test_retell_evidence.py

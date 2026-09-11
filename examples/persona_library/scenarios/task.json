@@ -1,0 +1,102 @@
+{
+  "constraints": {
+    "declared_tools": [
+      "confirm"
+    ],
+    "max_user_knowledge": [
+      "appointment_code",
+      "phone"
+    ],
+    "observable_state": {
+      "appointment_code": "APT-77"
+    }
+  },
+  "coverage": {
+    "delegation_obligations": [],
+    "intents": [
+      "confirm_appointment"
+    ],
+    "personas": [
+      "sha256:7b5542327e159953e98e98c11790d6606b834c8418be309ddd966bab21333266"
+    ],
+    "perturbations": [
+      "typo"
+    ],
+    "tool_obligations": [
+      "allow:confirm"
+    ]
+  },
+  "dataset": [
+    {
+      "behavior_policy": {
+        "cooperation_bounds": 0.705,
+        "disclosure_policy": 0.5828,
+        "escalation_schedule": [
+          0.0,
+          0.08,
+          0.16,
+          0.24,
+          0.32,
+          0.4
+        ],
+        "interruption_propensity": 0.29,
+        "patience_curve": [
+          1.0,
+          0.928,
+          0.856,
+          0.784,
+          0.712,
+          0.64
+        ],
+        "repair_propensity": 0.69
+      },
+      "identity": {
+        "demographics": {},
+        "name": "Priya",
+        "role": "customer",
+        "style_notes": []
+      },
+      "knowledge": [
+        {
+          "disclosure": "on_request",
+          "key": "appointment_code",
+          "value": "APT-77"
+        },
+        {
+          "disclosure": "on_request",
+          "key": "phone",
+          "value": "555-2020"
+        }
+      ],
+      "outcome": "The appointment is confirmed.",
+      "persona": {
+        "name": "Priya",
+        "role": "customer"
+      },
+      "provenance": {
+        "calibrated": false,
+        "evidence_class": "hand_written",
+        "pin": {},
+        "representativeness_claim": "none"
+      },
+      "situation": "I want to confirm my appointment.",
+      "temperament": {
+        "rajas": 0.4,
+        "sattva": 0.7,
+        "tamas": 0.2
+      },
+      "version": "sha256:7b5542327e159953e98e98c11790d6606b834c8418be309ddd966bab21333266"
+    }
+  ],
+  "goal": {
+    "failure_states": [],
+    "states": [
+      "greeted",
+      "confirmed"
+    ],
+    "success_state": "confirmed"
+  },
+  "kind": "task",
+  "name": "appointment-confirm",
+  "version": "sha256:87e61cd82d19b2aa8942cc955e446b5ca7e7b695a3f03e39f6fb977f9ee1e5a1"
+}

@@ -1,0 +1,867 @@
+{
+  "admissible_evidence_classes": [
+    "local_gate",
+    "captured_fixture"
+  ],
+  "generated_by": "fi.alk.optimize.build_optimizer_routing_table",
+  "kind": "agent-learning.optimizer-routing-table.v1",
+  "row_count": 17,
+  "rows": [
+    {
+      "evidence": [
+        {
+          "backend": "regression_replay",
+          "cell_ref": "langgraph/cua_agent/regression_replay",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 16,
+            "improvement_frequency": 0.0667,
+            "iterations": 16,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 7,
+            "selection": null,
+            "semantic_locality": 0.5833
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "langgraph/cua_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "langgraph",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "cua_agent"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "gepa",
+          "cell_ref": "langchain/framework_method/gepa",
+          "evidence_class": "local_gate",
+          "score": 0.9362,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.0,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "regression_replay",
+          "cell_ref": "langchain/framework_method/regression_replay",
+          "evidence_class": "local_gate",
+          "score": 0.9362,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.0,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "langchain",
+      "live_lane_evidence": [],
+      "recommended_backend": "gepa",
+      "target_kind": "framework_method"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "llamaindex/image_agent/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 4,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "llamaindex/image_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "llamaindex",
+      "live_lane_evidence": [],
+      "recommended_backend": "evolution_elo",
+      "target_kind": "image_agent"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "bandit",
+          "cell_ref": "langgraph/memory_ops/bandit",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.2917,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 24,
+            "improvement_frequency": 0.0435,
+            "iterations": 24,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 3,
+            "selection": null,
+            "semantic_locality": 0.625
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "langgraph/memory_ops/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 17,
+            "improvement_frequency": 0.0625,
+            "iterations": 17,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "langgraph",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "memory_ops"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "crewai/multi_agent_roster/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.938,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.0,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "crewai/multi_agent_roster/society",
+          "evidence_class": "local_gate",
+          "score": 0.938,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.0,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "crewai",
+      "live_lane_evidence": [],
+      "recommended_backend": "evolution_elo",
+      "target_kind": "multi_agent_roster"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "langgraph/orchestration_spans/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "langgraph/orchestration_spans/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 5,
+            "improvement_frequency": 0.25,
+            "iterations": 5,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 0.75
+          }
+        }
+      ],
+      "framework_profile": "langgraph",
+      "live_lane_evidence": [],
+      "recommended_backend": "tpe",
+      "target_kind": "orchestration_spans"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "pipecat/orchestration_spans/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "pipecat/orchestration_spans/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 5,
+            "improvement_frequency": 0.25,
+            "iterations": 5,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 0.75
+          }
+        }
+      ],
+      "framework_profile": "pipecat",
+      "live_lane_evidence": [],
+      "recommended_backend": "tpe",
+      "target_kind": "orchestration_spans"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "bandit",
+          "cell_ref": "llamaindex/prompt/bandit",
+          "evidence_class": "local_gate",
+          "score": 0.9810999999999998,
+          "trajectory_profile": {
+            "dedupe_rate": 0.9167,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 24,
+            "improvement_frequency": 0.0435,
+            "iterations": 24,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 10,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "llamaindex/prompt/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9811,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.5,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "gepa",
+          "cell_ref": "llamaindex/prompt/gepa",
+          "evidence_class": "local_gate",
+          "score": 0.9811,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.5,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "regression_replay",
+          "cell_ref": "llamaindex/prompt/regression_replay",
+          "evidence_class": "local_gate",
+          "score": 0.9811,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 2,
+            "improvement_frequency": 1.0,
+            "iterations": 2,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "llamaindex/prompt/society",
+          "evidence_class": "local_gate",
+          "score": 0.9811,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 3,
+            "improvement_frequency": 0.5,
+            "iterations": 3,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "llamaindex/prompt/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9811,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 2,
+            "improvement_frequency": 1.0,
+            "iterations": 2,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "llamaindex",
+      "live_lane_evidence": [],
+      "recommended_backend": "regression_replay",
+      "target_kind": "prompt"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "livekit/voice_agent/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 12,
+            "improvement_frequency": 0.0909,
+            "iterations": 12,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 3,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "livekit/voice_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "livekit/voice_agent/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 10,
+            "improvement_frequency": 0.1111,
+            "iterations": 10,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 0.6667
+          }
+        }
+      ],
+      "framework_profile": "livekit",
+      "live_lane_evidence": [],
+      "recommended_backend": "tpe",
+      "target_kind": "voice_agent"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "langgraph/whole_agent/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 13,
+            "improvement_frequency": 0.0833,
+            "iterations": 13,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 3,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "langgraph/whole_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "langgraph/whole_agent/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 10,
+            "improvement_frequency": 0.1111,
+            "iterations": 10,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 0.6667
+          }
+        }
+      ],
+      "framework_profile": "langgraph",
+      "live_lane_evidence": [],
+      "recommended_backend": "tpe",
+      "target_kind": "whole_agent"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "livekit/whole_agent/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 13,
+            "improvement_frequency": 0.0833,
+            "iterations": 13,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "livekit/whole_agent/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 14,
+            "improvement_frequency": 0.0769,
+            "iterations": 14,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "livekit/whole_agent/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 10,
+            "improvement_frequency": 0.1111,
+            "iterations": 10,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 2,
+            "selection": null,
+            "semantic_locality": 0.6667
+          }
+        }
+      ],
+      "framework_profile": "livekit",
+      "live_lane_evidence": [],
+      "recommended_backend": "tpe",
+      "target_kind": "whole_agent"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "crewai/workflow_trace/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "crewai",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "workflow_trace"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "langchain/workflow_trace/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "langchain",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "workflow_trace"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "bandit",
+          "cell_ref": "langgraph/workflow_trace/bandit",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.7917,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 24,
+            "improvement_frequency": 0.0435,
+            "iterations": 24,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 5,
+            "selection": null,
+            "semantic_locality": 0.75
+          }
+        },
+        {
+          "backend": "evolution_elo",
+          "cell_ref": "langgraph/workflow_trace/evolution_elo",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 6,
+            "improvement_frequency": 0.2,
+            "iterations": 6,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "gepa",
+          "cell_ref": "langgraph/workflow_trace/gepa",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 5,
+            "improvement_frequency": 0.25,
+            "iterations": 5,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 0,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "regression_replay",
+          "cell_ref": "langgraph/workflow_trace/regression_replay",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 5,
+            "improvement_frequency": 0.25,
+            "iterations": 5,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 0.75
+          }
+        },
+        {
+          "backend": "society",
+          "cell_ref": "langgraph/workflow_trace/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        },
+        {
+          "backend": "tpe",
+          "cell_ref": "langgraph/workflow_trace/tpe",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 5,
+            "improvement_frequency": 0.25,
+            "iterations": 5,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 0.75
+          }
+        }
+      ],
+      "framework_profile": "langgraph",
+      "live_lane_evidence": [],
+      "recommended_backend": "gepa",
+      "target_kind": "workflow_trace"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "livekit/workflow_trace/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "livekit",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "workflow_trace"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "llamaindex/workflow_trace/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "llamaindex",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "workflow_trace"
+    },
+    {
+      "evidence": [
+        {
+          "backend": "society",
+          "cell_ref": "pipecat/workflow_trace/society",
+          "evidence_class": "local_gate",
+          "score": 0.9801,
+          "trajectory_profile": {
+            "dedupe_rate": 0.0,
+            "early_stopped": false,
+            "eval_budget": null,
+            "evaluations": 7,
+            "improvement_frequency": 0.1667,
+            "iterations": 7,
+            "kind": "agent-learning.optimizer-trajectory-profile.v1",
+            "regression_count": 1,
+            "selection": null,
+            "semantic_locality": 1.0
+          }
+        }
+      ],
+      "framework_profile": "pipecat",
+      "live_lane_evidence": [],
+      "recommended_backend": "society",
+      "target_kind": "workflow_trace"
+    }
+  ]
+}

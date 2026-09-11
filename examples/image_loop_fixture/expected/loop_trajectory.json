@@ -1,0 +1,12 @@
+{
+  "seed": 1142,
+  "world_kind": "image",
+  "task_mode": "understanding",
+  "rounds": [
+    {"round": 0, "cell": "vqa_scene", "loss": 0.62, "sublayer": "perception"},
+    {"round": 1, "cell": "chart_synthetic", "loss": 0.48, "sublayer": "preprocessing"},
+    {"round": 2, "cell": "document_rendered", "loss": 0.31, "sublayer": "preprocessing"}
+  ],
+  "perturbation_operators": ["blur", "jpeg_compress", "resolution_drop", "occlusion"],
+  "note": "the expected loop trajectory under the pinned seed; the determinism golden. The example re-runs the loop twice and asserts byte-identical."
+}

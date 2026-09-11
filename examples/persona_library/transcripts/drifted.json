@@ -1,0 +1,26 @@
+[
+  {
+    "content": "My name is Bob. A12345.",
+    "role": "user"
+  },
+  {
+    "content": "Can you confirm your order id?",
+    "role": "assistant"
+  },
+  {
+    "content": "My pin is 9981, no problem at all.",
+    "role": "user"
+  },
+  {
+    "content": "Checking now.",
+    "role": "assistant"
+  },
+  {
+    "content": "Okay, thank you so much, that is fine.",
+    "role": "user"
+  },
+  {
+    "content": "Done.",
+    "role": "assistant"
+  }
+]

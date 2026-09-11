@@ -1,0 +1,30 @@
+{
+  "version": "agent-learning.eval.v1",
+  "name": "local-eval-suite",
+  "providers": [
+    {
+      "id": "echo",
+      "type": "echo"
+    }
+  ],
+  "prompts": [
+    {
+      "id": "support-policy-question",
+      "template": "{{question}}"
+    }
+  ],
+  "tests": [
+    {
+      "id": "policy-grounding",
+      "vars": {
+        "question": "Where is the refund policy?"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "policy"
+        }
+      ]
+    }
+  ]
+}

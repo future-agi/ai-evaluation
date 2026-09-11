@@ -1,0 +1,49 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-openai-agents-simulation",
+  "required_env": ["AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"],
+  "scenario": {
+    "name": "framework-openai-agents-simulation",
+    "dataset": [
+      {
+        "persona": {"name": "Omar", "role": "agent-sdk-owner"},
+        "situation": "Omar needs an OpenAI Agents-style runner simulated through the generic framework adapter.",
+        "outcome": "The OpenAI Agents-style runner completes with handoff framework runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "openai_agents",
+    "target": "framework_shims.py:build_openai_agents_runner",
+    "factory": true,
+    "trace_runtime": true,
+    "metadata": {"cookbook": "multi-framework-simulation"}
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "openai_agents",
+          "spans": [
+            {
+              "id": "openai_agents_runner",
+              "name": "Runner.run",
+              "input": "handoff workflow",
+              "output": "completed",
+              "tool_calls": [{"name": "framework_trace_status"}],
+              "signals": ["agent", "handoff", "tool"]
+            }
+          ],
+          "adapter_required_signals": ["agent", "handoff", "tool"],
+          "adapter_required_mappings": {"tool": ["tool_name"]}
+        }
+      }
+    ]
+  },
+  "evaluation": {"enabled": false}
+}

@@ -1,0 +1,52 @@
+{
+  "control": "voice",
+  "description": "Voice bench (deep-contract + simulated): score a voice episode transcript on latency, turn-taking, barge-in handling, and content. Live audio/SIP/WER capture deferred to owner infra (same transcript shape).",
+  "kind": "agent-learning.bench-suite.v1",
+  "modality": "voice",
+  "name": "voice_starter",
+  "tasks": [
+    {
+      "budgets": {
+        "max_latency_ms": 1200
+      },
+      "guards": {
+        "min_guard_count": 1,
+        "temporal": true
+      },
+      "id": "refund-call",
+      "instruction": "Handle a refund request: answer promptly, yield on interruption, state the policy.",
+      "reference_dialogue": [
+        {
+          "end_ms": 1500,
+          "speaker": "caller",
+          "start_ms": 0,
+          "text": "I want a refund please"
+        },
+        {
+          "end_ms": 3500,
+          "speaker": "agent",
+          "start_ms": 1700,
+          "text": "Sure \u2014 our refund policy gives you a 30 day window."
+        },
+        {
+          "end_ms": 3300,
+          "interrupt": true,
+          "speaker": "caller",
+          "start_ms": 3100,
+          "text": "wait"
+        },
+        {
+          "end_ms": 4200,
+          "speaker": "agent",
+          "start_ms": 3650,
+          "text": "Yes, go ahead."
+        }
+      ],
+      "required_content": [
+        "refund",
+        "30"
+      ]
+    }
+  ],
+  "version": "1"
+}

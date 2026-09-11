@@ -1,0 +1,34 @@
+{
+  "kind": "agent-learning.practice-capstone-fixture.v1",
+  "name": "refund_desk",
+  "description": "Deterministic local refund-desk simulation. Two obligation-cell families: the PRIMARY family (the cells the arm learns first) and a DISJOINT interference family optimized in the interference phase. Each cell carries a latent skill model: a config path -> value choice closes the cell iff it matches the cell's required_value. The interference family shares config paths with the primary family, so naive search on the interference family silently overwrites primary closures (config-space forgetting). Spaced regression replay re-tests the primary deck and repairs the regression; no-consolidation arms cannot. Offline, seeded, credential-free.",
+  "search_space": {
+    "agent.instructions.refund_policy": ["lenient", "strict", "balanced"],
+    "agent.instructions.tone": ["terse", "empathetic", "formal"],
+    "agent.tools.lookup_order.mock": ["static_fixture", "recorded_replay"],
+    "agent.memory.policy": ["none", "session", "persistent"]
+  },
+  "harness_layer_by_path": {
+    "agent.instructions.refund_policy": "instructions",
+    "agent.instructions.tone": "instructions",
+    "agent.tools.lookup_order.mock": "tooling",
+    "agent.memory.policy": "memory"
+  },
+  "primary_cells": [
+    {"intent": "refund_within_window", "persona": "patient_customer", "perturbation": null,
+     "path": "agent.instructions.refund_policy", "required_value": "lenient", "base_difficulty": 0.35},
+    {"intent": "refund_after_window", "persona": "angry_customer", "perturbation": null,
+     "path": "agent.instructions.refund_policy", "required_value": "strict", "base_difficulty": 0.5},
+    {"intent": "lookup_order_status", "persona": "patient_customer", "perturbation": null,
+     "path": "agent.tools.lookup_order.mock", "required_value": "recorded_replay", "base_difficulty": 0.4},
+    {"intent": "repeat_caller", "persona": "angry_customer", "perturbation": null,
+     "path": "agent.memory.policy", "required_value": "persistent", "base_difficulty": 0.55}
+  ],
+  "interference_cells": [
+    {"intent": "upsell_premium", "persona": "patient_customer", "perturbation": null,
+     "path": "agent.instructions.refund_policy", "required_value": "balanced", "base_difficulty": 0.4},
+    {"intent": "escalate_to_human", "persona": "angry_customer", "perturbation": null,
+     "path": "agent.memory.policy", "required_value": "session", "base_difficulty": 0.45}
+  ],
+  "interference_strength": 0.7
+}

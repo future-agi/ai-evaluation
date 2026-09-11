@@ -1,0 +1,28 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "regression-replay-manifest",
+  "scenario": {
+    "name": "regression-replay",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Asha",
+          "role": "red-team"
+        },
+        "situation": "Asha replays a promoted regression manifest.",
+        "outcome": "The replay manifest completes with safe containment."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "content": "The regression replay completed safely."
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}

@@ -1,0 +1,172 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-openenv-simulation",
+  "required_env": [
+    "AGENT_LEARNING_OPENENV_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "framework-openenv-simulation",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Mina",
+          "role": "environment-owner"
+        },
+        "situation": "Mina needs a framework adapter to emit OpenEnv/Gymnasium-style reset, step, reward, done, sandbox, and failure-injection evidence.",
+        "outcome": "The OpenEnv framework adapter completes the local replay with evaluator-visible OpenEnv trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "openenv",
+    "target": "sdk_framework_adapter_openenv_trace.py:LocalOpenEnvRunner",
+    "factory": true,
+    "method": "run",
+    "input_mode": "dict",
+    "trace_runtime": true,
+    "metadata": {
+      "cookbook": "framework-openenv-simulation"
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": []
+  },
+  "evaluation": {
+    "enabled": true,
+    "agent_report": {
+      "threshold": 0.9,
+      "config": {
+        "task_description": "Validate the OpenEnv framework adapter release gate.",
+        "expected_result": "The selected run/dict adapter emits local OpenEnv framework runtime evidence.",
+        "required_tools": [],
+        "available_tools": [],
+        "required_events": [
+          "framework_runtime",
+          "openenv"
+        ],
+        "required_artifact_types": [
+          "trace"
+        ],
+        "success_criteria": [
+          "run runtime evidence",
+          "framework adapter contract quality",
+          "typed state evidence",
+          "OpenEnv environment replay evidence",
+          "event evidence",
+          "artifact evidence"
+        ],
+        "required_framework_runtime": [
+          "framework_runtime",
+          "method",
+          "input",
+          "output",
+          "metadata",
+          "state",
+          "openenv",
+          "event",
+          "artifact"
+        ],
+        "framework_runtime_contract": {
+          "framework": "openenv",
+          "method": "run",
+          "input_mode": "dict",
+          "required_signals": [
+            "method",
+            "input",
+            "output",
+            "metadata",
+            "state",
+            "openenv",
+            "event",
+            "artifact"
+          ],
+          "max_error_count": 0,
+          "min_invocation_count": 1,
+          "required_artifact_types": [
+            "trace"
+          ],
+          "required_state_keys": [
+            "openenv"
+          ]
+        },
+        "framework_adapter_contract_quality": {
+          "kind": "agent-learning.framework-adapter-contract.v1",
+          "framework": "openenv",
+          "method": "run",
+          "input_mode": "dict",
+          "require_trace_runtime": true,
+          "require_local_executable_fixture": true,
+          "require_no_external_service": true,
+          "require_target": true,
+          "required_schema_sections": [
+            "input",
+            "output"
+          ],
+          "required_lifecycle_hooks": [
+            "setup",
+            "invoke",
+            "observe",
+            "teardown"
+          ],
+          "required_capabilities": [
+            "runtime_trace"
+          ],
+          "required_evidence_requirements": [
+            "framework_runtime",
+            "framework_trace",
+            "tool_calls",
+            "adapter_conformance",
+            "metric_evidence",
+            "openenv"
+          ]
+        },
+        "metric_weights": {
+          "framework_adapter_contract_quality": 8.0,
+          "framework_runtime_contract": 10.0,
+          "task_completion": 1.0,
+          "openenv_coverage": 4.0,
+          "openenv_quality": 4.0
+        },
+        "required_openenv": [
+          "openenv",
+          "state",
+          "observation",
+          "reset",
+          "step",
+          "action",
+          "reward",
+          "metadata",
+          "failure_injection",
+          "done",
+          "terminated",
+          "sandbox",
+          "in_process",
+          "local"
+        ],
+        "openenv_quality": {
+          "framework": "openenv",
+          "min_reset_count": 1,
+          "min_step_count": 2,
+          "min_action_route_count": 2,
+          "min_failure_count": 1,
+          "min_metadata_capture_count": 3,
+          "min_reward_total": 1.0,
+          "max_error_count": 0,
+          "require_done": true,
+          "require_terminated": true,
+          "require_sandbox": true,
+          "require_metadata_capture": true,
+          "require_no_external_service": true,
+          "require_deterministic_reset": true,
+          "required_runtime": "in_process",
+          "required_transport": "local",
+          "required_isolation": "process"
+        }
+      }
+    }
+  }
+}

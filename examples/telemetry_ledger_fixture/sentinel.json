@@ -1,0 +1,6 @@
+{
+  "expected_marker": "[redacted:SENTINEL_TOKEN]",
+  "kind": "agent-learning.ledger-sentinel.v1",
+  "seeded_secret_env": "SENTINEL_TOKEN",
+  "seeded_secret_value": "sk-sentinel-do-not-leak-7f3a"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "cua-loop-trajectory-golden",
+  "note": "The expected loop trajectory under the pinned seed (the determinism golden — loop_determinism_errors). Same seed in => byte-identical trajectory out over BrowserEnvironment.",
+  "seed": 1142,
+  "trajectory": [
+    {"phase": "assess", "cell": "checkout_baseline"},
+    {"phase": "diagnose", "cell": "selector_drift_family"},
+    {"phase": "drill", "cell": "multistep_form"},
+    {"phase": "update", "cell": "whole_agent"},
+    {"phase": "consolidate", "cell": "regression_replay"},
+    {"phase": "calibrate", "cell": "icc_repeat"}
+  ]
+}

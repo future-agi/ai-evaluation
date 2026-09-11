@@ -1,0 +1,288 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "local-agent-learning-suite",
+  "required_env": [
+    "AGENT_LEARNING_RUN_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY",
+    "AGENT_LEARNING_CUSTOM_FRAMEWORK_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_SOCIAL_MEMORY_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_REDTEAM_EXAMPLE_KEY",
+    "AGENT_LEARNING_WORLD_FRAMEWORK_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_VOICE_STREAMING_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_REDTEAM_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_WORKSPACE_OBSERVABILITY_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_AGENT_INTEGRATION_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTI_AGENT_FRAMEWORK_HANDOFF_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_OPTIMIZER_GOVERNANCE_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_AGENT_CONTROL_PLANE_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_BROWSER_CUA_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_FRAMEWORK_CERT_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_AUTONOMOUS_REDTEAM_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTIMODAL_IMAGE_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_SDK_PERSISTENT_REDTEAM_KEY",
+    "AGENT_LEARNING_SUITE_OPT_EXAMPLE_KEY"
+  ],
+  "required_capabilities": {
+    "commands": [
+      "run",
+      "suite",
+      "optimize_suite",
+      "eval",
+      "eval_artifact",
+      "action_run",
+      "redteam",
+      "optimize_eval",
+      "optimize"
+    ],
+    "result_kinds": [
+      "agent-learning.run.v1",
+      "agent-learning.suite.v1",
+      "agent-learning.suite-optimization.v1",
+      "agent-learning.eval.v1",
+      "agent-learning.artifact-evaluation.v1",
+      "agent-learning.action-run.v1",
+      "agent-learning.redteam.v1",
+      "agent-learning.eval-optimization.v1",
+      "agent-learning.optimization.v1"
+    ],
+    "environment_types": [
+      "adversarial_attack_pack",
+      "agent_control_plane",
+      "agent_integration",
+      "autonomy_loop",
+      "browser_cua",
+      "framework_capability",
+      "framework_trace",
+      "multi_agent_room",
+      "multimodal_image",
+      "optimizer_trace",
+      "persistent_state_attack",
+      "red_team_campaign",
+      "streaming_trace",
+      "voice",
+      "world_orchestration_replay"
+    ],
+    "environment_state_keys": [
+      "framework_runtime"
+    ],
+    "providers": [
+      "artifact",
+      "vapi",
+      "bland",
+      "livekit",
+      "retell",
+      "twilio"
+    ],
+    "frameworks": [
+      "langchain",
+      "langgraph",
+      "llamaindex",
+      "custom_refund_orchestrator",
+      "openai_agents",
+      "autogen",
+      "crewai",
+      "pydantic_ai",
+      "livekit",
+      "pipecat"
+    ],
+    "channels": [
+      "chat",
+      "phone",
+      "sip",
+      "voice",
+      "webrtc",
+      "websocket"
+    ],
+    "metrics": [
+      "agent_integration_quality",
+      "browser_action_outcome",
+      "eval_assertions",
+      "framework_capability_quality",
+      "framework_runtime_contract",
+      "framework_transcript_quality",
+      "multi_agent_coordination_quality",
+      "multimodal_faithfulness",
+      "optimizer_trace_quality",
+      "persistent_state_attack_coverage",
+      "persistent_state_attack_quality",
+      "red_team_campaign_quality",
+      "voice_trace_coverage",
+      "world_contract_quality"
+    ]
+  },
+  "optimizer_governance_policy": {
+    "require_optimizer_governance": true,
+    "min_governed": 1
+  },
+  "jobs": [
+    {
+      "id": "local-simulation",
+      "command": "run",
+      "path": "run_manifest.json",
+      "no_eval": true,
+      "name": "suite-local-simulation"
+    },
+    {
+      "id": "multi-framework-adapter-suite",
+      "command": "suite",
+      "path": "multi_framework_simulation_suite.json",
+      "name": "suite-multi-framework-adapters"
+    },
+    {
+      "id": "suite-level-framework-breadth-optimizer",
+      "command": "optimize-suite",
+      "path": "suite_optimization.json",
+      "name": "suite-framework-breadth-optimizer",
+      "max_candidates": 3
+    },
+    {
+      "id": "custom-framework-adapter-optimizer",
+      "command": "optimize",
+      "path": "custom_framework_optimization.json",
+      "name": "suite-custom-framework-adapter-optimizer",
+      "max_candidates": 3
+    },
+    {
+      "id": "social-memory-framework-optimizer",
+      "command": "optimize",
+      "path": "social_memory_framework_optimization.json",
+      "name": "suite-social-memory-framework-optimizer"
+    },
+    {
+      "id": "promptfoo-style-eval",
+      "command": "eval",
+      "path": "eval_suite.json",
+      "name": "suite-promptfoo-eval"
+    },
+    {
+      "id": "artifact-task-eval",
+      "command": "eval",
+      "path": "artifact_task_eval_suite.json",
+      "name": "suite-artifact-task-eval"
+    },
+    {
+      "id": "direct-artifact-report-eval",
+      "command": "eval-artifact",
+      "path": "fixtures/task_artifacts/refund_task_run.json",
+      "config": "artifact_task_eval_config.json",
+      "name": "suite-direct-artifact-report-eval"
+    },
+    {
+      "id": "artifact-action-report",
+      "command": "action-run",
+      "path": "fixtures/task_artifacts/refund_task_run.json",
+      "action_id": "report_orchestration_strategy",
+      "cwd": "artifacts/action-loop/workspace",
+      "name": "suite-artifact-action-report",
+      "output": "../../artifacts/action-loop/action-run.json",
+      "outputs": {
+        "junit": "../../artifacts/action-loop/action-run.junit.xml",
+        "sarif": "../../artifacts/action-loop/action-run.sarif.json",
+        "markdown": "../../artifacts/action-loop/action-run.md"
+      }
+    },
+    {
+      "id": "agent-red-team",
+      "command": "redteam",
+      "path": "redteam_manifest.json",
+      "name": "suite-agent-red-team"
+    },
+    {
+      "id": "persistent-state-redteam",
+      "command": "run",
+      "path": "persistent_state_redteam_manifest.json",
+      "name": "suite-persistent-state-redteam"
+    },
+    {
+      "id": "eval-suite-optimizer",
+      "command": "optimize-eval",
+      "path": "eval_suite_optimization.json",
+      "name": "suite-eval-suite-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "world-framework-memory-optimizer",
+      "command": "optimize",
+      "path": "world_framework_memory_optimization.json",
+      "name": "suite-world-framework-memory-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "voice-streaming-realtime-optimizer",
+      "command": "optimize",
+      "path": "voice_streaming_realtime_optimization.json",
+      "name": "suite-voice-streaming-realtime-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "redteam-campaign-optimizer",
+      "command": "optimize",
+      "path": "redteam_campaign_optimization.json",
+      "name": "suite-redteam-campaign-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "workspace-observability-optimizer",
+      "command": "optimize",
+      "path": "workspace_observability_optimization.json",
+      "name": "suite-workspace-observability-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "agent-integration-optimizer",
+      "command": "optimize",
+      "path": "agent_integration_optimization.json",
+      "name": "suite-agent-integration-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "multi-agent-framework-handoff-optimizer",
+      "command": "optimize",
+      "path": "multi_agent_framework_handoff_optimization.json",
+      "name": "suite-multi-agent-framework-handoff-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "optimizer-governance-optimizer",
+      "command": "optimize",
+      "path": "optimizer_governance_optimization.json",
+      "name": "suite-optimizer-governance-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "agent-control-plane-optimizer",
+      "command": "optimize",
+      "path": "agent_control_plane_optimization.json",
+      "name": "suite-agent-control-plane-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "browser-cua-optimizer",
+      "command": "optimize",
+      "path": "browser_cua_optimization.json",
+      "name": "suite-browser-cua-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "framework-certification-optimizer",
+      "command": "optimize",
+      "path": "framework_certification_optimization.json",
+      "name": "suite-framework-certification-optimizer",
+      "max_candidates": 2
+    },
+    {
+      "id": "autonomous-redteam-task-world-optimizer",
+      "command": "optimize",
+      "path": "autonomous_redteam_task_world_optimization.json",
+      "name": "suite-autonomous-redteam-task-world-optimizer",
+      "max_candidates": 3
+    },
+    {
+      "id": "multimodal-image-optimizer",
+      "command": "optimize",
+      "path": "multimodal_image_optimization.json",
+      "name": "suite-multimodal-image-optimizer",
+      "max_candidates": 3
+    }
+  ]
+}

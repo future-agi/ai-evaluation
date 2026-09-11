@@ -1,0 +1,49 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-llamaindex-simulation",
+  "required_env": ["AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"],
+  "scenario": {
+    "name": "framework-llamaindex-simulation",
+    "dataset": [
+      {
+        "persona": {"name": "Ishan", "role": "retrieval-agent-owner"},
+        "situation": "Ishan needs a LlamaIndex-style chat engine simulated through the generic framework adapter.",
+        "outcome": "The LlamaIndex-style chat engine completes with retrieval framework runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "llamaindex",
+    "target": "framework_shims.py:build_llamaindex_chat_engine",
+    "factory": true,
+    "trace_runtime": true,
+    "metadata": {"cookbook": "multi-framework-simulation"}
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "llamaindex",
+          "spans": [
+            {
+              "id": "llamaindex_chat_engine",
+              "name": "chat_engine.achat",
+              "input": "retrieval workflow",
+              "output": "completed",
+              "tool_calls": [{"name": "framework_trace_status"}],
+              "signals": ["retrieval", "index", "tool"]
+            }
+          ],
+          "adapter_required_signals": ["retrieval", "index", "tool"],
+          "adapter_required_mappings": {"tool": ["tool_name"]}
+        }
+      }
+    ]
+  },
+  "evaluation": {"enabled": false}
+}

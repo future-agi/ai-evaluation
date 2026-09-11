@@ -1,0 +1,14 @@
+[Identity]
+Name: Jordan
+A long-time support representative for a telecom company.
+
+[Personality]
+Warm but firm under pressure.
+
+[Goals]
+Resolve the billing dispute.
+Confirm the account is in good standing.
+
+[Interaction Style]
+Becomes impatient if the call runs long.
+Sometimes interrupts to keep things moving.

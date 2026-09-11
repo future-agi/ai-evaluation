@@ -1,0 +1,210 @@
+[
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.423,
+      "disclosure_policy": 0.2444,
+      "escalation_schedule": [
+        0.0,
+        0.19,
+        0.38,
+        0.57,
+        0.76,
+        0.95
+      ],
+      "interruption_propensity": 0.62,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.27
+    },
+    "identity": {
+      "demographics": {
+        "region": "north"
+      },
+      "language": "en",
+      "name": "A",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "A",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.95,
+      "sattva": 0.1,
+      "tamas": 0.2
+    },
+    "version": "sha256:30505a60310bf525b80b72a4e1eb92d38a934be08a379d65de049a0e9c845494"
+  },
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.423,
+      "disclosure_policy": 0.2444,
+      "escalation_schedule": [
+        0.0,
+        0.19,
+        0.38,
+        0.57,
+        0.76,
+        0.95
+      ],
+      "interruption_propensity": 0.62,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.27
+    },
+    "identity": {
+      "demographics": {
+        "region": "north"
+      },
+      "language": "en",
+      "name": "B",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "B",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.95,
+      "sattva": 0.1,
+      "tamas": 0.2
+    },
+    "version": "sha256:01aca9b662d079c4d877bf93f2cd89c0b8217d49815e0129b7f16cec4e4d00ad"
+  },
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.8225,
+      "disclosure_policy": 0.7238,
+      "escalation_schedule": [
+        0.0,
+        0.01,
+        0.02,
+        0.03,
+        0.04,
+        0.05
+      ],
+      "interruption_propensity": 0.08,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.865
+    },
+    "identity": {
+      "demographics": {
+        "region": "south"
+      },
+      "language": "en",
+      "name": "C",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "C",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.05,
+      "sattva": 0.95,
+      "tamas": 0.2
+    },
+    "version": "sha256:d5b5f773d026dc5695fc427eee436670e0d657522d531331e761e73c7926b0e8"
+  },
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.8225,
+      "disclosure_policy": 0.7238,
+      "escalation_schedule": [
+        0.0,
+        0.01,
+        0.02,
+        0.03,
+        0.04,
+        0.05
+      ],
+      "interruption_propensity": 0.08,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.865
+    },
+    "identity": {
+      "demographics": {
+        "region": "south"
+      },
+      "language": "en",
+      "name": "D",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "D",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.05,
+      "sattva": 0.95,
+      "tamas": 0.2
+    },
+    "version": "sha256:9ab49ada0288f7d1faceb149559660ec44c77d00938143285f4d3bc044ce6d6e"
+  }
+]

@@ -1,0 +1,13 @@
+schema_version: "1"
+provider:
+  type: retell
+  scope: world
+  process: agent
+  public_capability: target_http
+  event_path: /provider/events
+  tool_path: /provider/tools
+  required_secrets: [RETELL_API_KEY, RETELL_VOICE_ID]
+  provision:
+    command: [python, provider_target.py, provision]
+  destroy:
+    command: [python, provider_target.py, destroy]

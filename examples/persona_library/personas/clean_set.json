@@ -1,0 +1,202 @@
+[
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.658,
+      "disclosure_policy": 0.5264,
+      "escalation_schedule": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5
+      ],
+      "interruption_propensity": 0.35,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.62
+    },
+    "identity": {
+      "demographics": {},
+      "language": "en",
+      "name": "E",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "E",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.5,
+      "sattva": 0.6,
+      "tamas": 0.2
+    },
+    "version": "sha256:a1aae7dc9e710269fca120f373c5a8170c60a8df27be1c49bba01d36bd1ac780"
+  },
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.611,
+      "disclosure_policy": 0.47,
+      "escalation_schedule": [
+        0.0,
+        0.11,
+        0.22,
+        0.33,
+        0.44,
+        0.55
+      ],
+      "interruption_propensity": 0.38,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.55
+    },
+    "identity": {
+      "demographics": {},
+      "language": "en",
+      "name": "F",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "F",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.55,
+      "sattva": 0.5,
+      "tamas": 0.2
+    },
+    "version": "sha256:99783672b4ed50d948db7e0bca1a4ad28d209903d6bc2b0b88913feff9117d5d"
+  },
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.6345,
+      "disclosure_policy": 0.4982,
+      "escalation_schedule": [
+        0.0,
+        0.09,
+        0.18,
+        0.27,
+        0.36,
+        0.45
+      ],
+      "interruption_propensity": 0.32,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.585
+    },
+    "identity": {
+      "demographics": {},
+      "language": "es",
+      "name": "G",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "G",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.45,
+      "sattva": 0.55,
+      "tamas": 0.2
+    },
+    "version": "sha256:cd75e1fa920a464b50c90cbbd9d696ac724851411737fec2a0951c7f85ec85c6"
+  },
+  {
+    "behavior_policy": {
+      "cooperation_bounds": 0.611,
+      "disclosure_policy": 0.47,
+      "escalation_schedule": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5
+      ],
+      "interruption_propensity": 0.35,
+      "patience_curve": [
+        1.0,
+        0.928,
+        0.856,
+        0.784,
+        0.712,
+        0.64
+      ],
+      "repair_propensity": 0.55
+    },
+    "identity": {
+      "demographics": {},
+      "language": "es",
+      "name": "H",
+      "role": "customer",
+      "style_notes": []
+    },
+    "knowledge": [],
+    "outcome": "o",
+    "persona": {
+      "name": "H",
+      "role": "customer"
+    },
+    "provenance": {
+      "calibrated": false,
+      "evidence_class": "hand_written",
+      "pin": {},
+      "representativeness_claim": "none"
+    },
+    "situation": "s",
+    "temperament": {
+      "rajas": 0.5,
+      "sattva": 0.5,
+      "tamas": 0.2
+    },
+    "version": "sha256:de02c9f539149ab8b3b0258168ae16c30c9690137012f4758716770c71e95fba"
+  }
+]

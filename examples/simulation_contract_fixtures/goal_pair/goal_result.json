@@ -1,0 +1,17 @@
+{
+  "goal_machine": {
+    "checks": [
+      {
+        "kind": "world_success_condition",
+        "name": "won",
+        "passed": true,
+        "rung": "turn"
+      }
+    ],
+    "states_reached": [
+      "won"
+    ],
+    "stop_reason": "goal_success"
+  },
+  "stop_reason": "goal_success"
+}

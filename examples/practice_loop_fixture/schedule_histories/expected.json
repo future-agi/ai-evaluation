@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "expected": 4,
+      "name": "T1_expand",
+      "observed": 4
+    },
+    {
+      "expected": "instruction",
+      "name": "T2_demote",
+      "observed": "instruction"
+    },
+    {
+      "expected": "repeated_failure",
+      "name": "T3_retire",
+      "observed": "repeated_failure"
+    },
+    {
+      "expected": "obsolete",
+      "name": "T5_obsolete",
+      "observed": "obsolete"
+    },
+    {
+      "expected": 16,
+      "name": "interval_cap",
+      "observed": 16
+    }
+  ],
+  "tampered_detected": true
+}

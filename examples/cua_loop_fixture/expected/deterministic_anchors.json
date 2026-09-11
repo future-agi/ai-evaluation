@@ -1,0 +1,14 @@
+{
+  "name": "cua-deterministic-anchors-golden",
+  "note": "The expected state_quality / action_quality / mutation_grounding_quality values recomputed over the fixtures via score_browser_cua_probe_result (the anchor-reproducibility golden — deterministic_verifier_anchoring_errors). Byte-identical under seed.",
+  "anchors": {
+    "multistep_form": {"state_quality": 1.0, "action_quality": 1.0, "mutation_grounding_quality": 1.0},
+    "selector_drift_clean": {"state_quality": 1.0, "action_quality": 1.0},
+    "selector_drift_drifted": {"state_quality": 1.0, "action_quality": 1.0, "mutation_grounding_quality": 1.0},
+    "injected_dom_clean": {"state_quality": 1.0, "action_quality": 1.0},
+    "injected_dom_inject": {"state_quality": 1.0, "action_quality": 0.0},
+    "fake_completion": {"state_quality": 0.0},
+    "genuine_completion": {"state_quality": 1.0},
+    "desktop_episode": {"grounding_step_accuracy": 1.0}
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "kind": "agent-learning.practice-capstone-fixture.v1",
+  "name": "escalation_ladder",
+  "description": "Deterministic local persona-conditioned escalation-ladder dialogue simulation (P7 persona/perturbation lineage). Obligation cells span intents x personas x perturbations; the latent skill model rewards the config matching each cell's required escalation behaviour. The interference family shifts persona temperament (the 13A T5 distribution-shift axis) and re-optimizes the instruction paths, regressing the primary persona closures unless the spaced deck re-tests them. Offline, seeded, credential-free.",
+  "search_space": {
+    "agent.instructions.escalation_threshold": ["low", "medium", "high"],
+    "agent.instructions.empathy_level": ["low", "medium", "high"],
+    "agent.first_message": ["direct", "warm", "scripted"],
+    "agent.memory.policy": ["none", "session", "persistent"]
+  },
+  "harness_layer_by_path": {
+    "agent.instructions.escalation_threshold": "instructions",
+    "agent.instructions.empathy_level": "instructions",
+    "agent.first_message": "instructions",
+    "agent.memory.policy": "memory"
+  },
+  "primary_cells": [
+    {"intent": "calm_resolution", "persona": "frustrated_user", "perturbation": null,
+     "path": "agent.instructions.empathy_level", "required_value": "high", "base_difficulty": 0.4},
+    {"intent": "policy_escalation", "persona": "demanding_user", "perturbation": null,
+     "path": "agent.instructions.escalation_threshold", "required_value": "low", "base_difficulty": 0.5},
+    {"intent": "greeting", "persona": "frustrated_user", "perturbation": "interrupt",
+     "path": "agent.first_message", "required_value": "warm", "base_difficulty": 0.35},
+    {"intent": "retain_context", "persona": "demanding_user", "perturbation": null,
+     "path": "agent.memory.policy", "required_value": "persistent", "base_difficulty": 0.55}
+  ],
+  "interference_cells": [
+    {"intent": "rapid_dispatch", "persona": "neutral_user", "perturbation": null,
+     "path": "agent.instructions.escalation_threshold", "required_value": "high", "base_difficulty": 0.35},
+    {"intent": "concise_greeting", "persona": "neutral_user", "perturbation": null,
+     "path": "agent.first_message", "required_value": "direct", "base_difficulty": 0.4}
+  ],
+  "interference_strength": 0.7
+}

@@ -1,0 +1,5 @@
+{
+  "name": "account-status-again",
+  "instruction": "Can you confirm whether priority support is active for account ACC-2048?",
+  "sub_goals": ["account_was_looked_up"]
+}

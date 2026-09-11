@@ -1,38 +1,40 @@
 # Security Policy
 
-## Reporting a vulnerability
+## Reporting a Vulnerability
 
-The Future AGI team takes security seriously. If you discover a vulnerability in `ai-evaluation`, please report it privately — **do not open a public GitHub issue.**
+Please do not open a public issue for a vulnerability.
 
-**Email:** **security@futureagi.com**
+Email `hello@futureagi.io` with the subject prefix `[security]` and include:
 
-Include as much of the following as you can:
+- Affected package, version, commit, or artifact.
+- Reproduction steps.
+- Expected impact.
+- Any known workaround or mitigation.
 
-- Type of issue (e.g. code injection via eval template, credential leak in logs, guardrail bypass)
-- Affected version(s) and the commit or release tag
-- Reproduction steps
-- Proof-of-concept or exploit code, if possible
-- Impact — how an attacker might exploit it
+We will acknowledge reports as soon as possible, triage the issue, and coordinate
+fix timing with the reporter when appropriate.
 
-## Response timeline
+Expected response windows:
 
-- **Acknowledgement:** within 24 hours (Mon–Fri, Pacific & IST)
-- **Initial assessment:** within 3 business days
-- **Fix target:** depends on severity
-- **Public disclosure:** coordinated with the reporter, typically 7–90 days after a patch is available
+- Initial acknowledgement: 3 business days.
+- Initial severity assessment: 7 business days.
+- Remediation plan or status update: 14 business days for accepted reports.
 
 ## Scope
 
-**In scope:**
+Security reports may cover:
 
-- The `ai-evaluation` PyPI package
-- The `@future-agi/ai-evaluation` npm package
-- This repository's source (`future-agi/ai-evaluation`)
+- Secret leakage in artifacts, reports, traces, or logs.
+- Unsafe execution behavior in local simulation or optimization flows.
+- Dependency or package publishing risks.
+- Vulnerabilities in the public Python or TypeScript SDK surfaces.
+- Bypass of red-team, policy, approval, or trust-boundary controls.
 
-**Out of scope:**
+## Supported Versions
 
-- Third-party LLM providers reached via LiteLLM (report upstream)
-- Upstream dependencies (report to those projects)
-- Prompts or datasets users feed into evaluators (user-controlled input)
+| Version | Supported |
+| --- | --- |
+| Pre-v1 release branch | Latest maintained release-candidate commit only |
+| Older commits | No |
 
-For vulnerabilities that affect the broader Future AGI platform, see the [main repo's SECURITY.md](https://github.com/future-agi/future-agi/blob/main/SECURITY.md).
+After v1, supported versions should be listed in release notes.

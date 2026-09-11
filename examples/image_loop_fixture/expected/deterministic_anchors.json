@@ -1,0 +1,10 @@
+{
+  "seed": 1142,
+  "anchors": {
+    "task_success": {"value": 1.0, "metric": "exact_match", "fixture": "vqa.json"},
+    "ocr_accuracy": {"value": 1.0, "metric": "anls", "fixture": "ocr.json"},
+    "chart_accuracy": {"value": 1.0, "metric": "relaxed_accuracy", "fixture": "chart.json"},
+    "artifact_grounding": {"value": 1.0, "metric": "token_overlap", "fixture": "vqa.json"}
+  },
+  "note": "the expected EM/ANLS/relaxed-accuracy/grounding values under the pinned seed; the anchor-reproducibility golden"
+}

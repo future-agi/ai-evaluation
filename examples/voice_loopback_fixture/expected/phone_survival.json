@@ -1,0 +1,8 @@
+{
+  "band_energy_lt_4khz": 0.999995,
+  "post_channel_success": 0.685961,
+  "pre_channel_success": 0.714013,
+  "reason": "codec=g711_ulaw packet_loss=gilbert_elliott loss_realized=0.06 pre=0.714013 post=0.685961 (8 kHz telephony channel, simulated)",
+  "status": "survives",
+  "tier": "channel_simulated"
+}

@@ -1,0 +1,106 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "multi-framework-simulation-suite",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "required_capabilities": {
+    "commands": [
+      "run"
+    ],
+    "result_kinds": [
+      "agent-learning.run.v1"
+    ],
+    "environment_types": [
+      "framework_trace"
+    ],
+    "environment_state_keys": [
+      "framework_runtime"
+    ],
+    "frameworks": [
+      "langchain",
+      "langgraph",
+      "llamaindex",
+      "openai_agents",
+      "autogen",
+      "crewai",
+      "pydantic_ai",
+      "pipecat",
+      "livekit",
+      "custom_refund_orchestrator"
+    ],
+    "metrics": []
+  },
+  "jobs": [
+    {
+      "id": "langchain-runnable",
+      "command": "run",
+      "path": "framework_langchain_manifest.json",
+      "no_eval": true,
+      "name": "suite-langchain-runnable"
+    },
+    {
+      "id": "langgraph-state-graph",
+      "command": "run",
+      "path": "framework_langgraph_manifest.json",
+      "no_eval": true,
+      "name": "suite-langgraph-state-graph"
+    },
+    {
+      "id": "llamaindex-chat-engine",
+      "command": "run",
+      "path": "framework_llamaindex_manifest.json",
+      "no_eval": true,
+      "name": "suite-llamaindex-chat-engine"
+    },
+    {
+      "id": "openai-agents-runner",
+      "command": "run",
+      "path": "framework_openai_agents_manifest.json",
+      "no_eval": true,
+      "name": "suite-openai-agents-runner"
+    },
+    {
+      "id": "autogen-agent-chat",
+      "command": "run",
+      "path": "framework_autogen_manifest.json",
+      "no_eval": true,
+      "name": "suite-autogen-agent-chat"
+    },
+    {
+      "id": "crewai-crew",
+      "command": "run",
+      "path": "framework_crewai_manifest.json",
+      "no_eval": true,
+      "name": "suite-crewai-crew"
+    },
+    {
+      "id": "pydantic-ai-agent",
+      "command": "run",
+      "path": "framework_pydantic_ai_manifest.json",
+      "no_eval": true,
+      "name": "suite-pydantic-ai-agent"
+    },
+    {
+      "id": "pipecat-voice-pipeline",
+      "command": "run",
+      "path": "framework_pipecat_manifest.json",
+      "no_eval": true,
+      "name": "suite-pipecat-voice-pipeline"
+    },
+    {
+      "id": "livekit-realtime-agent",
+      "command": "run",
+      "path": "framework_livekit_manifest.json",
+      "no_eval": true,
+      "name": "suite-livekit-realtime-agent"
+    },
+    {
+      "id": "custom-refund-orchestrator",
+      "command": "run",
+      "path": "framework_custom_manifest.json",
+      "no_eval": true,
+      "name": "suite-custom-refund-orchestrator"
+    }
+  ]
+}

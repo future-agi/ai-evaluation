@@ -1,0 +1,88 @@
+{
+  "version": "agent-learning.suite.v1",
+  "name": "suite-level-framework-breadth-optimization",
+  "required_env": [
+    "AGENT_LEARNING_SUITE_OPT_EXAMPLE_KEY",
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "required_capabilities": {
+    "commands": [
+      "suite"
+    ],
+    "result_kinds": [
+      "agent-learning.suite.v1"
+    ],
+    "environment_state_keys": [
+      "framework_runtime"
+    ],
+    "frameworks": [
+      "langchain",
+      "langgraph",
+      "llamaindex",
+      "openai_agents",
+      "autogen",
+      "crewai",
+      "pydantic_ai",
+      "pipecat",
+      "livekit",
+      "custom_refund_orchestrator"
+    ]
+  },
+  "jobs": [
+    {
+      "id": "framework-breadth",
+      "command": "run",
+      "path": "framework_langchain_manifest.json",
+      "name": "suite-opt-single-framework-seed"
+    }
+  ],
+  "optimization": {
+    "threshold": 1.0,
+    "target": {
+      "name": "suite-framework-breadth",
+      "layers": [
+        "harness",
+        "framework",
+        "world",
+        "evaluator"
+      ],
+      "base_config": {
+        "jobs": [
+          {
+            "id": "framework-breadth",
+            "command": "run",
+            "path": "framework_langchain_manifest.json",
+            "name": "suite-opt-single-framework-seed"
+          }
+        ]
+      },
+      "search_space": {
+        "jobs.0": [
+          {
+            "id": "framework-breadth",
+            "command": "run",
+            "path": "framework_langchain_manifest.json",
+            "name": "suite-opt-single-framework-seed"
+          },
+          {
+            "id": "framework-breadth",
+            "command": "suite",
+            "path": "multi_framework_simulation_suite.json",
+            "name": "suite-opt-ten-framework-candidate"
+          }
+        ]
+      },
+      "metadata": {
+        "source": "examples/suite_optimization.json",
+        "task_kind": "agent_learning_suite_optimization",
+        "cookbook": "suite-optimization"
+      }
+    },
+    "optimizer": {
+      "algorithm": "agent",
+      "max_candidates": 3,
+      "include_seed": true,
+      "auto_diagnose": false
+    }
+  }
+}

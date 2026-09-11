@@ -1,0 +1,12 @@
+{
+  "byte_identical": true,
+  "kind": "agent-learning.ledger-fault-injection.v1",
+  "verdict_with_failing_ledger": {
+    "payload_sha256": "6b286baef34f43c34a570378fcb20006c8ee4389e6f31cfb452603bca279da44",
+    "verdict": "pass"
+  },
+  "verdict_without_telemetry": {
+    "payload_sha256": "6b286baef34f43c34a570378fcb20006c8ee4389e6f31cfb452603bca279da44",
+    "verdict": "pass"
+  }
+}

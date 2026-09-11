@@ -1,0 +1,11 @@
+{
+  "all_frozen_rows_closed_every_promotion": true,
+  "detected_within_bound": true,
+  "detection_latency_bound": 16,
+  "regression_detected": true,
+  "rows_replayed_at_promotion": [
+    "frozen_1",
+    "frozen_2",
+    "row_planted"
+  ]
+}

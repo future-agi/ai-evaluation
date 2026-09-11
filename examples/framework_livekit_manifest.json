@@ -1,0 +1,75 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "framework-livekit-simulation",
+  "required_env": [
+    "AGENT_LEARNING_MULTI_FRAMEWORK_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "framework-livekit-simulation",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Kabir",
+          "role": "realtime-agent-owner"
+        },
+        "situation": "Kabir needs a LiveKit-style realtime agent simulated through the generic framework adapter.",
+        "outcome": "The LiveKit-style agent completes with realtime voice framework runtime trace evidence."
+      }
+    ]
+  },
+  "agent": {
+    "type": "framework",
+    "framework": "livekit",
+    "target": "framework_shims.py:build_livekit_agent",
+    "factory": true,
+    "trace_runtime": true,
+    "metadata": {
+      "cookbook": "multi-framework-simulation"
+    }
+  },
+  "simulation": {
+    "engine": "local_text",
+    "modality": "voice",
+    "max_turns": 1,
+    "min_turns": 1,
+    "environments": [
+      {
+        "type": "framework_trace",
+        "data": {
+          "framework": "livekit",
+          "spans": [
+            {
+              "id": "livekit_room_agent",
+              "name": "agent.respond",
+              "input": "voice room message",
+              "output": "completed",
+              "tool_calls": [
+                {
+                  "name": "framework_trace_status"
+                }
+              ],
+              "signals": [
+                "voice",
+                "room",
+                "tool"
+              ]
+            }
+          ],
+          "adapter_required_signals": [
+            "voice",
+            "room",
+            "tool"
+          ],
+          "adapter_required_mappings": {
+            "tool": [
+              "tool_name"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}

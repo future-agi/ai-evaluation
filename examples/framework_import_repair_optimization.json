@@ -1,0 +1,1362 @@
+{
+  "agent": {
+    "input_mode": "text",
+    "method": "run",
+    "name": "framework-import-repair-agent",
+    "responses": [
+      {
+        "content": "I will first inspect the normalized BYO framework import manifest before accepting it into Future AGI workflows.",
+        "tool_calls": [
+          {
+            "arguments": {},
+            "id": "framework_import_status",
+            "name": "framework_import_status"
+          },
+          {
+            "arguments": {},
+            "id": "framework_import_exports",
+            "name": "list_framework_import_exports"
+          }
+        ]
+      },
+      {
+        "content": "Next I will verify passed source coverage across frameworks and export types.",
+        "tool_calls": [
+          {
+            "arguments": {
+              "status": "passed"
+            },
+            "id": "framework_import_sources",
+            "name": "list_framework_import_sources"
+          }
+        ]
+      },
+      {
+        "content": "Finally I will check gaps and failed sources before the agent is exposed to observability, evals, red-team, and optimization.",
+        "tool_calls": [
+          {
+            "arguments": {},
+            "id": "framework_import_gaps",
+            "name": "list_framework_import_gaps"
+          }
+        ]
+      }
+    ],
+    "type": "scripted"
+  },
+  "evaluation": {
+    "agent_report": {
+      "config": {
+        "available_tools": [
+          "framework_import_status",
+          "list_framework_import_exports",
+          "list_framework_import_sources",
+          "list_framework_import_gaps"
+        ],
+        "expected_result": "The optimized import has target, adapter, source, export, lifecycle, probe, portability, observability, artifact, and no-failed-source evidence.",
+        "framework_import_quality": {
+          "max_failed_sources": 0,
+          "min_artifact_count": 6,
+          "min_observability_hooks": 3,
+          "min_passed_sources": 24,
+          "min_source_count": 24,
+          "require_adapter": true,
+          "require_artifacts": true,
+          "require_capability_matrix": true,
+          "require_event_stream": true,
+          "require_lifecycle": true,
+          "require_observability": true,
+          "require_portability_matrix": true,
+          "require_probe_suite": true,
+          "require_target": true,
+          "require_trace_export": true,
+          "required_export_types": [
+            "trace_export",
+            "event_stream",
+            "lifecycle",
+            "capability_matrix",
+            "probe_suite",
+            "portability_matrix"
+          ],
+          "required_frameworks": [
+            "langgraph",
+            "langchain",
+            "livekit",
+            "pipecat"
+          ],
+          "required_signals": [
+            "framework_import",
+            "target",
+            "adapter",
+            "trace_export",
+            "event_stream",
+            "lifecycle",
+            "capability_matrix",
+            "probe_suite",
+            "portability_matrix",
+            "observability",
+            "artifact"
+          ]
+        },
+        "metric_weights": {
+          "framework_import_coverage": 5.0,
+          "framework_import_quality": 8.0,
+          "task_completion": 1.0,
+          "tool_selection_accuracy": 2.0
+        },
+        "required_artifact_types": [
+          "trace"
+        ],
+        "required_framework_import": [
+          "framework_import",
+          "framework_import_manifest",
+          "target",
+          "adapter",
+          "source",
+          "passed_source",
+          "artifact",
+          "observability",
+          "langgraph",
+          "langchain",
+          "livekit",
+          "pipecat",
+          "trace_export",
+          "event_stream",
+          "lifecycle",
+          "capability_matrix",
+          "probe_suite",
+          "portability_matrix"
+        ],
+        "required_tools": [
+          "framework_import_status",
+          "list_framework_import_exports",
+          "list_framework_import_sources",
+          "list_framework_import_gaps"
+        ],
+        "success_criteria": [
+          "all required frameworks are imported",
+          "all required export types are imported",
+          "target and adapter records are present",
+          "observability hooks and artifacts exist",
+          "failed source count is zero"
+        ],
+        "task_description": "Repair a BYO framework/provider import bundle until Future AGI can treat it as portable evidence for observability, evals, simulation, red-team, and optimization."
+      },
+      "threshold": 0.95
+    }
+  },
+  "name": "framework-import-repair-optimization",
+  "optimization": {
+    "optimizer": {
+      "algorithm": "agent",
+      "auto_diagnose": false,
+      "include_seed": true,
+      "max_candidates": 4
+    },
+    "scoring": {
+      "enabled": true,
+      "framework_import_quality": {
+        "max_failed_sources": 0,
+        "min_artifact_count": 6,
+        "min_observability_hooks": 3,
+        "min_passed_sources": 24,
+        "min_source_count": 24,
+        "require_adapter": true,
+        "require_artifacts": true,
+        "require_capability_matrix": true,
+        "require_event_stream": true,
+        "require_lifecycle": true,
+        "require_observability": true,
+        "require_portability_matrix": true,
+        "require_probe_suite": true,
+        "require_target": true,
+        "require_trace_export": true,
+        "required_export_types": [
+          "trace_export",
+          "event_stream",
+          "lifecycle",
+          "capability_matrix",
+          "probe_suite",
+          "portability_matrix"
+        ],
+        "required_frameworks": [
+          "langgraph",
+          "langchain",
+          "livekit",
+          "pipecat"
+        ],
+        "required_signals": [
+          "framework_import",
+          "target",
+          "adapter",
+          "trace_export",
+          "event_stream",
+          "lifecycle",
+          "capability_matrix",
+          "probe_suite",
+          "portability_matrix",
+          "observability",
+          "artifact"
+        ]
+      },
+      "layers": [
+        "framework_import"
+      ],
+      "method": "simulation_evidence",
+      "required_framework_import": [
+        "framework_import",
+        "framework_import_manifest",
+        "target",
+        "adapter",
+        "source",
+        "passed_source",
+        "artifact",
+        "observability",
+        "langgraph",
+        "langchain",
+        "livekit",
+        "pipecat",
+        "trace_export",
+        "event_stream",
+        "lifecycle",
+        "capability_matrix",
+        "probe_suite",
+        "portability_matrix"
+      ],
+      "required_tools": [
+        "framework_import_status",
+        "list_framework_import_exports",
+        "list_framework_import_sources",
+        "list_framework_import_gaps"
+      ],
+      "weights": {
+        "framework_import": 5.0,
+        "tool_coverage": 1.0
+      }
+    },
+    "target": {
+      "base_config": {
+        "agent": {
+          "input_mode": "text",
+          "method": "run",
+          "name": "framework-import-repair-agent",
+          "responses": [
+            {
+              "content": "I will first inspect the normalized BYO framework import manifest before accepting it into Future AGI workflows.",
+              "tool_calls": [
+                {
+                  "arguments": {},
+                  "id": "framework_import_status",
+                  "name": "framework_import_status"
+                },
+                {
+                  "arguments": {},
+                  "id": "framework_import_exports",
+                  "name": "list_framework_import_exports"
+                }
+              ]
+            },
+            {
+              "content": "Next I will verify passed source coverage across frameworks and export types.",
+              "tool_calls": [
+                {
+                  "arguments": {
+                    "status": "passed"
+                  },
+                  "id": "framework_import_sources",
+                  "name": "list_framework_import_sources"
+                }
+              ]
+            },
+            {
+              "content": "Finally I will check gaps and failed sources before the agent is exposed to observability, evals, red-team, and optimization.",
+              "tool_calls": [
+                {
+                  "arguments": {},
+                  "id": "framework_import_gaps",
+                  "name": "list_framework_import_gaps"
+                }
+              ]
+            }
+          ],
+          "type": "scripted"
+        },
+        "simulation": {
+          "environments": [
+            {
+              "data": {
+                "adapter": {},
+                "artifacts": [],
+                "framework": "langgraph",
+                "metadata": {
+                  "candidate": "weak",
+                  "cookbook": "framework-import-repair",
+                  "research_synthesis": "Import readiness must prove portable execution evidence, not just adapter configuration."
+                },
+                "name": "weak-framework-import-readiness",
+                "observability": {},
+                "required_export_types": [
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix"
+                ],
+                "required_frameworks": [
+                  "langgraph",
+                  "langchain",
+                  "livekit",
+                  "pipecat"
+                ],
+                "required_signals": [
+                  "framework_import",
+                  "target",
+                  "adapter",
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix",
+                  "observability",
+                  "artifact"
+                ],
+                "sources": [
+                  {
+                    "description": "langgraph trace_export import evidence for weak candidate",
+                    "export_type": "trace_export",
+                    "framework": "langgraph",
+                    "id": "langgraph_trace_export_weak",
+                    "name": "langgraph_trace_export_weak",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain trace_export import evidence for weak candidate",
+                    "error": "source failed during import replay",
+                    "export_type": "trace_export",
+                    "framework": "langchain",
+                    "id": "langchain_trace_export_weak",
+                    "name": "langchain_trace_export_weak",
+                    "record_count": 1,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "failed"
+                  }
+                ],
+                "target": {}
+              },
+              "type": "framework_import"
+            }
+          ]
+        }
+      },
+      "layers": [
+        "framework",
+        "integration",
+        "evaluator"
+      ],
+      "metadata": {
+        "cookbook": "framework-import-repair-optimization",
+        "export_types": [
+          "trace_export",
+          "event_stream",
+          "lifecycle",
+          "capability_matrix",
+          "probe_suite",
+          "portability_matrix"
+        ],
+        "frameworks": [
+          "langgraph",
+          "langchain",
+          "livekit",
+          "pipecat"
+        ],
+        "original_synthesis": "Framework import readiness is scored as a deterministic evidence contract: source coverage, export coverage, runtime lifecycle/probe/portability evidence, observability hooks, artifacts, and zero failed imports must all close before the UI/control-plane layer treats a BYO agent as optimizable.",
+        "research_sources": [
+          {
+            "title": "VeRO: A Harness for Agents to Optimize Agents",
+            "url": "https://arxiv.org/abs/2602.22480",
+            "used_for": "versioned candidate rewards and observation-driven harness search",
+            "year": 2026
+          },
+          {
+            "title": "Agents Learn Their Runtime: Interpreter Persistence as Training-Time Semantics",
+            "url": "https://arxiv.org/abs/2603.01209",
+            "used_for": "runtime/interface semantics as import-readiness constraints",
+            "year": 2026
+          },
+          {
+            "title": "From Agent Traces to Trust: Evidence Tracing and Execution Provenance in LLM Agents",
+            "url": "https://arxiv.org/abs/2606.04990",
+            "used_for": "portable process evidence across tools, memory, environment, and recovery",
+            "year": 2026
+          },
+          {
+            "title": "CausalFlow: Causal Attribution and Counterfactual Repair for LLM Agent Failures",
+            "url": "https://arxiv.org/abs/2605.25338",
+            "used_for": "failed import evidence to minimal validated repair candidates",
+            "year": 2026
+          }
+        ],
+        "source": "fi.alk.optimize.build_framework_import_repair_optimization_manifest",
+        "task_kind": "framework_import_repair"
+      },
+      "name": "framework-import-repair-optimization",
+      "search_space": {
+        "simulation.environments": [
+          [
+            {
+              "data": {
+                "adapter": {},
+                "artifacts": [],
+                "framework": "langgraph",
+                "metadata": {
+                  "candidate": "weak",
+                  "cookbook": "framework-import-repair",
+                  "research_synthesis": "Import readiness must prove portable execution evidence, not just adapter configuration."
+                },
+                "name": "weak-framework-import-readiness",
+                "observability": {},
+                "required_export_types": [
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix"
+                ],
+                "required_frameworks": [
+                  "langgraph",
+                  "langchain",
+                  "livekit",
+                  "pipecat"
+                ],
+                "required_signals": [
+                  "framework_import",
+                  "target",
+                  "adapter",
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix",
+                  "observability",
+                  "artifact"
+                ],
+                "sources": [
+                  {
+                    "description": "langgraph trace_export import evidence for weak candidate",
+                    "export_type": "trace_export",
+                    "framework": "langgraph",
+                    "id": "langgraph_trace_export_weak",
+                    "name": "langgraph_trace_export_weak",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain trace_export import evidence for weak candidate",
+                    "error": "source failed during import replay",
+                    "export_type": "trace_export",
+                    "framework": "langchain",
+                    "id": "langchain_trace_export_weak",
+                    "name": "langchain_trace_export_weak",
+                    "record_count": 1,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "failed"
+                  }
+                ],
+                "target": {}
+              },
+              "type": "framework_import"
+            }
+          ],
+          [
+            {
+              "data": {
+                "adapter": {
+                  "name": "partial-import-adapter",
+                  "runtime": "langgraph",
+                  "version": "2026-06"
+                },
+                "artifacts": [
+                  {
+                    "id": "partial-trace-artifact",
+                    "path": "artifacts/partial-trace.json",
+                    "signals": [
+                      "trace_export",
+                      "artifact"
+                    ],
+                    "type": "trace_export"
+                  }
+                ],
+                "framework": "langgraph",
+                "metadata": {
+                  "candidate": "partial",
+                  "cookbook": "framework-import-repair",
+                  "research_synthesis": "Import readiness must prove portable execution evidence, not just adapter configuration."
+                },
+                "name": "partial-framework-import-readiness",
+                "observability": {
+                  "traces": [
+                    "otel-preview"
+                  ]
+                },
+                "required_export_types": [
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix"
+                ],
+                "required_frameworks": [
+                  "langgraph",
+                  "langchain",
+                  "livekit",
+                  "pipecat"
+                ],
+                "required_signals": [
+                  "framework_import",
+                  "target",
+                  "adapter",
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix",
+                  "observability",
+                  "artifact"
+                ],
+                "sources": [
+                  {
+                    "description": "langgraph trace_export import evidence for partial candidate",
+                    "export_type": "trace_export",
+                    "framework": "langgraph",
+                    "id": "langgraph_trace_export_partial",
+                    "name": "langgraph_trace_export_partial",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph event_stream import evidence for partial candidate",
+                    "export_type": "event_stream",
+                    "framework": "langgraph",
+                    "id": "langgraph_event_stream_partial",
+                    "name": "langgraph_event_stream_partial",
+                    "record_count": 8,
+                    "signals": [
+                      "event_stream",
+                      "framework_import",
+                      "langgraph",
+                      "source",
+                      "stream"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph lifecycle import evidence for partial candidate",
+                    "export_type": "lifecycle",
+                    "framework": "langgraph",
+                    "id": "langgraph_lifecycle_partial",
+                    "name": "langgraph_lifecycle_partial",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "lifecycle",
+                      "shutdown",
+                      "source",
+                      "startup"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain trace_export import evidence for partial candidate",
+                    "export_type": "trace_export",
+                    "framework": "langchain",
+                    "id": "langchain_trace_export_partial",
+                    "name": "langchain_trace_export_partial",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain event_stream import evidence for partial candidate",
+                    "export_type": "event_stream",
+                    "framework": "langchain",
+                    "id": "langchain_event_stream_partial",
+                    "name": "langchain_event_stream_partial",
+                    "record_count": 8,
+                    "signals": [
+                      "event_stream",
+                      "framework_import",
+                      "langchain",
+                      "source",
+                      "stream"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain lifecycle import evidence for partial candidate",
+                    "export_type": "lifecycle",
+                    "framework": "langchain",
+                    "id": "langchain_lifecycle_partial",
+                    "name": "langchain_lifecycle_partial",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "lifecycle",
+                      "shutdown",
+                      "source",
+                      "startup"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat portability_matrix import evidence for partial candidate",
+                    "error": "source failed during import replay",
+                    "export_type": "portability_matrix",
+                    "framework": "pipecat",
+                    "id": "pipecat_portability_matrix_partial",
+                    "name": "pipecat_portability_matrix_partial",
+                    "record_count": 1,
+                    "signals": [
+                      "framework_import",
+                      "migration",
+                      "pipecat",
+                      "portability_matrix",
+                      "source"
+                    ],
+                    "status": "failed"
+                  }
+                ],
+                "target": {
+                  "name": "partial-byo-agent",
+                  "provider": "futureagi",
+                  "repository": "github.com/customer/agent"
+                }
+              },
+              "type": "framework_import"
+            }
+          ],
+          [
+            {
+              "data": {
+                "adapter": {
+                  "name": "futureagi-framework-import-adapter",
+                  "runtime": "multi_framework",
+                  "supports": [
+                    "trace_export",
+                    "event_stream",
+                    "lifecycle",
+                    "capability_matrix",
+                    "probe_suite",
+                    "portability_matrix"
+                  ],
+                  "version": "2026-06"
+                },
+                "artifacts": [
+                  {
+                    "id": "verified-trace_export-artifact",
+                    "path": "artifacts/verified-trace_export.json",
+                    "signals": [
+                      "trace_export",
+                      "artifact",
+                      "observability"
+                    ],
+                    "type": "trace_export"
+                  },
+                  {
+                    "id": "verified-event_stream-artifact",
+                    "path": "artifacts/verified-event_stream.json",
+                    "signals": [
+                      "event_stream",
+                      "artifact",
+                      "observability"
+                    ],
+                    "type": "event_stream"
+                  },
+                  {
+                    "id": "verified-lifecycle-artifact",
+                    "path": "artifacts/verified-lifecycle.json",
+                    "signals": [
+                      "lifecycle",
+                      "artifact",
+                      "observability"
+                    ],
+                    "type": "lifecycle"
+                  },
+                  {
+                    "id": "verified-capability_matrix-artifact",
+                    "path": "artifacts/verified-capability_matrix.json",
+                    "signals": [
+                      "capability_matrix",
+                      "artifact",
+                      "observability"
+                    ],
+                    "type": "capability_matrix"
+                  },
+                  {
+                    "id": "verified-probe_suite-artifact",
+                    "path": "artifacts/verified-probe_suite.json",
+                    "signals": [
+                      "probe_suite",
+                      "artifact",
+                      "observability"
+                    ],
+                    "type": "probe_suite"
+                  },
+                  {
+                    "id": "verified-portability_matrix-artifact",
+                    "path": "artifacts/verified-portability_matrix.json",
+                    "signals": [
+                      "portability_matrix",
+                      "artifact",
+                      "observability"
+                    ],
+                    "type": "portability_matrix"
+                  }
+                ],
+                "framework": "langgraph",
+                "metadata": {
+                  "candidate": "verified",
+                  "cookbook": "framework-import-repair",
+                  "research_synthesis": "Import readiness must prove portable execution evidence, not just adapter configuration."
+                },
+                "name": "verified-framework-import-readiness",
+                "observability": {
+                  "dashboards": [
+                    "futureagi-import-readiness"
+                  ],
+                  "events": [
+                    "simulation",
+                    "eval",
+                    "optimization"
+                  ],
+                  "logs": [
+                    "tool_calls",
+                    "state_transitions"
+                  ],
+                  "metrics": [
+                    "coverage",
+                    "latency",
+                    "failures"
+                  ],
+                  "traces": [
+                    "otel",
+                    "futureagi"
+                  ]
+                },
+                "required_export_types": [
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix"
+                ],
+                "required_frameworks": [
+                  "langgraph",
+                  "langchain",
+                  "livekit",
+                  "pipecat"
+                ],
+                "required_signals": [
+                  "framework_import",
+                  "target",
+                  "adapter",
+                  "trace_export",
+                  "event_stream",
+                  "lifecycle",
+                  "capability_matrix",
+                  "probe_suite",
+                  "portability_matrix",
+                  "observability",
+                  "artifact"
+                ],
+                "sources": [
+                  {
+                    "description": "langgraph trace_export import evidence for verified candidate",
+                    "export_type": "trace_export",
+                    "framework": "langgraph",
+                    "id": "langgraph_trace_export_verified",
+                    "name": "langgraph_trace_export_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "observability",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph event_stream import evidence for verified candidate",
+                    "export_type": "event_stream",
+                    "framework": "langgraph",
+                    "id": "langgraph_event_stream_verified",
+                    "name": "langgraph_event_stream_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "event_stream",
+                      "framework_import",
+                      "langgraph",
+                      "observability",
+                      "source",
+                      "stream"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph lifecycle import evidence for verified candidate",
+                    "export_type": "lifecycle",
+                    "framework": "langgraph",
+                    "id": "langgraph_lifecycle_verified",
+                    "name": "langgraph_lifecycle_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "lifecycle",
+                      "observability",
+                      "shutdown",
+                      "source",
+                      "startup"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph capability_matrix import evidence for verified candidate",
+                    "export_type": "capability_matrix",
+                    "framework": "langgraph",
+                    "id": "langgraph_capability_matrix_verified",
+                    "name": "langgraph_capability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "capability_matrix",
+                      "framework_import",
+                      "langgraph",
+                      "memory",
+                      "observability",
+                      "source",
+                      "tools"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph probe_suite import evidence for verified candidate",
+                    "export_type": "probe_suite",
+                    "framework": "langgraph",
+                    "id": "langgraph_probe_suite_verified",
+                    "name": "langgraph_probe_suite_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "observability",
+                      "probe_suite",
+                      "smoke_probe",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langgraph portability_matrix import evidence for verified candidate",
+                    "export_type": "portability_matrix",
+                    "framework": "langgraph",
+                    "id": "langgraph_portability_matrix_verified",
+                    "name": "langgraph_portability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langgraph",
+                      "migration",
+                      "observability",
+                      "portability_matrix",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain trace_export import evidence for verified candidate",
+                    "export_type": "trace_export",
+                    "framework": "langchain",
+                    "id": "langchain_trace_export_verified",
+                    "name": "langchain_trace_export_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "observability",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain event_stream import evidence for verified candidate",
+                    "export_type": "event_stream",
+                    "framework": "langchain",
+                    "id": "langchain_event_stream_verified",
+                    "name": "langchain_event_stream_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "event_stream",
+                      "framework_import",
+                      "langchain",
+                      "observability",
+                      "source",
+                      "stream"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain lifecycle import evidence for verified candidate",
+                    "export_type": "lifecycle",
+                    "framework": "langchain",
+                    "id": "langchain_lifecycle_verified",
+                    "name": "langchain_lifecycle_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "lifecycle",
+                      "observability",
+                      "shutdown",
+                      "source",
+                      "startup"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain capability_matrix import evidence for verified candidate",
+                    "export_type": "capability_matrix",
+                    "framework": "langchain",
+                    "id": "langchain_capability_matrix_verified",
+                    "name": "langchain_capability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "capability_matrix",
+                      "framework_import",
+                      "langchain",
+                      "memory",
+                      "observability",
+                      "source",
+                      "tools"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain probe_suite import evidence for verified candidate",
+                    "export_type": "probe_suite",
+                    "framework": "langchain",
+                    "id": "langchain_probe_suite_verified",
+                    "name": "langchain_probe_suite_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "observability",
+                      "probe_suite",
+                      "smoke_probe",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "langchain portability_matrix import evidence for verified candidate",
+                    "export_type": "portability_matrix",
+                    "framework": "langchain",
+                    "id": "langchain_portability_matrix_verified",
+                    "name": "langchain_portability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "langchain",
+                      "migration",
+                      "observability",
+                      "portability_matrix",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "livekit trace_export import evidence for verified candidate",
+                    "export_type": "trace_export",
+                    "framework": "livekit",
+                    "id": "livekit_trace_export_verified",
+                    "name": "livekit_trace_export_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "livekit",
+                      "observability",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "livekit event_stream import evidence for verified candidate",
+                    "export_type": "event_stream",
+                    "framework": "livekit",
+                    "id": "livekit_event_stream_verified",
+                    "name": "livekit_event_stream_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "event_stream",
+                      "framework_import",
+                      "livekit",
+                      "observability",
+                      "source",
+                      "stream"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "livekit lifecycle import evidence for verified candidate",
+                    "export_type": "lifecycle",
+                    "framework": "livekit",
+                    "id": "livekit_lifecycle_verified",
+                    "name": "livekit_lifecycle_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "lifecycle",
+                      "livekit",
+                      "observability",
+                      "shutdown",
+                      "source",
+                      "startup"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "livekit capability_matrix import evidence for verified candidate",
+                    "export_type": "capability_matrix",
+                    "framework": "livekit",
+                    "id": "livekit_capability_matrix_verified",
+                    "name": "livekit_capability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "capability_matrix",
+                      "framework_import",
+                      "livekit",
+                      "memory",
+                      "observability",
+                      "source",
+                      "tools"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "livekit probe_suite import evidence for verified candidate",
+                    "export_type": "probe_suite",
+                    "framework": "livekit",
+                    "id": "livekit_probe_suite_verified",
+                    "name": "livekit_probe_suite_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "livekit",
+                      "observability",
+                      "probe_suite",
+                      "smoke_probe",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "livekit portability_matrix import evidence for verified candidate",
+                    "export_type": "portability_matrix",
+                    "framework": "livekit",
+                    "id": "livekit_portability_matrix_verified",
+                    "name": "livekit_portability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "livekit",
+                      "migration",
+                      "observability",
+                      "portability_matrix",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat trace_export import evidence for verified candidate",
+                    "export_type": "trace_export",
+                    "framework": "pipecat",
+                    "id": "pipecat_trace_export_verified",
+                    "name": "pipecat_trace_export_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "observability",
+                      "pipecat",
+                      "source",
+                      "span",
+                      "trace_export"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat event_stream import evidence for verified candidate",
+                    "export_type": "event_stream",
+                    "framework": "pipecat",
+                    "id": "pipecat_event_stream_verified",
+                    "name": "pipecat_event_stream_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "event_stream",
+                      "framework_import",
+                      "observability",
+                      "pipecat",
+                      "source",
+                      "stream"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat lifecycle import evidence for verified candidate",
+                    "export_type": "lifecycle",
+                    "framework": "pipecat",
+                    "id": "pipecat_lifecycle_verified",
+                    "name": "pipecat_lifecycle_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "lifecycle",
+                      "observability",
+                      "pipecat",
+                      "shutdown",
+                      "source",
+                      "startup"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat capability_matrix import evidence for verified candidate",
+                    "export_type": "capability_matrix",
+                    "framework": "pipecat",
+                    "id": "pipecat_capability_matrix_verified",
+                    "name": "pipecat_capability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "capability_matrix",
+                      "framework_import",
+                      "memory",
+                      "observability",
+                      "pipecat",
+                      "source",
+                      "tools"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat probe_suite import evidence for verified candidate",
+                    "export_type": "probe_suite",
+                    "framework": "pipecat",
+                    "id": "pipecat_probe_suite_verified",
+                    "name": "pipecat_probe_suite_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "observability",
+                      "pipecat",
+                      "probe_suite",
+                      "smoke_probe",
+                      "source"
+                    ],
+                    "status": "passed"
+                  },
+                  {
+                    "description": "pipecat portability_matrix import evidence for verified candidate",
+                    "export_type": "portability_matrix",
+                    "framework": "pipecat",
+                    "id": "pipecat_portability_matrix_verified",
+                    "name": "pipecat_portability_matrix_verified",
+                    "record_count": 8,
+                    "signals": [
+                      "framework_import",
+                      "migration",
+                      "observability",
+                      "pipecat",
+                      "portability_matrix",
+                      "source"
+                    ],
+                    "status": "passed"
+                  }
+                ],
+                "target": {
+                  "commit": "verified-2026-06-framework-import",
+                  "modalities": [
+                    "chat",
+                    "voice",
+                    "webrtc",
+                    "sip"
+                  ],
+                  "name": "verified-byo-agent",
+                  "provider": "futureagi",
+                  "repository": "github.com/customer/agent"
+                }
+              },
+              "type": "framework_import"
+            }
+          ]
+        ]
+      }
+    },
+    "threshold": 0.95
+  },
+  "required_env": [
+    "AGENT_LEARNING_FRAMEWORK_IMPORT_REPAIR_OPT_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "dataset": [
+      {
+        "outcome": "The optimized import bundle proves portable framework evidence with clean gaps and failed-source checks.",
+        "persona": {
+          "name": "Asha",
+          "role": "agent-platform-owner"
+        },
+        "situation": "Asha is importing a customer-owned multi-framework agent into Future AGI and needs to prove the evidence contract before enabling UI observability, evals, red-team, and optimization."
+      }
+    ],
+    "name": "framework-import-repair-optimization"
+  },
+  "simulation": {
+    "auto_execute_tools": true,
+    "engine": "local_text",
+    "environments": [
+      {
+        "data": {
+          "adapter": {},
+          "artifacts": [],
+          "framework": "langgraph",
+          "metadata": {
+            "candidate": "weak",
+            "cookbook": "framework-import-repair",
+            "research_synthesis": "Import readiness must prove portable execution evidence, not just adapter configuration."
+          },
+          "name": "weak-framework-import-readiness",
+          "observability": {},
+          "required_export_types": [
+            "trace_export",
+            "event_stream",
+            "lifecycle",
+            "capability_matrix",
+            "probe_suite",
+            "portability_matrix"
+          ],
+          "required_frameworks": [
+            "langgraph",
+            "langchain",
+            "livekit",
+            "pipecat"
+          ],
+          "required_signals": [
+            "framework_import",
+            "target",
+            "adapter",
+            "trace_export",
+            "event_stream",
+            "lifecycle",
+            "capability_matrix",
+            "probe_suite",
+            "portability_matrix",
+            "observability",
+            "artifact"
+          ],
+          "sources": [
+            {
+              "description": "langgraph trace_export import evidence for weak candidate",
+              "export_type": "trace_export",
+              "framework": "langgraph",
+              "id": "langgraph_trace_export_weak",
+              "name": "langgraph_trace_export_weak",
+              "record_count": 8,
+              "signals": [
+                "framework_import",
+                "langgraph",
+                "source",
+                "span",
+                "trace_export"
+              ],
+              "status": "passed"
+            },
+            {
+              "description": "langchain trace_export import evidence for weak candidate",
+              "error": "source failed during import replay",
+              "export_type": "trace_export",
+              "framework": "langchain",
+              "id": "langchain_trace_export_weak",
+              "name": "langchain_trace_export_weak",
+              "record_count": 1,
+              "signals": [
+                "framework_import",
+                "langchain",
+                "source",
+                "span",
+                "trace_export"
+              ],
+              "status": "failed"
+            }
+          ],
+          "target": {}
+        },
+        "type": "framework_import"
+      }
+    ],
+    "max_turns": 3,
+    "min_turns": 3
+  },
+  "version": "agent-learning.optimization.v1"
+}

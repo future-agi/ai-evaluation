@@ -1,0 +1,23 @@
+{
+  "kind": "agent-learning.practice-capstone.v1",
+  "description": "Capstone A/B experiment config (RU-7). The practice loop vs real search backends at EQUAL TOTAL metered budget over three kit-local fixtures. EXPERIMENT, not a gate — running it + the paper is a separate later task.",
+  "eval_budget": 256,
+  "seed": 42,
+  "arms": ["practice_loop", "gepa", "tpe", "society", "bandit"],
+  "arm_budgets": {
+    "practice_loop": 256,
+    "gepa": 256,
+    "tpe": 256,
+    "society": 256,
+    "bandit": 256
+  },
+  "ablations": ["a1_no_zpd", "a2_no_spacing", "a3_no_consolidation", "a4_no_calibration"],
+  "fixtures": ["refund_desk", "tool_world_ops", "escalation_ladder"],
+  "interference_protocol": {
+    "rounds": 4,
+    "cells": "disjoint",
+    "planted_regressions": true
+  },
+  "headline": "retention_after_interference",
+  "note": "best_found is printed per arm so a search arm may visibly win best-found while losing retention; the headline is retention_after_interference at equal total metered budget (the equal-budget discipline, AD-I)."
+}

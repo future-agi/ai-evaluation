@@ -1,0 +1,29 @@
+{
+  "aggregation": {
+    "conjunction": "all_cells_must_close",
+    "mode": "obligation_cells",
+    "projection": "weighted_mean"
+  },
+  "evals": [
+    {
+      "cells": [],
+      "direction": "maximize",
+      "eval": "agent_report",
+      "scope": "run",
+      "threshold": 0.7,
+      "weight": 1.0
+    }
+  ],
+  "exclusion_policy": "record",
+  "guards": {
+    "canary_evals": [],
+    "min_guard_count": 1,
+    "sentinel_rows": [
+      "row_g"
+    ]
+  },
+  "kind": "agent-learning.objective.v1",
+  "source": "declared",
+  "unstable_policy": "calibration_channel",
+  "version": "sha256:b7419fa2fc311b49e3737d1635b608403500feae0bf17f5575bc33cb7cac94b0"
+}

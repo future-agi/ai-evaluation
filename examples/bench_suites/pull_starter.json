@@ -1,0 +1,43 @@
+{
+  "control": "pull",
+  "description": "Pull/RL control mode: the agent (a policy obs->action) drives a deterministic simulated environment via reset/step; score = reward. Live external env servers plug in as another Environment (deferred to owner infra).",
+  "kind": "agent-learning.bench-suite.v1",
+  "modality": "rl",
+  "name": "pull_starter",
+  "tasks": [
+    {
+      "env": {
+        "kind": "reach_target",
+        "spec": {
+          "max_steps": 10,
+          "start": 0,
+          "target": 5
+        }
+      },
+      "guards": {
+        "min_guard_count": 1,
+        "reference_solvable": true
+      },
+      "id": "reach-target-5",
+      "instruction": "Navigate from start to the target within the step budget."
+    },
+    {
+      "env": {
+        "kind": "guess_number",
+        "spec": {
+          "high": 100,
+          "low": 1,
+          "max_steps": 12,
+          "secret": 42
+        }
+      },
+      "guards": {
+        "min_guard_count": 1,
+        "reference_solvable": true
+      },
+      "id": "guess-number-42",
+      "instruction": "Find the secret number using higher/lower feedback."
+    }
+  ],
+  "version": "1"
+}

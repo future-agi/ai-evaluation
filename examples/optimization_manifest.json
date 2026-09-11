@@ -1,0 +1,329 @@
+{
+  "version": "agent-learning.optimization.v1",
+  "name": "local-agent-optimization",
+  "required_env": [
+    "AGENT_LEARNING_OPTIMIZE_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "local-agent-optimization",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Riya",
+          "role": "ci-owner"
+        },
+        "situation": "Riya needs optimizer backend allocation evidence.",
+        "outcome": "The optimized manifest passes the portfolio gate."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "content": "Optimizer portfolio inspected from Agent Learning Kit.",
+    "tool_calls": [
+      {
+        "id": "status",
+        "name": "optimizer_portfolio_status",
+        "arguments": {}
+      },
+      {
+        "id": "list",
+        "name": "list_optimizer_backends",
+        "arguments": {
+          "status": "completed"
+        }
+      },
+      {
+        "id": "backend",
+        "name": "inspect_optimizer_backend",
+        "arguments": {
+          "optimizer": "bandit"
+        }
+      },
+      {
+        "id": "ablation",
+        "name": "inspect_optimizer_ablation",
+        "arguments": {}
+      }
+    ]
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1
+  },
+  "evaluation": {
+    "agent_report": {
+      "threshold": 0.9,
+      "config": {
+        "required_tools": [
+          "optimizer_portfolio_status",
+          "list_optimizer_backends",
+          "inspect_optimizer_backend",
+          "inspect_optimizer_ablation"
+        ],
+        "available_tools": [
+          "optimizer_portfolio_status",
+          "list_optimizer_backends",
+          "inspect_optimizer_backend",
+          "inspect_optimizer_ablation"
+        ],
+        "required_optimizer_portfolio": [
+          "optimizer_portfolio",
+          "backend_plan",
+          "backend_run",
+          "backend_lineage",
+          "selected_optimizer",
+          "ablation",
+          "consensus",
+          "selected_relation",
+          "diagnostic",
+          "feedback",
+          "search_path",
+          "improvement",
+          "rollback_decision",
+          "agent",
+          "tpe",
+          "bandit"
+        ],
+        "optimizer_portfolio_quality": {
+          "required_backends": [
+            "agent",
+            "tpe",
+            "bandit"
+          ],
+          "required_completed_backends": [
+            "agent",
+            "tpe",
+            "bandit"
+          ],
+          "required_consensus_backends": [
+            "agent",
+            "tpe"
+          ],
+          "required_selection_relations": [
+            "selected",
+            "equivalent",
+            "supporting"
+          ],
+          "required_dependencies": [
+            "backend_consensus"
+          ],
+          "required_search_paths": [
+            "optimizer.backend_portfolio.backends",
+            "optimizer.backend_selector.policy"
+          ],
+          "min_backend_plan_count": 3,
+          "min_backend_run_count": 3,
+          "min_completed_backends": 3,
+          "min_lineage_count": 3,
+          "min_consensus_backends": 2,
+          "min_feedback_cases": 1,
+          "min_diagnostics": 1,
+          "min_search_paths": 2,
+          "min_improved_backends": 3,
+          "min_final_score": 0.99,
+          "max_failed_backends": 0,
+          "require_selected_optimizer": true,
+          "require_backend_plan": true,
+          "require_backend_runs": true,
+          "require_backend_lineage": true,
+          "require_completed_backend": true,
+          "require_ablation": true,
+          "require_consensus": true,
+          "require_selected_relation": true,
+          "require_diagnostics": true,
+          "require_feedback": true,
+          "require_search_paths": true,
+          "require_improvement": true,
+          "require_rollback_decision": true
+        },
+        "metric_weights": {
+          "optimizer_portfolio_coverage": 5.0,
+          "optimizer_portfolio_quality": 10.0,
+          "final_response_quality": 1.0
+        }
+      }
+    }
+  },
+  "optimization": {
+    "threshold": 0.9,
+    "target": {
+      "name": "agent-learning-optimizer-portfolio",
+      "layers": [
+        "harness",
+        "multi_agent",
+        "evaluator"
+      ],
+      "base_config": {
+        "simulation": {
+          "environments": [
+            {
+              "type": "optimizer_backend_portfolio",
+              "data": {
+                "name": "agent-learning-portfolio-bad",
+                "selected_optimizer": "agent",
+                "final_score": 0.2,
+                "improved": false,
+                "rollback_decision": {},
+                "feedback_cases": [],
+                "diagnoses": [],
+                "search_paths": [],
+                "backend_plan": [
+                  {
+                    "optimizer": "agent",
+                    "rank": 1
+                  }
+                ],
+                "backend_runs": [
+                  {
+                    "optimizer": "agent",
+                    "status": "completed",
+                    "final_score": 0.2
+                  }
+                ],
+                "backend_lineage": [],
+                "ablation_report": {
+                  "selected_optimizer": "agent",
+                  "selected_candidate_id": "candidate_agent",
+                  "dependency": "single_backend",
+                  "consensus_backends": [],
+                  "selected_backend_required": true
+                }
+              }
+            }
+          ]
+        }
+      },
+      "search_space": {
+        "simulation.environments.0.data": [
+          {
+            "name": "agent-learning-portfolio-bad",
+            "selected_optimizer": "agent",
+            "final_score": 0.2,
+            "improved": false,
+            "rollback_decision": {},
+            "feedback_cases": [],
+            "diagnoses": [],
+            "search_paths": [],
+            "backend_plan": [
+              {
+                "optimizer": "agent",
+                "rank": 1
+              }
+            ],
+            "backend_runs": [
+              {
+                "optimizer": "agent",
+                "status": "completed",
+                "final_score": 0.2
+              }
+            ],
+            "backend_lineage": [],
+            "ablation_report": {
+              "selected_optimizer": "agent",
+              "selected_candidate_id": "candidate_agent",
+              "dependency": "single_backend",
+              "consensus_backends": [],
+              "selected_backend_required": true
+            }
+          },
+          {
+            "name": "agent-learning-portfolio",
+            "selected_optimizer": "bandit",
+            "final_score": 1.0,
+            "improved": true,
+            "rollback_decision": {
+              "rollback_required": false
+            },
+            "feedback_cases": [
+              {
+                "id": "case"
+              }
+            ],
+            "diagnoses": [
+              {
+                "component": "multi_agent"
+              }
+            ],
+            "search_paths": [
+              "optimizer.backend_portfolio.backends",
+              "optimizer.backend_selector.policy"
+            ],
+            "backend_plan": [
+              {
+                "optimizer": "agent",
+                "rank": 1
+              },
+              {
+                "optimizer": "tpe",
+                "rank": 2
+              },
+              {
+                "optimizer": "bandit",
+                "rank": 3
+              }
+            ],
+            "backend_runs": [
+              {
+                "optimizer": "agent",
+                "status": "completed",
+                "final_score": 0.84,
+                "improved": true
+              },
+              {
+                "optimizer": "tpe",
+                "status": "completed",
+                "final_score": 0.91,
+                "improved": true
+              },
+              {
+                "optimizer": "bandit",
+                "status": "completed",
+                "final_score": 1.0,
+                "improved": true
+              }
+            ],
+            "backend_lineage": [
+              {
+                "optimizer": "agent",
+                "selection_relation": "equivalent",
+                "patch_paths": [
+                  "optimizer.backend_portfolio.backends"
+                ]
+              },
+              {
+                "optimizer": "tpe",
+                "selection_relation": "supporting",
+                "patch_paths": [
+                  "optimizer.backend_selector.policy"
+                ]
+              },
+              {
+                "optimizer": "bandit",
+                "selection_relation": "selected",
+                "patch_paths": [
+                  "optimizer.backend_portfolio.backends"
+                ]
+              }
+            ],
+            "ablation_report": {
+              "selected_optimizer": "bandit",
+              "selected_candidate_id": "candidate_bandit",
+              "dependency": "backend_consensus",
+              "consensus_backends": [
+                "agent",
+                "tpe"
+              ],
+              "selected_backend_required": false
+            }
+          }
+        ]
+      }
+    },
+    "optimizer": {
+      "max_candidates": 3,
+      "diagnostic_score_threshold": 0.9
+    }
+  }
+}

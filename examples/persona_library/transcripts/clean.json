@@ -1,0 +1,26 @@
+[
+  {
+    "content": "My name is Mira. A12345.",
+    "role": "user"
+  },
+  {
+    "content": "I understand. Can you confirm your order id?",
+    "role": "assistant"
+  },
+  {
+    "content": "I am getting frustrated. Please resolve this now.",
+    "role": "user"
+  },
+  {
+    "content": "Thanks. Checking the refund policy now.",
+    "role": "assistant"
+  },
+  {
+    "content": "This is unacceptable. I need this resolved right now or I will escalate to a supervisor.",
+    "role": "user"
+  },
+  {
+    "content": "Your refund is being processed.",
+    "role": "assistant"
+  }
+]

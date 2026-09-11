@@ -1,0 +1,71 @@
+{
+  "version": "agent-learning.eval.v1",
+  "name": "local-eval-suite-optimization",
+  "providers": [
+    {
+      "id": "echo",
+      "type": "echo"
+    },
+    {
+      "id": "scripted-support-agent",
+      "type": "scripted",
+      "response": "Private credentials only."
+    }
+  ],
+  "prompts": [
+    {
+      "id": "support-policy-question",
+      "template": "{{question}}"
+    }
+  ],
+  "tests": [
+    {
+      "id": "policy-grounding",
+      "vars": {
+        "question": "Where is the refund policy?"
+      },
+      "assert": [
+        {
+          "type": "contains",
+          "value": "policy"
+        },
+        {
+          "type": "not_contains",
+          "value": "private credentials"
+        }
+      ]
+    }
+  ],
+  "optimization": {
+    "threshold": 1.0,
+    "target": {
+      "name": "eval-suite-provider-response",
+      "layers": [
+        "prompt",
+        "evaluator"
+      ],
+      "base_config": {
+        "providers": [
+          {},
+          {
+            "response": "Private credentials only."
+          }
+        ]
+      },
+      "search_space": {
+        "providers.1.response": [
+          "Private credentials only.",
+          "Policy answer: {{question}} is covered by the refund policy. No secrets are exposed."
+        ]
+      },
+      "metadata": {
+        "example": "agent-learning-eval-suite-optimization"
+      }
+    },
+    "optimizer": {
+      "max_candidates": 2,
+      "include_seed": true,
+      "auto_diagnose": false
+    }
+  }
+}

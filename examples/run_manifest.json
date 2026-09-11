@@ -1,0 +1,32 @@
+{
+  "version": "agent-learning.run.v1",
+  "name": "local-agent-run",
+  "required_env": [
+    "AGENT_LEARNING_RUN_EXAMPLE_KEY"
+  ],
+  "scenario": {
+    "name": "local-agent-run",
+    "dataset": [
+      {
+        "persona": {
+          "name": "Maya",
+          "role": "sdk-owner"
+        },
+        "situation": "Maya needs a unified Agent Learning Kit run artifact.",
+        "outcome": "The unified run command returns a stable payload."
+      }
+    ]
+  },
+  "agent": {
+    "type": "scripted",
+    "content": "The unified Agent Learning Kit run command executed successfully."
+  },
+  "simulation": {
+    "engine": "local_text",
+    "max_turns": 1,
+    "min_turns": 1
+  },
+  "evaluation": {
+    "enabled": false
+  }
+}
