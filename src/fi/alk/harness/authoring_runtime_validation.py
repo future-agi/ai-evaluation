@@ -17,17 +17,19 @@ from pathlib import Path
 
 
 def _generic_candidate_hash(source: Path, authoring: Path) -> str:
+    from .provision import source_fingerprint
+
     digest = hashlib.sha256()
-    for label, root in (("source", source), ("authoring", authoring)):
-        for path in sorted(item for item in root.rglob("*") if item.is_file()):
-            relative = path.relative_to(root).as_posix()
-            if (
-                relative.startswith("generic-harness/")
-                or relative == "runtime-validation.json"
-            ):
-                continue
-            digest.update(f"{label}/{relative}\n".encode("utf-8"))
-            digest.update(path.read_bytes())
+    digest.update(source_fingerprint(source).encode("ascii"))
+    for path in sorted(item for item in authoring.rglob("*") if item.is_file()):
+        relative = path.relative_to(authoring).as_posix()
+        if (
+            relative.startswith("generic-harness/")
+            or relative == "runtime-validation.json"
+        ):
+            continue
+        digest.update(f"authoring/{relative}\n".encode("utf-8"))
+        digest.update(path.read_bytes())
     return "sha256:" + digest.hexdigest()
 
 

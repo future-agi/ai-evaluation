@@ -6,6 +6,7 @@ import pytest
 
 from fi.alk.harness.authoring_runtime_validation import (
     RuntimeValidationError,
+    _generic_candidate_hash,
     validate_and_repair,
     validate_once,
 )
@@ -256,6 +257,26 @@ def test_generic_validation_retries_infrastructure_without_reauthoring(
         RepairAction.RETRY_INFRASTRUCTURE,
         RepairAction.CERTIFY,
     ]
+
+
+def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    (source / ".git").mkdir(parents=True)
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    (authoring / "world.sqlite").write_text("world", encoding="utf-8")
+    before = _generic_candidate_hash(source, authoring)
+
+    (source / ".git" / "index").write_text("moving metadata", encoding="utf-8")
+    (authoring / "generic-harness").mkdir()
+    (authoring / "generic-harness" / "repair-history.json").write_text(
+        "changing history", encoding="utf-8"
+    )
+
+    assert _generic_candidate_hash(source, authoring) == before
 
 
 @pytest.mark.parametrize("bad_setup", [False, True])
