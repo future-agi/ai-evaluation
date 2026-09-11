@@ -1,5 +1,9 @@
 name: SDK smoke
 
+# Least-privilege token: install + test only.
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:

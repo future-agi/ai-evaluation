@@ -5,6 +5,10 @@ name: Daytona snapshot
 # base runtime or the ALK guest changes). PRs/pushes that touch the runtime run
 # a dry-run that parses the Dockerfile + build context without publishing.
 
+# Least-privilege token: both jobs only checkout and run scripts.
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
