@@ -12,6 +12,11 @@ from fi.alk.harness.authoring_runtime_validation import (
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.diagnostics import HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
+from fi.alk.harness.repair_controller import (
+    RepairAction,
+    RepairBudgets,
+    RepairController,
+)
 
 
 def test_validation_repairs_then_revalidates_and_records_scope(tmp_path):
@@ -110,6 +115,147 @@ def test_runtime_validation_error_carries_structured_diagnostics() -> None:
     )
 
     assert error.diagnostics == (diagnostic,)
+
+
+def test_generic_validation_uses_typed_patch_policy_and_persists_history(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    calls = []
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir",
+        code="required_value_missing",
+        message="missing value",
+    )
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError(
+                "environment", "invalid", diagnostics=(diagnostic,)
+            )
+        return 5
+
+    async def repair(phase, guidance):
+        assert phase == "environment"
+        assert "required_value_missing@world_ir" in guidance
+        (authoring / "world.sqlite").write_text("changed", encoding="utf-8")
+        calls.append("repair")
+        return 0
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+    )
+
+    assert calls == ["validate", "repair", "validate"]
+    history = json.loads(
+        (authoring / "generic-harness" / "repair-history.json").read_text()
+    )
+    assert [item["action"] for item in history["decisions"]] == [
+        RepairAction.PATCH_ENVIRONMENT.value,
+        RepairAction.CERTIFY.value,
+    ]
+    proof = json.loads((authoring / "runtime-validation.json").read_text())
+    assert proof["generic_harness"] == "v1"
+    assert proof["setup_ready_scenarios"] == 5
+
+
+def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_import",
+        code="array_shape_mismatch",
+        message="malformed array",
+    )
+    calls = []
+
+    async def validate(*args):
+        calls.append("validate")
+        raise RuntimeValidationError(
+            "environment", "invalid", diagnostics=(diagnostic,)
+        )
+
+    async def repair(*args):
+        pytest.fail("compiler failures must not invoke model repair")
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    with pytest.raises(RuntimeValidationError):
+        asyncio.run(
+            validate_and_repair(
+                job, source, authoring, validate=validate, repair=repair
+            )
+        )
+
+    assert calls == ["validate", "validate"]
+    history = json.loads(
+        (authoring / "generic-harness" / "repair-history.json").read_text()
+    )
+    assert [item["action"] for item in history["decisions"]] == [
+        RepairAction.RECOMPILE.value,
+        RepairAction.REJECT.value,
+    ]
+
+
+def test_generic_validation_retries_infrastructure_without_reauthoring(
+    tmp_path,
+) -> None:
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    calls = []
+    waits = []
+
+    async def validate(*args):
+        calls.append("validate")
+        if len(calls) == 1:
+            raise RuntimeValidationError("infrastructure", "temporary outage")
+        return 1
+
+    async def repair(*args):
+        pytest.fail("infrastructure failures must not invoke model repair")
+
+    async def sleeper(seconds):
+        waits.append(seconds)
+
+    controller = RepairController(
+        RepairBudgets(
+            infrastructure_retries_per_candidate=1,
+            infrastructure_initial_backoff_seconds=0,
+            infrastructure_jitter_ratio=0,
+        )
+    )
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    asyncio.run(
+        validate_and_repair(
+            job,
+            source,
+            authoring,
+            validate=validate,
+            repair=repair,
+            controller=controller,
+            sleeper=sleeper,
+        )
+    )
+
+    assert calls == ["validate", "validate"]
+    assert waits == [0]
+    assert [item.action for item in controller.history.decisions] == [
+        RepairAction.RETRY_INFRASTRUCTURE,
+        RepairAction.CERTIFY,
+    ]
 
 
 @pytest.mark.parametrize("bad_setup", [False, True])

@@ -8,11 +8,48 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import random
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+
+def _generic_candidate_hash(source: Path, authoring: Path) -> str:
+    digest = hashlib.sha256()
+    for label, root in (("source", source), ("authoring", authoring)):
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            relative = path.relative_to(root).as_posix()
+            if (
+                relative.startswith("generic-harness/")
+                or relative == "runtime-validation.json"
+            ):
+                continue
+            digest.update(f"{label}/{relative}\n".encode("utf-8"))
+            digest.update(path.read_bytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def _fallback_diagnostic(error):
+    from .diagnostics import HarnessDiagnostic
+    from .job import HarnessStage
+
+    if error.phase == "scenarios":
+        code = "ready_condition_invalid"
+        stage = HarnessStage.VALIDATING_SCENARIOS
+    elif error.phase == "infrastructure":
+        code = "process_dependency_timeout"
+        stage = HarnessStage.BUILDING_ENVIRONMENT
+    else:
+        code = "generated_setup_invalid"
+        stage = HarnessStage.VALIDATING_ENVIRONMENT
+    return HarnessDiagnostic.create(
+        stage=stage,
+        component="runtime_validation",
+        code=code,
+        message=str(error),
+    )
 
 
 class RuntimeValidationError(RuntimeError):
@@ -202,7 +239,14 @@ async def validate_once(
 
 
 async def validate_and_repair(
-    job, source: Path, authoring: Path, *, validate=validate_once, repair=None
+    job,
+    source: Path,
+    authoring: Path,
+    *,
+    validate=validate_once,
+    repair=None,
+    controller=None,
+    sleeper=asyncio.sleep,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
     if repair is None:
@@ -234,6 +278,116 @@ async def validate_and_repair(
                     guidance=[guidance],
                 )
             )
+
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+        from .repair_controller import (
+            CandidateObservation,
+            RepairAction,
+            RepairController,
+            RepairOutcome,
+            RepairPhase,
+        )
+
+        repair_controller = controller or RepairController()
+        artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
+        for _attempt in range(12):
+            candidate_hash = _generic_candidate_hash(source, authoring)
+            try:
+                count = await validate(job, source, authoring)
+            except RuntimeValidationError as exc:
+                diagnostics = exc.diagnostics or (_fallback_diagnostic(exc),)
+                phase = (
+                    RepairPhase.SCENARIOS
+                    if exc.phase == "scenarios"
+                    else RepairPhase.ENVIRONMENT
+                )
+                decision = repair_controller.decide(
+                    CandidateObservation(
+                        candidate_hash=candidate_hash,
+                        phase=phase,
+                        diagnostics=diagnostics,
+                    )
+                )
+                artifacts.write_repair_history(repair_controller.history)
+                if decision.action is RepairAction.REJECT:
+                    raise
+                if decision.action is RepairAction.RETRY_INFRASTRUCTURE:
+                    await sleeper(decision.retry_after_seconds or 0)
+                    repair_controller.record_result(
+                        decision.sequence,
+                        after_candidate_hash=candidate_hash,
+                        outcome=RepairOutcome.APPLIED,
+                    )
+                    artifacts.write_repair_history(repair_controller.history)
+                    continue
+                if decision.action is RepairAction.RECOMPILE:
+                    # Compilation is deterministic. Re-evaluate once; an unchanged fingerprint
+                    # is rejected by the controller rather than handed to a model as data repair.
+                    repair_controller.record_result(
+                        decision.sequence,
+                        after_candidate_hash=candidate_hash,
+                        outcome=RepairOutcome.NO_MATERIAL_CHANGE,
+                    )
+                    artifacts.write_repair_history(repair_controller.history)
+                    continue
+                repair_phase = (
+                    "scenarios"
+                    if decision.action is RepairAction.PATCH_SCENARIOS
+                    else "environment"
+                )
+                guidance = (
+                    "Apply one constrained repair using submitted source evidence only. "
+                    "Do not modify source, disable constraints, weaken checks, drop scenarios, "
+                    "or invent services/tools. Resolve this complete diagnostic set: "
+                    + ", ".join(
+                        sorted(f"{item.code}@{item.component}" for item in diagnostics)
+                    )
+                )
+                status = await repair(repair_phase, guidance)
+                after_hash = _generic_candidate_hash(source, authoring)
+                repair_controller.record_result(
+                    decision.sequence,
+                    after_candidate_hash=after_hash,
+                    outcome=(RepairOutcome.FAILED if status else RepairOutcome.APPLIED),
+                )
+                artifacts.write_repair_history(repair_controller.history)
+                if status:
+                    raise
+            else:
+                decision = repair_controller.decide(
+                    CandidateObservation(
+                        candidate_hash=candidate_hash,
+                        phase=RepairPhase.ENVIRONMENT,
+                    )
+                )
+                if decision.action is not RepairAction.CERTIFY:
+                    raise RuntimeValidationError(
+                        "environment", "generic pipeline refused passing candidate"
+                    )
+                artifacts.write_repair_history(repair_controller.history)
+                (authoring / "runtime-validation.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "passed",
+                            "attempts": len(repair_controller.history.decisions),
+                            "setup_ready_scenarios": count,
+                            "reference_tools_proven": False,
+                            "generic_harness": "v1",
+                        },
+                        indent=2,
+                    )
+                    + "\n"
+                )
+                return
+        raise RuntimeValidationError(
+            "environment", "generic repair controller decision bound exhausted"
+        )
 
     repairs = {"environment": 0, "scenarios": 0}
     for attempt in range(5):
