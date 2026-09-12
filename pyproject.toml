@@ -1,5 +1,6 @@
 [build-system]
-requires = ["hatchling"]
+# Bounded: the build backend is the one artifact input uv.lock does not cover.
+requires = ["hatchling>=1.25,<2"]
 build-backend = "hatchling.build"
 
 [project]
