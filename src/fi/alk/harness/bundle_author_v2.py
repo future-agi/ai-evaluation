@@ -1853,6 +1853,13 @@ def author_bundle_v2(
             shutil.rmtree(backup)
         else:
             temporary.rename(output_root)
+        # The certificate binds to the sealed bundle digest, so it must remain a control-plane
+        # sidecar rather than becoming a manifest-listed file (which would create a digest cycle).
+        # Production compilation receives this file in the frozen authoring archive and places it
+        # beside /work/bundle for the hosted entrypoint's mandatory pre-call gate.
+        certificate = authoring_root / "runtime-validation.json"
+        if generic_pipeline and certificate.is_file() and not certificate.is_symlink():
+            shutil.copy2(certificate, output_root.parent / "runtime-validation.json")
         return loaded
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)

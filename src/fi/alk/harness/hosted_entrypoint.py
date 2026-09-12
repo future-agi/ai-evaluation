@@ -403,6 +403,10 @@ _SECTION_2E_CODES = frozenset(
         "capability_slug_invalid",
         "process_name_invalid",
         "fixed_port_reserved",
+        "certification_missing",
+        "certification_invalid",
+        "certification_mismatch",
+        "certification_incomplete",
     }
 )
 
@@ -2030,6 +2034,36 @@ async def run_job(
                 fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
                 code=exc.code,
                 message=exc.message,
+            )
+
+        if (manifest.metadata or {}).get("generic_harness") == "v1":
+            from .certification import CertificationGateError, verify_runtime_certification
+
+            try:
+                certificate = await asyncio.to_thread(
+                    verify_runtime_certification,
+                    work_directory / "runtime-validation.json",
+                    bundle_digest=manifest.digest,
+                    source_digest=manifest.provenance.source_digest,
+                )
+            except CertificationGateError as exc:
+                return await _fail(
+                    domain=FailureDomain.ENVIRONMENT,
+                    fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                    code=exc.code,
+                    message=exc.message,
+                )
+            await adapter.log(
+                level="info",
+                message=(
+                    "generic harness certification accepted: "
+                    f"fingerprint={certificate.fingerprint}; "
+                    f"source={certificate.source.digest}; "
+                    f"bundle={certificate.compiler.bundle_digest}; "
+                    f"scenarios={certificate.checks.scenario_setup_ready}; "
+                    f"tools={certificate.checks.tool_contract}; "
+                    f"limitations={len(certificate.limitations)}"
+                ),
             )
 
         # 2. Preflight -- BEFORE any provision (§2e). `parallelism` is the RAW requested value

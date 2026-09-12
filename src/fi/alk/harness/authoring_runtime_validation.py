@@ -51,6 +51,9 @@ def _write_runtime_evidence(
     manifest,
     count: int,
     external_provider: bool,
+    tool_report,
+    reset_equivalence,
+    world_isolation,
 ) -> None:
     """Seal facts which would otherwise disappear with the validation sandbox."""
 
@@ -64,8 +67,7 @@ def _write_runtime_evidence(
 
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
-        "agent tool trajectories are verified during calls, not setup certification",
-        "reset equivalence and concurrent world isolation were not certified",
+        "runtime-only agent tool effects are verified during calls, not setup certification",
     ]
     if external_provider:
         source_schema_hash = manifest.provenance.source_digest
@@ -75,6 +77,10 @@ def _write_runtime_evidence(
         source_invariants = CheckStatus.NOT_RUN
         limitations.append(
             "external provider state and tool implementations were not available for local inspection"
+        )
+    if world_isolation is CheckStatus.NOT_RUN:
+        limitations.append(
+            "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
         )
     else:
         source_model = store.read_source_model()
@@ -86,15 +92,6 @@ def _write_runtime_evidence(
         source_invariants = CheckStatus.PASSED
 
     contract = authoring / "contract.json"
-    declared_tools = 0
-    if contract.is_file():
-        try:
-            contract_body = json.loads(contract.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            contract_body = {}
-        tools = contract_body.get("tools") if isinstance(contract_body, dict) else None
-        if isinstance(tools, list):
-            declared_tools = len(tools)
     scenarios = authoring / "scenarios"
     if not scenarios.exists():
         scenarios = authoring / "scenario"
@@ -112,13 +109,43 @@ def _write_runtime_evidence(
             processes=CheckStatus.PASSED,
             source_invariants=source_invariants,
             scenario_setup_ready=f"{count}/{count}",
-            tool_contract=f"0/{declared_tools}",
-            reset_equivalence=CheckStatus.NOT_RUN,
-            world_isolation=CheckStatus.NOT_RUN,
+            tool_contract=(
+                f"{tool_report.certified_or_runtime_only}/{tool_report.total}"
+            ),
+            reset_equivalence=reset_equivalence,
+            world_isolation=world_isolation,
         ),
         limitations=tuple(limitations),
     )
     store.write_runtime_evidence(evidence)
+    store.write_tool_certification(tool_report)
+
+
+def _world_state_digest(world) -> str:
+    """Return a value-level baseline fingerprint without persisting world contents."""
+
+    state = world.read_only().state()
+    canonical = {
+        table: sorted(
+            rows,
+            key=lambda row: json.dumps(
+                row,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+        for table, rows in sorted(state.items())
+    }
+    encoded = json.dumps(
+        canonical,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _write_generic_certificate(job, authoring: Path, repairs) -> None:
@@ -220,6 +247,7 @@ async def validate_once(
 ) -> int:
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
+    from .contract import AgentContract
     from .hosted_entrypoint import (
         ProcessWorldFactory,
         _resolve_hosted_public_url,
@@ -231,6 +259,7 @@ async def validate_once(
     from .process_runtime import ProcessRuntimeProvider
     from .scenario_source import load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
+    from .tool_certification import ToolAvailability, certify_tool_inventory
 
     external_provider = (
         getattr(getattr(job, "source", None), "kind", None) is SourceKind.PROVIDER
@@ -242,7 +271,7 @@ async def validate_once(
         and job.metadata.get("generic_harness_v1") is True
     )
     if generic:
-        from .certification import GenericHarnessArtifactStore
+        from .certification import CheckStatus, GenericHarnessArtifactStore
 
         artifact_root = authoring / "generic-harness"
         (artifact_root / GenericHarnessArtifactStore.RUNTIME_EVIDENCE).unlink(
@@ -292,16 +321,67 @@ async def validate_once(
                 authoring=authoring,
                 output=bundle,
             )
+            validation_parallelism = 1 if external_provider or not generic else 2
             preflight_bundle(
-                bundle, manifest, parallelism=1, secret_refs=job_secret_purposes(job)
+                bundle,
+                manifest,
+                parallelism=validation_parallelism,
+                secret_refs=job_secret_purposes(job),
             )
             runtimes = await provider.provision(
                 manifest,
                 source=source,
                 bundle_dir=bundle,
                 work_directory=work,
-                instances=1,
+                instances=validation_parallelism,
             )
+            tool_report = None
+            world_isolation = None
+            if generic:
+                contract = AgentContract.model_validate_json(
+                    (authoring / "contract.json").read_text(encoding="utf-8")
+                )
+                tool_report = certify_tool_inventory(
+                    contract, bundle, external_provider=external_provider
+                )
+                rejected_tools = [
+                    item.tool
+                    for item in tool_report.tools
+                    if item.availability is ToolAvailability.REJECTED
+                ]
+                if rejected_tools:
+                    from .diagnostics import DiagnosticLocation, HarnessDiagnostic
+                    from .job import HarnessStage
+
+                    diagnostics = tuple(
+                        HarnessDiagnostic.create(
+                            stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                            component="tool_contract",
+                            code="tool_schema_mismatch",
+                            message=f"{name}: tool has no single runnable implementation seam",
+                            location=DiagnosticLocation(tool=name),
+                        )
+                        for name in sorted(rejected_tools)
+                    )
+                    raise RuntimeValidationError(
+                        "environment",
+                        "Tool contract certification rejected: "
+                        + ", ".join(sorted(rejected_tools)),
+                        diagnostics=diagnostics,
+                    )
+                build_output = json.loads(
+                    (work / "artifacts" / "build.json").read_text(encoding="utf-8")
+                )
+                conformance = build_output.get("conformance")
+                if conformance is False:
+                    raise RuntimeValidationError(
+                        "environment",
+                        "Concurrent world isolation conformance failed: "
+                        + str(build_output.get("conformance_reason") or "unknown reason"),
+                    )
+                world_isolation = (
+                    CheckStatus.PASSED if conformance is True else CheckStatus.NOT_RUN
+                )
             factory = ProcessWorldFactory(work)
             runtime = runtimes[0]
             phase = "scenarios"
@@ -310,6 +390,8 @@ async def validate_once(
                 raise RuntimeValidationError(
                     phase, "Runtime scenario count differs from the requested count"
                 )
+
+            baseline_state_digest: str | None = None
 
             async def check_setups(invariants):
                 failures = []
@@ -322,8 +404,18 @@ async def validate_once(
                     raise RuntimeValidationError(phase, "\n".join(failures))
 
             async def check_setup(scenario, invariants):
+                nonlocal baseline_state_digest
                 await provider.reset(runtime, work_directory=work)
                 world = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                if generic and not external_provider:
+                    current_digest = _world_state_digest(world)
+                    if baseline_state_digest is None:
+                        baseline_state_digest = current_digest
+                    elif current_digest != baseline_state_digest:
+                        raise RuntimeValidationError(
+                            phase,
+                            f"{scenario.scenario_key}: reset did not restore the certified baseline",
+                        )
                 for name, fn, target, timeout in (
                     ("setup", scenario.setup, world, 30.0),
                     ("ready", scenario.ready, world.read_only(), 15.0),
@@ -373,6 +465,9 @@ async def validate_once(
                         manifest=manifest,
                         count=len(scenarios),
                         external_provider=True,
+                            tool_report=tool_report,
+                        reset_equivalence=CheckStatus.NOT_RUN,
+                        world_isolation=CheckStatus.NOT_RUN,
                     )
                 return len(scenarios)
             phase = "environment"
@@ -390,12 +485,25 @@ async def validate_once(
             if invariants:
                 await check_setups(invariants)
             if generic:
+                await provider.reset(runtime, work_directory=work)
+                reset_world = await factory.create(
+                    runtime, rng=random.Random(job.seed or 0)
+                )
+                if baseline_state_digest is None or _world_state_digest(
+                    reset_world
+                ) != baseline_state_digest:
+                    raise RuntimeValidationError(
+                        "environment", "Final reset did not restore the certified baseline"
+                    )
                 _write_runtime_evidence(
                     job=job,
                     authoring=authoring,
                     manifest=manifest,
                     count=len(scenarios),
                     external_provider=False,
+                    tool_report=tool_report,
+                    reset_equivalence=CheckStatus.PASSED,
+                    world_isolation=world_isolation,
                 )
             return len(scenarios)
         except RuntimeValidationError as exc:

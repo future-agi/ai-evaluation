@@ -16,6 +16,7 @@ from .diagnostics import HarnessDiagnostic
 from .repair_controller import RepairHistory
 from .source_model import SourceModel
 from .world_ir import WorldIR
+from .tool_certification import ToolCertificationReport
 
 HARNESS_CERTIFICATION_SCHEMA_VERSION = "futureagi.harness-certification.v1"
 
@@ -161,6 +162,75 @@ class HarnessCertification(BaseModel):
         return self
 
 
+class CertificationGateError(RuntimeError):
+    """A generic execution candidate is missing or does not match its proof."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(f"{code}: {message}")
+
+
+def verify_runtime_certification(
+    path: Path,
+    *,
+    bundle_digest: str,
+    source_digest: str,
+) -> HarnessCertification:
+    """Fail closed unless a tamper-evident certificate matches the execution bundle."""
+
+    if not path.is_file() or path.is_symlink():
+        raise CertificationGateError(
+            "certification_missing",
+            "generic runtime certification was not supplied to the execution sandbox",
+        )
+    try:
+        certificate = HarnessCertification.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise CertificationGateError(
+            "certification_invalid", "generic runtime certification is invalid"
+        ) from exc
+    if certificate.status is not CertificationStatus.CERTIFIED:
+        raise CertificationGateError(
+            "certification_incomplete", "generic runtime candidate was not certified"
+        )
+    if certificate.compiler.bundle_digest != bundle_digest:
+        raise CertificationGateError(
+            "certification_mismatch",
+            "certification bundle digest does not match the execution bundle",
+        )
+    if certificate.source.digest != source_digest:
+        raise CertificationGateError(
+            "certification_mismatch",
+            "certification source digest does not match the execution source",
+        )
+    required = {
+        "static": certificate.checks.static,
+        "processes": certificate.checks.processes,
+    }
+    failed = sorted(name for name, value in required.items() if value is not CheckStatus.PASSED)
+    for name, ratio in (
+        ("scenario_setup_ready", certificate.checks.scenario_setup_ready),
+        ("tool_contract", certificate.checks.tool_contract),
+    ):
+        try:
+            accepted, total = (int(value) for value in ratio.split("/", 1))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise CertificationGateError(
+                "certification_invalid", f"{name} is not a valid certification ratio"
+            ) from exc
+        if accepted != total:
+            failed.append(name)
+    if failed:
+        raise CertificationGateError(
+            "certification_incomplete",
+            "required certification checks did not pass: " + ", ".join(failed),
+        )
+    return certificate
+
+
 def _fingerprint(raw: dict[str, Any]) -> str:
     def jsonable(value: Any) -> Any:
         if isinstance(value, BaseModel):
@@ -194,6 +264,7 @@ class GenericHarnessArtifactStore:
     REPAIR_HISTORY = "repair-history.json"
     RUNTIME_EVIDENCE = "runtime-evidence.json"
     CERTIFICATION = "certification.json"
+    TOOL_CERTIFICATION = "tool-certification.json"
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -250,11 +321,18 @@ class GenericHarnessArtifactStore:
     def read_certification(self) -> HarnessCertification:
         return self._read(self.CERTIFICATION, HarnessCertification)
 
+    def write_tool_certification(self, value: ToolCertificationReport) -> Path:
+        return self._write(self.TOOL_CERTIFICATION, value)
+
+    def read_tool_certification(self) -> ToolCertificationReport:
+        return self._read(self.TOOL_CERTIFICATION, ToolCertificationReport)
+
 
 __all__ = [
     "HARNESS_CERTIFICATION_SCHEMA_VERSION",
     "CertificationAuthoring",
     "CertificationChecks",
+    "CertificationGateError",
     "CertificationCompiler",
     "CertificationRuntime",
     "CertificationSource",
@@ -263,4 +341,5 @@ __all__ = [
     "GenericHarnessArtifactStore",
     "HarnessCertification",
     "RuntimeValidationEvidence",
+    "verify_runtime_certification",
 ]

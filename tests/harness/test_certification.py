@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from fi.alk.harness.certification import (
     CertificationAuthoring,
     CertificationChecks,
+    CertificationGateError,
     CertificationCompiler,
     CertificationRuntime,
     CertificationSource,
@@ -18,6 +19,7 @@ from fi.alk.harness.certification import (
     GenericHarnessArtifactStore,
     HarnessCertification,
     RuntimeValidationEvidence,
+    verify_runtime_certification,
 )
 from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
@@ -92,6 +94,59 @@ def test_certificate_is_canonical_and_tamper_evident() -> None:
 
     with pytest.raises(ValidationError, match="fingerprint_mismatch"):
         HarnessCertification.model_validate(body)
+
+
+def test_execution_gate_accepts_only_matching_complete_certificate(tmp_path: Path) -> None:
+    path = tmp_path / "runtime-validation.json"
+    path.write_text(_certificate().model_dump_json(), encoding="utf-8")
+
+    assert (
+        verify_runtime_certification(
+            path,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+        ).fingerprint
+        == _certificate().fingerprint
+    )
+
+    with pytest.raises(CertificationGateError, match="certification_mismatch"):
+        verify_runtime_certification(
+            path,
+            bundle_digest=_digest("0"),
+            source_digest=_digest("a"),
+        )
+
+
+def test_execution_gate_rejects_missing_and_incomplete_certificates(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing.json"
+    with pytest.raises(CertificationGateError, match="certification_missing"):
+        verify_runtime_certification(
+            missing,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+        )
+
+    path = tmp_path / "runtime-validation.json"
+    certificate = _certificate()
+    incomplete = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=certificate.source,
+        authoring=certificate.authoring,
+        compiler=certificate.compiler,
+        runtime=certificate.runtime,
+        checks=certificate.checks.model_copy(update={"tool_contract": "2/3"}),
+        repairs=certificate.repairs,
+        limitations=certificate.limitations,
+    )
+    path.write_text(incomplete.model_dump_json(), encoding="utf-8")
+    with pytest.raises(CertificationGateError, match="certification_incomplete"):
+        verify_runtime_certification(
+            path,
+            bundle_digest=_digest("f"),
+            source_digest=_digest("a"),
+        )
 
 
 def test_certified_status_cannot_hide_diagnostics() -> None:

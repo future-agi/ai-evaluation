@@ -1075,6 +1075,9 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
         encoding="utf-8",
     )
     authoring = _authoring(tmp_path)
+    (authoring / "runtime-validation.json").write_text(
+        '{"status":"certified"}\n', encoding="utf-8"
+    )
     database = sqlite3.connect(authoring / "world.sqlite")
     try:
         database.execute("CREATE TABLE users (id TEXT, tags TEXT)")
@@ -1098,6 +1101,9 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
     assert store.migrations == ["seed/source-schema.sql"]
     assert store.seed_files == ["seed/world.sqlite"]
     assert manifest.metadata["generic_harness"] == "v1"
+    assert (tmp_path / "runtime-validation.json").read_text(encoding="utf-8") == (
+        '{"status":"certified"}\n'
+    )
     schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE users" in schema
     assert "user-1" not in schema
