@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/futureagi-mark-email.png" alt="Future AGI" width="72" />
+  <img src="https://raw.githubusercontent.com/future-agi/agent-learning-kit/main/docs/assets/futureagi-mark-email.png" alt="Future AGI" width="72" />
 </p>
 
 <h1 align="center">Agent Learning Kit</h1>
@@ -9,20 +9,20 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE">Apache-2.0</a>
+  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/LICENSE">Apache-2.0</a>
   ·
-  <a href="docs/index.md">Docs</a>
+  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/docs/index.md">Docs</a>
   ·
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/CONTRIBUTING.md">Contributing</a>
   ·
-  <a href="SECURITY.md">Security</a>
+  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/SECURITY.md">Security</a>
   ·
-  <a href="ROADMAP.md">V1 roadmap</a>
+  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/ROADMAP.md">V1 roadmap</a>
   ·
-  <a href="LIBRARIES.md">Library inventory</a>
+  <a href="https://github.com/future-agi/agent-learning-kit/blob/main/LIBRARIES.md">Library inventory</a>
 </p>
 
-![Agent Learning lifecycle blueprint](docs/assets/hero-agent-blueprint.jpg)
+![Agent Learning lifecycle blueprint](https://raw.githubusercontent.com/future-agi/agent-learning-kit/main/docs/assets/hero-agent-blueprint.jpg)
 
 Agent Learning Kit is the local-first SDK and CLI for testing, simulating,
 red-teaming, and optimizing AI agents.
@@ -53,10 +53,10 @@ Point it at an agent's source and it reads what that agent verifiably is, builds
 tools act on, and writes test scenarios that are each proved before they are kept. It is driven
 as a conversation, in a terminal or on a web page.
 
-- **[Start here](src/fi/alk/harness/README.md)**: setup from nothing, then how to use it
-- **[The web page](harness-ui/README.md)**: the same harness as a chat, on `localhost:8777`
-- **[How it works](src/fi/alk/harness/HOW-IT-WORKS.md)** and
-  **[why it is shaped this way](src/fi/alk/harness/DESIGN.md)**
+- **[Start here](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk/harness/README.md)**: setup from nothing, then how to use it
+- **[The web page](https://github.com/future-agi/agent-learning-kit/blob/main/harness-ui/README.md)**: the same harness as a chat, on `localhost:8777`
+- **[How it works](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk/harness/HOW-IT-WORKS.md)** and
+  **[why it is shaped this way](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk/harness/DESIGN.md)**
 
 OpenEnv/Gymnasium shapes are compatibility inputs, not the product center.
 Agent Learning Kit is the primary runtime and release contract, and the bar is
@@ -90,7 +90,7 @@ pip install "agent-learning-kit[all]"
 ```
 
 TypeScript evaluation package (npm at launch; today build from
-[`typescript/agent-learning-kit`](typescript/agent-learning-kit)):
+[`typescript/agent-learning-kit`](https://github.com/future-agi/agent-learning-kit/blob/main/typescript/agent-learning-kit)):
 
 ```bash
 pnpm add @future-agi/agent-learning-kit
@@ -111,7 +111,7 @@ Then run the golden path against the bundled example manifests. The
 credential, so any placeholder value works.
 
 > Prefer the SDK spine over the CLI?
-> [Spec + Runner](docs/simulate/spec-and-runner.md) runs the same simulation as
+> [Spec + Runner](https://github.com/future-agi/agent-learning-kit/blob/main/docs/simulate/spec-and-runner.md) runs the same simulation as
 > one `SimulationSpec` fed to one `SimulationRunner` — the plug-and-play surface
 > behind every simulation.
 
@@ -154,7 +154,7 @@ Optional platform mode: to use Future AGI platform-backed evaluation, set
 `AGENT_LEARNING_API_KEY` (it takes precedence over the `FUTURE_AGI_API_KEY`
 and `FI_API_KEY` aliases), or call `configure(api_key="...")` from
 `fi.alk`. See
-[docs/reference/configure.md](docs/reference/configure.md).
+[docs/reference/configure.md](https://github.com/future-agi/agent-learning-kit/blob/main/docs/reference/configure.md).
 
 Cut local release proof:
 
@@ -203,30 +203,30 @@ The public SDK is `agent-learning-kit`, the Python namespace is
 The active `ai-evaluation` code is included here under `src/fi/evals`, with its
 TypeScript SDK source under `typescript/agent-learning-kit/src`. The
 `simulate-sdk` and `agent-opt` engine code is included under `src/fi/simulate`
-and `src/fi/opt`. See [LIBRARIES.md](LIBRARIES.md) for the complete source map.
+and `src/fi/opt`. See [LIBRARIES.md](https://github.com/future-agi/agent-learning-kit/blob/main/LIBRARIES.md) for the complete source map.
 The ai-evaluation source inventory used by `agent-learn release-check` lives at
 the ai-evaluation source inventory (maintained in the internal-docs repo).
 
 ## Repository Map
 
-- [`examples/`](examples): runnable cookbooks and manifests.
-- [`src/fi/alk`](src/fi/alk): public Python SDK facade and CLI.
-- [`src/fi/evals`](src/fi/evals): active `ai-evaluation` engine code.
-- [`src/fi/simulate`](src/fi/simulate): migrated `simulate-sdk` engine code.
-- [`src/fi/opt`](src/fi/opt): migrated `agent-opt` engine code.
-- [`typescript/agent-learning-kit`](typescript/agent-learning-kit): public
+- [`examples/`](https://github.com/future-agi/agent-learning-kit/blob/main/examples): runnable cookbooks and manifests.
+- [`src/fi/alk`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/alk): public Python SDK facade and CLI.
+- [`src/fi/evals`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/evals): active `ai-evaluation` engine code.
+- [`src/fi/simulate`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/simulate): migrated `simulate-sdk` engine code.
+- [`src/fi/opt`](https://github.com/future-agi/agent-learning-kit/blob/main/src/fi/opt): migrated `agent-opt` engine code.
+- [`typescript/agent-learning-kit`](https://github.com/future-agi/agent-learning-kit/blob/main/typescript/agent-learning-kit): public
   TypeScript package, including the active evaluation SDK source.
-- [`docs/index.md`](docs/index.md): full documentation index.
-- [`ROADMAP.md`](ROADMAP.md): public v1 roadmap and post-v1 extensions.
-- [`LIBRARIES.md`](LIBRARIES.md): source map for the consolidated engines.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md): local development and PR workflow.
-- [`SECURITY.md`](SECURITY.md): vulnerability reporting policy.
-- [`LICENSE`](LICENSE): Apache-2.0 license.
-- [`NOTICE`](NOTICE): Apache notice metadata.
+- [`docs/index.md`](https://github.com/future-agi/agent-learning-kit/blob/main/docs/index.md): full documentation index.
+- [`ROADMAP.md`](https://github.com/future-agi/agent-learning-kit/blob/main/ROADMAP.md): public v1 roadmap and post-v1 extensions.
+- [`LIBRARIES.md`](https://github.com/future-agi/agent-learning-kit/blob/main/LIBRARIES.md): source map for the consolidated engines.
+- [`CONTRIBUTING.md`](https://github.com/future-agi/agent-learning-kit/blob/main/CONTRIBUTING.md): local development and PR workflow.
+- [`SECURITY.md`](https://github.com/future-agi/agent-learning-kit/blob/main/SECURITY.md): vulnerability reporting policy.
+- [`LICENSE`](https://github.com/future-agi/agent-learning-kit/blob/main/LICENSE): Apache-2.0 license.
+- [`NOTICE`](https://github.com/future-agi/agent-learning-kit/blob/main/NOTICE): Apache notice metadata.
 
 ## Development
 
-New public SDK development belongs here. See [DEVELOPMENT.md](DEVELOPMENT.md)
+New public SDK development belongs here. See [DEVELOPMENT.md](https://github.com/future-agi/agent-learning-kit/blob/main/DEVELOPMENT.md)
 for the boundary between this package and the backing engine repos.
 
 ```bash
@@ -271,12 +271,12 @@ extensions land post-v1 without weakening any gate.
 
 ## Community
 
-- Contributions: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- Security reports: [SECURITY.md](SECURITY.md)
-- License: [Apache-2.0](LICENSE)
+- Contributions: [CONTRIBUTING.md](https://github.com/future-agi/agent-learning-kit/blob/main/CONTRIBUTING.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](https://github.com/future-agi/agent-learning-kit/blob/main/CODE_OF_CONDUCT.md)
+- Security reports: [SECURITY.md](https://github.com/future-agi/agent-learning-kit/blob/main/SECURITY.md)
+- License: [Apache-2.0](https://github.com/future-agi/agent-learning-kit/blob/main/LICENSE)
 
 ## Deep Dive
 
 The full documentation set — quickstarts, per-track guides, framework pages,
-and reference material — starts at [docs/index.md](docs/index.md).
+and reference material — starts at [docs/index.md](https://github.com/future-agi/agent-learning-kit/blob/main/docs/index.md).
