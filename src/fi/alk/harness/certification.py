@@ -75,6 +75,26 @@ class CertificationChecks(BaseModel):
     world_isolation: CheckStatus = CheckStatus.NOT_RUN
 
 
+class RuntimeValidationEvidence(BaseModel):
+    """Facts captured by the disposable runtime before it is torn down.
+
+    This is deliberately separate from the final certificate: the runtime can prove what it
+    exercised, while the repair controller owns the terminal decision and complete history.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_digest: str
+    source_schema_hash: str
+    world_ir_hash: str
+    compiler_version: str = Field(min_length=1)
+    bundle_digest: str
+    contract_hash: str
+    scenario_set_hash: str
+    checks: CertificationChecks
+    limitations: tuple[str, ...] = ()
+
+
 class HarnessCertification(BaseModel):
     """Secret-free proof describing exactly what was and was not validated."""
 
@@ -172,6 +192,7 @@ class GenericHarnessArtifactStore:
     SOURCE_MODEL = "source-model.json"
     WORLD_IR = "world-ir.json"
     REPAIR_HISTORY = "repair-history.json"
+    RUNTIME_EVIDENCE = "runtime-evidence.json"
     CERTIFICATION = "certification.json"
 
     def __init__(self, root: Path) -> None:
@@ -217,6 +238,12 @@ class GenericHarnessArtifactStore:
     def read_repair_history(self) -> RepairHistory:
         return self._read(self.REPAIR_HISTORY, RepairHistory)
 
+    def write_runtime_evidence(self, value: RuntimeValidationEvidence) -> Path:
+        return self._write(self.RUNTIME_EVIDENCE, value)
+
+    def read_runtime_evidence(self) -> RuntimeValidationEvidence:
+        return self._read(self.RUNTIME_EVIDENCE, RuntimeValidationEvidence)
+
     def write_certification(self, value: HarnessCertification) -> Path:
         return self._write(self.CERTIFICATION, value)
 
@@ -235,4 +262,5 @@ __all__ = [
     "CheckStatus",
     "GenericHarnessArtifactStore",
     "HarnessCertification",
+    "RuntimeValidationEvidence",
 ]

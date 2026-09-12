@@ -17,6 +17,7 @@ from fi.alk.harness.certification import (
     CheckStatus,
     GenericHarnessArtifactStore,
     HarnessCertification,
+    RuntimeValidationEvidence,
 )
 from fi.alk.harness.repair_controller import RepairHistory
 from fi.alk.harness.source_model import SourceModel
@@ -70,6 +71,20 @@ def _certificate() -> HarnessCertification:
     )
 
 
+def _runtime_evidence() -> RuntimeValidationEvidence:
+    return RuntimeValidationEvidence(
+        source_digest=_digest("a"),
+        source_schema_hash=_digest("b"),
+        world_ir_hash=_digest("c"),
+        compiler_version="compiler-v1",
+        bundle_digest=_digest("d"),
+        contract_hash=_digest("e"),
+        scenario_set_hash=_digest("f"),
+        checks=CertificationChecks(schema_and_seed=CheckStatus.PASSED),
+        limitations=("tool trajectories not run",),
+    )
+
+
 def test_certificate_is_canonical_and_tamper_evident() -> None:
     certificate = _certificate()
     body = json.loads(certificate.model_dump_json())
@@ -111,13 +126,21 @@ def test_artifact_store_round_trips_and_uses_private_atomic_files(
     source_path = store.write_source_model(source)
     world_path = store.write_world_ir(world)
     history_path = store.write_repair_history(_history())
+    evidence_path = store.write_runtime_evidence(_runtime_evidence())
     certificate_path = store.write_certification(_certificate())
 
     assert store.read_source_model() == source
     assert store.read_world_ir() == world
     assert store.read_repair_history() == _history()
+    assert store.read_runtime_evidence() == _runtime_evidence()
     assert store.read_certification() == _certificate()
-    for path in (source_path, world_path, history_path, certificate_path):
+    for path in (
+        source_path,
+        world_path,
+        history_path,
+        evidence_path,
+        certificate_path,
+    ):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert not list((tmp_path / "generic").glob(".*.json.*"))
 

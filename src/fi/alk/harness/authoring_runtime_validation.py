@@ -10,10 +10,160 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import random
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+
+def _artifact_digest(path: Path) -> str:
+    """Hash one authoring artifact without depending on its absolute checkout path."""
+
+    digest = hashlib.sha256()
+    if path.is_file():
+        digest.update(path.read_bytes())
+    elif path.is_dir():
+        for item in sorted(
+            candidate for candidate in path.rglob("*") if candidate.is_file()
+        ):
+            relative = item.relative_to(path).as_posix().encode("utf-8")
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(item.read_bytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def _runtime_snapshot(job) -> str | None:
+    metadata = getattr(job, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("daytona_snapshot", "sandbox_snapshot", "snapshot"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return os.environ.get("ALK_DAYTONA_SNAPSHOT") or None
+
+
+def _write_runtime_evidence(
+    *,
+    job,
+    authoring: Path,
+    manifest,
+    count: int,
+    external_provider: bool,
+) -> None:
+    """Seal facts which would otherwise disappear with the validation sandbox."""
+
+    from .certification import (
+        CertificationChecks,
+        CheckStatus,
+        GenericHarnessArtifactStore,
+        RuntimeValidationEvidence,
+    )
+    from .compile.postgres import POSTGRES_COMPILER_VERSION
+
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    limitations = [
+        "agent tool trajectories are verified during calls, not setup certification",
+        "reset equivalence and concurrent world isolation were not certified",
+    ]
+    if external_provider:
+        source_schema_hash = manifest.provenance.source_digest
+        world_ir_hash = _artifact_digest(Path("__external_provider_world__"))
+        compiler_version = "external-provider-black-box"
+        schema_and_seed = CheckStatus.NOT_RUN
+        source_invariants = CheckStatus.NOT_RUN
+        limitations.append(
+            "external provider state and tool implementations were not available for local inspection"
+        )
+    else:
+        source_model = store.read_source_model()
+        world_ir = store.read_world_ir()
+        source_schema_hash = source_model.fingerprint
+        world_ir_hash = world_ir.fingerprint
+        compiler_version = POSTGRES_COMPILER_VERSION
+        schema_and_seed = CheckStatus.PASSED
+        source_invariants = CheckStatus.PASSED
+
+    contract = authoring / "contract.json"
+    declared_tools = 0
+    if contract.is_file():
+        try:
+            contract_body = json.loads(contract.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            contract_body = {}
+        tools = contract_body.get("tools") if isinstance(contract_body, dict) else None
+        if isinstance(tools, list):
+            declared_tools = len(tools)
+    scenarios = authoring / "scenarios"
+    if not scenarios.exists():
+        scenarios = authoring / "scenario"
+    evidence = RuntimeValidationEvidence(
+        source_digest=manifest.provenance.source_digest,
+        source_schema_hash=source_schema_hash,
+        world_ir_hash=world_ir_hash,
+        compiler_version=compiler_version,
+        bundle_digest=manifest.digest,
+        contract_hash=_artifact_digest(contract),
+        scenario_set_hash=_artifact_digest(scenarios),
+        checks=CertificationChecks(
+            static=CheckStatus.PASSED,
+            schema_and_seed=schema_and_seed,
+            processes=CheckStatus.PASSED,
+            source_invariants=source_invariants,
+            scenario_setup_ready=f"{count}/{count}",
+            tool_contract=f"0/{declared_tools}",
+            reset_equivalence=CheckStatus.NOT_RUN,
+            world_isolation=CheckStatus.NOT_RUN,
+        ),
+        limitations=tuple(limitations),
+    )
+    store.write_runtime_evidence(evidence)
+
+
+def _write_generic_certificate(job, authoring: Path, repairs) -> None:
+    from .certification import (
+        CertificationAuthoring,
+        CertificationCompiler,
+        CertificationRuntime,
+        CertificationSource,
+        CertificationStatus,
+        GenericHarnessArtifactStore,
+        HarnessCertification,
+    )
+
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    evidence = store.read_runtime_evidence()
+    source = getattr(job, "source", None)
+    certificate = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=CertificationSource(
+            repository=getattr(source, "repository", None),
+            commit=getattr(source, "commit_sha", None),
+            digest=evidence.source_digest,
+            schema_hash=evidence.source_schema_hash,
+        ),
+        authoring=CertificationAuthoring(
+            contract_hash=evidence.contract_hash,
+            world_ir_hash=evidence.world_ir_hash,
+            scenario_set_hash=evidence.scenario_set_hash,
+        ),
+        compiler=CertificationCompiler(
+            version=evidence.compiler_version,
+            bundle_digest=evidence.bundle_digest,
+        ),
+        runtime=CertificationRuntime(
+            snapshot=_runtime_snapshot(job),
+            validation_attempts=len(repairs.decisions),
+        ),
+        checks=evidence.checks,
+        repairs=repairs,
+        limitations=evidence.limitations,
+    )
+    store.write_certification(certificate)
+    (authoring / "runtime-validation.json").write_text(
+        certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _generic_candidate_hash(source: Path, authoring: Path) -> str:
@@ -87,6 +237,21 @@ async def validate_once(
         and getattr(getattr(job, "agent", None), "mode", None)
         is ProviderExecutionMode.CONNECT_ONLY
     )
+    generic = bool(
+        isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+
+        artifact_root = authoring / "generic-harness"
+        (artifact_root / GenericHarnessArtifactStore.RUNTIME_EVIDENCE).unlink(
+            missing_ok=True
+        )
+        (artifact_root / GenericHarnessArtifactStore.CERTIFICATION).unlink(
+            missing_ok=True
+        )
+        (authoring / "runtime-validation.json").unlink(missing_ok=True)
 
     # The real execution consumes its credential file. Validation gets a private copy,
     # with the same purpose map, so it cannot destroy the execution handoff.
@@ -112,6 +277,7 @@ async def validate_once(
             ),
             provider_attempt_id=capabilities.attempt_id,
             provider_expires_at=capabilities.expires_at,
+            generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
         executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="runtime-validation"
@@ -200,6 +366,14 @@ async def validate_once(
                     "skipping local source-data invariant review",
                     flush=True,
                 )
+                if generic:
+                    _write_runtime_evidence(
+                        job=job,
+                        authoring=authoring,
+                        manifest=manifest,
+                        count=len(scenarios),
+                        external_provider=True,
+                    )
                 return len(scenarios)
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
@@ -215,6 +389,14 @@ async def validate_once(
             phase = "scenarios"
             if invariants:
                 await check_setups(invariants)
+            if generic:
+                _write_runtime_evidence(
+                    job=job,
+                    authoring=authoring,
+                    manifest=manifest,
+                    count=len(scenarios),
+                    external_provider=False,
+                )
             return len(scenarios)
         except RuntimeValidationError as exc:
             raise RuntimeValidationError(
@@ -373,19 +555,32 @@ async def validate_and_repair(
                         "environment", "generic pipeline refused passing candidate"
                     )
                 artifacts.write_repair_history(repair_controller.history)
-                (authoring / "runtime-validation.json").write_text(
-                    json.dumps(
-                        {
-                            "status": "passed",
-                            "attempts": len(repair_controller.history.decisions),
-                            "setup_ready_scenarios": count,
-                            "reference_tools_proven": False,
-                            "generic_harness": "v1",
-                        },
-                        indent=2,
-                    )
-                    + "\n"
+                evidence_path = (
+                    authoring
+                    / "generic-harness"
+                    / GenericHarnessArtifactStore.RUNTIME_EVIDENCE
                 )
+                if evidence_path.is_file():
+                    _write_generic_certificate(
+                        job, authoring, repair_controller.history
+                    )
+                else:
+                    # Injected validators in unit/integration consumers may not implement the
+                    # runtime-evidence seam. Keep their legacy proof shape without allowing the
+                    # production validator to emit a false full certificate.
+                    (authoring / "runtime-validation.json").write_text(
+                        json.dumps(
+                            {
+                                "status": "passed",
+                                "attempts": len(repair_controller.history.decisions),
+                                "setup_ready_scenarios": count,
+                                "reference_tools_proven": False,
+                                "generic_harness": "v1",
+                            },
+                            indent=2,
+                        )
+                        + "\n"
+                    )
                 return
         raise RuntimeValidationError(
             "environment", "generic repair controller decision bound exhausted"

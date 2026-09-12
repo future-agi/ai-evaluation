@@ -2575,6 +2575,7 @@ def apply_postgres_sqlite_world(
     dbname: str,
     credentials: EngineCredentials,
     source_digest: str,
+    artifact_root: Path | None = None,
 ) -> None:
     """Inspect the migrated database, import legacy rows semantically, and bind inserts."""
 
@@ -2676,6 +2677,15 @@ def apply_postgres_sqlite_world(
                     ),
                 )
             ) from error
+        if artifact_root is not None:
+            # Persist the canonical models, in the private artifact store, only after PostgreSQL
+            # accepted the compiled program. The final secret-free certificate is assembled by
+            # runtime validation after every scenario setup/ready check has also passed.
+            from .certification import GenericHarnessArtifactStore
+
+            artifacts = GenericHarnessArtifactStore(artifact_root)
+            artifacts.write_source_model(source)
+            artifacts.write_world_ir(imported.world)
 
 
 class GenericWorldSeedError(ValueError):
@@ -2700,6 +2710,7 @@ def apply_seed_file(
     group: int | None = None,
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
     source_digest: str | None = None,
+    generic_artifact_root: Path | None = None,
 ) -> None:
     """Applies one migration/seed file, per §2c: "applied in listed order." `postgres` shells out
     to a psql-style command (`-f`, so a large schema file streams rather than loading into this
@@ -2733,13 +2744,15 @@ def apply_seed_file(
                     process=process_name,
                 )
             try:
-                apply_postgres_sqlite_world(
-                    file,
-                    port=port,
-                    dbname=dbname,
-                    credentials=credentials,
-                    source_digest=source_digest,
-                )
+                world_kwargs = {
+                    "port": port,
+                    "dbname": dbname,
+                    "credentials": credentials,
+                    "source_digest": source_digest,
+                }
+                if generic_artifact_root is not None:
+                    world_kwargs["artifact_root"] = generic_artifact_root
+                apply_postgres_sqlite_world(file, **world_kwargs)
             except Exception as exc:
                 code = str(getattr(exc, "code", "generic_world_import_failed"))
                 diagnostics = tuple(getattr(exc, "diagnostics", ()))
@@ -2831,6 +2844,7 @@ def apply_store_seed(
     group: int | None = None,
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer,
     source_digest: str | None = None,
+    generic_artifact_root: Path | None = None,
 ) -> None:
     """§2c: "migrations then seed_files... applied in listed order" — migrations always precede
     seed_files, regardless of how many files either list holds, and each list keeps its own
@@ -2848,6 +2862,7 @@ def apply_store_seed(
             group=group,
             rabbitmq_import=rabbitmq_import,
             source_digest=source_digest,
+            generic_artifact_root=generic_artifact_root,
         )
 
 
@@ -2971,6 +2986,7 @@ class SpawnContext:
     # HTTP API seam every other rabbitmq call in this context already uses.
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer
     bundle_dir: Path | None = None
+    generic_artifact_root: Path | None = None
 
 
 @dataclass
@@ -3650,6 +3666,7 @@ def _freeze_one_store(
             group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
             source_digest=manifest.provenance.source_digest,
+            generic_artifact_root=context.generic_artifact_root,
         )
         # m3, p6-review-r1: §2c defines the sentinel as a check "against the freshly seeded
         # baseline" — checked here, before sealing, so a seed that silently produced the wrong
@@ -3986,6 +4003,7 @@ def _seal_world_store(
             group=handle.gid,
             rabbitmq_import=context.rabbitmq_import,
             source_digest=manifest.provenance.source_digest,
+            generic_artifact_root=context.generic_artifact_root,
         )
     return handle
 
@@ -4673,6 +4691,7 @@ class ProcessRuntimeProvider:
         public_url_resolver: Callable[[int, int], str] | None = None,
         provider_attempt_id: str | None = None,
         provider_expires_at: datetime | None = None,
+        generic_artifact_root: Path | None = None,
     ) -> None:
         self._runner = runner
         self._sync_run = sync_run
@@ -4707,6 +4726,7 @@ class ProcessRuntimeProvider:
         self._public_url_resolver = public_url_resolver
         self._provider_attempt_id = provider_attempt_id
         self._provider_expires_at = provider_expires_at
+        self._generic_artifact_root = generic_artifact_root
 
         self._manifest: EnvironmentBundleV2 | None = None
         self._bundle_digest: str | None = None
@@ -4816,6 +4836,7 @@ class ProcessRuntimeProvider:
                 rabbitmq_delete=self._rabbitmq_delete,
                 rabbitmq_import=self._rabbitmq_import,
                 bundle_dir=bundle_dir,
+                generic_artifact_root=self._generic_artifact_root,
             )
             # N3, p6-review-r2 (MAJOR): the job identity (`_manifest`/`_bundle_digest`) is
             # committed only AFTER `build_process_trees`/`freeze_baseline` both succeed —

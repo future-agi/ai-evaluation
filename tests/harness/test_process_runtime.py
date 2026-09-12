@@ -3129,6 +3129,68 @@ def test_apply_seed_file_imports_sqlite_world_without_psql(
     ]
 
 
+def test_typed_postgres_seed_persists_the_accepted_source_and_world(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Certification inputs are emitted only after the compiled seed is accepted."""
+    import sqlite3
+
+    from fi.alk.harness import certification
+    from fi.alk.harness.compile import postgres as postgres_compiler
+    from fi.alk.harness.source_model import SourceModel
+    from fi.alk.harness.source_schema import postgres as postgres_schema
+    from fi.alk.harness.world_import import sqlite as sqlite_import
+    from fi.alk.harness.world_ir import WorldIR
+
+    world_path = tmp_path / "world.sqlite"
+    with sqlite3.connect(world_path):
+        pass
+    source = SourceModel.create(source_digest="sha256:" + "a" * 64, engine="postgres")
+    world = WorldIR.create(source_model_fingerprint=source.fingerprint, tables=())
+    compiled = object()
+    applied = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    fake_psycopg = types.ModuleType("psycopg")
+    fake_psycopg.connect = lambda **_kwargs: Connection()
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    monkeypatch.setattr(postgres_schema, "inspect_postgres", lambda *_a, **_k: source)
+    monkeypatch.setattr(
+        sqlite_import,
+        "import_sqlite_world",
+        lambda *_a, **_k: types.SimpleNamespace(world=world),
+    )
+    monkeypatch.setattr(
+        postgres_compiler, "compile_postgres", lambda *_a, **_k: compiled
+    )
+    monkeypatch.setattr(
+        postgres_compiler,
+        "apply_postgres",
+        lambda connection, program: applied.append((connection, program)),
+    )
+
+    artifact_root = tmp_path / "artifacts"
+    pr.apply_postgres_sqlite_world(
+        world_path,
+        port=5432,
+        dbname="baseline",
+        credentials=pr.EngineCredentials(username="harness", password="pw"),
+        source_digest=source.source_digest,
+        artifact_root=artifact_root,
+    )
+
+    store = certification.GenericHarnessArtifactStore(artifact_root)
+    assert store.read_source_model() == source
+    assert store.read_world_ir() == world
+    assert applied and applied[0][1] is compiled
+
+
 def test_apply_seed_file_requires_provenance_for_typed_world(tmp_path: Path) -> None:
     world = tmp_path / "world.sqlite"
     world.write_bytes(b"sqlite fixture")

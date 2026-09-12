@@ -7,16 +7,25 @@ import pytest
 from fi.alk.harness.authoring_runtime_validation import (
     RuntimeValidationError,
     _generic_candidate_hash,
+    _write_generic_certificate,
     validate_and_repair,
     validate_once,
+)
+from fi.alk.harness.certification import (
+    CertificationChecks,
+    CheckStatus,
+    GenericHarnessArtifactStore,
+    RuntimeValidationEvidence,
 )
 from fi.alk.harness.job import HarnessJob
 from fi.alk.harness.diagnostics import HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
 from fi.alk.harness.repair_controller import (
+    CandidateObservation,
     RepairAction,
     RepairBudgets,
     RepairController,
+    RepairPhase,
 )
 
 
@@ -277,6 +286,55 @@ def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
     )
 
     assert _generic_candidate_hash(source, authoring) == before
+
+
+def test_generic_certificate_combines_runtime_evidence_and_repair_history(
+    tmp_path,
+) -> None:
+    authoring = tmp_path / "authoring"
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+
+    def digest(character):
+        return "sha256:" + character * 64
+
+    store.write_runtime_evidence(
+        RuntimeValidationEvidence(
+            source_digest=digest("a"),
+            source_schema_hash=digest("b"),
+            world_ir_hash=digest("c"),
+            compiler_version="compiler-v1",
+            bundle_digest=digest("d"),
+            contract_hash=digest("e"),
+            scenario_set_hash=digest("f"),
+            checks=CertificationChecks(
+                static=CheckStatus.PASSED,
+                schema_and_seed=CheckStatus.PASSED,
+                scenario_setup_ready="2/2",
+            ),
+            limitations=("tool trajectories not run",),
+        )
+    )
+    controller = RepairController()
+    controller.decide(
+        CandidateObservation(candidate_hash=digest("0"), phase=RepairPhase.ENVIRONMENT)
+    )
+    job = SimpleNamespace(
+        source=SimpleNamespace(repository="future-agi/example", commit_sha="1" * 40),
+        metadata={"daytona_snapshot": "snapshot-r1"},
+    )
+
+    _write_generic_certificate(job, authoring, controller.history)
+
+    certificate = store.read_certification()
+    assert certificate.status.value == "certified"
+    assert certificate.source.repository == "future-agi/example"
+    assert certificate.runtime.snapshot == "snapshot-r1"
+    assert certificate.runtime.validation_attempts == 1
+    assert certificate.checks.scenario_setup_ready == "2/2"
+    assert (
+        json.loads((authoring / "runtime-validation.json").read_text())["fingerprint"]
+        == certificate.fingerprint
+    )
 
 
 @pytest.mark.parametrize("bad_setup", [False, True])
