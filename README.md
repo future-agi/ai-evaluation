@@ -65,21 +65,21 @@ OpenEnv/Gymnasium-shaped traces remain compatibility evidence inside that bar.
 
 ## Install
 
-PyPI and npm publishing land at the v1 launch. Today, install from source:
-
-```bash
-git clone https://github.com/future-agi/agent-learning-kit
-cd agent-learning-kit
-pip install -e .
-```
-
-(or `uv sync` for contributors)
-
-At launch:
+Install from PyPI:
 
 ```bash
 pip install agent-learning-kit
 ```
+
+To develop against source (contributors):
+
+```bash
+git clone https://github.com/future-agi/agent-learning-kit
+cd agent-learning-kit
+uv sync          # or: pip install -e .
+```
+
+(npm publishing of the TypeScript SDK lands at the v1 launch.)
 
 Optional Python extras:
 

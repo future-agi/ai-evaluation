@@ -1,0 +1,56 @@
+# DRAFT — future-agi/agent-learning-kit/.github/workflows/publish-pypi.yml
+# Publishes agent-learning-kit to PyPI via Trusted Publishing (OIDC): no
+# long-lived PyPI token anywhere. PyPI-side one-time setup (project owner):
+#   PyPI → project "agent-learning-kit" → Publishing → add GitHub publisher
+#   owner=future-agi  repo=agent-learning-kit  workflow=publish-pypi.yml  environment=pypi
+# Triggered by pushing a release tag (sdk-vX.Y.Z) whose pyproject version must
+# match — the guard below refuses a mismatch so a tag can never publish the
+# wrong version. workflow_dispatch is a manual re-run only.
+name: publish-pypi
+
+on:
+  push:
+    tags: ['sdk-v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Guard — tag must equal pyproject version
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="${TAG#sdk-v}"
+          have="$(uv version --short)"
+          [[ "$want" == "$have" ]] || { echo "::error::tag $TAG != pyproject version $have"; exit 1; }
+      - run: uv build
+      - name: Smoke — the wheel must import the hosted entrypoint
+        run: |
+          set -euo pipefail
+          uv venv .smoke && . .smoke/bin/activate
+          uv pip install dist/*.whl
+          python -c "import fi.simulate.hosted.child_entrypoint, fi.alk.harness; print('ok')"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/, if-no-files-found: error }
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi          # bind the OIDC trust + optional required reviewer here
+    permissions:
+      id-token: write          # OIDC for Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      # SHA-pinned: release/v1 is a moving branch on this action.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 as of 2026-09-12
