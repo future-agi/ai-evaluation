@@ -1,28 +1,9 @@
-# Publishes agent-learning-kit to PyPI via Trusted Publishing (OIDC): no
-# long-lived PyPI token anywhere.
-#
-# PyPI-side one-time setup — the project does NOT exist on PyPI yet, so this
-# must be a PENDING publisher created at ACCOUNT level (not under a project):
-#   https://pypi.org/manage/account/publishing/  → "Add a new pending publisher"
-#   project=agent-learning-kit  owner=future-agi  repo=agent-learning-kit
-#   workflow=publish-pypi.yml   environment=pypi
-# Do this from the ORG PyPI account: whichever account creates the pending
-# publisher becomes the project owner. A pending publisher does NOT reserve
-# the name — register it and land the first release promptly.
-#
-# Trigger: every push to main (i.e. every merged PR). A release happens ONLY
-# when the pyproject version is not yet on PyPI — the `check` job looks it up
-# and skips everything otherwise, so ordinary merges stay green and never
-# wake the reviewer. To release: bump `version` in pyproject.toml (+ uv lock),
-# merge to main, approve the `pypi` environment deployment when it pauses.
-# Each version publishes exactly once (PyPI is immutable); a mistake needs a
-# new version, never a re-upload.
-#
-# Gates: main is protected by the branch ruleset (PR approval to merge), and
-# the `pypi` environment requires a reviewer (prevent self-review) before the
-# publish job gets its OIDC token. PyPI's trust check binds only
-# (repo, workflow file, environment), not the ref — those two gates ARE the
-# authorization. There is deliberately no workflow_dispatch and no tag trigger.
+# Publishes agent-learning-kit to PyPI (Trusted Publishing) on merge to main,
+# only when the pyproject version is not yet on PyPI.
+# Release: bump `version` in pyproject.toml + `uv lock`, merge, approve the
+# `pypi` environment deployment. PyPI publisher: pending publisher at
+# https://pypi.org/manage/account/publishing/ (repo agent-learning-kit,
+# workflow publish-pypi.yml, environment pypi).
 name: publish-pypi
 
 on:
@@ -34,7 +15,11 @@ permissions:
 
 concurrency:
   group: publish-pypi-main
-  cancel-in-progress: false      # never cancel a publish mid-flight; queue instead
+  cancel-in-progress: false
+
+env:
+  PYPI_PROJECT: agent-learning-kit
+  UV_VERSION: "0.12.9"
 
 jobs:
   check:
@@ -49,24 +34,36 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: ">=0.12,<0.13"
-      - name: Decide — is the pyproject version already on PyPI?
-        id: v
+          version: ${{ env.UV_VERSION }}
+      - id: v
         env:
           REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          HEADLINE: ${{ github.event.head_commit.message }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$REF" == refs/heads/main ]] || { echo "::error::refusing to publish from $REF"; exit 1; }
           version="$(uv version --short)"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-z0-9.]*)$ ]] || { echo "::error::pyproject version '$version' is not a release version"; exit 1; }
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-z0-9.]*)$ ]] || { echo "::error::unexpected version shape"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          code="$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/agent-learning-kit/${version}/json")"
+          wheel="agent_learning_kit-${version}-py3-none-any.whl"; sdist="agent_learning_kit-${version}.tar.gz"
+          body="$(mktemp)"
+          code="$(curl -sS --max-time 30 --retry 3 --retry-delay 2 -o "$body" -w '%{http_code}' \
+                  "https://pypi.org/pypi/${PYPI_PROJECT}/json")"
           case "$code" in
-            404) echo "publish=true"  >> "$GITHUB_OUTPUT"; echo "agent-learning-kit ${version} not on PyPI — will publish" ;;
-            200) echo "publish=false" >> "$GITHUB_OUTPUT"; echo "agent-learning-kit ${version} already on PyPI — nothing to do" ;;
-            *)   echo "::error::PyPI lookup returned HTTP $code — refusing to guess"; exit 1 ;;
+            404) publish=true;  why="first release" ;;
+            200) if jq -e --arg v "$version" --arg w "$wheel" --arg s "$sdist" \
+                       '(.releases[$v] // []) | map(.filename) | (index($w) != null and index($s) != null)' "$body" >/dev/null
+                 then publish=false; why="already on PyPI"
+                 else publish=true;  why="not on PyPI"; fi ;;
+            *)   echo "::error::PyPI lookup returned HTTP $code"; exit 1 ;;
           esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          {
+            echo "## ${PYPI_PROJECT} **${version}** — ${why}"
+            echo "- commit: \`${SHA}\` — ${HEADLINE%%$'\n'*}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: check
@@ -76,17 +73,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false   # no GITHUB_TOKEN left in .git for the smoke step's import-time code
+          persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: ">=0.12,<0.13"      # what the release was verified with (0.12.x); don't let the build tool float
+          version: ${{ env.UV_VERSION }}
       - run: uv build
-      - name: Smoke — the wheel must import the hosted-runner entrypoints and expose the CLI
-        run: |
+      - run: |
           set -euo pipefail
-          uv venv .smoke --python 3.12          # pinned: matches sdk-smoke.yml
+          uv venv .smoke --python 3.12
           uv pip install --python .smoke/bin/python dist/*.whl
-          .smoke/bin/python -c "import fi.simulate.hosted.child_entrypoint, fi.alk.harness; print('ok')"
+          .smoke/bin/python -c "import fi.simulate.hosted.child_entrypoint, fi.alk.harness"
           .smoke/bin/alk --help > /dev/null
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -99,18 +95,42 @@ jobs:
     if: needs.check.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: pypi            # required reviewer (prevent self-review) + OIDC trust live here
+    environment: pypi
     permissions:
-      id-token: write            # OIDC for Trusted Publishing — this job only downloads + publishes
+      id-token: write
       contents: read
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
+      - id: recheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="agent_learning_kit-${VERSION}-py3-none-any.whl"; sdist="agent_learning_kit-${VERSION}.tar.gz"
+          body="$(mktemp)"
+          code="$(curl -sS --max-time 30 --retry 3 --retry-delay 2 -o "$body" -w '%{http_code}' \
+                  "https://pypi.org/pypi/${PYPI_PROJECT}/json")"
+          if [[ "$code" == 200 ]] && jq -e --arg v "$VERSION" --arg w "$wheel" --arg s "$sdist" \
+               '(.releases[$v] // []) | map(.filename) | (index($w) != null and index($s) != null)' "$body" >/dev/null; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$code" == 200 || "$code" == 404 ]]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::PyPI lookup returned HTTP $code"; exit 1
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.recheck.outputs.go == 'true'
         with:
           name: dist
           path: dist/
-      # SHA-pinned: release/v1 is a moving branch on this action.
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 as of 2026-09-12
+      - if: steps.recheck.outputs.go == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' "agent_learning_kit-${VERSION}-py3-none-any.whl" "agent_learning_kit-${VERSION}.tar.gz" | sort)
+          [[ "$(ls -1 dist/ | sort)" == "$expected" ]] || { echo "::error::dist/ does not match version ${VERSION}"; ls -la dist/; exit 1; }
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        if: steps.recheck.outputs.go == 'true'
         with:
-          attestations: true     # PEP 740 provenance for sdist + wheel (explicit, not default-reliant)
-          skip-existing: true    # a re-run after a partial upload (wheel ok, sdist failed) must not 400 on "File already exists"
-      - run: echo "Published agent-learning-kit ${{ needs.check.outputs.version }} to PyPI" >> "$GITHUB_STEP_SUMMARY"
+          attestations: true
+          skip-existing: true
