@@ -2756,10 +2756,32 @@ def apply_seed_file(
             except Exception as exc:
                 code = str(getattr(exc, "code", "generic_world_import_failed"))
                 diagnostics = tuple(getattr(exc, "diagnostics", ()))
+                structural = []
+                for diagnostic in diagnostics:
+                    location = diagnostic.location
+                    parts = [
+                        value
+                        for value in (
+                            getattr(location, "table", None),
+                            getattr(location, "column", None),
+                            getattr(location, "constraint", None),
+                            getattr(location, "process", None),
+                            getattr(location, "tool", None),
+                        )
+                        if value
+                    ]
+                    structural.append(
+                        diagnostic.code + (f" at {'.'.join(parts)}" if parts else "")
+                    )
+                summary = (
+                    ": " + ", ".join(sorted(set(structural)))
+                    if structural
+                    else ""
+                )
                 raise ProcessRuntimeError(
                     "seed",
                     "seed_failed",
-                    f"{code}: semantic world import failed",
+                    f"{code}: semantic world import failed{summary}",
                     process=process_name,
                     domain=FailureDomain.ENVIRONMENT,
                     diagnostics=diagnostics,

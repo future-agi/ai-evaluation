@@ -3242,6 +3242,7 @@ def test_apply_seed_file_preserves_structured_world_diagnostics(
 
     assert raised.value.diagnostics == (diagnostic,)
     assert "array is malformed" not in str(raised.value)
+    assert "array_shape_mismatch at users.tags" in str(raised.value)
 
 
 def test_apply_seed_file_redis_pipes_file_content_over_stdin(tmp_path: Path) -> None:

@@ -365,6 +365,7 @@ def _sqlite_sql(
     *,
     contract_declarations: dict[tuple[str, str], str] | None = None,
     include_schema: bool = True,
+    include_rows: bool = True,
 ) -> str:
     statements: list[str] = []
     contract_declarations = contract_declarations or {}
@@ -453,7 +454,7 @@ def _sqlite_sql(
                     f"CREATE TABLE IF NOT EXISTS {_identifier(table)} "
                     f"({', '.join(definitions)});"
                 )
-            for record in selected:
+            for record in selected if include_rows else ():
                 # An authored SQLite world cannot retain the distinction between an
                 # omitted source column and an explicitly stored NULL: every row is
                 # read back with every column present.  When the real source schema is
@@ -697,7 +698,23 @@ def _generic_postgres_seed_artifacts(
 
     source_schemas = _source_schema_paths(source, contract=contract)
     world = authoring / "world.sqlite"
-    if not source_schemas:
+    data_store = contract.get("data_store")
+    data_store = data_store if isinstance(data_store, dict) else {}
+    store_kind = str(data_store.get("kind") or "").strip().lower()
+    normalized_store_kind = store_kind.replace("-", "_").replace(" ", "_")
+    embedded_store = any(
+        marker in normalized_store_kind
+        for marker in (
+            "in_process",
+            "in_memory",
+            "memory",
+            "sqlite",
+            "filesystem",
+            "file_store",
+            "local_state",
+        )
+    )
+    if not source_schemas and not embedded_store:
         raise BundleAuthorError(
             "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
         )
@@ -707,10 +724,20 @@ def _generic_postgres_seed_artifacts(
         )
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
-    schema_path.write_text(
-        prefix + "\n".join(path.read_text(encoding="utf-8") for path in source_schemas),
-        encoding="utf-8",
-    )
+    if source_schemas:
+        schema_sql = "\n".join(
+            path.read_text(encoding="utf-8") for path in source_schemas
+        )
+    else:
+        # A data-free/in-process source has no repository-owned database schema to adopt.
+        # Its authored world is harness-owned scenario state, so compile only that world's
+        # deterministic schema here; process_runtime imports the rows from world.sqlite.
+        schema_sql = _sqlite_sql(
+            world,
+            contract_declarations=_contract_column_declarations(contract),
+            include_rows=False,
+        )
+    schema_path.write_text(prefix + schema_sql, encoding="utf-8")
     world_path = seed / "world.sqlite"
     shutil.copy2(world, world_path)
     adopted = [

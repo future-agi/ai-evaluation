@@ -1127,6 +1127,72 @@ def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> No
         )
 
 
+def test_generic_pipeline_compiles_harness_schema_for_in_process_store(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "data_store": {"kind": "in_process"},
+                "data_schema": {"accounts": {"id": "TEXT PRIMARY KEY"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = sqlite3.connect(authoring / "world.sqlite")
+    try:
+        database.execute("CREATE TABLE accounts (id TEXT PRIMARY KEY, status TEXT)")
+        database.execute("INSERT INTO accounts VALUES (?, ?)", ("acct-1", "active"))
+        database.commit()
+    finally:
+        database.close()
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    store = manifest.seed.stores[0]
+    assert store.migrations == ["seed/source-schema.sql"]
+    assert store.seed_files == ["seed/world.sqlite"]
+    schema = (output / "seed" / "source-schema.sql").read_text(encoding="utf-8")
+    assert 'CREATE TABLE IF NOT EXISTS "accounts"' in schema
+    assert "acct-1" not in schema
+    with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
+        assert copied.execute("SELECT status FROM accounts").fetchone() == ("active",)
+
+
+def test_generic_pipeline_still_requires_schema_for_declared_postgres(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    (authoring / "contract.json").write_text(
+        json.dumps({"modality": "chat", "data_store": {"kind": "postgres"}}),
+        encoding="utf-8",
+    )
+    database = sqlite3.connect(authoring / "world.sqlite")
+    database.close()
+
+    with pytest.raises(BundleAuthorError, match="source_schema_required"):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
 def test_bundle_preserves_sqlite_unique_constraints_for_upserts(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
