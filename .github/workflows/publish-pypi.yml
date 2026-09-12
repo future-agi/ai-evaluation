@@ -8,32 +8,69 @@
 #   workflow=publish-pypi.yml   environment=pypi
 # Do this from the ORG PyPI account: whichever account creates the pending
 # publisher becomes the project owner. A pending publisher does NOT reserve
-# the name — register it and push the first sdk-v* tag in the same sitting.
+# the name — register it and land the first release promptly.
 #
-# Trigger: ONLY a pushed release tag sdk-vX.Y.Z whose version equals the
-# pyproject version. There is deliberately no workflow_dispatch — it would
-# let any push-capable account publish an arbitrary ref while skipping the
-# tag guard; a failed publish is re-run from the original tag run in the
-# Actions UI (skip-existing makes that idempotent). PyPI's trust check binds
-# only (repo, workflow file, environment), not the ref — so the real gate is
-# repo-side: a tag ruleset on sdk-v* and a required reviewer + an sdk-v*
-# deployment-tag policy on the `pypi` environment (without the tag policy the
-# environment refuses tag-triggered deploys, or gates nothing).
+# Trigger: every push to main (i.e. every merged PR). A release happens ONLY
+# when the pyproject version is not yet on PyPI — the `check` job looks it up
+# and skips everything otherwise, so ordinary merges stay green and never
+# wake the reviewer. To release: bump `version` in pyproject.toml (+ uv lock),
+# merge to main, approve the `pypi` environment deployment when it pauses.
+# Each version publishes exactly once (PyPI is immutable); a mistake needs a
+# new version, never a re-upload.
+#
+# Gates: main is protected by the branch ruleset (PR approval to merge), and
+# the `pypi` environment requires a reviewer (prevent self-review) before the
+# publish job gets its OIDC token. PyPI's trust check binds only
+# (repo, workflow file, environment), not the ref — those two gates ARE the
+# authorization. There is deliberately no workflow_dispatch and no tag trigger.
 name: publish-pypi
 
 on:
   push:
-    tags: ['sdk-v[0-9]+.[0-9]+.[0-9]+']
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-pypi-${{ github.ref_name }}
-  cancel-in-progress: false
+  group: publish-pypi-main
+  cancel-in-progress: false      # never cancel a publish mid-flight; queue instead
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.v.outputs.publish }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ">=0.12,<0.13"
+      - name: Decide — is the pyproject version already on PyPI?
+        id: v
+        env:
+          REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$REF" == refs/heads/main ]] || { echo "::error::refusing to publish from $REF"; exit 1; }
+          version="$(uv version --short)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-z0-9.]*)$ ]] || { echo "::error::pyproject version '$version' is not a release version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/agent-learning-kit/${version}/json")"
+          case "$code" in
+            404) echo "publish=true"  >> "$GITHUB_OUTPUT"; echo "agent-learning-kit ${version} not on PyPI — will publish" ;;
+            200) echo "publish=false" >> "$GITHUB_OUTPUT"; echo "agent-learning-kit ${version} already on PyPI — nothing to do" ;;
+            *)   echo "::error::PyPI lookup returned HTTP $code — refusing to guess"; exit 1 ;;
+          esac
+
   build:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,16 +80,6 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ">=0.12,<0.13"      # what the release was verified with (0.12.x); don't let the build tool float
-      - name: Guard — must be a release tag equal to the pyproject version
-        env:
-          REF: ${{ github.ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$REF" == refs/tags/sdk-v* ]] || { echo "::error::refusing to publish from $REF (not an sdk-v* release tag)"; exit 1; }
-          want="${REF#refs/tags/sdk-v}"
-          have="$(uv version --short)"
-          [[ "$want" == "$have" ]] || { echo "::error::tag version $want != pyproject version $have"; exit 1; }
       - run: uv build
       - name: Smoke — the wheel must import the hosted-runner entrypoints and expose the CLI
         run: |
@@ -68,10 +95,11 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [check, build]
+    if: needs.check.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: pypi            # OIDC trust + required reviewer + sdk-v* deployment-tag policy live here
+    environment: pypi            # required reviewer (prevent self-review) + OIDC trust live here
     permissions:
       id-token: write            # OIDC for Trusted Publishing — this job only downloads + publishes
       contents: read
@@ -85,3 +113,4 @@ jobs:
         with:
           attestations: true     # PEP 740 provenance for sdist + wheel (explicit, not default-reliant)
           skip-existing: true    # a re-run after a partial upload (wheel ok, sdist failed) must not 400 on "File already exists"
+      - run: echo "Published agent-learning-kit ${{ needs.check.outputs.version }} to PyPI" >> "$GITHUB_STEP_SUMMARY"
