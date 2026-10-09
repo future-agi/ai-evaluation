@@ -20,12 +20,15 @@ import sqlite3
 from contextlib import closing
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import Version
 
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
@@ -680,6 +683,84 @@ def _schema_like(path: Path) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _SourceSchemaArtifact:
+    """Executable DDL plus its immutable repository evidence location."""
+
+    relative_path: str
+    sql: str
+
+
+def _create_table_statements(sql: str) -> list[str]:
+    """Extract complete CREATE TABLE statements from documented SQL.
+
+    README setup blocks often also contain ``CREATE DATABASE``, psql meta commands and fixture
+    inserts.  The hosted world owns its database and rows, so only the source-authored table DDL
+    is adopted here.  Comment text is removed before balancing parentheses so prose cannot alter
+    statement boundaries.
+    """
+
+    cleaned = re.sub(r"--[^\n]*", "", sql)
+    statements: list[str] = []
+    pattern = re.compile(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+        r"(?:(?:\"?[A-Za-z_]\w*\"?)\.)?\"?[A-Za-z_]\w*\"?\s*\(",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(cleaned):
+        depth = 1
+        quote: str | None = None
+        index = match.end()
+        while index < len(cleaned) and depth:
+            char = cleaned[index]
+            if quote is not None:
+                if char == quote:
+                    if index + 1 < len(cleaned) and cleaned[index + 1] == quote:
+                        index += 2
+                        continue
+                    quote = None
+            elif char in {"'", '"'}:
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            index += 1
+        if depth:
+            continue
+        while index < len(cleaned) and cleaned[index].isspace():
+            index += 1
+        if index < len(cleaned) and cleaned[index] == ";":
+            index += 1
+        statements.append(cleaned[match.start() : index].strip() + "\n")
+    return statements
+
+
+def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
+    """Use the first README SQL fence that explicitly declares a table schema.
+
+    This is source-owned executable evidence, not model-authored schema.  Taking the first
+    qualifying setup block avoids concatenating alternative local/cloud deployment recipes that
+    declare the same tables twice.
+    """
+
+    for readme in sorted(source.glob("README*.md")):
+        text = readme.read_text(encoding="utf-8", errors="replace")
+        for number, match in enumerate(
+            re.finditer(r"```(?:sql|postgres(?:ql)?)\s*\n(.*?)```", text, re.I | re.S),
+            start=1,
+        ):
+            statements = _create_table_statements(match.group(1))
+            if statements:
+                return [
+                    _SourceSchemaArtifact(
+                        relative_path=f"{readme.relative_to(source).as_posix()}#sql-{number}",
+                        sql="\n".join(statements),
+                    )
+                ]
+    return []
+
+
 def _compose_source_schema_paths(source: Path) -> list[Path]:
     """Discover repository-owned DDL mounted into a database init directory.
 
@@ -763,6 +844,21 @@ def _source_schema_paths(
     return [unique[key] for key in sorted(unique)]
 
 
+def _source_schema_artifacts(
+    source: Path, *, contract: dict[str, Any] | None = None
+) -> list[_SourceSchemaArtifact]:
+    paths = _source_schema_paths(source, contract=contract)
+    if paths:
+        return [
+            _SourceSchemaArtifact(
+                relative_path=path.relative_to(source.resolve()).as_posix(),
+                sql=path.read_text(encoding="utf-8"),
+            )
+            for path in paths
+        ]
+    return _documented_source_schemas(source)
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -770,16 +866,13 @@ def _adopted_seed_sql(
     contract: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     source_schemas = (
-        _source_schema_paths(source, contract=contract) if source is not None else []
+        _source_schema_artifacts(source, contract=contract)
+        if source is not None
+        else []
     )
     if source_schemas:
-        schema_sql = "\n".join(
-            path.read_text(encoding="utf-8") for path in source_schemas
-        )
-        adopted = [
-            f"source/{path.relative_to(source.resolve()).as_posix()}"
-            for path in source_schemas
-        ]
+        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas]
         store = authoring / "store.json"
         if store.is_file():
             return (
@@ -832,7 +925,7 @@ def _generic_postgres_seed_artifacts(
 ) -> tuple[list[str], list[str], list[str]]:
     """Package source schema and semantic rows separately for runtime catalogue inspection."""
 
-    source_schemas = _source_schema_paths(source, contract=contract)
+    source_schemas = _source_schema_artifacts(source, contract=contract)
     canonical_world = authoring / "generic-harness" / "world-ir.json"
     legacy_world = authoring / "world.sqlite"
     data_store = contract.get("data_store")
@@ -871,9 +964,7 @@ def _generic_postgres_seed_artifacts(
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
     if source_schemas:
-        schema_sql = "\n".join(
-            path.read_text(encoding="utf-8") for path in source_schemas
-        )
+        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
     else:
         # A data-free/in-process source has no repository-owned database schema to adopt.
         # During the compatibility window SQLite may carry that harness-owned schema. Canonical
@@ -912,10 +1003,10 @@ def _generic_postgres_seed_artifacts(
             contracts.mkdir(exist_ok=True)
             shutil.copy2(schema, contracts / name)
             adopted_contracts.append(f"generic-harness/{name}")
-    adopted = [
-        f"source/{path.relative_to(source.resolve()).as_posix()}"
-        for path in source_schemas
-    ] + [adopted_world, *adopted_contracts]
+    adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas] + [
+        adopted_world,
+        *adopted_contracts,
+    ]
     return ["seed/source-schema.sql"], [f"seed/{world_path.name}"], adopted
 
 
@@ -1093,14 +1184,38 @@ def _plan_python(
 
 def _docker_python(root: Path) -> str:
     dockerfile = root / "Dockerfile"
-    if not dockerfile.is_file():
-        return "python3.12"
-    text = dockerfile.read_text(encoding="utf-8", errors="replace")
-    argument = re.search(r"(?mi)^ARG\s+PYTHON_VERSION\s*=\s*([0-9]+\.[0-9]+)\s*$", text)
-    if argument:
-        return f"python{argument.group(1)}"
-    direct = re.search(r"(?mi)^FROM\s+(?:[^/\s]+/)*python:([0-9]+\.[0-9]+)", text)
-    return f"python{direct.group(1)}" if direct else "python3.12"
+    candidate = "3.12"
+    if dockerfile.is_file():
+        text = dockerfile.read_text(encoding="utf-8", errors="replace")
+        argument = re.search(
+            r"(?mi)^ARG\s+PYTHON_VERSION\s*=\s*([0-9]+\.[0-9]+)\s*$", text
+        )
+        direct = re.search(
+            r"(?mi)^FROM\s+(?:[^/\s]+/)*(?:uv:)?python([0-9]+\.[0-9]+)(?:[-:]|$)",
+            text,
+        ) or re.search(r"(?mi)^FROM\s+(?:[^/\s]+/)*python:([0-9]+\.[0-9]+)", text)
+        if argument:
+            candidate = argument.group(1)
+        elif direct:
+            candidate = direct.group(1)
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            body = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            requires = str((body.get("project") or {}).get("requires-python") or "")
+            specifier = SpecifierSet(requires) if requires else None
+        except (OSError, ValueError, InvalidSpecifier, tomllib.TOMLDecodeError):
+            specifier = None
+        if specifier is not None and Version(candidate) not in specifier:
+            compatible = [
+                version
+                for version in ("3.13", "3.12", "3.11")
+                if Version(version) in specifier
+            ]
+            if compatible:
+                candidate = compatible[0]
+    return f"python{candidate}"
 
 
 def _dockerfile_run(root: Path) -> list[str] | None:

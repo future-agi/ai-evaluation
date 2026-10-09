@@ -13,6 +13,8 @@ from fi.alk.harness.bundle_author_v2 import (
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
+    _docker_python,
+    _source_schema_artifacts,
     _sqlite_sql,
     author_bundle_v2,
     reseal_scenarios,
@@ -1464,6 +1466,56 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
     with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
         assert copied.execute("SELECT tags FROM users").fetchone() == ('["priority"]',)
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+
+
+def test_documented_readme_schema_is_adopted_without_setup_or_fixture_sql(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE DATABASE ticketsdb;
+\\c ticketsdb
+CREATE TABLE tickets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT
+);
+INSERT INTO tickets (title, description) VALUES ('Broken login', 'Fixture');
+```
+
+```sql
+CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].relative_path == "README.md#sql-1"
+    assert "CREATE TABLE tickets" in artifacts[0].sql
+    assert "title TEXT NOT NULL" in artifacts[0].sql
+    assert "CREATE DATABASE" not in artifacts[0].sql
+    assert "INSERT INTO" not in artifacts[0].sql
+    assert "embedding" not in artifacts[0].sql
+
+
+def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        "FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.10,<3.13'\n",
+        encoding="utf-8",
+    )
+
+    assert _docker_python(tmp_path) == "python3.12"
 
 
 def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:

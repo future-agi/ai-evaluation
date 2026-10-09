@@ -402,23 +402,23 @@ def _tables_the_source_lacks(
         return []
     from pathlib import Path as _Path
 
-    from ..bundle_author_v2 import _source_schema_paths
+    from ..bundle_author_v2 import _source_schema_artifacts
 
     try:
-        paths = _source_schema_paths(
+        artifacts = _source_schema_artifacts(
             _Path(source_root),
             contract=contract.model_dump() if hasattr(contract, "model_dump") else None,
         )
     except Exception:
         return []
-    if not paths:
+    if not artifacts:
         return []
     declared: dict[str, set[str]] = {}
     required: dict[str, set[str]] = {}
     cites: dict[str, dict[str, tuple[str, str]]] = {}
-    for path in paths:
+    for artifact in artifacts:
         # Comments first: a trailing `-- matched against caller_ani` is prose, not a column.
-        sql = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        sql = re.sub(r"--[^\n]*", "", artifact.sql)
         for found in re.finditer(
             r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?\w+"?\.)?"?([A-Za-z_]\w*)"?\s*\(',
             sql,
