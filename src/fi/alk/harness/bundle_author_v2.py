@@ -1308,6 +1308,102 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
+def _is_adk_web_command(command: list[str]) -> bool:
+    """Return whether argv starts Google ADK's source-owned HTTP development server."""
+
+    normalized = [str(item).strip() for item in command]
+    return any(
+        normalized[index : index + 2] == ["adk", "web"]
+        for index in range(max(0, len(normalized) - 1))
+    )
+
+
+def _command_port(command: list[str], *, default: int) -> int:
+    """Read a conventional ``--port`` option without interpreting arbitrary shell text."""
+
+    for index, token in enumerate(command):
+        if token == "--port" and index + 1 < len(command):
+            try:
+                port = int(command[index + 1])
+            except (TypeError, ValueError):
+                return default
+            return port if 1 <= port <= 65535 else default
+        if token.startswith("--port="):
+            try:
+                port = int(token.partition("=")[2])
+            except ValueError:
+                return default
+            return port if 1 <= port <= 65535 else default
+    return default
+
+
+def _adk_app_name(root: Path, configured_workdir: str) -> str | None:
+    """Discover the unique ADK app package exposed by ``adk web``.
+
+    ADK discovers applications as immediate Python packages below its working directory. Keep
+    this source-derived and deterministic: when a checkout contains more than one possible app,
+    authoring must describe the desired HTTP boundary instead of the compiler guessing.
+    """
+
+    configured = configured_workdir.strip()
+    workdir = (
+        (root / configured).resolve()
+        if configured not in {"", ".", "/"}
+        else root.resolve()
+    )
+    if not workdir.is_relative_to(root.resolve()) or not workdir.is_dir():
+        return None
+    candidates = sorted(
+        path.name
+        for path in workdir.iterdir()
+        if path.is_dir()
+        and path.name not in _IGNORED_ARTIFACT_PARTS
+        and (path / "__init__.py").is_file()
+        and (path / "agent.py").is_file()
+    )
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
+    """Compile ADK's documented web API into the generic JSON HTTP interface."""
+
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if not _is_adk_web_command(command):
+        return None
+    app_name = _adk_app_name(root, str(runtime.get("workdir") or ""))
+    if app_name is None:
+        return None
+    port = _command_port(command, default=8000)
+    return {
+        "kind": "http",
+        "protocol": "json_template",
+        "port": port,
+        "path": "/run_sse",
+        "health_path": "/docs",
+        "include_tools": False,
+        "setup_requests": [
+            {
+                "method": "POST",
+                "path": f"/apps/{app_name}/users/{{{{thread_id}}}}/sessions",
+                "body_template": {},
+                "accepted_statuses": [200],
+                "capture": {"session_id": "id"},
+            }
+        ],
+        "request_template": {
+            "user_id": "{{thread_id}}",
+            "app_name": app_name,
+            "streaming": True,
+            "session_id": "{{session_id}}",
+            "new_message": {
+                "role": "user",
+                "parts": [{"text": "{{new_message_content}}"}],
+            },
+        },
+        "response_path": "content.parts.0.text",
+    }
+
+
 def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
     """Run a contract argv inside the dependency environment selected for the source."""
 
@@ -1975,6 +2071,12 @@ def resolve_environment_plan(
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
+        if is_http_runtime and _is_adk_web_command(runtime_command):
+            # ADK exposes a normal ``--port`` seam. Wire it to the world's allocated port so a
+            # multi-world chat run does not collapse to serial execution or collide on 8080.
+            process = _consumable_source_process(
+                process, "PORT", f"{{{{PORT_{control_name}}}}}"
+            )
         if is_livekit:
             update: dict[str, Any] = {
                 "started_check": StartedCheck(
@@ -2210,6 +2312,19 @@ def author_bundle_v2(
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
+            adk_interface = _adk_web_interface(source_root, runtime)
+            if (
+                contract_modality == "chat"
+                and adk_interface is not None
+                and contract_interface_kind in {"", "http"}
+                and not str(interface.get("path") or "").strip()
+            ):
+                # Repair an incomplete model-authored HTTP declaration from deterministic source
+                # evidence. A complete source interface always wins and is never overwritten.
+                runtime = dict(runtime)
+                runtime["interface"] = adk_interface
+                contract_body = {**contract_body, "runtime": runtime}
+                contract_interface_kind = "http"
         elif (
             contract_modality == "chat"
             and _discover_callback_entrypoint(source_root) is not None
@@ -2249,20 +2364,28 @@ def author_bundle_v2(
             and not isinstance(interface, dict)
             and runtime.get("command")
         ):
-            # A runnable one-shot command is a real source-owned execution boundary even when it
-            # is not a server. Compile the generic stdin/environment subprocess bridge below and
-            # expose that bridge to the chat runner as the standard callable protocol.
             runtime = dict(runtime)
-            runtime["interface"] = {
-                "kind": "command",
-                "protocol": "fi.alk",
-                "path": "",
-                "health_path": "",
-                "include_tools": False,
-            }
+            adk_interface = _adk_web_interface(source_root, runtime)
+            if adk_interface is not None:
+                # ``adk web`` is a persistent source-owned HTTP server, not a one-shot command.
+                # Launch it directly and describe its existing API rather than nesting it inside
+                # the subprocess bridge (which would make both processes bind the same port).
+                runtime["interface"] = adk_interface
+                contract_interface_kind = "http"
+            else:
+                # A runnable one-shot command is a real source-owned execution boundary even when
+                # it is not a server. Compile the generic stdin/environment subprocess bridge
+                # below and expose that bridge to the chat runner as the callable protocol.
+                runtime["interface"] = {
+                    "kind": "command",
+                    "protocol": "fi.alk",
+                    "path": "",
+                    "health_path": "",
+                    "include_tools": False,
+                }
+                contract_interface_kind = "command"
+                command_adapter_contract = True
             contract_body = {**contract_body, "runtime": runtime}
-            contract_interface_kind = "command"
-            command_adapter_contract = True
         if (
             contract_modality == "chat"
             and contract_interface_kind == "callable"

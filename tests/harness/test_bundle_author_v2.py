@@ -2564,6 +2564,125 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert readiness.path == "/docs"
 
 
+def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "software_bug_assistant"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='software-bug-assistant'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv",
+        "run",
+        "adk",
+        "web",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+    ]
+    _write_chat_contract(authoring, command=command)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.run_command[:2] == ["sh", "-c"]
+    assert "adk web" in agent.run_command[-1]
+    assert "$PORT" in agent.run_command[-1]
+    assert agent.fixed_port_consumable is True
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
+    assert "ThreadingHTTPServer" not in agent.run_command[-1]
+    assert agent.fixed_port == 8080
+    readiness = next(
+        item for item in manifest.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/docs"
+
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["kind"] == "http"
+    assert interface["protocol"] == "json_template"
+    assert interface["path"] == "/run_sse"
+    assert interface["request_template"]["app_name"] == "software_bug_assistant"
+    assert interface["setup_requests"][0]["path"] == (
+        "/apps/software_bug_assistant/users/{{thread_id}}/sessions"
+    )
+
+
+def test_non_server_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["uv", "run", "adk", "run", "app"])
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    assert "ALK_SUBPROCESS_COMMAND" in agent.environment
+
+
+def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={"kind": "http", "port": 9090},
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.fixed_port == 9090
+    assert agent.fixed_port_consumable is True
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["path"] == "/run_sse"
+    assert interface["health_path"] == "/docs"
+    assert interface["request_template"]["app_name"] == "bug_agent"
+
+
 @pytest.mark.parametrize(
     ("lock", "knob", "expected"),
     [
