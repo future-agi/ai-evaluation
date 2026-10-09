@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,6 +18,7 @@ from fi.alk.harness.bundle_author_v2 import (
     _docker_python,
     _source_schema_artifacts,
     _sqlite_sql,
+    _uv_sync_build_command,
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
@@ -634,9 +637,10 @@ def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manife
             "uv",
             "sync",
             "--no-cache",
-            "--python",
-            "python3.14",
-        ]
+                "--python",
+                "python3.14",
+                "--no-dev",
+            ]
         assert any("download-files" in command for command in agent.build_commands)
     else:
         assert any("requirements.txt" in command for command in agent.build_commands)
@@ -1516,6 +1520,73 @@ def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
     )
 
     assert _docker_python(tmp_path) == "python3.12"
+
+
+def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'case " $* " in\n'
+        '  *" --locked "*) echo "The lockfile at uv.lock needs to be updated" >&2; exit 2;;\n'
+        "  *) exit 0;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(tmp_path, "python3.12"),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    attempts = calls.read_text(encoding="utf-8").splitlines()
+    assert len(attempts) == 2
+    assert "--locked" in attempts[0]
+    assert "--locked" not in attempts[1]
+    assert "--no-dev" in attempts[0]
+    assert "--no-dev" in attempts[1]
+
+
+def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'echo "Could not connect to package registry" >&2\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(tmp_path, "python3.12"),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 7
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:

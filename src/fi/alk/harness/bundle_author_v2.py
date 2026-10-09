@@ -1145,9 +1145,7 @@ def _plan_python(
     )
     python = _docker_python(root)
     if (root / "pyproject.toml").is_file():
-        commands = [["uv", "sync", "--no-cache", "--python", python]]
-        if (root / "uv.lock").is_file():
-            commands[0].append("--locked")
+        commands = [_uv_sync_build_command(root, python)]
         if livekit_download:
             commands.append(
                 [
@@ -1180,6 +1178,42 @@ def _plan_python(
     return process.model_copy(
         update={"build_commands": commands, "run_command": run_override or run}
     )
+
+
+def _uv_sync_build_command(root: Path, python: str) -> list[str]:
+    """Install runtime dependencies while preserving valid source lockfiles.
+
+    Submitted source is copied into a writable build tree before this runs. A valid lock remains
+    mandatory and reproducible. If uv specifically reports that the repository's own lock is
+    stale relative to ``pyproject.toml``, resolve only the runtime dependencies in that isolated
+    copy; never mutate the submitted checkout and never reinterpret unrelated install failures as
+    a stale lock.
+    """
+
+    base = ["uv", "sync", "--no-cache", "--python", python, "--no-dev"]
+    if not (root / "uv.lock").is_file():
+        return base
+    locked = shlex.join([*base, "--locked"])
+    unlocked = shlex.join(base)
+    script = "\n".join(
+        [
+            "set -u",
+            'log="$(mktemp)"',
+            "set +e",
+            f'{locked} >"$log" 2>&1',
+            "status=$?",
+            "set -e",
+            'cat "$log" >&2',
+            'if [ "$status" -eq 0 ]; then rm -f "$log"; exit 0; fi',
+            'if grep -Fq "needs to be updated" "$log"; then',
+            '  rm -f "$log"',
+            f"  exec {unlocked}",
+            "fi",
+            'rm -f "$log"',
+            'exit "$status"',
+        ]
+    )
+    return ["sh", "-c", script]
 
 
 def _docker_python(root: Path) -> str:
