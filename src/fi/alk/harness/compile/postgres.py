@@ -45,6 +45,14 @@ class PostgresInsert(BaseModel):
     params: tuple[Any, ...] = Field(repr=False)
 
 
+class PostgresSequenceReset(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_name: str
+    table: str
+    column: str
+
+
 class PostgresCompileResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -52,6 +60,7 @@ class PostgresCompileResult(BaseModel):
     world_ir_hash: str
     compiler_version: str = POSTGRES_COMPILER_VERSION
     operations: tuple[PostgresInsert, ...]
+    sequence_resets: tuple[PostgresSequenceReset, ...] = ()
     decisions: tuple[CompileDecision, ...]
     warnings: tuple[str, ...] = ()
 
@@ -135,6 +144,7 @@ def compile_postgres(
     source_tables = {table.name: table for table in source.tables}
     world_tables = {table.source_name: table for table in world.tables}
     operations: list[PostgresInsert] = []
+    sequence_resets: set[tuple[str, str, str]] = set()
     decisions: list[CompileDecision] = []
     for table_name in _table_order(source, world):
         source_table = source_tables[table_name]
@@ -216,10 +226,25 @@ def compile_postgres(
                     params=tuple(params),
                 )
             )
+            for column in source_table.columns:
+                authored = row.values.get(column.name)
+                if (
+                    authored is not None
+                    and authored.state is ValueState.PRESENT
+                    and column.default_expression is not None
+                    and column.default_expression.lstrip()
+                    .lower()
+                    .startswith("nextval(")
+                ):
+                    sequence_resets.add((schema, table_name, column.name))
     return PostgresCompileResult(
         source_schema_hash=source.fingerprint,
         world_ir_hash=world.fingerprint,
         operations=tuple(operations),
+        sequence_resets=tuple(
+            PostgresSequenceReset(schema_name=schema, table=table, column=column)
+            for schema, table, column in sorted(sequence_resets)
+        ),
         decisions=tuple(decisions),
     )
 
@@ -230,6 +255,14 @@ def apply_postgres(connection: Any, compiled: PostgresCompileResult) -> None:
     with connection.transaction():
         for operation in compiled.operations:
             connection.execute(operation.statement, operation.params or None)
+        for reset in compiled.sequence_resets:
+            qualified = f"{_identifier(reset.schema_name)}.{_identifier(reset.table)}"
+            column = _identifier(reset.column)
+            connection.execute(
+                "SELECT setval(pg_get_serial_sequence(%s, %s), "
+                f"COALESCE(MAX({column}), 1), MAX({column}) IS NOT NULL) FROM {qualified}",
+                (f"{reset.schema_name}.{reset.table}", reset.column),
+            )
 
 
 __all__ = [
@@ -238,6 +271,7 @@ __all__ = [
     "PostgresCompileError",
     "PostgresCompileResult",
     "PostgresInsert",
+    "PostgresSequenceReset",
     "apply_postgres",
     "compile_postgres",
 ]

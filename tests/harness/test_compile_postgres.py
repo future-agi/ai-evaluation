@@ -248,6 +248,110 @@ def test_reconcile_is_not_added_when_authored_row_omits_primary_key() -> None:
     assert "ON CONFLICT" not in operation.statement
 
 
+def test_compile_reconciles_serial_sequence_after_explicit_seed_ids() -> None:
+    source = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="tickets",
+                columns=(
+                    _column(
+                        "ticket_id",
+                        LogicalType.INTEGER,
+                        "integer",
+                        default="nextval('tickets_ticket_id_seq'::regclass)",
+                    ),
+                    _column("title", LogicalType.STRING, "text"),
+                ),
+                primary_key=("ticket_id",),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="tickets",
+                rows=(
+                    WorldRow(
+                        identity="ticket-10",
+                        values={
+                            "ticket_id": WorldValue.present(LogicalType.INTEGER, 10),
+                            "title": WorldValue.present(LogicalType.STRING, "Seeded"),
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    compiled = compile_postgres(source, world, reconcile_existing=True)
+
+    assert [reset.model_dump() for reset in compiled.sequence_resets] == [
+        {"schema_name": "public", "table": "tickets", "column": "ticket_id"}
+    ]
+
+
+def test_serial_sequence_advances_past_seeded_ids_in_real_postgres() -> None:
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run the real compiler test")
+    psycopg = pytest.importorskip("psycopg")
+    source = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="tickets",
+                columns=(
+                    _column(
+                        "ticket_id",
+                        LogicalType.INTEGER,
+                        "integer",
+                        default="nextval('compiler_sequence.tickets_ticket_id_seq'::regclass)",
+                    ),
+                    _column("title", LogicalType.STRING, "text"),
+                ),
+                primary_key=("ticket_id",),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="tickets",
+                rows=(
+                    WorldRow(
+                        identity="ticket-10",
+                        values={
+                            "ticket_id": WorldValue.present(LogicalType.INTEGER, 10),
+                            "title": WorldValue.present(LogicalType.STRING, "Seeded"),
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+    compiled = compile_postgres(source, world, schema="compiler_sequence")
+
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute("DROP SCHEMA IF EXISTS compiler_sequence CASCADE")
+        connection.execute("CREATE SCHEMA compiler_sequence")
+        connection.execute(
+            "CREATE TABLE compiler_sequence.tickets ("
+            "ticket_id serial PRIMARY KEY, title text NOT NULL)"
+        )
+        apply_postgres(connection, compiled)
+        generated_id = connection.execute(
+            "INSERT INTO compiler_sequence.tickets (title) VALUES ('Generated') "
+            "RETURNING ticket_id"
+        ).fetchone()[0]
+
+    assert generated_id == 11
+
+
 def test_compiled_operations_apply_to_real_postgres() -> None:
     dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
     if not dsn:
