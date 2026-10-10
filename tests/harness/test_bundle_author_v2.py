@@ -637,10 +637,10 @@ def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manife
             "uv",
             "sync",
             "--no-cache",
-                "--python",
-                "python3.14",
-                "--no-dev",
-            ]
+            "--python",
+            "python3.14",
+            "--no-dev",
+        ]
         assert any("download-files" in command for command in agent.build_commands)
     else:
         assert any("requirements.txt" in command for command in agent.build_commands)
@@ -2743,6 +2743,80 @@ def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) 
     assert interface["setup_requests"][0]["path"] == (
         "/apps/software_bug_assistant/users/{{thread_id}}/sessions"
     )
+
+
+def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    tools = source / "deployment" / "mcp-toolbox"
+    app.mkdir(parents=True)
+    tools.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (app / "tools.py").write_text(
+        "from toolbox_core import ToolboxSyncClient\n"
+        "tools = ToolboxSyncClient('http://127.0.0.1:5000').load_toolset('tickets')\n",
+        encoding="utf-8",
+    )
+    (tools / "tools.yaml").write_text(
+        "sources:\n"
+        "  db:\n"
+        "    kind: postgres\n"
+        "tools:\n"
+        "  get-ticket:\n"
+        "    kind: postgres-sql\n"
+        "    source: db\n"
+        "    description: Get one ticket.\n"
+        "    parameters:\n"
+        "      - name: ticket_id\n"
+        "        type: string\n"
+        "    statement: SELECT * FROM tickets WHERE ticket_id = $1;\n"
+        "toolsets:\n"
+        "  tickets:\n"
+        "    - get-ticket\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=[
+            "uv",
+            "run",
+            "adk",
+            "web",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+        ],
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE tickets (ticket_id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    adapter = next(
+        process for process in manifest.processes if process.name == "mcp-toolbox"
+    )
+    assert adapter.depends_on == ["world-db"]
+    assert adapter.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "mcp-toolbox" in agent.depends_on
+    assert agent.environment["MCP_TOOLBOX_URL"] == "{{MCP_TOOLBOX_URL}}"
+    assert (output / "generated" / "mcp-toolbox" / "server.py").is_file()
+    definition = json.loads(
+        (output / "generated" / "mcp-toolbox" / "toolbox.json").read_text()
+    )
+    assert definition["tools"]["get-ticket"]["statement"].endswith("$1;")
 
 
 def test_non_server_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:

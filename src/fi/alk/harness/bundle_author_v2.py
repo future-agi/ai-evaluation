@@ -1596,6 +1596,66 @@ def _tool_proxy_process() -> SourceProcess:
     )
 
 
+def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Find one source-owned MCP Toolbox SQL configuration.
+
+    ``ToolboxSyncClient`` loads its tools over HTTP at import time. A repository may ship the
+    declarative ``tools.yaml`` without the large Toolbox executable. Preserve that declaration
+    and host it against the harness-owned world database instead of silently starting the agent
+    with an empty tool list.
+    """
+
+    source_mentions_toolbox = any(
+        "ToolboxSyncClient" in path.read_text(encoding="utf-8", errors="ignore")
+        for path in root.rglob("*.py")
+        if not any(
+            part in _IGNORED_ARTIFACT_PARTS for part in path.relative_to(root).parts
+        )
+    )
+    if not source_mentions_toolbox:
+        return None
+    candidates: list[tuple[Path, dict[str, Any]]] = []
+    for path in root.rglob("tools.y*ml"):
+        if any(
+            part in _IGNORED_ARTIFACT_PARTS for part in path.relative_to(root).parts
+        ):
+            continue
+        try:
+            body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(body, dict):
+            continue
+        tools = body.get("tools")
+        toolsets = body.get("toolsets")
+        if not isinstance(tools, dict) or not isinstance(toolsets, dict):
+            continue
+        if not any(
+            isinstance(spec, dict) and str(spec.get("kind") or "").endswith("-sql")
+            for spec in tools.values()
+        ):
+            continue
+        candidates.append((path, body))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _mcp_toolbox_process() -> SourceProcess:
+    return SourceProcess(
+        name="mcp-toolbox",
+        working_directory="generated/mcp-toolbox",
+        source_origin="bundle",
+        run_command=[sys.executable, "server.py"],
+        environment={
+            "PORT": "{{PORT_mcp-toolbox}}",
+            "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+        },
+        started_check=StartedCheck(port=True, timeout_seconds=180),
+        user=ProcessUser.SVC_TOOLS,
+        depends_on=["world-db"],
+    )
+
+
 # --- C1 (world-port-model v1.3) authoring seams ----------------------------------------------
 
 # The env var the rewritten tools-api command reads its per-world port from (C1 §1, checklist 2).
@@ -2266,6 +2326,38 @@ def resolve_environment_plan(
             "dockerfile" if (root / "Dockerfile").is_file() else "generated_python"
         )
 
+    toolbox = _mcp_toolbox_definition(root)
+    if toolbox is not None and control_name:
+        processes.append(_mcp_toolbox_process())
+        rewritten: list[ManagedProcess | SourceProcess] = []
+        for candidate in processes:
+            if isinstance(candidate, SourceProcess) and candidate.name == control_name:
+                dependencies = [*candidate.depends_on]
+                if "mcp-toolbox" not in dependencies:
+                    dependencies.append("mcp-toolbox")
+                candidate = candidate.model_copy(
+                    update={
+                        "depends_on": dependencies,
+                        "environment": {
+                            **candidate.environment,
+                            "MCP_TOOLBOX_URL": "{{MCP_TOOLBOX_URL}}",
+                        },
+                    }
+                )
+            rewritten.append(candidate)
+        processes = rewritten
+        capabilities["mcp_toolbox"] = CapabilityV2(
+            protocol=CapabilityProtocol.HTTP,
+            service="mcp-toolbox",
+            container_port=5000,
+            configuration_name="MCP_TOOLBOX_URL",
+        )
+        readiness.append(
+            ReadinessProbeV2(
+                capability="mcp_toolbox", path="/health", timeout_seconds=180
+            )
+        )
+
     return EnvironmentPlanV2(
         packaging=packaging,
         control_service=control_name,
@@ -2662,6 +2754,21 @@ def author_bundle_v2(
             shutil.copy2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
+            )
+        if any(process.name == "mcp-toolbox" for process in plan.processes):
+            toolbox = _mcp_toolbox_definition(source_root)
+            if toolbox is None:
+                raise BundleAuthorError("mcp_toolbox_definition_missing")
+            _, definition = toolbox
+            generated = temporary / "generated" / "mcp-toolbox"
+            generated.mkdir(parents=True)
+            shutil.copy2(
+                Path(__file__).with_name("mcp_toolbox_adapter.py"),
+                generated / "server.py",
+            )
+            (generated / "toolbox.json").write_text(
+                json.dumps(definition, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
