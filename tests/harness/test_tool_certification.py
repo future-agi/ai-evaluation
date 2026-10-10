@@ -58,3 +58,16 @@ def test_external_provider_tools_are_explicitly_runtime_only(tmp_path: Path) -> 
 
     assert report.certified_or_runtime_only == report.total == 1
     assert report.tools[0].availability is ToolAvailability.RUNTIME_ONLY
+
+
+def test_named_service_without_per_tool_path_is_runtime_only(tmp_path: Path) -> None:
+    payload = _contract(mode="service").model_dump(mode="python")
+    payload["tool_entrypoints"][0]["endpoint"] = ""
+    payload["tool_entrypoints"][0]["service"] = "remote-mcp"
+
+    report = certify_tool_inventory(
+        AgentContract.model_validate(payload), tmp_path, external_provider=False
+    )
+
+    assert report.certified_or_runtime_only == report.total == 1
+    assert report.tools[0].availability is ToolAvailability.RUNTIME_ONLY

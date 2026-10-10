@@ -167,7 +167,7 @@ def certify_tool_inventory(
                     ),
                 )
             )
-        elif entry.mode == "service" and entry.endpoint and entry.method:
+        elif entry.mode == "service" and (entry.endpoint or entry.service) and entry.method:
             results.append(
                 ToolCertification(
                     tool=tool.name,
