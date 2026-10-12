@@ -1707,7 +1707,6 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
                 "agent",
                 "one_liner",
                 "modality",
-                "call_direction",
                 "domain",
                 "system_prompt",
                 "system_prompt_origin",

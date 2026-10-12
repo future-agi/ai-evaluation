@@ -203,7 +203,6 @@ def test_provider_prompt_and_function_are_grounded_and_scrubbed(tmp_path, provid
         == "provider_builtin"
     )
     assert "secret" not in json.dumps(contract)
-    assert contract["call_direction"] == "inbound"
 
 
 def test_retell_flow_tools_are_grounded_through_named_conversation_nodes(tmp_path):
