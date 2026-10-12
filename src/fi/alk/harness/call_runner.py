@@ -394,13 +394,16 @@ def _canonical_simulator_secrets(values: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _dispatch_agent_name(runtime: EnvironmentRuntime) -> str | None:
+def _dispatch_agent_name(runtime: EnvironmentRuntime, job: HarnessJob) -> str | None:
     """The ONLY place this repo reads the dispatch-identity metadata key, so a
     change to the key name/convention is a one-line adapt. The provisioner
     mirrors the agent process's rendered LIVEKIT_AGENT_NAME here; a bundle
     that declares none (or an ambiguous set) leaves the key absent and the
     caller's typed `CallAborted` below fires."""
-    value = runtime.metadata.get("livekit_agent_name")
+    if job.agent.mode is ProviderExecutionMode.CONNECT_ONLY:
+        value = job.agent.config.get("agent_name")
+    else:
+        value = runtime.metadata.get("livekit_agent_name")
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
@@ -1168,7 +1171,11 @@ class CallRunnerImpl:
         connector = _resolve_connector(
             self._context.job, self._context.target_provider_secret_values
         )
-        agent_name = _dispatch_agent_name(runtime) if connector == "livekit" else None
+        agent_name = (
+            _dispatch_agent_name(runtime, self._context.job)
+            if connector == "livekit"
+            else None
+        )
         if connector == "livekit" and agent_name is None:
             raise CallAborted(
                 "voice_dispatch_identity_unavailable: runtime.metadata['livekit_agent_name'] is "
