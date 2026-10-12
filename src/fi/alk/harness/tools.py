@@ -123,7 +123,11 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def accept_contract(
-    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+    payload: dict[str, Any],
+    destination: Path,
+    *,
+    source_root: Path | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -139,9 +143,24 @@ def accept_contract(
 
     problems = validate_contract(contract)
     if source_root is not None:
-        from .source_tool_evidence import tool_evidence_problems
+        from .source_tool_evidence import attach_tool_sources, tool_evidence_problems
 
         problems.extend(tool_evidence_problems(contract, source_root))
+        if not problems:
+            contract = attach_tool_sources(contract, source_root)
+    if not problems:
+        from .contract_evidence import ground_contract
+        from .catalogue import load_catalogue
+
+        try:
+            contract = ground_contract(
+                contract,
+                source_root=source_root,
+                provider_profile=provider_profile,
+                catalogue=load_catalogue(destination).model_dump(),
+            )
+        except (ValueError, OSError, SyntaxError) as invalid:
+            problems.append(f"evidence:{invalid}")
     if problems:
         return _problems(problems, arrived)
 
@@ -174,12 +193,58 @@ def _without_nulls(value: Any) -> Any:
 # Each selected eval is one judge call per call in the suite.
 MOST_CHOSEN_EVALS = 6
 
+_ORIGIN_SCHEMA = {
+    "type": "object",
+    "description": "Exact evidence for this item. Use code, prompt, doc, config, "
+    "provider_system_prompt, or provider_tool_list; never infer an origin.",
+    "properties": {
+        "kind": {"type": "string"},
+        "path": {"type": "string"},
+        "line": {"type": "integer"},
+        "field": {"type": "string"},
+        "sha256": {
+            "type": "string",
+            "description": "Computed from verified prompt bytes at submission.",
+        },
+    },
+    "required": ["kind"],
+}
+
+_CONTRACT_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "short": {"type": "string"},
+        "origin": _ORIGIN_SCHEMA,
+        "enforced_by": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["code", "prompt", "judge"]},
+        },
+        "sub_goal": {"type": "string"},
+    },
+    "required": ["text"],
+}
+
+_STORE_CONFIGURATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source": {
+            "type": "string",
+            "enum": ["environment", "file", "provider_field", "system_prompt"],
+        },
+        "ref": {"type": "string"},
+        "section": {"type": "string"},
+    },
+    "required": ["source", "ref"],
+}
+
 
 def contract_tools(
     destination: Path,
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -228,6 +293,16 @@ def contract_tools(
                     "type": "string",
                     "description": "One sentence: what this agent is for.",
                 },
+                "domain": {
+                    "type": "object",
+                    "description": "Exactly two words naming the business domain, for example "
+                    "Guest Booking or Admin Support.",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                    },
+                    "required": ["label"],
+                },
                 "modality": {
                     "type": "string",
                     "enum": list(known_modalities()),
@@ -263,11 +338,71 @@ def contract_tools(
                     "description": "The agent's own instructions, quoted. Often lives away from "
                     "the main agent file.",
                 },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "The full system prompt verbatim when the source or provider "
+                    "supplies it. Do not summarize or truncate it.",
+                },
+                "system_prompt_origin": _ORIGIN_SCHEMA,
+                "hard_constraint_details": {
+                    "type": "array",
+                    "items": _CONTRACT_ITEM_SCHEMA,
+                },
+                "real_use_case_details": {
+                    "type": "array",
+                    "items": _CONTRACT_ITEM_SCHEMA,
+                },
+                "actors": {
+                    "type": "array",
+                    "description": "Only named actors explicitly present in source or provider configuration.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "role": {"type": "string"},
+                            "origin": _ORIGIN_SCHEMA,
+                        },
+                        "required": ["name", "role", "origin"],
+                    },
+                },
+                "amendment_details": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["unreachable_tool", "contract_change"],
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["subject", "kind", "reason"],
+                    },
+                },
                 "hard_constraints": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Rules it must obey, in the source's own words. The agent "
-                    "under test is told these and graded against them.",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "short": {"type": "string"},
+                                    "origin": _ORIGIN_SCHEMA,
+                                    "enforced_by": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "sub_goal": {"type": "string"},
+                                },
+                                "required": ["text", "origin"],
+                            },
+                        ]
+                    },
+                    "description": "Rules it must obey, in the source's own words, with an "
+                    "origin on each rule. Plain strings remain accepted for old callers.",
                 },
                 "tools": {
                     "type": "array",
@@ -297,6 +432,25 @@ def contract_tools(
                                 '{"priority": ["low", "normal", "urgent"]}.',
                             },
                             "description": {"type": "string"},
+                            "origin": _ORIGIN_SCHEMA,
+                            "effect": {
+                                "type": "string",
+                                "description": "The observable state or external effect of the "
+                                "tool, stated only where the source proves it.",
+                            },
+                            "effect_kind": {
+                                "type": "string",
+                                "enum": ["read", "write", "external", "control"],
+                                "description": "Canonical effect supported by effect_evidence. Omit when unknown. Never classify from the tool name.",
+                            },
+                            "effect_evidence": {
+                                "type": "object",
+                                "properties": {
+                                    "origin": _ORIGIN_SCHEMA,
+                                    "excerpt": {"type": "string"},
+                                },
+                                "required": ["origin", "excerpt"],
+                            },
                             "requires": {
                                 "type": "array",
                                 "items": {"type": "string"},
@@ -317,8 +471,29 @@ def contract_tools(
                 },
                 "data_schema": {
                     "type": "object",
-                    "description": "The shape of the records the agent works on: which fields "
-                    "each kind of record has.",
+                    "description": "Database tables keyed by table name. Prefer "
+                    "{table: {columns: [{name, type, enum?, pk, nullable, references?}]}}. "
+                    "Legacy {table: {column: declaration}} remains accepted.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "columns": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "type": {"type": "string"},
+                                        "enum": {"type": "array"},
+                                        "pk": {"type": "boolean"},
+                                        "nullable": {"type": "boolean"},
+                                        "references": {"type": "string"},
+                                    },
+                                    "required": ["name", "type"],
+                                },
+                            }
+                        },
+                    },
                 },
                 "base_environment": {
                     "type": "object",
@@ -341,6 +516,11 @@ def contract_tools(
                                 "description": "transport or inference",
                             },
                             "what": {"type": "string"},
+                            "used_by": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Exact consuming components or tools observed in source.",
+                            },
                             "engine": {"type": "string"},
                             "reached": {
                                 "type": "object",
@@ -411,12 +591,29 @@ def contract_tools(
                 },
                 "real_use_cases": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "What this agent is for, one plain sentence each. These are "
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "short": {"type": "string"},
+                                    "origin": _ORIGIN_SCHEMA,
+                                    "enforced_by": _CONTRACT_ITEM_SCHEMA["properties"][
+                                        "enforced_by"
+                                    ],
+                                    "sub_goal": {"type": "string"},
+                                },
+                                "required": ["text", "origin"],
+                            },
+                        ]
+                    },
+                    "description": "What this agent is for, one grounded item each. These are "
                     "capabilities, not test cases: 'cancel an order that has not shipped', not "
                     "a narrated situation with a customer, a name and an outcome. Each one is "
-                    "something the agent's own text says it does, never stretched from a passing "
-                    "word or a tool name. Scenarios are written later, from these.",
+                    "something the agent's own text says it does, with that item's origin. "
+                    "Plain strings remain accepted for old callers.",
                 },
                 "notes": {
                     "type": "string",
@@ -520,6 +717,22 @@ def contract_tools(
                                 "description": "Anything about reaching it that the fields above "
                                 "do not carry, especially why a tool cannot be reached.",
                             },
+                            "origin": _ORIGIN_SCHEMA,
+                            "implementation_origin": {
+                                "type": "string",
+                                "enum": [
+                                    "source",
+                                    "provider_builtin",
+                                    "provider_custom_function",
+                                ],
+                            },
+                            "provider_function": {
+                                "type": "object",
+                                "properties": {
+                                    "url": {"type": "string"},
+                                    "parameters": {"type": "object"},
+                                },
+                            },
                         },
                     },
                 },
@@ -536,13 +749,25 @@ def contract_tools(
                     "description": "What the agent's tools read and write, and how to point them "
                     "at a different one.",
                     "properties": {
+                        "location": {
+                            "type": "string",
+                            "enum": [
+                                "external_db",
+                                "in_process",
+                                "prompt_embedded",
+                                "provider_kb",
+                                "none",
+                            ],
+                            "description": "Only record a location established by the source. Missing evidence is omitted.",
+                        },
+                        "configuration": _STORE_CONFIGURATION_SCHEMA,
                         "kind": {
                             "type": "string",
                             "description": "postgres, clickhouse, mysql, sqlite, in_process for "
                             "state held in memory, or none.",
                         },
                         "configured_by": {
-                            "type": "string",
+                            "oneOf": [{"type": "string"}, _STORE_CONFIGURATION_SCHEMA],
                             "description": "How the code chooses its connection: the environment "
                             "variable it reads, the config file, or the constructor argument. "
                             "This is what makes substituting a store possible without editing "
@@ -763,6 +988,29 @@ def contract_tools(
         data_schema = payload.get("data_schema")
         if not isinstance(data_schema, dict):
             data_schema = {}
+        data_schema = {
+            table: {
+                str(column.get("name")): " ".join(
+                    part
+                    for part in (
+                        str(column.get("type") or ""),
+                        (
+                            f"FK {column['references']}"
+                            if column.get("references")
+                            and " FK " not in f" {column.get('type') or ''} ".upper()
+                            else ""
+                        ),
+                    )
+                    if part
+                )
+                for column in declaration.get("columns", [])
+                if isinstance(column, dict) and str(column.get("name") or "").strip()
+            }
+            if isinstance(declaration, dict)
+            and isinstance(declaration.get("columns"), list)
+            else declaration
+            for table, declaration in data_schema.items()
+        }
         base_environment = payload.get("base_environment")
         if not isinstance(base_environment, dict):
             base_environment = {}
@@ -926,6 +1174,43 @@ def contract_tools(
 
         thin = [
             (
+                "domain",
+                not payload.get("domain"),
+                "no two-word domain tag. Add domain.label with exactly two words grounded in "
+                "the agent's stated purpose, for example Guest Booking or Admin Support.",
+            ),
+            (
+                "item-provenance",
+                any(
+                    isinstance(items, list)
+                    and any(
+                        not isinstance(item, dict) or not item.get("origin")
+                        for item in items
+                    )
+                    for items in (
+                        payload.get("tools"),
+                        payload.get("hard_constraints"),
+                        payload.get("real_use_cases"),
+                    )
+                ),
+                "one or more tools, hard constraints, or real use cases lack item-level origin. "
+                "Use the object form and identify code, prompt, doc, config, "
+                "provider_system_prompt, or provider_tool_list for each item. Do not invent "
+                "an origin where the supplied material does not prove one.",
+            ),
+            (
+                "database-columns",
+                bool(payload.get("data_schema"))
+                and not any(
+                    isinstance(table, dict) and isinstance(table.get("columns"), list)
+                    for table in (payload.get("data_schema") or {}).values()
+                ),
+                "data_schema has no structured columns. For each database table use "
+                "{columns: [{name, type, enum?, pk, nullable, references?}]} so keys and "
+                "nullability remain visible. If this is not a database schema, submit again "
+                "as is.",
+            ),
+            (
                 "prompt",
                 bool(payload.get("conversational", True))
                 and not payload.get("hard_constraints")
@@ -981,7 +1266,12 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination, source_root=source_root)
+        return accept_contract(
+            payload,
+            destination,
+            source_root=source_root,
+            provider_profile=provider_profile,
+        )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 

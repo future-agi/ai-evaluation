@@ -8,10 +8,11 @@ resource is returned in a validated lifecycle receipt so cleanup is exact and re
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -79,7 +80,42 @@ class ProviderImportSpec(BaseModel):
 JsonRequest = Callable[[str, str, str, Mapping[str, Any] | None], dict[str, Any]]
 
 
-def _safe_profile_value(value: Any, key: str = "") -> Any:
+def redact_profile_urls(text: str, *, schema: bool = False) -> str:
+    """Remove credentials and signed queries from URLs, including URLs in prose."""
+
+    def redact(match: re.Match[str]) -> str:
+        raw = match.group()
+        address = raw.rstrip(".,;!?)")
+        try:
+            parsed = urlsplit(address)
+            if not parsed.netloc:
+                return raw
+            query = urlencode(
+                [
+                    (key, value)
+                    for key, value in parse_qsl(parsed.query)
+                    if schema
+                    and key in {"version", "v"}
+                    and re.fullmatch(r"v?[0-9]{1,8}(?:[.-][0-9]{1,8}){0,3}", value)
+                ]
+            )
+            safe = urlunsplit(
+                (
+                    parsed.scheme,
+                    parsed.netloc.rsplit("@", 1)[-1],
+                    parsed.path,
+                    query,
+                    "",
+                )
+            )
+            return safe + raw[len(address) :]
+        except ValueError:
+            return "[redacted]"
+
+    return re.sub(r"\b[A-Za-z][A-Za-z0-9+.-]{0,31}://[^\s<>\"'`]+", redact, text)
+
+
+def _safe_profile_value(value: Any, key: str = "", *, schema: bool = False) -> Any:
     """Return provider configuration that is safe to give the authoring model.
 
     Imported assistant definitions are part of the source of truth for contract and scenario
@@ -87,7 +123,7 @@ def _safe_profile_value(value: Any, key: str = "") -> Any:
     behavioral configuration while removing secrets and URL userinfo/query fragments.
     """
     lowered = key.lower()
-    if any(
+    sensitive = any(
         marker in lowered
         for marker in (
             "secret",
@@ -96,23 +132,49 @@ def _safe_profile_value(value: Any, key: str = "") -> Any:
             "apikey",
             "credential",
             "authorization",
+            "password",
         )
-    ):
+    )
+    if sensitive and not (schema and isinstance(value, Mapping)):
         return "[redacted]"
     if isinstance(value, Mapping):
         return {
-            str(item_key): _safe_profile_value(item, str(item_key))
+            str(item_key): "[redacted]"
+            if sensitive
+            and item_key in {"default", "example", "examples", "const", "enum"}
+            else _safe_profile_value(
+                item, str(item_key), schema=schema or lowered == "parameters"
+            )
             for item_key, item in value.items()
         }
     if isinstance(value, list):
-        return [_safe_profile_value(item, key) for item in value]
-    if isinstance(value, str) and "://" in value:
-        parsed = urlsplit(value)
-        if parsed.scheme and parsed.netloc:
-            hostname = parsed.hostname or ""
-            port = f":{parsed.port}" if parsed.port else ""
-            return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
+        return [_safe_profile_value(item, key, schema=schema) for item in value]
+    if isinstance(value, str):
+        return redact_profile_urls(value, schema=schema)
     return value
+
+
+def safe_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """Retain which sanitized fields cannot be published as verbatim text."""
+    safe = _safe_profile_value(profile)
+    changed = set(profile.get("unavailable_verbatim_fields") or [])
+
+    def compare(original: Any, cleaned: Any, path: str) -> None:
+        if isinstance(original, Mapping) and isinstance(cleaned, Mapping):
+            for key, value in original.items():
+                compare(
+                    value, cleaned.get(str(key)), f"{path}.{key}" if path else str(key)
+                )
+        elif isinstance(original, list) and isinstance(cleaned, list):
+            for index, (value, sanitized) in enumerate(zip(original, cleaned)):
+                compare(value, sanitized, f"{path}.{index}")
+        elif original != cleaned:
+            changed.add(path)
+
+    compare(profile, safe, "")
+    if changed:
+        safe["unavailable_verbatim_fields"] = sorted(changed)
+    return safe
 
 
 def inspect_provider_target(
@@ -212,7 +274,7 @@ def inspect_provider_target(
                 "retell_response_engine_unsupported: provider_import supports "
                 "retell-llm and conversation-flow"
             )
-    return _safe_profile_value(profile)
+    return safe_provider_profile(profile)
 
 
 def _request_json(
