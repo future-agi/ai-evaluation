@@ -8,6 +8,7 @@ import math
 import os
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -248,30 +249,42 @@ class UsageReporter:
         self._network_lock = threading.RLock()
 
     def check(self, action: UsageAction) -> None:
-        try:
-            with self._network_lock:
-                response = self._transport.request(
-                    "POST",
-                    self._endpoint,
-                    headers=self._capabilities.auth_headers(),
-                    json_body={"operation": "check", "action": action},
-                )
-        except TransportError as exc:
-            raise UsageUnavailable(f"usage check unavailable: {exc}") from exc
-        body = response.body
-        result = (
-            body.get("result")
-            if isinstance(body, dict) and isinstance(body.get("result"), dict)
-            else body
-        )
-        if response.status_code == 402:
-            raise UsageDenied(body)
-        if response.status_code < 200 or response.status_code >= 300:
-            raise UsageUnavailable(
-                f"usage check failed with HTTP {response.status_code}"
+        last_transport_error: TransportError | None = None
+        for attempt in range(3):
+            try:
+                with self._network_lock:
+                    response = self._transport.request(
+                        "POST",
+                        self._endpoint,
+                        headers=self._capabilities.auth_headers(),
+                        json_body={"operation": "check", "action": action},
+                    )
+            except TransportError as exc:
+                last_transport_error = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+                raise UsageUnavailable(f"usage check unavailable: {exc}") from exc
+            body = response.body
+            result = (
+                body.get("result")
+                if isinstance(body, dict) and isinstance(body.get("result"), dict)
+                else body
             )
-        if not isinstance(result, dict) or result.get("allowed") is not True:
-            raise UsageUnavailable("usage check response did not allow the action")
+            if response.status_code == 402:
+                raise UsageDenied(body)
+            if 500 <= response.status_code < 600 and attempt < 2:
+                time.sleep(0.5 * (2**attempt))
+                continue
+            if response.status_code < 200 or response.status_code >= 300:
+                raise UsageUnavailable(
+                    f"usage check failed with HTTP {response.status_code}"
+                )
+            if not isinstance(result, dict) or result.get("allowed") is not True:
+                raise UsageUnavailable("usage check response did not allow the action")
+            return
+        # The loop always returns or raises. Keep the invariant explicit for type checkers.
+        raise UsageUnavailable(f"usage check unavailable: {last_transport_error}")
 
     def record(
         self,

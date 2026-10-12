@@ -246,6 +246,13 @@ def contract_tools(
                     "simulated person is briefed: someone who did not dial has no opening request "
                     "to make.",
                 },
+                "agent_languages": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Voice only: the languages the agent's own instructions say it "
+                    "speaks, for example ['English'] for 'respond in English only'. Leave empty when "
+                    "its instructions do not say. The simulated caller's transcriber follows it.",
+                },
                 "conversational": {
                     "type": "boolean",
                     "description": "True if a person talks with it turn by turn. False for an "
@@ -407,8 +414,9 @@ def contract_tools(
                     "items": {"type": "string"},
                     "description": "What this agent is for, one plain sentence each. These are "
                     "capabilities, not test cases: 'cancel an order that has not shipped', not "
-                    "a narrated situation with a customer, a name and an outcome. Scenarios are "
-                    "written later, from these.",
+                    "a narrated situation with a customer, a name and an outcome. Each one is "
+                    "something the agent's own text says it does, never stretched from a passing "
+                    "word or a tool name. Scenarios are written later, from these.",
                 },
                 "notes": {
                     "type": "string",

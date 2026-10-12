@@ -171,7 +171,7 @@ afterwards. It is a whole conversation from first contact to a settled outcome, 
 
 | Field | What it is | Required |
 |---|---|---|
-| `name` | Short identifier, lower case with hyphens or underscores. Becomes the scenario's folder name, so it is how a result is read later. | yes |
+| `name` | Short identifier, lower case with hyphens or underscores. Becomes the scenario's folder name, so it is how a result is read later. It names only what the scenario carries: a language, accent or condition appears in it only when the caller and situation have it. Two scenarios differ in name by what they test, never by a counter or an invented value such as a code, PIN or reference; a number belongs only when it is part of what is tested. | yes |
 | `instruction` | What the person is trying to achieve, written to them, plus everything they hold. | yes |
 | `sub_goals` | Names from the shared catalogue that must hold. Nothing else grades this scenario. | yes |
 | `solution` | What a correct agent would do, as steps. Never run against the agent under test. | yes |

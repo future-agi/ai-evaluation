@@ -407,20 +407,24 @@ def _contract_sql_type(declaration: str) -> str | None:
         ("UNION[", "OPTIONAL[", "LIST[", "DICT[", "MAPPING[", "TUPLE[", "SET[")
     )
     if language_type:
+        # Preserve the outer value shape before considering words that describe
+        # members.  Human-readable contracts commonly say things such as
+        # ``list of dicts with qty (int), cost_basis (float)``; classifying that
+        # declaration as a number destroys the authored JSON value.
+        if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
+            return "jsonb"
+        if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
+            return "jsonb"
         if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
             return "double precision"
         if tokens & {"INT", "INTEGER"}:
             return "bigint"
         if tokens & {"BOOL", "BOOLEAN"}:
             return "boolean"
-        if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
-            return "jsonb"
-        if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
-            return "jsonb"
         if tokens & {"STR", "STRING"}:
             return "text"
     patterns = (
-        (r"^BOOLEAN\b", "boolean"),
+        (r"^(?:BOOL|BOOLEAN)\b", "boolean"),
         (r"^(?:BIGINT|INTEGER|INT|SMALLINT)\b", "bigint"),
         (r"^(?:DOUBLE PRECISION|REAL|FLOAT)\b", "double precision"),
         (
@@ -440,17 +444,17 @@ def _contract_sql_type(declaration: str) -> str | None:
     # Application contracts often use language-level unions instead of SQL
     # declarations. Interpret the whole declaration as a type set, with the wider
     # compatible representation winning independently of token order.
+    if re.match(r"^(?:DICT|MAPPING|OBJECT|JSON|ANY)\b", normalized):
+        return "jsonb"
+    if re.match(r"^(?:LIST|ARRAY|TUPLE|SET)\b", normalized):
+        # Without a proven homogeneous leaf type, JSONB preserves the value shape.
+        return "jsonb"
     if tokens & {"FLOAT", "NUMBER", "DECIMAL", "DOUBLE"}:
         return "double precision"
     if tokens & {"INT", "INTEGER"}:
         return "bigint"
     if tokens & {"BOOL", "BOOLEAN"}:
         return "boolean"
-    if tokens & {"DICT", "MAPPING", "OBJECT", "JSON", "ANY"}:
-        return "jsonb"
-    if tokens & {"LIST", "ARRAY", "TUPLE", "SET"}:
-        # Without a proven homogeneous leaf type, JSONB preserves the value shape.
-        return "jsonb"
     if tokens & {"STR", "STRING"}:
         return "text"
     return None
@@ -1665,7 +1669,7 @@ def resolve_environment_plan(
                 environment = {**declared_runtime_environment, **environment}
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
-            "voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
+                    "voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
                 )
                 environment.setdefault(
                     "HARNESS_TOOL_TRACE",
@@ -2668,7 +2672,13 @@ def _schema_column_types(paths: list[Path]) -> dict[tuple[str, str], str]:
                 if len(words) < 2:
                     continue
                 name = words[0].strip('"')
-                if name.upper() in ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"):
+                if name.upper() in (
+                    "PRIMARY",
+                    "FOREIGN",
+                    "UNIQUE",
+                    "CHECK",
+                    "CONSTRAINT",
+                ):
                     continue
                 kind = words[1].upper()
                 rest = " ".join(words[1:]).upper()

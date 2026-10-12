@@ -21,6 +21,13 @@ from .world.runtime import Call
 # Model configuration only: no platform callback capability or source-fetch credential.
 _CHAT_ENV = frozenset(
     {
+        # Platform-owned model gateway credentials are simulator configuration,
+        # not target-agent or callback credentials.  The isolated worker needs
+        # them when the Claude SDK wire protocol is routed to a non-Claude model.
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
+        "ALK_CLAUDE_GATEWAY_API_KEY",
+        "ALK_CLAUDE_GATEWAY_URL",
         "ALK_HARNESS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
@@ -85,7 +92,11 @@ class IsolatedChatCallRunner:
             work_directory=context.work_directory / "chat-workers",
         )
         if "error" in result:
-            raise CallAborted(f"chat_worker_failed: {result['error']}")
+            raise CallAborted(
+                f"chat_worker_failed: {result['error']}",
+                marker=result.get("error_marker"),
+                code=result.get("error_code") or "call_failed",
+            )
         artifact_ids = {}
         for artifact in result["artifacts"]:
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
@@ -154,6 +165,16 @@ async def main() -> None:
             EnvironmentRuntime.model_validate(payload["runtime"]),
         )
         result = {"outcome": asdict(outcome), "artifacts": collector.artifacts}
+    except CallAborted as exc:
+        # CallAborted messages and structured failure fields are already designed for
+        # result receipts. Preserve them across the worker boundary; returning only the
+        # exception class made every chat failure indistinguishable and discarded useful
+        # retry/attribution codes. Arbitrary exceptions remain type-only below.
+        result = {
+            "error": str(exc),
+            "error_code": exc.code,
+            "error_marker": exc.marker,
+        }
     except Exception as exc:  # noqa: BLE001 - return a secret-safe worker failure
         result = {"error": type(exc).__name__}
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

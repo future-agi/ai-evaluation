@@ -571,9 +571,10 @@ and can read them side by side. So say it in the brief, for each writer that get
 separates your own scenarios from each other**, one clause per scenario, in the same words as the
 difficulty rule above. Then the writer has no excuse and no need to guess.
 
-**Say in every brief what a writer cannot see in its siblings.** A caller's first name may appear once
-in the whole suite, so ask for first names that belong to that caller's background rather than the
-commonest ones. Spread the people's circumstances across the briefs instead of leaving each writer to
+**Say in every brief what a writer cannot see in its siblings.** A caller's full name may appear once
+in the whole suite, so ask for names that are ordinary in that caller's background, with the family
+name varied rather than reaching for a rare given name or one from another background. Spread
+the people's circumstances across the briefs instead of leaving each writer to
 pick, so that no one of them dominates the suite; people who moved or are visiting are real too.
 
 **Names have to be distinguishable when spoken, not merely different.** "No two people share a name" lets

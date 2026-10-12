@@ -746,6 +746,20 @@ def _bundle_contract_value(bundle_dir: Path, key: str) -> str | None:
     return value or None
 
 
+def _bundle_contract_list(bundle_dir: Path, key: str) -> list[str]:
+    path = bundle_dir / "contract.json"
+    if not path.is_file():
+        return []
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    values = body.get(key) if isinstance(body, dict) else None
+    if not isinstance(values, list):
+        return []
+    return [str(one).strip() for one in values if str(one).strip()]
+
+
 def _bundle_contract_modality(bundle_dir: Path) -> str | None:
     return _bundle_contract_value(bundle_dir, "modality")
 
@@ -774,6 +788,9 @@ def _default_build_call_runner(
         call_environ = dict(os.environ)
         if declared:
             call_environ["ALK_CALL_DIRECTION"] = declared
+        spoken = _bundle_contract_list(context.bundle_dir, "agent_languages")
+        if spoken:
+            call_environ["ALK_AGENT_LANGUAGES"] = ",".join(spoken)
         return CallRunnerImpl(adapter, context, environ=call_environ)
     # Repository-hosted text targets advertise their concrete HTTP interface in the frozen
     # contract adopted into Bundle V2. Connector-only Vapi/Retell remains on the existing

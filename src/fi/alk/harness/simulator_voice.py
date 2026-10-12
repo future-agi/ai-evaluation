@@ -61,9 +61,6 @@ _TEMPERAMENTS = (
     (("reserved", "passive"), (0.25, 0.5, 0.6)),
 )
 
-# Languages transcribed with Deepgram's multilingual model rather than a single language code.
-_MULTILINGUAL_STT = ("ar", "es")
-
 # Written as separate numbered rules rather than one paragraph. These arrive late in a long
 # prompt, and a rule buried mid-sentence there does not survive: a caller ignored the loop rule
 # for four turns while it was the tail of a compound sentence.
@@ -106,9 +103,13 @@ SIMULATOR_INSTRUCTIONS = (
     "without the task moving forward, do not try a fifth time and do not rephrase the same point "
     "again: react once the way rule 12g says, then end the call.\n"
     "6. Otherwise let the agent finish speaking. Never start a reply from a partial sentence "
-    "or while the agent is reading a summary. Wait for the complete question before answering.\n"
+    "or while the agent is reading a summary. Wait for the complete question before answering. "
+    "You are only ever the caller: never say the agent's lines, such as a recap of your request "
+    "or a question asking whether to go ahead.\n"
     "7. A quote, proposed action, or booking summary is not a completed outcome. If the agent "
-    "asks for final confirmation, answer explicitly, then remain on the call until the agent "
+    "asks for final confirmation, answer explicitly the way people do, a yes or the one detail "
+    "that is wrong, never reading back an address or summary the agent has just read, then "
+    "remain on the call until the agent "
     "confirms that the action actually completed. Do not use goodbye or other closing language "
     "before that confirmation.\n"
     "8. Follow sequence words literally. If the scenario says to do something after an earlier "
@@ -169,15 +170,17 @@ SIMULATOR_INSTRUCTIONS = (
     "12e. Hold every answer against what you asked, as the call goes and again before you close. "
     "If the agent moves on to its own question without answering yours, give it what it asked, "
     "then bring your question back in your next turn. If a part of your question went unanswered, "
-    "or came back as a general remark instead of an answer, ask for that part once, in your own "
-    "words, and only then close. Saying an answer covered everything when it "
+    "or came back as a general remark instead of an answer, ask for that part once in your next "
+    "turn, in your own words, even if the agent has moved on to something else: answer what it "
+    "asked and ask yours in the same turn. Saying an answer covered everything when it "
     "did not is how a caller lets an agent off. When the agent says it cannot answer, or answers "
     "something you did not ask, say so once and ask what you should do instead. Being sent "
     "somewhere else is not an answer either: before you accept it, ask once for the specific next "
     "step, then decide whether it is enough.\n"
     "12f. You understand only the languages you speak. When the agent talks in another, you did "
     "not understand it: say so in your own language, the way a person would, and do not answer "
-    "what it said.\n"
+    "what it said. When its words reach you broken or cut off, say you did not catch that, in your "
+    "own language, and let it say it again.\n"
     "12g. When you are not getting what you called for, it shows in how you talk, not in a word "
     "naming it, and it builds: the first no you take in your stride, then you get short and pointed "
     "('no, that doesn't work for me', 'so what am I supposed to do?'), with no 'please' and no 'are "
@@ -480,13 +483,23 @@ def transcriber_for(language: str) -> tuple[str, str, str]:
 _MULTILINGUAL_STT = frozenset({"en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"})
 
 
+def _agent_language_codes(agent_languages: str) -> set[str]:
+    """Base codes of the agent's declared languages, or none unless every one is a known language."""
+    names = [one.strip().lower() for one in (agent_languages or "").split(",") if one.strip()]
+    codes = [_LANGUAGE_CODES.get(name) for name in names]
+    if not codes or not all(codes):
+        return set()
+    return {code.split("-")[0] for code in codes}
+
+
 def persona_stt_language(
-    persona: Mapping[str, object] | None, override: str = ""
+    persona: Mapping[str, object] | None, override: str = "", agent_languages: str = ""
 ) -> str:
     """The STT language for one caller, from the persona's languages.
 
     An explicit override always wins. Otherwise the persona's first language is used, so a caller
-    who speaks Hindi is transcribed as Hindi rather than forced to English.
+    who speaks Hindi is transcribed as Hindi rather than forced to English. When the agent declares
+    languages that exclude the caller's, the agent will answer in its own, so it is heard as multi.
     """
     if override and override.strip():
         return override.strip()
@@ -499,9 +512,13 @@ def persona_stt_language(
         code = _LANGUAGE_CODES.get(first) or (
             first if (len(first) in (2, 3) or "-" in first) and first.replace("-", "").isalpha() else ""
         )
-        # The caller transcribes the agent, whose language may not be the caller's own.
+        # The caller transcribes the agent, who may answer in English or the caller's language.
         if code and not code.startswith("en"):
-            return "multi" if code.split("-")[0] in _MULTILINGUAL_STT else code
+            base = code.split("-")[0]
+            agent = _agent_language_codes(agent_languages)
+            if base in _MULTILINGUAL_STT or (agent and base not in agent):
+                return "multi"
+            return code
         if code:
             return code
     return "en"
@@ -833,7 +850,9 @@ def simulator_definition(
     stt_override = (get("SIMULATOR_STT_PROVIDER") or "").strip()
     _, tts_provider = voice_providers(get)
     language = persona_stt_language(
-        dict(persona or {}), (get("SIMULATOR_STT_LANGUAGE") or "").strip()
+        dict(persona or {}),
+        (get("SIMULATOR_STT_LANGUAGE") or "").strip(),
+        (get("ALK_AGENT_LANGUAGES") or "").strip(),
     )
     stt_default_provider, stt_model, stt_language = transcriber_for(language)
     stt_provider = stt_override or stt_default_provider
@@ -1004,7 +1023,7 @@ def caller_habit(persona: Mapping[str, Any] | None) -> str:
 
 _CALL_MOVES = (
     "you describe what is going on in your own words rather than naming the fix you think you need",
-    "you ask what a word the agent uses means",
+    "you ask what a term the agent uses means when it is one a person in your place would not know",
     "you ask the what-if your own situation raises",
     "you weigh what the answer costs you in time, money or effort, and say so",
     "before you go, you make sure you know exactly what happens next and what you have to do",

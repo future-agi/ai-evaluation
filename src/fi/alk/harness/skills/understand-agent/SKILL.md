@@ -94,7 +94,9 @@ Find, in roughly this order:
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent
    people dial into ("callers dial in", "thanks for calling") is `inbound`. Record it as
-   `call_direction`, and leave it out for chat, which a person always starts.
+   `call_direction`, and leave it out for chat, which a person always starts. Record the languages
+   its instructions say it speaks as `agent_languages` ("English only" is `["English"]`), and leave
+   it empty when they do not say.
 
    This is not who speaks first: an outbound agent usually still greets. It decides how the
    simulated person is briefed, and briefing someone who did not dial as though they had an errand
@@ -189,7 +191,9 @@ Find, in roughly this order:
 14. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
     not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
     not write a situation with a character, a sequence of events and an outcome. Those are
-    scenarios and they are written later, from these sentences.
+    scenarios and they are written later, from these sentences. Each one is something the
+    agent's own text says it does; a capability stretched from a passing word or a tool name
+    becomes a whole slice of scenarios testing what the agent was never built to do.
 
 ## A repository may not hold one agent
 

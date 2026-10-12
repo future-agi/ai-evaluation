@@ -1,0 +1,334 @@
+# Release pipeline. On every push to main: publish the SDK to PyPI when the
+# pyproject version is new, build and certify the E2B template, then open a
+# pull request in future-agi/deployment pinning that template.
+# SDK release: bump `version` in pyproject.toml + `uv lock`, merge, approve the
+# `pypi` deployment. Template: approve the `e2b-template` deployment.
+# Setup (secrets, approvers, PyPI publisher): DEVELOPMENT.md, "Release pipeline".
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/publish-pypi.yml
+      - scripts/e2b-template.py
+      - scripts/bump_deployment_values.py
+      - Dockerfile.hosted
+      - .dockerignore
+      - hosted-snapshot/**
+      - pyproject.toml
+      - src/**
+
+permissions:
+  contents: read
+
+env:
+  PYPI_PROJECT: agent-learning-kit
+  UV_VERSION: "0.12.9"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate publisher inputs without credentials
+        run: python3 scripts/e2b-template.py --dry-run
+
+  sdk-check:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.v.outputs.publish }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - id: v
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          HEADLINE: ${{ github.event.head_commit.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$REF" == refs/heads/main ]] || { echo "::error::refusing to publish from $REF"; exit 1; }
+          version="$(uv version --short)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-z0-9.]*)$ ]] || { echo "::error::unexpected version shape"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          wheel="agent_learning_kit-${version}-py3-none-any.whl"; sdist="agent_learning_kit-${version}.tar.gz"
+          body="$(mktemp)"
+          code="$(curl -sS --max-time 30 --retry 3 --retry-delay 2 -o "$body" -w '%{http_code}' \
+                  "https://pypi.org/pypi/${PYPI_PROJECT}/json")"
+          case "$code" in
+            404) publish=true;  why="first release" ;;
+            200) if jq -e --arg v "$version" --arg w "$wheel" --arg s "$sdist" \
+                       '(.releases[$v] // []) | map(.filename) | (index($w) != null and index($s) != null)' "$body" >/dev/null
+                 then publish=false; why="already on PyPI"
+                 else publish=true;  why="not on PyPI"; fi ;;
+            *)   echo "::error::PyPI lookup returned HTTP $code"; exit 1 ;;
+          esac
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          {
+            echo "## ${PYPI_PROJECT} **${version}** — ${why}"
+            echo "- commit: \`${SHA}\` — ${HEADLINE%%$'\n'*}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  sdk-build:
+    needs: sdk-check
+    if: needs.sdk-check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv build
+      - run: |
+          set -euo pipefail
+          uv venv .smoke --python 3.12
+          uv pip install --python .smoke/bin/python dist/*.whl
+          .smoke/bin/python -c "import fi.simulate.hosted.child_entrypoint, fi.alk.harness"
+          .smoke/bin/alk --help > /dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  sdk-publish:
+    needs: [sdk-check, sdk-build]
+    if: needs.sdk-check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: publish-pypi-main
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.sdk-check.outputs.version }}
+    steps:
+      - id: recheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="agent_learning_kit-${VERSION}-py3-none-any.whl"; sdist="agent_learning_kit-${VERSION}.tar.gz"
+          body="$(mktemp)"
+          code="$(curl -sS --max-time 30 --retry 3 --retry-delay 2 -o "$body" -w '%{http_code}' \
+                  "https://pypi.org/pypi/${PYPI_PROJECT}/json")"
+          if [[ "$code" == 200 ]] && jq -e --arg v "$VERSION" --arg w "$wheel" --arg s "$sdist" \
+               '(.releases[$v] // []) | map(.filename) | (index($w) != null and index($s) != null)' "$body" >/dev/null; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$code" == 200 || "$code" == 404 ]]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::PyPI lookup returned HTTP $code"; exit 1
+          fi
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.recheck.outputs.go == 'true'
+        with:
+          name: dist
+          path: dist/
+      - if: steps.recheck.outputs.go == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' "agent_learning_kit-${VERSION}-py3-none-any.whl" "agent_learning_kit-${VERSION}.tar.gz" | sort)
+          [[ "$(ls -1 dist/ | sort)" == "$expected" ]] || { echo "::error::dist/ does not match version ${VERSION}"; ls -la dist/; exit 1; }
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        if: steps.recheck.outputs.go == 'true'
+        with:
+          attestations: true
+          skip-existing: true
+
+  template-publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: e2b-template
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: e2b-template-${{ github.ref }}-${{ github.sha }}
+      cancel-in-progress: false
+    outputs:
+      release: ${{ steps.release.outputs.json }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check required credentials
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+        run: |
+          if [[ -z "$E2B_API_KEY" ]]; then
+            echo "::error::Add the E2B_API_KEY repository secret to publish templates."
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, publish, and certify
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          E2B_REGISTRY_USERNAME: ${{ github.actor }}
+          E2B_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          uv run --python 3.12 scripts/e2b-template.py \
+            --image-repository "ghcr.io/${GITHUB_REPOSITORY,,}/alk-hosted-runtime" \
+            --image-tag "${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --template-name "alk-hosted-${GITHUB_SHA:0:12}" \
+            --output dist/e2b-template-release.json
+      - name: Export certified release
+        id: release
+        run: |
+          json="$(jq -c . dist/e2b-template-release.json)"
+          echo "json=${json}" >> "$GITHUB_OUTPUT"
+      - name: Summarize certified release
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          release = json.loads(Path("dist/e2b-template-release.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Certified E2B template\n\n")
+              for label, key in (
+                  ("ALK commit", "alk_source_revision"),
+                  ("Image", "image_reference"),
+                  ("Template reference", "template_reference"),
+                  ("CPU", "cpu_count"),
+                  ("Memory (MB)", "memory_mb"),
+                  ("Verified disk (GB)", "verified_disk_gb"),
+              ):
+                  summary.write(f"- {label}: `{release[key]}`\n")
+              summary.write("\nCertification checks:\n\n")
+              for check in release["certification_checks"]:
+                  summary.write(f"- {check}\n")
+              summary.write(
+                  "\nDownload the release artifact for the immutable template reference "
+                  "and full certification metadata.\n"
+              )
+          PY
+      - name: Save certified release metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2b-template-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2b-template-release.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deployment-bump:
+    needs: template-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: deployment-bump-${{ github.sha }}
+      cancel-in-progress: false
+    env:
+      RELEASE_JSON: ${{ needs.template-publish.outputs.release }}
+    steps:
+      - name: Check required credentials
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_ID" || -z "$APP_KEY" ]]; then
+            echo "::error::Share the RELEASE_BOT_APP_ID and RELEASE_BOT_PRIVATE_KEY organization secrets with this repository to open the deployment pull request."
+            exit 1
+          fi
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: future-agi
+          repositories: deployment
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: kit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: future-agi/deployment
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          path: deployment
+      - name: Pin the certified template in both regions
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_JSON" > "$RUNNER_TEMP/e2b-template-release.json"
+          python3 kit/scripts/bump_deployment_values.py \
+            --release "$RUNNER_TEMP/e2b-template-release.json" \
+            deployment/us/gcp/deployment/values.yaml \
+            deployment/eu/gcp/deployment/values.yaml
+      - name: Open the deployment pull request
+        working-directory: deployment
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          release="$RUNNER_TEMP/e2b-template-release.json"
+          template_name="$(jq -er .template_name "$release")"
+          template_reference="$(jq -er .template_reference "$release")"
+          branch="chore/harness-pin-${template_name}"
+          title="chore(harness): pin the ${template_name} E2B template"
+          git config user.name "futureagi-release-bot"
+          git config user.email "release-bot@futureagi.com"
+          git switch -c "$branch"
+          git add us/gcp/deployment/values.yaml eu/gcp/deployment/values.yaml
+          if git diff --cached --quiet; then
+            echo "deployment already pins ${template_reference}; nothing to do"
+            exit 0
+          fi
+          git commit -m "$title"
+          git push --force origin "$branch"
+          body="$(jq -er --arg run "$RUN_URL" '[
+            "## Summary",
+            "",
+            "- Pin the US and EU backend and worker hosted harness to the certified E2B template `\(.template_name)`.",
+            "- Opened by the agent-learning-kit release workflow after the template passed certification.",
+            "",
+            "## Certified artifact",
+            "",
+            "- Run: \($run)",
+            "- Template reference: `\(.template_reference)`",
+            "- Build ID: `\(.template_build_id)`",
+            "- Kit commit: `\(.alk_source_revision)`",
+            "- Resources: \(.cpu_count) CPU, \(.memory_mb) MB memory, \(.verified_disk_gb) GB verified disk"
+          ] | join("\n")' "$release")"
+          existing="$(gh pr list --repo future-agi/deployment --head "$branch" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh api -X PATCH "repos/future-agi/deployment/pulls/${existing}" -f body="$body" --silent
+          else
+            gh pr create --repo future-agi/deployment --base main --head "$branch" --title "$title" --body "$body"
+          fi

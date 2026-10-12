@@ -1,10 +1,11 @@
 [build-system]
-requires = ["hatchling"]
+# Bounded: the build backend is the one artifact input uv.lock does not cover.
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
 name = "agent-learning-kit"
-version = "0.2.2"
+version = "0.2.3"
 description = "Unified Future AGI SDK for agent learning workflows."
 readme = "README.md"
 requires-python = ">=3.10"

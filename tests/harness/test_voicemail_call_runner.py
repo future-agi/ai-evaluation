@@ -166,3 +166,35 @@ def test_a_caller_with_several_languages_is_transcribed_multilingually() -> None
     assert persona_stt_language({"languages": ["French"]}) == "multi"
     assert persona_stt_language({"languages": ["English", "english"]}) == "en-US"
     assert persona_stt_language({"languages": ["French", "English"]}, "de") == "de"
+
+
+def test_the_agents_declared_languages_reach_the_simulator_of_every_call(tmp_path: Path) -> None:
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _doc(context.bundle_dir, persona={"name": "Layla Haddad", "languages": ["Arabic"]})
+    started = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    async def place_call(spec):
+        return _report(
+            transcript="hello",
+            messages=[{"role": "user", "content": "hello"}],
+            started_at=started,
+            ended_at=started + timedelta(seconds=10),
+        )
+
+    runner = cr.CallRunnerImpl(
+        FakeAdapter(),
+        context,
+        place_call=place_call,
+        environ={cr.AGENT_LANGUAGES_ALIAS: "English", "UNRELATED_SETTING": "x"},
+    )
+    built: list[Any] = []
+    real = cr.simulator_definition
+
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        built.append(real(*args, **kwargs))
+        return built[-1]
+
+    with patch.object(cr, "simulator_definition", side_effect=recorded):
+        _run(runner, _FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "a-w0"}))
+    stt = built[-1].stt
+    assert (stt["language"] if isinstance(stt, dict) else stt.language) == "multi"

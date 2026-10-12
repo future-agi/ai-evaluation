@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from fi.alk.harness import judge as judge_module
 
 
@@ -292,8 +294,113 @@ def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_
     assert "accent not set" in _condition_the_call_lacks(english)
 
 
-def test_a_language_outside_the_multilingual_transcriber_is_transcribed_in_its_own() -> None:
+# (persona languages, agent languages, override, expected STT language)
+_STT_CASES = [
+    # English callers keep their own variant; the agent's languages never move them.
+    (["English"], "", "", "en-US"),
+    (["en-GB"], "", "", "en-GB"),
+    (["English"], "Arabic", "", "en-US"),
+    # Covered by the multilingual model: always multi, so English and the caller's language are heard.
+    (["Spanish"], "", "", "multi"),
+    (["Spanish"], "Spanish", "", "multi"),
+    (["Spanish"], "English", "", "multi"),
+    (["French"], "", "", "multi"),
+    (["Hindi"], "", "", "multi"),
+    (["es"], "", "", "multi"),
+    # Not covered: the caller's own language unless the agent declares languages without it.
+    (["Arabic"], "", "", "ar"),
+    (["Arabic"], "Arabic", "", "ar"),
+    (["Arabic"], "Arabic,English", "", "ar"),
+    (["Arabic"], "English", "", "multi"),
+    (["Arabic"], "english", "", "multi"),
+    (["Arabic"], " English , French ", "", "multi"),
+    (["Arabic"], "en", "", "multi"),
+    (["Polish"], "English", "", "multi"),
+    (["ko"], "", "", "ko"),
+    (["ko"], "Korean", "", "ko"),
+    # A declared list holding anything unrecognised is ignored as a whole.
+    (["Arabic"], "Englsh", "", "ar"),
+    (["Arabic"], "English (US)", "", "ar"),
+    (["Arabic"], "English,Klingon", "", "ar"),
+    (["Arabic"], "English;French", "", "ar"),
+    (["Arabic"], " , ", "", "ar"),
+    # Several persona languages, or none, are unchanged by the agent's list.
+    (["Arabic", "English"], "English", "", "multi"),
+    ([], "English", "", "en"),
+    # An explicit override always wins.
+    (["Arabic"], "English", "ar", "ar"),
+    (["Spanish"], "", "es", "es"),
+]
+
+
+@pytest.mark.parametrize(("languages", "agent", "override", "expected"), _STT_CASES)
+def test_the_simulator_transcribes_the_agent_in_the_language_it_will_hear(
+    languages: list[str], agent: str, override: str, expected: str
+) -> None:
     from fi.alk.harness.simulator_voice import persona_stt_language
 
-    assert persona_stt_language({"languages": ["French"]}) == "multi"
-    assert persona_stt_language({"languages": ["ko"]}) == "ko"
+    assert persona_stt_language({"languages": languages}, override, agent) == expected
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("multi", ("deepgram", "nova-3", "multi")),
+        ("es", ("deepgram", "nova-3", "multi")),
+        ("en-US", ("deepgram", "nova-3", "multi")),
+        ("ar", ("deepgram", "nova-3", "ar")),
+        ("ko", ("deepgram", "nova-3", "ko")),
+        ("", ("deepgram", "nova-3", "en-US")),
+    ],
+)
+def test_the_transcriber_sends_multi_only_where_the_model_covers_it(
+    language: str, expected: tuple[str, str, str]
+) -> None:
+    from fi.alk.harness.simulator_voice import transcriber_for
+
+    assert transcriber_for(language) == expected
+
+
+def test_the_simulator_definition_reads_the_agents_languages_from_its_settings() -> None:
+    from fi.alk.harness.simulator_voice import simulator_definition
+
+    def heard(settings: dict[str, str]) -> str:
+        definition = simulator_definition(lambda key: settings.get(key, ""), {"languages": ["Arabic"]})
+        stt = definition.stt
+        return stt["language"] if isinstance(stt, dict) else stt.language
+
+    assert heard({}) == "ar"
+    assert heard({"ALK_AGENT_LANGUAGES": "English"}) == "multi"
+    assert heard({"ALK_AGENT_LANGUAGES": "Englsh"}) == "ar"
+    assert heard({"ALK_AGENT_LANGUAGES": "English", "SIMULATOR_STT_LANGUAGE": "ar"}) == "ar"
+
+
+def test_the_agents_declared_languages_reach_the_call_environment(tmp_path) -> None:
+    import json
+
+    from fi.alk.harness import call_runner
+    from fi.alk.harness.hosted_entrypoint import _bundle_contract_list
+
+    (tmp_path / "contract.json").write_text(json.dumps({"agent_languages": ["English", " ", "Arabic"]}))
+    assert _bundle_contract_list(tmp_path, "agent_languages") == ["English", "Arabic"]
+    assert _bundle_contract_list(tmp_path, "missing") == []
+    (tmp_path / "contract.json").write_text(json.dumps({"agent_languages": "English"}))
+    assert _bundle_contract_list(tmp_path, "agent_languages") == []
+    (tmp_path / "contract.json").write_text("{not json")
+    assert _bundle_contract_list(tmp_path, "agent_languages") == []
+    (tmp_path / "contract.json").unlink()
+    assert _bundle_contract_list(tmp_path, "agent_languages") == []
+    # The call runner forwards only *_ALIAS environment names to the call process.
+    assert call_runner.AGENT_LANGUAGES_ALIAS == "ALK_AGENT_LANGUAGES"
+
+
+def test_the_contract_records_the_agents_languages_and_older_contracts_still_load() -> None:
+    from fi.alk.harness.contract import AgentContract
+
+    base = {"agent": "a", "summary": "s"}
+    assert AgentContract.model_validate(base).agent_languages == []
+    assert AgentContract.model_validate({**base, "agent_languages": "English"}).agent_languages == ["English"]
+    assert AgentContract.model_validate({**base, "agent_languages": ["English", "Hindi"]}).agent_languages == [
+        "English",
+        "Hindi",
+    ]

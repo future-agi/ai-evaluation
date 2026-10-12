@@ -7,6 +7,8 @@ import json
 import os
 from types import SimpleNamespace
 
+import pytest
+
 from test_chat_call_runner import (
     _Adapter,
     _ToolWorld,
@@ -15,6 +17,7 @@ from test_chat_call_runner import (
 )
 
 from fi.alk.harness import chat_call_runner, chat_worker
+from fi.alk.harness.hosted_scheduler import CallAborted
 from fi.alk.harness.process_runtime import (
     EnvironmentRuntime,
     RuntimeEndpoint,
@@ -86,6 +89,10 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     context = _context(tmp_path)
     adapter = _Adapter()
     monkeypatch.setenv("HARNESS_PLATFORM_API_KEY", "parent-only")
+    monkeypatch.setenv("AGENTCC_API_KEY", "simulator-model-key")
+    monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "simulator-claude-key")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://claude.example")
     original = dict(os.environ)
     payloads = []
 
@@ -94,6 +101,10 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
 
         async def worker(module, payload, *, environ, work_directory):
             assert "HARNESS_PLATFORM_API_KEY" not in environ
+            assert environ["AGENTCC_API_KEY"] == "simulator-model-key"
+            assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
+            assert environ["ALK_CLAUDE_GATEWAY_API_KEY"] == "simulator-claude-key"
+            assert environ["ALK_CLAUDE_GATEWAY_URL"] == "https://claude.example"
             payloads.append(payload)
             if len(payloads) == 2:
                 both.set()
@@ -151,3 +162,84 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
         for payload in payloads
     } == {("trial-0", "authored-0"), ("trial-1", "authored-1")}
     assert dict(os.environ) == original
+
+
+def test_isolated_chat_runner_preserves_structured_worker_failure(
+    tmp_path, monkeypatch
+):
+    context = _context(tmp_path)
+
+    async def worker(*_args, **_kwargs):
+        return {
+            "error": "chat_target_failed: upstream unavailable",
+            "error_code": "target_agent_failed",
+            "error_marker": "target_unavailable",
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    runner = chat_worker.IsolatedChatCallRunner(_Adapter(), context)
+
+    with pytest.raises(CallAborted) as error:
+        asyncio.run(
+            runner.run(
+                SimpleNamespace(
+                    scenario_key="trial-key",
+                    source_scenario_key="one",
+                    scenario_id="trial-id",
+                ),
+                EnvironmentRuntime(
+                    runtime_id="runtime-1",
+                    world_index=0,
+                    bundle_digest="sha256:" + "a" * 64,
+                    state=RuntimeState.READY,
+                ),
+            )
+        )
+
+    assert str(error.value) == (
+        "chat_worker_failed: chat_target_failed: upstream unavailable"
+    )
+    assert error.value.code == "target_agent_failed"
+    assert error.value.marker == "target_unavailable"
+
+
+def test_chat_worker_returns_call_aborted_details_only(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+    )
+    payload = {
+        "job": context.job.model_dump(mode="json"),
+        "bundle_dir": str(context.bundle_dir),
+        "work_directory": str(context.work_directory),
+        "source_directory": None,
+        "target_secrets": {},
+        "attempt_number": 1,
+        "runtime": runtime.model_dump(mode="json"),
+        "scenario_key": "trial-key",
+        "source_scenario_key": "one",
+        "scenario_id": "trial-id",
+    }
+    result_path = tmp_path / "worker-error.json"
+
+    async def fail(*_args, **_kwargs):
+        raise CallAborted(
+            "chat target did not start",
+            code="target_agent_failed",
+            marker="target_unavailable",
+        )
+
+    monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", fail)
+    monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
+
+    asyncio.run(chat_worker.main())
+
+    assert json.loads(result_path.read_text()) == {
+        "error": "chat target did not start",
+        "error_code": "target_agent_failed",
+        "error_marker": "target_unavailable",
+    }

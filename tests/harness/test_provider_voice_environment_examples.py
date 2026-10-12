@@ -189,3 +189,67 @@ def test_conversation_flow_import_backend_implements_all_declared_tool_routes(
         "create_booking",
     ):
         assert f'"kind": "tool.{name}"' in trace
+
+
+def test_import_backend_supports_preference_and_pharmacy_fixtures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PROVIDER_TRACE_PATH", str(tmp_path / "provider-trace.jsonl"))
+    path = ROOT / "import_backend" / "agent.py"
+    spec = importlib.util.spec_from_file_location("provider_import_backend", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    client = TestClient(module.app)
+
+    preference = client.post(
+        "/provider/tools/record_preference",
+        json={"args": {"preference": "weekday mornings"}},
+    ).json()
+    assert preference == {"recorded": True, "preference": "weekday mornings"}
+
+    patient = client.post(
+        "/provider/tools/find_patient",
+        json={"arguments": {"phone": "+15551234567"}},
+    ).json()
+    assert patient["found"] is True
+    assert patient["patient"]["patient_id"] == "pat_001"
+
+    prescriptions = client.post(
+        "/provider/tools/list_prescriptions",
+        json={"patient_id": "pat_001"},
+    ).json()
+    assert {item["rx_id"] for item in prescriptions["prescriptions"]} == {
+        "rx_101",
+        "rx_102",
+    }
+
+    accepted = client.post(
+        "/provider/tools/request_refill",
+        json={"patient_id": "pat_001", "rx_id": "rx_101"},
+    ).json()
+    assert accepted["accepted"] is True
+    assert accepted["status"] == "processing"
+
+    refused = client.post(
+        "/provider/tools/request_refill",
+        json={"patient_id": "pat_002", "rx_id": "rx_103"},
+    ).json()
+    assert refused == {
+        "accepted": False,
+        "reason": "controlled_medication_requires_prescriber",
+        "rx_id": "rx_103",
+    }
+
+    status = client.post(
+        "/provider/tools/check_refill_status",
+        json={"refill_id": "ref_201"},
+    ).json()
+    assert status["found"] is True
+    assert status["refill"]["status"] == "ready_for_collection"
+
+    transfer = client.post(
+        "/provider/tools/transfer_to_pharmacist",
+        json={"reason": "interaction question"},
+    ).json()
+    assert transfer == {"transferred": True, "reason": "interaction question"}

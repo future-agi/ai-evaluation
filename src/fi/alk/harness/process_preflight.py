@@ -508,7 +508,7 @@ def _verify_secret_purposes(
     # the phone connector dials with platform-owned telephony credentials.
     connect_only_claims_target_provider = isinstance(connect_only, dict) and str(
         connect_only.get("connector") or ""
-    ).lower() in {"vapi", "retell", "retell_chat"}
+    ).lower() in {"vapi", "retell", "retell_chat", "livekit"}
     guest_claims_target_provider = (
         process_claims_target_provider
         or lifecycle_claims_target_provider

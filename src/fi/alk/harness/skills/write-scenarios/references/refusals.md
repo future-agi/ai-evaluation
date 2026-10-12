@@ -32,7 +32,7 @@ often; each is cheaper to avoid while writing than to fix after a refusal.
 |---|---|---|
 | `... already occupies this cell and asserts the same sub-goals` | Same coordinate, same checks: the same test twice. | Deal it a different difficulty, a different cell, or a check that only this scenario can fail. |
 | `coverage puts <axis> at ..., which is not a level the plan deals` | The level was invented rather than copied from the brief. | Copy every coverage value from your brief, spelled as dealt. |
-| `... already has a caller named ...` | Two people in the suite share a first name, so their results cannot be told apart. | Check the names your brief and your earlier submissions list, and choose a first name no other scenario uses. |
+| `... already has a caller named ...` | Two people in the suite share a full name, so their results cannot be told apart. | Choose another full name from the same background; a common given name is fine with a different family name. |
 | `<axis> is already at ... which is its whole share of this suite` | One level of an axis already holds a third of the suite while other levels are thin. | Write one of the thinner levels it names; behaviour, interaction, task and person all have room. |
 | `... may not put more than ... on one` | One location, accent or language already holds its share of the suite. | Choose a different one, with a name and language that fit it; the situation can stay. |
 | `the coordinate claims a condition the call does not carry` | A level the persona fields do not deliver. | Set the persona field the kind file names for that level, or choose a level the scenario really carries. |

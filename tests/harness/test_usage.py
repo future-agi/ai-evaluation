@@ -100,6 +100,19 @@ class _RecordingTransport:
         return TransportResponse(200, {"result": {"allowed": True}}, {})
 
 
+class _TransientTransport:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise TransportError("temporary TLS failure")
+        if self.calls == 2:
+            return TransportResponse(503, {"detail": "busy"}, {})
+        return TransportResponse(200, {"result": {"allowed": True}}, {})
+
+
 def test_paid_usage_check_fails_closed_on_transport_error(tmp_path) -> None:
     reporter = UsageReporter(
         _capabilities(),
@@ -130,6 +143,7 @@ def test_usage_record_logs_when_report_is_not_delivered(tmp_path, caplog) -> Non
     assert "journaled but not delivered" in caplog.text
     assert str(record.id) in caplog.text
 
+
 def test_usage_check_sends_only_the_call_action(tmp_path) -> None:
     transport = _RecordingTransport()
     reporter = UsageReporter(
@@ -141,3 +155,19 @@ def test_usage_check_sends_only_the_call_action(tmp_path) -> None:
     reporter.check("text_call")
 
     assert transport.body == {"operation": "check", "action": "text_call"}
+
+
+def test_usage_check_retries_transient_transport_and_server_failures(
+    tmp_path, monkeypatch
+) -> None:
+    transport = _TransientTransport()
+    reporter = UsageReporter(
+        _capabilities(),
+        transport,
+        UsageJournal(tmp_path / "usage.json", attempt_id="attempt-1"),
+    )
+    monkeypatch.setattr("fi.alk.harness.usage.time.sleep", lambda _seconds: None)
+
+    reporter.check("voice_call")
+
+    assert transport.calls == 3

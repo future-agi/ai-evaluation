@@ -76,6 +76,7 @@ _STRING_FIELDS = (
     "notes",
 )
 _LIST_FIELDS = (
+    "agent_languages",
     "hard_constraints",
     "real_use_cases",
     "amendments",
@@ -596,6 +597,8 @@ class AgentContract(BaseModel):
     # person, so it stays inbound. It changes how the simulated person is briefed, not who speaks
     # first: an outbound agent still greets, it just has to say who it is and why it called.
     call_direction: str = "inbound"
+    # Voice only: the languages the agent's own instructions say it speaks. Empty when they do not say.
+    agent_languages: list[str] = Field(default_factory=list)
     conversational: bool = True
     system_prompt_excerpt: str = ""
     hard_constraints: list[str] = Field(default_factory=list)
