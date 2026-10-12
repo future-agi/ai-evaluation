@@ -61,3 +61,4 @@ jobs:
           tests/test_retell_evidence.py
           tests/test_bump_deployment_values.py
           tests/test_release_workflow.py
+          tests/test_release_pr_step.py
