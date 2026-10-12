@@ -52,6 +52,27 @@ def test_live_outputs_include_verified_evidence_and_measured_tables(tmp_path):
                 "hard_constraint_details": [
                     {"text": "Be truthful", "short": "Truthful"}
                 ],
+                "base_environment": {"customers": [{"email": "private-fixture-row"}]},
+                "runtime": {"environment": {"CUSTOM_VALUE": "private-runtime-value"}},
+                "tools": [
+                    {"name": "lookup", "arg_values": {"email": "private-tool-value"}}
+                ],
+                "runtime_dependencies": [
+                    {
+                        "name": "model",
+                        "used_by": ["support"],
+                        "reached": {"host": "private-runtime-host"},
+                    }
+                ],
+                "data_store": {
+                    "kind": "postgres",
+                    "location": "external_db",
+                    "host": "private-store-host",
+                },
+                "data_schema_columns": {
+                    "customers": [{"name": "email", "type": "TEXT"}]
+                },
+                "unrelated_field": "private-unrelated-value",
                 "system_prompt": "Read https://user:password@example.com/docs?token=private-value",
                 "system_prompt_origin": {
                     "kind": "provider_field",
@@ -88,6 +109,20 @@ def test_live_outputs_include_verified_evidence_and_measured_tables(tmp_path):
     assert outputs["tool_certification"] == report.model_dump(mode="json")
     assert outputs["contract"]["domain"]["label"] == "Guest Booking"
     assert outputs["contract"]["hard_constraint_details"][0]["short"] == "Truthful"
+    assert "base_environment" not in outputs["contract"]
+    assert "runtime" not in outputs["contract"]
+    assert "arg_values" not in outputs["contract"]["tools"][0]
+    assert outputs["contract"]["runtime_dependencies"] == [
+        {"name": "model", "used_by": ["support"]}
+    ]
+    assert outputs["contract"]["data_store"] == {
+        "kind": "postgres",
+        "location": "external_db",
+    }
+    assert outputs["contract"]["data_schema_columns"] == {
+        "customers": [{"name": "email", "type": "TEXT"}]
+    }
+    assert "private-" not in json.dumps(outputs)
     assert "system_prompt" not in outputs["contract"]
     assert "system_prompt_origin" not in outputs["contract"]
     assert outputs["stores"] == [

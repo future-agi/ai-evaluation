@@ -208,7 +208,7 @@ def _provider_facts(contract: AgentContract, profile: Mapping[str, Any]) -> None
             kind="tool_list" if custom else "platform_builtin", field=field
         )
         entry = entries.get(tool.name)
-        if entry is None:
+        if entry is None or (entry.mode == "unreachable" and entry.source is None):
             entry = ToolEntry(tool=tool.name, mode="provider")
             contract.tool_entrypoint_details.append(entry)
         if entry.source is None:
@@ -262,6 +262,20 @@ def ground_contract(
     elif contract.system_prompt or contract.system_prompt_origin:
         _source_prompt(contract, source_root)
     contract.system_prompt_excerpt = redact_profile_urls(contract.system_prompt_excerpt)
+    provider_tools = {entry.tool for entry in contract.tool_entrypoint_details}
+    disproved = {
+        f"{item.subject}: {item.reason}"
+        for item in contract.amendment_details
+        if item.kind == "unreachable_tool" and item.subject in provider_tools
+    }
+    contract.amendments = [
+        item for item in contract.amendments if item not in disproved
+    ]
+    contract.amendment_details = [
+        item
+        for item in contract.amendment_details
+        if not (item.kind == "unreachable_tool" and item.subject in provider_tools)
+    ]
 
     for item in (*contract.hard_constraint_details, *contract.real_use_case_details):
         if set(item.enforced_by) - {"code", "prompt", "judge"}:
@@ -389,7 +403,7 @@ def ground_contract(
                         f"tool[{entry.tool}]: source snippet does not match its file"
                     )
                 entry.implementation_origin = "source"
-        if entry.mode == "unreachable":
+        if entry.mode == "unreachable" and entry.tool not in provider_tools:
             amendment = Amendment(
                 subject=entry.tool,
                 kind="unreachable_tool",

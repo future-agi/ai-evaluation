@@ -239,6 +239,37 @@ def test_retell_flow_tools_are_grounded_through_named_conversation_nodes(tmp_pat
     assert contract["tools"][0]["effect_kind"] == "external"
 
 
+def test_provider_inventory_overrides_unreachable_display_claim_without_changing_runtime(
+    tmp_path,
+):
+    payload = body(
+        tools=[{"name": "finish"}],
+        tool_entrypoints=[
+            {"tool": "finish", "mode": "unreachable", "notes": "No local code"}
+        ],
+        amendment_details=[
+            {"subject": "finish", "kind": "unreachable_tool", "reason": "No local code"}
+        ],
+    )
+    result = submit(
+        tmp_path,
+        payload,
+        provider_profile={
+            "provider": "retell",
+            "general_tools": [{"type": "end_call", "name": "finish"}],
+        },
+    )
+    assert not result.get("is_error"), result
+    contract = saved(tmp_path)
+    assert contract["tool_entrypoints"][0]["mode"] == "unreachable"
+    assert (
+        contract["tool_entrypoint_details"][0]["implementation_origin"]
+        == "provider_builtin"
+    )
+    assert contract["amendments"] == []
+    assert contract["amendment_details"] == []
+
+
 @pytest.mark.parametrize(
     "profile",
     [

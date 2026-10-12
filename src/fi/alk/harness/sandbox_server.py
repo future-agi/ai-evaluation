@@ -1701,7 +1701,77 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             for tool in contract.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         ]
-        data = safe_provider_profile(contract)
+        data = {
+            name: contract[name]
+            for name in (
+                "agent",
+                "one_liner",
+                "modality",
+                "call_direction",
+                "domain",
+                "system_prompt",
+                "system_prompt_origin",
+                "system_prompt_excerpt",
+                "tools",
+                "hard_constraints",
+                "hard_constraint_details",
+                "real_use_cases",
+                "real_use_case_details",
+                "runtime_dependencies",
+                "tool_entrypoints",
+                "tool_entrypoint_details",
+                "data_store",
+                "data_schema",
+                "data_schema_columns",
+                "amendments",
+                "amendment_details",
+                "actors",
+            )
+            if name in contract
+        }
+        entry_fields = {
+            "tool",
+            "mode",
+            "module",
+            "callable",
+            "service",
+            "endpoint",
+            "method",
+            "notes",
+            "origin",
+            "source",
+            "implementation_origin",
+            "provider_function",
+        }
+        for field, allowed in {
+            "tools": {
+                "name",
+                "args",
+                "arg_types",
+                "description",
+                "origin",
+                "effect",
+                "effect_kind",
+                "effect_evidence",
+            },
+            "tool_entrypoints": entry_fields,
+            "tool_entrypoint_details": entry_fields,
+            "runtime_dependencies": {"name", "kind", "what", "engine", "used_by"},
+        }.items():
+            if isinstance(data.get(field), list):
+                data[field] = [
+                    {key: value for key, value in item.items() if key in allowed}
+                    for item in data[field]
+                    if isinstance(item, dict)
+                ]
+        if isinstance(data.get("data_store"), dict):
+            data["data_store"] = {
+                key: value
+                for key, value in data["data_store"].items()
+                if key
+                in {"kind", "version", "configured_by", "configuration", "location"}
+            }
+        data = safe_provider_profile(data)
         data.pop("unavailable_verbatim_fields", None)
         prompt = data.get("system_prompt")
         origin = data.get("system_prompt_origin")
