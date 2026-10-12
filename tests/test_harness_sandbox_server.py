@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from io import BytesIO
 import json
 import os
@@ -14,6 +15,7 @@ from fi.alk.harness.sandbox_server import (
     SandboxRerunRequest,
     _CONTROLLER_TOKEN,
     _presentation_value,
+    _stage_outputs,
     _process_identity,
     _worker_failure_retryable,
     create_app,
@@ -29,6 +31,112 @@ def test_presentation_redaction_handles_prose_with_email_before_url():
         _presentation_value("postgres://user:password@database:5432/app")
         == "postgres://[redacted]@database:5432/app"
     )
+
+
+def test_live_outputs_include_verified_evidence_and_measured_tables(tmp_path):
+    from fi.alk.harness.source_model import SourceModel
+    from fi.alk.harness.tool_certification import ToolCertificationReport
+
+    generic = tmp_path / "generic-harness"
+    generic.mkdir()
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64, engine="sqlite"
+    )
+    report = ToolCertificationReport.create([])
+    (generic / "source-model.json").write_text(source_model.model_dump_json())
+    (generic / "tool-certification.json").write_text(report.model_dump_json())
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "domain": {"id": "guest-booking", "label": "Guest Booking"},
+                "hard_constraint_details": [
+                    {"text": "Be truthful", "short": "Truthful"}
+                ],
+                "system_prompt": "Read https://user:password@example.com/docs?token=private-value",
+                "system_prompt_origin": {
+                    "kind": "provider_field",
+                    "field": "general_prompt",
+                    "sha256": "a" * 64,
+                },
+            }
+        )
+    )
+    (tmp_path / "build.json").write_text(
+        json.dumps(
+            {
+                "stores": [
+                    {
+                        "capability": "db",
+                        "engine": "postgres",
+                        "strategy": "template_clone",
+                        "row_counts": {
+                            "customers": 0,
+                            "harness_seed_sentinel": 1,
+                            "_alk_tool_trace": 0,
+                            "_private_business": 2,
+                            "invalid": True,
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    outputs = {item["kind"]: item["data"] for item in _stage_outputs(tmp_path)}
+
+    assert outputs["source_model"] == source_model.model_dump(mode="json")
+    assert outputs["tool_certification"] == report.model_dump(mode="json")
+    assert outputs["contract"]["domain"]["label"] == "Guest Booking"
+    assert outputs["contract"]["hard_constraint_details"][0]["short"] == "Truthful"
+    assert "system_prompt" not in outputs["contract"]
+    assert "system_prompt_origin" not in outputs["contract"]
+    assert outputs["stores"] == [
+        {
+            "capability": "db",
+            "engine": "postgres",
+            "strategy": "template_clone",
+            "tables": [
+                {"name": "_alk_tool_trace", "rows": 0, "internal": True},
+                {"name": "_private_business", "rows": 2, "internal": False},
+                {"name": "customers", "rows": 0, "internal": False},
+                {"name": "harness_seed_sentinel", "rows": 1, "internal": True},
+            ],
+            "total_rows": 3,
+        }
+    ]
+
+    (generic / "tool-certification.json").write_text(
+        report.model_dump_json().replace(report.fingerprint, "sha256:" + "0" * 64)
+    )
+    assert "tool_certification" not in {
+        item["kind"] for item in _stage_outputs(tmp_path)
+    }
+
+
+@pytest.mark.parametrize(
+    "digest", [None, "0" * 64, hashlib.sha256(b"Help the caller.").hexdigest()]
+)
+def test_live_prompt_requires_matching_digest(tmp_path, digest):
+    prompt = "Help the caller."
+    (tmp_path / "contract.json").write_text(
+        json.dumps(
+            {
+                "system_prompt": prompt,
+                "system_prompt_origin": {
+                    "kind": "file",
+                    "path": "prompt.txt",
+                    "sha256": digest,
+                },
+            }
+        )
+    )
+    contract = _stage_outputs(tmp_path)[0]["data"]
+    if digest == hashlib.sha256(prompt.encode()).hexdigest():
+        assert contract["system_prompt"] == prompt
+        assert contract["system_prompt_origin"]["sha256"] == digest
+    else:
+        assert "system_prompt" not in contract
+        assert "system_prompt_origin" not in contract
 
 
 def test_local_sandbox_rejects_source_outside_allowed_root(tmp_path, monkeypatch):
@@ -107,7 +215,9 @@ def test_local_connect_only_provider_requires_no_source_upload(tmp_path) -> None
     assert response.job.source.kind.value == "provider"
     assert (sandbox.jobs_root / response.job.job_id / "provider-source").is_dir()
 
-    with pytest.raises(ValueError, match="provider_only_requires_connect_only_provider"):
+    with pytest.raises(
+        ValueError, match="provider_only_requires_connect_only_provider"
+    ):
         LocalSandboxRequest(provider_only=True, connector="auto")
 
 

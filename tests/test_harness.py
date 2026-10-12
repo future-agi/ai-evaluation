@@ -3774,6 +3774,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         "data_schema_columns",
         "hard_constraint_details",
         "real_use_case_details",
+        "tool_entrypoint_details",
         # Extracted deterministically from submitted Python after validation.
         "source",
         "line_start",

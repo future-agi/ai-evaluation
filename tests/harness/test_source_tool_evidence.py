@@ -98,6 +98,7 @@ def test_saved_contract_includes_exact_tool_source_and_origin(tmp_path):
         "path": "agent.py",
         "line": 2,
         "field": "",
+        "sha256": None,
     }
     assert saved["tools"][0]["origin"] == entry["origin"]
 

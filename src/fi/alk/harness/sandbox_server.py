@@ -90,7 +90,9 @@ class LocalSandboxRequest(BaseModel):
             sum(
                 bool(value)
                 for value in (
-                    self.source_path, self.source_id, self.github_repository,
+                    self.source_path,
+                    self.source_id,
+                    self.github_repository,
                     self.provider_only,
                 )
             )
@@ -1569,97 +1571,6 @@ def _json_artifact(path: Path, *, max_bytes: int = 1_000_000) -> Any | None:
         return None
 
 
-def _stage_outputs(root: Path) -> list[dict[str, Any]]:
-    outputs: list[dict[str, Any]] = []
-    contract = _json_artifact(root / "contract.json")
-    if isinstance(contract, dict):
-        outputs.append(
-            {
-                "id": "contract",
-                "stage": HarnessStage.UNDERSTANDING_AGENT.value,
-                "title": "Agent contract",
-                "summary": (
-                    f"{len(contract.get('tools') or [])} tools, "
-                    f"{len(contract.get('hard_constraints') or [])} constraints and "
-                    f"{len(contract.get('real_use_cases') or [])} use cases"
-                ),
-                "kind": "contract",
-                "data": _presentation_value(contract),
-                "updated_at": datetime.fromtimestamp(
-                    (root / "contract.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    environment = _json_artifact(root / "environment.json")
-    if isinstance(environment, dict):
-        visible = _presentation_value(
-            {
-                key: value
-                for key, value in environment.items()
-                if key
-                not in {
-                    "source",
-                    "compose_file",
-                    "compose_override_file",
-                    "internal_overrides",
-                    "runtime_trace_path",
-                    "source_fingerprint",
-                }
-            }
-        )
-        outputs.append(
-            {
-                "id": "environment",
-                "stage": HarnessStage.GENERATING_ENVIRONMENT.value,
-                "title": "Execution environment",
-                "summary": (
-                    f"{len(environment.get('services') or [])} services ready"
-                    + (
-                        f" in {environment.get('provision_seconds')}s"
-                        if environment.get("provision_seconds") is not None
-                        else ""
-                    )
-                ),
-                "kind": "environment",
-                "data": visible,
-                "updated_at": datetime.fromtimestamp(
-                    (root / "environment.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    scenarios = _json_artifact(root / "scenarios.json")
-    if isinstance(scenarios, list):
-        outputs.append(
-            {
-                "id": "scenarios",
-                "stage": HarnessStage.GENERATING_SCENARIOS.value,
-                "title": "Generated scenarios",
-                "summary": f"{len(scenarios)} grounded scenarios",
-                "kind": "scenarios",
-                "data": scenarios,
-                "updated_at": datetime.fromtimestamp(
-                    (root / "scenarios.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    results = _json_artifact(root / "results.json")
-    if isinstance(results, dict):
-        outputs.append(
-            {
-                "id": "results",
-                "stage": HarnessStage.GRADING.value,
-                "title": "Run results",
-                "summary": "Scenario execution and grading evidence",
-                "kind": "results",
-                "data": results,
-                "updated_at": datetime.fromtimestamp(
-                    (root / "results.json").stat().st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    return outputs
-
-
 def _presentation_value(value: Any, key: str = "") -> Any:
     lowered = key.lower()
     if any(marker in lowered for marker in ("password", "secret", "token", "api_key")):
@@ -1778,43 +1689,43 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _read_json_value(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
 def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
     """Return bounded, secret-safe snapshots for the platform's live run UI."""
     outputs: list[dict[str, Any]] = []
-    contract = _read_json_value(run_root / "contract.json")
+    from .provider_import import safe_provider_profile
+
+    contract = _json_artifact(run_root / "contract.json")
     if isinstance(contract, dict):
         tools = [
             {"name": str(tool.get("name") or "")}
             for tool in contract.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         ]
-        data = {
-            "one_liner": str(contract.get("one_liner") or ""),
-            "modality": str(contract.get("modality") or "unknown"),
-            "runtime": contract.get("runtime") or {},
-            "tools": tools,
-            "hard_constraints": [
-                str(item) for item in contract.get("hard_constraints", [])
-            ],
-        }
+        data = safe_provider_profile(contract)
+        data.pop("unavailable_verbatim_fields", None)
+        prompt = data.get("system_prompt")
+        origin = data.get("system_prompt_origin")
+        if (
+            not isinstance(prompt, str)
+            or not prompt
+            or prompt != contract.get("system_prompt")
+            or not isinstance(origin, dict)
+            or origin.get("sha256")
+            != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        ):
+            data.pop("system_prompt", None)
+            data.pop("system_prompt_origin", None)
         outputs.append(
             {
                 "id": "contract",
                 "kind": "contract",
                 "title": "Agent contract",
-                "summary": f"{len(tools)} tools · {data['modality']} modality",
+                "summary": f"{len(tools)} tools · {data.get('modality') or 'unknown'} modality",
                 "data": data,
             }
         )
 
-    environment = _read_json_value(run_root / "environment.json")
+    environment = _json_artifact(run_root / "environment.json")
     if isinstance(environment, dict):
         services = [str(item) for item in environment.get("services", [])]
         # Endpoint values are useful operational feedback, but credentials embedded in a URI
@@ -1838,7 +1749,7 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             }
         )
 
-    scenarios = _read_json_value(run_root / "scenarios.json")
+    scenarios = _json_artifact(run_root / "scenarios.json")
     if isinstance(scenarios, list):
         data = [
             {
@@ -1859,7 +1770,70 @@ def _stage_outputs(run_root: Path) -> list[dict[str, Any]]:
             }
         )
 
-    platform = _read_json_value(run_root / "platform.json")
+    from .catalogue import Catalogue
+    from .source_model import SourceModel
+    from .tool_certification import ToolCertificationReport
+
+    for kind, name, model in (
+        ("sub_goals", "sub_goals.json", Catalogue),
+        ("source_model", "generic-harness/source-model.json", SourceModel),
+        (
+            "tool_certification",
+            "generic-harness/tool-certification.json",
+            ToolCertificationReport,
+        ),
+    ):
+        document = _json_artifact(run_root / name)
+        if not isinstance(document, dict):
+            continue
+        try:
+            model.model_validate(document)
+        except ValueError:
+            continue
+        outputs.append(
+            {
+                "id": kind,
+                "kind": kind,
+                "title": kind.replace("_", " ").capitalize(),
+                "data": safe_provider_profile(document),
+            }
+        )
+
+    build = _json_artifact(run_root / "artifacts" / "build.json")
+    if build is None:
+        build = _json_artifact(run_root / "build.json")
+    stores = []
+    if isinstance(build, dict):
+        for record in build.get("stores") or []:
+            if not isinstance(record, dict) or not isinstance(
+                record.get("row_counts"), dict
+            ):
+                continue
+            tables = [
+                {
+                    "name": name,
+                    "rows": rows,
+                    "internal": name in {"_alk_tool_trace", "harness_seed_sentinel"},
+                }
+                for name, rows in sorted(record["row_counts"].items())
+                if type(rows) is int and rows >= 0
+            ]
+            if tables:
+                stores.append(
+                    {
+                        "capability": str(record.get("capability") or ""),
+                        "engine": record.get("engine", ""),
+                        "strategy": record.get("strategy", ""),
+                        "tables": tables,
+                        "total_rows": sum(table["rows"] for table in tables),
+                    }
+                )
+    if stores:
+        outputs.append(
+            {"id": "stores", "kind": "stores", "title": "Seeded stores", "data": stores}
+        )
+
+    platform = _json_artifact(run_root / "platform.json")
     if isinstance(platform, dict):
         run_test_id = str(platform.get("run_test_id") or "").strip()
         execution_id = str(platform.get("test_execution_id") or "").strip()

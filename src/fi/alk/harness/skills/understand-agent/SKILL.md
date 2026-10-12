@@ -195,6 +195,26 @@ Find, in roughly this order:
     agent's own text says it does; a capability stretched from a passing word or a tool name
     becomes a whole slice of scenarios testing what the agent was never built to do.
 
+Record display evidence alongside these execution facts. Give the domain a two-word label.
+Keep the complete verbatim prompt in `system_prompt` with `system_prompt_origin` pointing to
+its file or exact provider field. Keep excerpts separate. Submission computes the prompt hash
+after checking the source. If the full prompt is assembled dynamically or has several provider
+parts, leave the full prompt absent.
+
+Rules and use cases accept objects with text, a short label, origin, enforcement mechanisms,
+and an existing sub-goal name where one is known. Only claim code, prompt, or judge enforcement
+when that mechanism exists. For each tool, record `effect_kind` only as read, write, external,
+or control, with `effect_evidence` containing an exact excerpt and its origin. Tool names do
+not prove effects. Provider functions retain their parameter schema and safe callback URL.
+Do not invent source code for provider tools.
+Submission derives provider entrypoint details from the captured profile. Do not add an
+execution entrypoint merely to display a provider tool.
+
+Record the datastore location and structured configuration reference where the source shows
+them. Runtime dependencies include the exact components that use them. Include named actors
+only when the source identifies them. An unreachable entrypoint records why it is unreachable;
+submission emits one structured amendment for that tool. Missing evidence stays omitted.
+
 ## A repository may not hold one agent
 
 What you are pointed at is a directory, not necessarily a single agent. Before reading anything in

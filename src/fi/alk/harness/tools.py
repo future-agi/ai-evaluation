@@ -123,7 +123,11 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def accept_contract(
-    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+    payload: dict[str, Any],
+    destination: Path,
+    *,
+    source_root: Path | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -144,6 +148,19 @@ def accept_contract(
         problems.extend(tool_evidence_problems(contract, source_root))
         if not problems:
             contract = attach_tool_sources(contract, source_root)
+    if not problems:
+        from .contract_evidence import ground_contract
+        from .catalogue import load_catalogue
+
+        try:
+            contract = ground_contract(
+                contract,
+                source_root=source_root,
+                provider_profile=provider_profile,
+                catalogue=load_catalogue(destination).model_dump(),
+            )
+        except (ValueError, OSError, SyntaxError) as invalid:
+            problems.append(f"evidence:{invalid}")
     if problems:
         return _problems(problems, arrived)
 
@@ -185,8 +202,40 @@ _ORIGIN_SCHEMA = {
         "path": {"type": "string"},
         "line": {"type": "integer"},
         "field": {"type": "string"},
+        "sha256": {
+            "type": "string",
+            "description": "Computed from verified prompt bytes at submission.",
+        },
     },
     "required": ["kind"],
+}
+
+_CONTRACT_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "short": {"type": "string"},
+        "origin": _ORIGIN_SCHEMA,
+        "enforced_by": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["code", "prompt", "judge"]},
+        },
+        "sub_goal": {"type": "string"},
+    },
+    "required": ["text"],
+}
+
+_STORE_CONFIGURATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source": {
+            "type": "string",
+            "enum": ["environment", "file", "provider_field", "system_prompt"],
+        },
+        "ref": {"type": "string"},
+        "section": {"type": "string"},
+    },
+    "required": ["source", "ref"],
 }
 
 
@@ -195,6 +244,7 @@ def contract_tools(
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    provider_profile: dict[str, Any] | None = None,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -294,6 +344,42 @@ def contract_tools(
                     "supplies it. Do not summarize or truncate it.",
                 },
                 "system_prompt_origin": _ORIGIN_SCHEMA,
+                "hard_constraint_details": {
+                    "type": "array",
+                    "items": _CONTRACT_ITEM_SCHEMA,
+                },
+                "real_use_case_details": {
+                    "type": "array",
+                    "items": _CONTRACT_ITEM_SCHEMA,
+                },
+                "actors": {
+                    "type": "array",
+                    "description": "Only named actors explicitly present in source or provider configuration.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "role": {"type": "string"},
+                            "origin": _ORIGIN_SCHEMA,
+                        },
+                        "required": ["name", "role", "origin"],
+                    },
+                },
+                "amendment_details": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["unreachable_tool", "contract_change"],
+                            },
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["subject", "kind", "reason"],
+                    },
+                },
                 "hard_constraints": {
                     "type": "array",
                     "items": {
@@ -303,6 +389,7 @@ def contract_tools(
                                 "type": "object",
                                 "properties": {
                                     "text": {"type": "string"},
+                                    "short": {"type": "string"},
                                     "origin": _ORIGIN_SCHEMA,
                                     "enforced_by": {
                                         "type": "array",
@@ -350,6 +437,19 @@ def contract_tools(
                                 "type": "string",
                                 "description": "The observable state or external effect of the "
                                 "tool, stated only where the source proves it.",
+                            },
+                            "effect_kind": {
+                                "type": "string",
+                                "enum": ["read", "write", "external", "control"],
+                                "description": "Canonical effect supported by effect_evidence. Omit when unknown. Never classify from the tool name.",
+                            },
+                            "effect_evidence": {
+                                "type": "object",
+                                "properties": {
+                                    "origin": _ORIGIN_SCHEMA,
+                                    "excerpt": {"type": "string"},
+                                },
+                                "required": ["origin", "excerpt"],
                             },
                             "requires": {
                                 "type": "array",
@@ -416,6 +516,11 @@ def contract_tools(
                                 "description": "transport or inference",
                             },
                             "what": {"type": "string"},
+                            "used_by": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Exact consuming components or tools observed in source.",
+                            },
                             "engine": {"type": "string"},
                             "reached": {
                                 "type": "object",
@@ -493,7 +598,12 @@ def contract_tools(
                                 "type": "object",
                                 "properties": {
                                     "text": {"type": "string"},
+                                    "short": {"type": "string"},
                                     "origin": _ORIGIN_SCHEMA,
+                                    "enforced_by": _CONTRACT_ITEM_SCHEMA["properties"][
+                                        "enforced_by"
+                                    ],
+                                    "sub_goal": {"type": "string"},
                                 },
                                 "required": ["text", "origin"],
                             },
@@ -608,6 +718,21 @@ def contract_tools(
                                 "do not carry, especially why a tool cannot be reached.",
                             },
                             "origin": _ORIGIN_SCHEMA,
+                            "implementation_origin": {
+                                "type": "string",
+                                "enum": [
+                                    "source",
+                                    "provider_builtin",
+                                    "provider_custom_function",
+                                ],
+                            },
+                            "provider_function": {
+                                "type": "object",
+                                "properties": {
+                                    "url": {"type": "string"},
+                                    "parameters": {"type": "object"},
+                                },
+                            },
                         },
                     },
                 },
@@ -624,13 +749,25 @@ def contract_tools(
                     "description": "What the agent's tools read and write, and how to point them "
                     "at a different one.",
                     "properties": {
+                        "location": {
+                            "type": "string",
+                            "enum": [
+                                "external_db",
+                                "in_process",
+                                "prompt_embedded",
+                                "provider_kb",
+                                "none",
+                            ],
+                            "description": "Only record a location established by the source. Missing evidence is omitted.",
+                        },
+                        "configuration": _STORE_CONFIGURATION_SCHEMA,
                         "kind": {
                             "type": "string",
                             "description": "postgres, clickhouse, mysql, sqlite, in_process for "
                             "state held in memory, or none.",
                         },
                         "configured_by": {
-                            "type": "string",
+                            "oneOf": [{"type": "string"}, _STORE_CONFIGURATION_SCHEMA],
                             "description": "How the code chooses its connection: the environment "
                             "variable it reads, the config file, or the constructor argument. "
                             "This is what makes substituting a store possible without editing "
@@ -1129,7 +1266,12 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination, source_root=source_root)
+        return accept_contract(
+            payload,
+            destination,
+            source_root=source_root,
+            provider_profile=provider_profile,
+        )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 

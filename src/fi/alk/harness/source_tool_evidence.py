@@ -86,7 +86,8 @@ def attach_tool_sources(contract: AgentContract, source: Path) -> AgentContract:
         end = int(node.end_lineno)
         relative = path.resolve().relative_to(root).as_posix()
         origin = Origin(kind="code", path=relative, line=start)
-        entry.origin = entry.origin or origin
+        entry.origin = origin
+        entry.implementation_origin = "source"
         entry.source = ToolSource(
             path=relative,
             line_start=start,
@@ -94,7 +95,7 @@ def attach_tool_sources(contract: AgentContract, source: Path) -> AgentContract:
             code="\n".join(text.splitlines()[start - 1 : end]),
         )
         tool = tools.get(entry.tool)
-        if tool is not None and tool.origin is None:
+        if tool is not None:
             tool.origin = origin
     return contract
 

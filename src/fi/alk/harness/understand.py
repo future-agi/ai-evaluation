@@ -24,15 +24,22 @@ SKILL = "understand-agent"
 PROVIDER_IMPORT_PROFILE_PATH_ENV = "ALK_PROVIDER_IMPORT_PROFILE_PATH"
 
 
-def _provider_import_briefing() -> str:
+def _provider_import_profile() -> dict[str, Any]:
     """Load the sanitized external-provider definition prepared by the control process."""
     configured = os.environ.get(PROVIDER_IMPORT_PROFILE_PATH_ENV, "").strip()
     if not configured:
-        return ""
+        return {}
     path = Path(configured)
     try:
         profile = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _provider_import_briefing() -> str:
+    profile = _provider_import_profile()
+    if not profile:
         return ""
     return (
         "\n\n## Imported provider target (authoritative, read-only)\n\n"
@@ -114,6 +121,8 @@ def open_stage(
                 destination,
                 available_evals,
                 source_root=source.workdir() if source.kind == "repo" else None,
+                provider_profile=getattr(source, "profile", None)
+                or _provider_import_profile(),
             ),
         },
         extra_builtins=source.builtin_tools(),
