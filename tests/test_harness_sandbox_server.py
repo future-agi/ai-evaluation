@@ -57,6 +57,17 @@ def test_live_outputs_include_verified_evidence_and_measured_tables(tmp_path):
                 "tools": [
                     {"name": "lookup", "arg_values": {"email": "private-tool-value"}}
                 ],
+                "tool_entrypoints": [
+                    {
+                        "tool": "lookup",
+                        "source": {
+                            "path": "tools.py",
+                            "line_start": 1,
+                            "line_end": 1,
+                            "code": "requests.get('https://x.test/a?signature=private-source-value')",
+                        },
+                    }
+                ],
                 "runtime_dependencies": [
                     {
                         "name": "model",
@@ -112,6 +123,10 @@ def test_live_outputs_include_verified_evidence_and_measured_tables(tmp_path):
     assert "base_environment" not in outputs["contract"]
     assert "runtime" not in outputs["contract"]
     assert "arg_values" not in outputs["contract"]["tools"][0]
+    assert (
+        outputs["contract"]["tool_entrypoints"][0]["source"]["code"]
+        == "requests.get('https://x.test/a')"
+    )
     assert outputs["contract"]["runtime_dependencies"] == [
         {"name": "model", "used_by": ["support"]}
     ]

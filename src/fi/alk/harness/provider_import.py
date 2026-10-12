@@ -12,7 +12,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -80,7 +80,7 @@ class ProviderImportSpec(BaseModel):
 JsonRequest = Callable[[str, str, str, Mapping[str, Any] | None], dict[str, Any]]
 
 
-def redact_profile_urls(text: str) -> str:
+def redact_profile_urls(text: str, *, schema: bool = False) -> str:
     """Remove credentials and signed queries from URLs, including URLs in prose."""
 
     def redact(match: re.Match[str]) -> str:
@@ -90,14 +90,29 @@ def redact_profile_urls(text: str) -> str:
             parsed = urlsplit(address)
             if not parsed.netloc:
                 return raw
+            query = urlencode(
+                [
+                    (key, value)
+                    for key, value in parse_qsl(parsed.query)
+                    if schema
+                    and key in {"version", "v"}
+                    and re.fullmatch(r"v?[0-9]{1,8}(?:[.-][0-9]{1,8}){0,3}", value)
+                ]
+            )
             safe = urlunsplit(
-                (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", "")
+                (
+                    parsed.scheme,
+                    parsed.netloc.rsplit("@", 1)[-1],
+                    parsed.path,
+                    query,
+                    "",
+                )
             )
             return safe + raw[len(address) :]
         except ValueError:
             return "[redacted]"
 
-    return re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"'`]+", redact, text)
+    return re.sub(r"\b[A-Za-z][A-Za-z0-9+.-]{0,31}://[^\s<>\"'`]+", redact, text)
 
 
 def _safe_profile_value(value: Any, key: str = "", *, schema: bool = False) -> Any:
@@ -135,7 +150,7 @@ def _safe_profile_value(value: Any, key: str = "", *, schema: bool = False) -> A
     if isinstance(value, list):
         return [_safe_profile_value(item, key, schema=schema) for item in value]
     if isinstance(value, str):
-        return redact_profile_urls(value)
+        return redact_profile_urls(value, schema=schema)
     return value
 
 

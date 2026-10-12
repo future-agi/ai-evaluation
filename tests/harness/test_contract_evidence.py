@@ -134,6 +134,7 @@ def test_provider_prompt_and_function_are_grounded_and_scrubbed(tmp_path, provid
     prompt = "You are Claire.\n Help the caller.\n"
     parameters = {
         "type": "object",
+        "$ref": "https://example.com/schema?version=2",
         "properties": {
             "id": {"type": "string", "enum": ["a", "b"]},
             "api_key": {"type": "string", "description": "Credential reference"},
@@ -464,6 +465,21 @@ def test_provider_schema_redacts_secret_defaults_but_keeps_the_declaration():
         profile["general_tools"][0]["parameters"]["$ref"]
         == "https://example.com/schema"
     )
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("version=2", "?version=2"),
+        ("v=2026-10-01&signature=private-value", "?v=2026-10-01"),
+        ("version=2&token=private-value#private-value", "?version=2"),
+        ("version=private-value", ""),
+    ],
+)
+def test_schema_urls_preserve_only_demonstrably_safe_version_selectors(query, expected):
+    url = f"https://user:private-value@example.com/schema?{query}"
+    profile = safe_provider_profile({"parameters": {"$ref": url}})
+    assert profile["parameters"]["$ref"] == f"https://example.com/schema{expected}"
 
 
 def test_embedded_provider_prompt_credentials_are_not_published_or_hashed(tmp_path):
