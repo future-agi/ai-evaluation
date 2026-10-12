@@ -763,6 +763,87 @@ def test_phone_connect_only_authoring_uses_only_supplied_prompt() -> None:
     }
 
 
+_LIVEKIT_HOSTED_CONFIG = {
+    cr.LIVEKIT_URL_CONFIG_KEY: "wss://customer.livekit.cloud",
+    "agent_name": "returns-agent",
+    "target_system_prompt": "You handle returns.",
+}
+
+
+@pytest.mark.parametrize(
+    ("config", "error"),
+    [
+        (
+            {"target_system_prompt": "You handle returns."},
+            "livekit_connect_only_requires_agent_name",
+        ),
+        (
+            {"agent_name": "returns-agent"},
+            "livekit_connect_only_requires_target_system_prompt",
+        ),
+        (
+            {"agent_name": "returns-agent", "target_system_prompt": "x" * 65537},
+            "livekit_connect_only_requires_target_system_prompt",
+        ),
+    ],
+)
+def test_livekit_connect_only_requires_agent_name_and_prompt(
+    config: dict[str, Any], error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        AgentConnection(
+            connector="livekit", mode=ProviderExecutionMode.CONNECT_ONLY, config=config
+        )
+
+
+def test_livekit_connect_only_authoring_uses_the_pasted_prompt_and_drops_secrets(
+    tmp_path: Path,
+) -> None:
+    secrets = tmp_path / "authoring-target-secrets.json"
+    secrets.write_text('{"LIVEKIT_API_KEY": "lk-key"}', encoding="utf-8")
+    job = _job(
+        connector="livekit",
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config=dict(_LIVEKIT_HOSTED_CONFIG),
+    )
+
+    assert _load_provider_import_profile(job, secrets) == {
+        "provider": "livekit",
+        "modality": "voice",
+        "agent_name": "returns-agent",
+        "system_prompt": "You handle returns.",
+        "tools": [],
+    }
+    assert not secrets.exists()
+
+
+def test_livekit_connect_only_dispatches_the_configured_agent_name(
+    tmp_path: Path,
+) -> None:
+    _job_obj, context = _context(
+        tmp_path=tmp_path,
+        mode=ProviderExecutionMode.CONNECT_ONLY,
+        config=dict(_LIVEKIT_HOSTED_CONFIG),
+    )
+    _write_scenario_doc(context.bundle_dir, scenario_key="livekit-call")
+    captured: dict[str, Any] = {}
+
+    async def place_call(spec):
+        captured["spec"] = spec
+        return _report()
+
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    _run(
+        runner,
+        _FakeScenario("livekit-call"),
+        _runtime(metadata={"livekit_agent_name": "agent-from-source"}),
+    )
+
+    config = captured["spec"].environment.config
+    assert config["agent_definition"]["agent_name"] == "returns-agent"
+    assert config["livekit_runtime"]["url"] == "wss://customer.livekit.cloud/"
+
+
 def test_phone_connect_only_rejects_customer_dialer_override() -> None:
     with pytest.raises(ValueError, match="phone_dialer_config_is_platform_owned"):
         AgentConnection(

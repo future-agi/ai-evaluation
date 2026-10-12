@@ -63,6 +63,19 @@ def _load_provider_import_profile(
             "system_prompt": str(job.agent.config["target_system_prompt"]),
             "tools": [],
         }
+    if (
+        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and job.agent.connector.strip().lower() == "livekit"
+    ):
+        if secrets_path is not None:
+            secrets_path.unlink(missing_ok=True)
+        return {
+            "provider": "livekit",
+            "modality": "voice",
+            "agent_name": str(job.agent.config["agent_name"]),
+            "system_prompt": str(job.agent.config["target_system_prompt"]),
+            "tools": [],
+        }
     inspect_connect_only_provider = (
         job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
         and job.agent.connector.strip().lower() in {"vapi", "retell", "retell_chat"}
