@@ -16,7 +16,7 @@ import re
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .backends import tool, tool_server
 
@@ -1008,7 +1008,6 @@ def scenario_tools(
     start_from: list[Scenario] | None = None,
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
-    scenario_problem: Callable[[dict[str, Any]], str] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -1483,11 +1482,6 @@ def scenario_tools(
                     "this cell, or place it on a level the call actually has."
                 )
             return as_given or _err(said)
-
-        if scenario_problem:
-            problem = scenario_problem(args)
-            if problem:
-                return _refuse(problem)
 
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
