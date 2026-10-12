@@ -40,6 +40,8 @@ class VapiWebSocketConnector(ProviderConnector):
                 assistant_id=target.assistant_id,
                 api_url=f"{str(target.api_base_url).rstrip('/')}/call",
                 first_message_mode=first_message_mode,
+                call_metadata=dict(target.call_metadata),
+                call_variables=dict(target.call_variables),
             )
         )
 
@@ -78,10 +80,15 @@ class VapiWebSocketConnector(ProviderConnector):
                     },
                 },
             }
+            overrides: dict[str, object] = {}
             if self._config.first_message_mode:
-                payload["assistantOverrides"] = {
-                    "firstMessageMode": self._config.first_message_mode,
-                }
+                overrides["firstMessageMode"] = self._config.first_message_mode
+            if self._config.call_metadata:
+                overrides["metadata"] = dict(self._config.call_metadata)
+            if self._config.call_variables:
+                overrides["variableValues"] = dict(self._config.call_variables)
+            if overrides:
+                payload["assistantOverrides"] = overrides
             async with self._session.post(
                 self._config.api_url,
                 headers={"Authorization": f"Bearer {self._config.api_key}"},

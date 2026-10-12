@@ -164,6 +164,9 @@ class ProviderContext(BaseModel):
     provider_resource_prefix: str
     idempotency_key: str
     expires_at: datetime
+    # The world's request-binding secret (§6.2). Never serialized: lifecycle commands get this
+    # context as a file, and a receipt that carries it is rejected below.
+    tool_secret: str | None = Field(default=None, exclude=True, repr=False)
 
 
 class ProviderTarget(BaseModel):
@@ -266,6 +269,7 @@ def validate_provision_receipt(
         context.public_base_url,
         context.event_url,
         context.tool_base_url,
+        context.tool_secret,
     ]
     for secret in forbidden_values:
         if secret and secret in raw:

@@ -1,0 +1,65 @@
+{
+  "rules": [
+    {
+      "id": "no_double_booking",
+      "text": "A slot holds at most one booked appointment; booking or moving into a taken slot is refused.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "real_records",
+      "text": "Appointments, insurance, messages and escalations always reference an existing patient, slot and contact detail.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "cancelled_is_final",
+      "text": "A cancelled appointment cannot be rescheduled or reinstated; book a new one instead.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "no_past_slots",
+      "text": "A slot that has already started cannot be booked or moved into.",
+      "class": "system_invariant"
+    },
+    {
+      "id": "identity_verification",
+      "text": "When verification_required is true, reading or changing a patient's appointments, insurance or forms requires a successful verify_patient for that patient first.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "verification_required": {"type": "boolean", "default": true}
+      }
+    },
+    {
+      "id": "change_notice",
+      "text": "Appointments cannot be cancelled or rescheduled less than change_notice_hours hours before they start.",
+      "class": "configurable_environment_policy",
+      "parameters": {
+        "change_notice_hours": {"type": "integer", "default": 24, "allowed": [0, 2, 12, 24, 48]}
+      }
+    },
+    {
+      "id": "confirm_before_changes",
+      "text": "Read back the date, time, provider and location and get the caller's agreement before booking, rescheduling or cancelling.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "late_changes_to_front_desk",
+      "text": "When a change is refused because it is inside the notice window, explain why and hand the request to the front desk with escalate_to_staff.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "unverified_to_front_desk",
+      "text": "When a caller cannot be verified, change nothing and hand them to the front desk with escalate_to_staff.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "red_flags_to_emergency",
+      "text": "If the caller describes chest pain, trouble breathing, stroke signs, severe bleeding or suicidal thoughts, tell them to call emergency services and do not book.",
+      "class": "agent_policy"
+    },
+    {
+      "id": "no_medical_advice",
+      "text": "Never diagnose, or recommend treatment or medication.",
+      "class": "agent_policy"
+    }
+  ]
+}

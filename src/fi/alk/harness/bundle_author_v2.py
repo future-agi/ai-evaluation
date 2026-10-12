@@ -121,6 +121,16 @@ _COMPOSE_NAMES = (
 )
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+# Every hosted world store starts with these: the readiness sentinel and the table the
+# `tool_trace` evidence seam reads (`call_runner._collect_tool_trace_calls`).
+WORLD_SEED_PREFIX = (
+    "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
+    "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+    "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+    "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+    "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+)
+WORLD_SEED_SENTINEL_QUERY = "SELECT id FROM harness_seed_sentinel WHERE id='ready'"
 
 
 def _reuse_certified_bundle(
@@ -2393,13 +2403,7 @@ def author_bundle_v2(
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
-        prefix = (
-            "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
-            "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
-        )
+        prefix = WORLD_SEED_PREFIX
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
             migrations, seed_files, adopted_seed = _generic_postgres_seed_artifacts(
@@ -2442,10 +2446,7 @@ def author_bundle_v2(
                     version="16",
                 ),
             ),
-            sentinel=Sentinel(
-                query="SELECT id FROM harness_seed_sentinel WHERE id='ready'",
-                expected="ready",
-            ),
+            sentinel=Sentinel(query=WORLD_SEED_SENTINEL_QUERY, expected="ready"),
         )
         provider_manifest: ProviderRepositoryManifest | None = None
         provider_import: ProviderImportSpec | None = None

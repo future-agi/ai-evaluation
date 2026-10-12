@@ -59,6 +59,8 @@ dependencies = [
     { name = "gepa" },
     { name = "google-adk" },
     { name = "httpx" },
+    { name = "jinja2" },
+    { name = "jmespath" },
     { name = "jsonschema" },
     { name = "levenshtein" },
     { name = "litellm" },
@@ -176,6 +178,8 @@ requires-dist = [
     { name = "google-adk", specifier = ">=2.7.1,<2.8" },
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6" },
+    { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "jmespath", specifier = ">=1.1.0" },
     { name = "jsonschema", specifier = ">=4.25.1,<5" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.4.6,<2" },
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.2.4,<2" },
@@ -2355,6 +2359,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/95/a06692b29e77473f286e1ec1f426d3ca44d7b5843be8ad21d7a5f3fcdcc0/jiter-0.15.0-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:b6c0ffae686c39bf3737be60793783267628783ea42545632c10b291105aee45", size = 305128, upload-time = "2026-05-19T10:09:43.657Z" },
     { url = "https://files.pythonhosted.org/packages/23/85/7270d7ad41d6061a25b950c6bf91d638bd9aacb113200a8c8d57a055fd67/jiter-0.15.0-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1d54fb5b31dea401a41af3f8a7d2512e9b6a6a005491e6166c7e4ffab9639a9c", size = 340459, upload-time = "2026-05-19T10:09:45.452Z" },
     { url = "https://files.pythonhosted.org/packages/c8/8d/302cb2057b7513327b4d575cff6b1d066ee6431a5357fc3f8867cd684406/jiter-0.15.0-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:54d5d6090cdc1b7c9e780dfb04949a990adb1e301a2fc0bbcee7de4638d33f9a", size = 344469, upload-time = "2026-05-19T10:09:46.864Z" },
+]
+
+[[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
 ]
 
 [[package]]

@@ -82,6 +82,7 @@ from .simulator_voice import (
 )
 from .world.errors import WorldUnavailable
 from .world.runtime import Call
+from . import request_binding
 
 logger = logging.getLogger(__name__)
 
@@ -547,6 +548,7 @@ def _build_spec(
     environ: Mapping[str, str],
     connector: str = "livekit",
     provider_target_id: str | None = None,
+    call_binding: Mapping[str, str] | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
 
@@ -562,6 +564,13 @@ def _build_spec(
     # supply authoring context, but the call itself dials the existing number.
     if connector in {"vapi", "retell"} and simulator_config.get("phone_number"):
         connector = "phone"
+    if call_binding and connector not in {"vapi", "retell"}:
+        raise ValueError(f"request_binding_unsupported_connector: {connector}")
+    bound = (
+        {"call_metadata": dict(call_binding), "call_variables": dict(call_binding)}
+        if call_binding
+        else {}
+    )
     provider_agent: simulate.AgentDefinition | None = None
     if connector == "vapi":
         if not provider_target_id:
@@ -579,6 +588,7 @@ def _build_spec(
                     simulator_config.get("vapi_api_base_url") or "https://api.vapi.ai"
                 ),
                 "api_key_env": VAPI_API_KEY_ALIAS,
+                **bound,
             },
             transport={"kind": "vapi_websocket"},
             provider_evidence={
@@ -607,6 +617,7 @@ def _build_spec(
                     or "wss://retell-ai-4ihahnq7.livekit.cloud"
                 ),
                 "api_key_env": RETELL_API_KEY_ALIAS,
+                **bound,
             },
             transport={"kind": "retell_webcall"},
             provider_evidence={
@@ -720,6 +731,109 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         # TYPE is safe for a local log line.
         logger.debug(
             "tool_trace clear skipped (table likely absent): %s", type(exc).__name__
+        )
+
+
+@dataclass(frozen=True)
+class _RequestBinding:
+    dsn: str
+    token: str
+
+    def call_values(self) -> dict[str, str]:
+        return request_binding.call_metadata(self.token)
+
+
+def _bundle_binds_requests(bundle_dir: Path) -> bool:
+    try:
+        manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return False
+    metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+    spec = metadata.get("provider_import") if isinstance(metadata, dict) else None
+    return isinstance(spec, dict) and spec.get("request_binding") is True
+
+
+def _bind_call(
+    context: CallRunnerContext, runtime: EnvironmentRuntime, scenario_key: str
+) -> _RequestBinding | None:
+    """§6.2: make a fresh token the only one this world's tool server executes, before the
+    provider call or chat exists."""
+    if not _bundle_binds_requests(context.bundle_dir):
+        return None
+    secret = runtime.metadata.get(request_binding.SECRET_METADATA_KEY)
+    endpoint = _find_postgres_endpoint(runtime)
+    if not isinstance(secret, str) or not secret or endpoint is None:
+        raise CallAborted(
+            "request_binding_unavailable: the world has no clone secret or no PostgreSQL store"
+        )
+    token = request_binding.new_token()
+    try:
+        request_binding.register_active_call(
+            endpoint.address, token=token, secret=secret, scenario_key=scenario_key
+        )
+    except Exception as exc:  # noqa: BLE001 - str(exc) can carry the world DSN
+        raise CallAborted(
+            f"request_binding_register_failed: {type(exc).__name__}"
+        ) from None
+    return _RequestBinding(dsn=endpoint.address, token=token)
+
+
+def _stray_calls(binding: _RequestBinding, scenario_key: str) -> dict[str, Any]:
+    try:
+        rows = request_binding.read_stray_calls(binding.dsn)
+    except Exception as exc:  # noqa: BLE001 - str(exc) can carry the world DSN
+        logger.warning(
+            "stray calls unreadable scenario=%s: %s", scenario_key, type(exc).__name__
+        )
+        return {"count": None, "error": f"read_failed: {type(exc).__name__}"}
+    logger.info("stray calls scenario=%s count=%d", scenario_key, len(rows))
+    return {
+        "count": len(rows),
+        "calls": [
+            {key: row.get(key) for key in ("reason", "tool", "provider_call_id", "at")}
+            for row in rows
+        ],
+    }
+
+
+async def _upload_tool_trace(
+    adapter: "ArtifactUploader",
+    calls: tuple[Call, ...],
+    *,
+    scenario_key: str,
+    binding: _RequestBinding | None,
+) -> None:
+    """One JSON line per call; a request-bound run adds a final `{"stray_calls": ...}` line and
+    uploads even when the agent made no call."""
+    lines = [
+        json.dumps(
+            {
+                "name": call.name,
+                "arguments": call.arguments,
+                "result": call.result,
+                "ok": call.ok,
+                "error": call.error,
+                "refused": call.refused,
+                "at": call.at,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        for call in calls
+    ]
+    if binding is not None:
+        lines.append(
+            json.dumps(
+                {"stray_calls": _stray_calls(binding, scenario_key)},
+                sort_keys=True,
+                default=str,
+            )
+        )
+    if lines:
+        await adapter.upload_artifact(
+            "\n".join(lines).encode("utf-8"),
+            kind=ArtifactKind.TOOL_TRACE,
+            scenario_key=scenario_key,
         )
 
 
@@ -1386,6 +1500,7 @@ class CallRunnerImpl:
                 else None
             )
 
+        binding = _bind_call(self._context, runtime, scenario.scenario_key)
         # Off the event loop: choosing the caller's voice may ask Cartesia over HTTP.
         spec = await asyncio.to_thread(
             _build_spec,
@@ -1394,6 +1509,7 @@ class CallRunnerImpl:
             connector=connector,
             agent_name=agent_name,
             provider_target_id=provider_target_id,
+            call_binding=binding.call_values() if binding else None,
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=call_environ,
@@ -1450,6 +1566,7 @@ class CallRunnerImpl:
                 runtime=runtime,
                 scenario_key=scenario.scenario_key,
                 started_at=started_at,
+                binding=binding,
             )
         except (CallAborted, WorldUnavailable):
             # `_translate_report`'s own typed control-flow (non-completed status, no test case,
@@ -1480,6 +1597,7 @@ class CallRunnerImpl:
         runtime: EnvironmentRuntime,
         scenario_key: str,
         started_at: datetime,
+        binding: _RequestBinding | None = None,
     ) -> CallOutcome:
         case = report.test_cases[0] if report.test_cases else None
         case_started_at = (
@@ -1515,28 +1633,9 @@ class CallRunnerImpl:
         # from transcript prose.
         if not calls and case is not None:
             calls = _collect_provider_tool_calls(case)
-        if calls:
-            tool_trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
-                for call in calls
-            ).encode("utf-8")
-            await self._adapter.upload_artifact(
-                tool_trace,
-                kind=ArtifactKind.TOOL_TRACE,
-                scenario_key=scenario_key,
-            )
+        await _upload_tool_trace(
+            self._adapter, calls, scenario_key=scenario_key, binding=binding
+        )
         if case is not None and case.result is not None:
             result = case.result
             combined = result.audio_combined_path
