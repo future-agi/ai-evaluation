@@ -15,6 +15,7 @@ from fi.alk.harness.bundle_author_v2 import (
     _contract_sql_type,
     _sqlite_sql,
     author_bundle_v2,
+    reseal_scenarios,
     resolve_environment_plan,
 )
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
@@ -2589,3 +2590,70 @@ def test_livekit_pinned_in_requirements_is_read(tmp_path):
 
     (tmp_path / "requirements.txt").write_text("livekit-agents[silero]==1.4.0\n")
     assert _livekit_isolatable(tmp_path)
+
+
+def test_livekit_lower_bound_in_pyproject_is_read(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _livekit_isolatable
+
+    (tmp_path / "pyproject.toml").write_text('dependencies = ["livekit-agents>=1.6.9,<2"]\n')
+    assert _livekit_isolatable(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('dependencies = ["livekit-agents>=1.2,<2"]\n')
+    assert not _livekit_isolatable(tmp_path)
+
+
+def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "provider-target"
+    source.mkdir()
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "reseal-job",
+            "run_id": "reseal-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "retell",
+                "mode": ProviderExecutionMode.CONNECT_ONLY.value,
+                "config": {"agent_id": "agent_existing"},
+                "secret_refs": {
+                    "RETELL_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "retell-key",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+    bundle = authoring / "environment-bundle"
+    sealed = author_bundle_v2(source=source, job=job, authoring=authoring, output=bundle)
+    added = authoring / "scenarios" / "two"
+    shutil.copytree(authoring / "scenarios" / "one", added)
+    (added / "scenario.json").write_text(
+        json.dumps({"name": "two", "instruction": "Test two", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+
+    digest = reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert digest == resealed.digest != sealed.digest
+    assert sorted(path.name for path in (bundle / "scenarios").iterdir()) == ["one", "two"]
+    assert json.loads((bundle / "scenarios" / "two" / "scenario.json").read_text())[
+        "scenario_key"
+    ] == "two"
+    preflight_bundle(
+        bundle, resealed, parallelism=1, secret_refs={"RETELL_API_KEY": "target_provider"}
+    )
+
+
+def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
+    assert reseal_scenarios(_authoring(tmp_path)) is None

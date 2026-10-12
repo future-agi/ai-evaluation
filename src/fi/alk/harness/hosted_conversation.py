@@ -27,7 +27,8 @@ class ConversationTransportError(RuntimeError):
 
 
 class ConversationEndpoints(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # A newer platform may offer endpoints this harness does not use yet.
+    model_config = ConfigDict(extra="ignore")
 
     commands: str
     events: str
@@ -38,6 +39,12 @@ class ConversationEndpoints(BaseModel):
 
     session_store: str
     session_store_append: str
+    # Absent on platforms that predate the builder; its tools say so instead of failing.
+    scenarios: str = ""
+    publish: str = ""
+    runs: str = ""
+    run_start: str = ""
+    overview: str = ""
 
     @field_validator(
         "commands",
@@ -48,9 +55,16 @@ class ConversationEndpoints(BaseModel):
         "workspace",
         "session_store",
         "session_store_append",
+        "scenarios",
+        "publish",
+        "runs",
+        "run_start",
+        "overview",
     )
     @classmethod
     def _https_endpoint(cls, value: str) -> str:
+        if not value:
+            return value
         parsed = urlparse(value)
         if parsed.scheme != "https" or not parsed.netloc or not value.endswith("/"):
             raise ValueError(
@@ -86,7 +100,7 @@ class ConversationCapabilities(BaseModel):
         if self.expires_at <= datetime.now(timezone.utc):
             raise ValueError("conversation capability is expired")
         for endpoint in self.endpoints.model_dump().values():
-            if self.conversation_id not in urlparse(endpoint).path.split("/"):
+            if endpoint and self.conversation_id not in urlparse(endpoint).path.split("/"):
                 raise ValueError(
                     "conversation endpoint is bound to another conversation"
                 )
@@ -240,13 +254,46 @@ class ConversationClient:
             self.capabilities.endpoints.run_status,
         )
 
-    async def adjust(self, instruction: str) -> dict[str, Any]:
+    async def scenarios(self, query: dict[str, Any]) -> dict[str, Any]:
+        return await self._platform("scenarios", query)
+
+    async def publish(self, digest: str) -> dict[str, Any]:
+        return await self._platform("publish", {"digest": digest})
+
+    async def runs(self, run_id: str = "", limit: int = 10) -> dict[str, Any]:
+        return await self._platform(
+            "runs", {"run_id": run_id, "limit": limit} if run_id else {"limit": limit}
+        )
+
+    async def start_run(
+        self, numbers: list[int], ranges: list[dict[str, int]], trials: int
+    ) -> dict[str, Any]:
+        return await self._platform(
+            "run_start", {"numbers": numbers, "ranges": ranges, "trials": trials}
+        )
+
+    async def overview(self) -> dict[str, Any]:
+        return await self._platform("overview", {})
+
+    async def _platform(self, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
+        url = getattr(self.capabilities.endpoints, endpoint)
+        if not url:
+            raise ConversationTransportError(
+                f"this platform does not offer the {endpoint} endpoint"
+            )
+        return await self._request("POST", url, json_body=body)
+
+    async def adjust(
+        self, instruction: str, target_stage: str = "", scenario_delta: int = 0
+    ) -> dict[str, Any]:
         return await self._request(
             "POST",
             self.capabilities.endpoints.adjust,
             json_body={
                 "instruction": instruction,
                 "client_request_id": f"conversation-{uuid.uuid4().hex}",
+                **({"target_stage": target_stage} if target_stage else {}),
+                **({"scenario_delta": scenario_delta} if scenario_delta > 0 else {}),
             },
         )
 
@@ -318,8 +365,14 @@ class ConversationClient:
                 409,
                 422,
             }:
+                said = (
+                    response.body.get("message") or response.body.get("detail") or ""
+                    if isinstance(response.body, dict)
+                    else ""
+                )
                 raise ConversationTransportError(
                     f"conversation endpoint returned HTTP {response.status_code}"
+                    + (f": {said}" if said else "")
                 )
             if loop.time() + delay > deadline:
                 status = response.status_code if response is not None else "unreachable"
@@ -363,12 +416,17 @@ def _workspace_archive(workspace: Path) -> bytes:
             for path in sorted(root.rglob("*")):
                 relative = path.relative_to(root)
                 if not relative.parts or any(
-                    part in {"__pycache__", "outbound-spool"} for part in relative.parts
+                    part in {"__pycache__", "outbound-spool", "telemetry"}
+                    for part in relative.parts
                 ):
                     continue
                 if path.is_symlink():
                     continue
-                archive.add(path, arcname=relative.as_posix(), recursive=False)
+                # The model's CLI writes and removes its own files under the workspace while we pack.
+                try:
+                    archive.add(path, arcname=relative.as_posix(), recursive=False)
+                except FileNotFoundError:
+                    continue
         file.seek(0)
         return file.read()
 

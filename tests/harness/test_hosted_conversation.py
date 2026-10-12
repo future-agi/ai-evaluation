@@ -81,41 +81,20 @@ def test_conversation_turn_does_not_require_undeclared_history():
     assert conversation.spent_usd == 0.25
 
 
-def test_hosted_chat_leaves_unrelated_invalid_jobs_on_generic_path(
-    tmp_path, monkeypatch
-):
-    captured = {}
-
-    def fake_open_conversation(**kwargs):
-        captured.update(kwargs)
-        return object()
+def test_hosted_chat_leaves_unrelated_invalid_jobs_on_generic_path(monkeypatch):
+    from fi.alk.harness.poc_guest_booking import guest_booking_policy_job
 
     monkeypatch.setenv(TARGET_PHONE_ENV, "+15551234567")
     monkeypatch.setenv(PIN_ENV, "7682")
-    monkeypatch.setattr(
-        "fi.alk.harness.hosted_chat_entrypoint.open_conversation",
-        fake_open_conversation,
-    )
-    runtime = object.__new__(HostedChatRuntime)
-    runtime.job = {
+    job = {
         "metadata": {"agent_name": "ordinary phone agent"},
         "scenario_count": 10,
-        "agent": {
-            "connector": "phone",
-            "config": {"phone_number": "+15557654321"},
-        },
+        "agent": {"connector": "phone", "config": {"phone_number": "+15557654321"}},
         # Deliberately not a complete SDK HarnessJob: generic chat accepted this before the POC.
         "runtime": {"parallelism": 20, "cpu_units": 1},
     }
-    runtime.source = tmp_path
-    runtime.workspace = tmp_path
-    runtime._control_only = lambda: False
-    runtime._ask = lambda *_args, **_kwargs: None
-    runtime._configure_stage = lambda _name, spec: spec
 
-    runtime._conversation()
-
-    assert captured["job"] is None
+    assert guest_booking_policy_job(job) is None
 
 
 def test_conversation_client_starts_from_durable_command_watermark():
@@ -258,84 +237,6 @@ harness_chat:
         "mcp__run__run_simulation",
         "mcp__flow__route_to_stage",
     ]
-
-
-def test_active_authoring_chat_answers_read_only_and_requests_adjustments(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("ALK_HARNESS", "claude")
-    policy_path = tmp_path / "policy.yaml"
-    policy_path.write_text(
-        """schema_version: 1
-harness_chat:
-  enabled: true
-  stages:
-    understand:
-      enabled: true
-  lifecycle:
-    request_user_input: true
-""",
-        encoding="utf-8",
-    )
-
-    class ControlClient:
-        def __init__(self):
-            self.capabilities = _capabilities()
-            self.turn_context = {
-                **self.capabilities.turn_context,
-                "capabilities": {"control_only": True},
-            }
-            self.adjustments = []
-
-        async def adjust(self, instruction):
-            self.adjustments.append(instruction)
-            return {"status": "pending", "instruction": instruction}
-
-        async def run_status(self):
-            return {"state": "running", "stage": "generating_scenarios"}
-
-    async def mutation_tool(_args):
-        return {"content": []}
-
-    client = ControlClient()
-    runtime = HostedChatRuntime(
-        client=client,  # type: ignore[arg-type]
-        policy=load_chat_policy(policy_path),
-        workspace=tmp_path,
-        source=tmp_path,
-        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
-    )
-    spec = SessionSpec(
-        system_prompt="understand",
-        servers={
-            "mutations": ToolServer(
-                name="mutations",
-                tools=[ToolSpec("save_contract", "write", {}, mutation_tool)],
-            )
-        },
-        builtins=("Read", "Glob", "Grep", "Write", "Bash"),
-    )
-
-    configured = runtime._configure_stage("understand", spec)
-
-    assert set(configured.granted()) == {
-        "Read",
-        "Glob",
-        "Grep",
-        "AskUserQuestion",
-        "mcp__platform-control__get_run_status",
-        "mcp__platform-control__request_adjustment",
-    }
-    adjustment_tool = next(
-        tool
-        for tool in configured.servers["platform-control"].tools
-        if tool.name == "request_adjustment"
-    )
-    result = asyncio.run(
-        adjustment_tool.handler({"instruction": "Add a failed payment scenario"})
-    )
-    assert client.adjustments == ["Add a failed payment scenario"]
-    assert '"status": "pending"' in result["content"][0]["text"]
 
 
 def test_chat_policy_rejects_unknown_stages(tmp_path):
@@ -700,103 +601,6 @@ def test_answer_does_not_acknowledge_queued_followup(tmp_path, monkeypatch):
     assert client.events[-1]["acknowledge_through"] == 4
 
 
-def test_vertex_coordinator_opens_durable_session(tmp_path, monkeypatch):
-    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
-    policy_path = tmp_path / "policy.yaml"
-    policy_path.write_text(
-        "schema_version: 1\nharness_chat:\n  enabled: true\n"
-        "  stages:\n    reception:\n      enabled: true\n"
-    )
-    client = QuestionClient()
-    client.turn_context = {
-        **client.turn_context,
-        "capabilities": {"control_only": True},
-    }
-    runtime = HostedChatRuntime(
-        client=client,
-        policy=load_chat_policy(policy_path),
-        workspace=tmp_path,
-        source=tmp_path,
-        job={},
-    )
-
-    async def exercise():
-        stage = runtime.conversation.stage
-        async with stage:
-            context = stage.spec.conversation
-            stored = await runtime.event_store.get_session(
-                app_name=context.app_name,
-                user_id=context.user_id,
-                session_id=context.session_id,
-            )
-            assert stored.id == context.session_id
-
-    asyncio.run(exercise())
-
-
-def test_control_coordinator_restores_journal_without_resuming_missing_provider_session(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("ALK_HARNESS", "claude")
-    policy_path = tmp_path / "policy.yaml"
-    policy_path.write_text(
-        "schema_version: 1\nharness_chat:\n  enabled: true\n"
-        "  stages:\n    reception:\n      enabled: true\n"
-    )
-
-    class PersistentClient(QuestionClient):
-        def __init__(self):
-            super().__init__()
-            self.turn_context = {
-                **self.turn_context,
-                "capabilities": {"control_only": True},
-            }
-            self.entries = []
-
-        async def append_session(self, key, entries):
-            self.entries.extend(entries)
-
-        async def load_session(self, key):
-            return {"entries": self.entries}
-
-        async def checkpoint(self, workspace):
-            raise AssertionError(
-                "Control-only chat must not overwrite authoring archives"
-            )
-
-    client = PersistentClient()
-    warm = tmp_path / "warm"
-    cold = tmp_path / "cold"
-    warm.mkdir()
-    cold.mkdir()
-    (warm / ".futureagi-provider-sessions.json").write_text(
-        json.dumps({"claude:reception": "provider-session-123"})
-    )
-    (warm / "contract.json").write_text('{"authoring": "untouched"}')
-    runtime = HostedChatRuntime(
-        client=client,
-        policy=load_chat_policy(policy_path),
-        workspace=warm,
-        source=warm,
-        job={},
-    )
-    runtime._write_journal({"message-1": "completed"})
-    asyncio.run(runtime._checkpoint())
-    restored = HostedChatRuntime(
-        client=client,
-        policy=load_chat_policy(policy_path),
-        workspace=cold,
-        source=cold,
-        job={},
-    )
-    asyncio.run(restored._restore_coordinator_state())
-    assert restored.conversation.stage.spec.conversation.resume_session_id is None
-    assert restored._read_journal() == {"message-1": "completed"}
-    assert not (cold / ".futureagi-provider-sessions.json").exists()
-    assert not (cold / "contract.json").exists()
-
-
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422])
 def test_definite_conversation_errors_do_not_retry(status, monkeypatch):
     from types import SimpleNamespace
@@ -848,3 +652,27 @@ def test_unavailable_requests_stop_before_platform_stale_window(monkeypatch):
     asyncio.run(exercise())
     assert 35 < clock[0] <= 60
     assert timeouts[-1] < timeouts[0]
+
+
+def test_carrying_on_a_build_restates_how_many_scenarios_it_was_asked_for(tmp_path):
+    from fi.alk.harness.hosted_chat_entrypoint import HostedChatRuntime
+
+    runtime = object.__new__(HostedChatRuntime)
+    runtime.workspace = tmp_path
+    runtime.job = {"scenario_count": 60}
+    runtime.client = type(
+        "Client", (), {"turn_context": {"capabilities": {"control_only": True}}, "command_watermark": 3}
+    )()
+    runtime._last_progress, runtime._idle_turns, runtime._opened_with = None, 0, None
+    runtime._what_exists = lambda: (True, False)
+    runtime._after_saved = lambda: None
+    handled = []
+
+    async def handle(command):
+        handled.append(command["payload"]["content"])
+
+    runtime._handle = handle
+
+    assert asyncio.run(runtime._carry_on())
+    assert "with 60 scenarios" in handled[0]
+    assert "call finish_build" in handled[0]

@@ -1508,8 +1508,11 @@ def scenario_tools(
         if twin:
             return _refuse(twin)
         if cap() and target.get("people") != "alike":
+            # A replacement does not count against itself.
             crowded = crowded_field(
-                kept, Scenario.model_validate(args).persona, cap()
+                [one for one in kept if one.name != str(args.get("name") or "")],
+                Scenario.model_validate(args).persona,
+                cap(),
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)

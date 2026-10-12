@@ -467,7 +467,7 @@ class ClaudeBackend:
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            options.disallowed_tools = list(UNWANTED)
+            options.disallowed_tools = [name for name in UNWANTED if name not in spec.builtins]
             options.hooks = gate_hooks(allowed)
             options.can_use_tool = spec.permission_override or permission_gate(
                 spec.ask, allowed
