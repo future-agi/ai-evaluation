@@ -139,9 +139,11 @@ def accept_contract(
 
     problems = validate_contract(contract)
     if source_root is not None:
-        from .source_tool_evidence import tool_evidence_problems
+        from .source_tool_evidence import attach_tool_sources, tool_evidence_problems
 
         problems.extend(tool_evidence_problems(contract, source_root))
+        if not problems:
+            contract = attach_tool_sources(contract, source_root)
     if problems:
         return _problems(problems, arrived)
 
@@ -173,6 +175,19 @@ def _without_nulls(value: Any) -> Any:
 
 # Each selected eval is one judge call per call in the suite.
 MOST_CHOSEN_EVALS = 6
+
+_ORIGIN_SCHEMA = {
+    "type": "object",
+    "description": "Exact evidence for this item. Use code, prompt, doc, config, "
+    "provider_system_prompt, or provider_tool_list; never infer an origin.",
+    "properties": {
+        "kind": {"type": "string"},
+        "path": {"type": "string"},
+        "line": {"type": "integer"},
+        "field": {"type": "string"},
+    },
+    "required": ["kind"],
+}
 
 
 def contract_tools(
@@ -228,6 +243,16 @@ def contract_tools(
                     "type": "string",
                     "description": "One sentence: what this agent is for.",
                 },
+                "domain": {
+                    "type": "object",
+                    "description": "Exactly two words naming the business domain, for example "
+                    "Guest Booking or Admin Support.",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                    },
+                    "required": ["label"],
+                },
                 "modality": {
                     "type": "string",
                     "enum": list(known_modalities()),
@@ -263,11 +288,34 @@ def contract_tools(
                     "description": "The agent's own instructions, quoted. Often lives away from "
                     "the main agent file.",
                 },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "The full system prompt verbatim when the source or provider "
+                    "supplies it. Do not summarize or truncate it.",
+                },
+                "system_prompt_origin": _ORIGIN_SCHEMA,
                 "hard_constraints": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Rules it must obey, in the source's own words. The agent "
-                    "under test is told these and graded against them.",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "origin": _ORIGIN_SCHEMA,
+                                    "enforced_by": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "sub_goal": {"type": "string"},
+                                },
+                                "required": ["text", "origin"],
+                            },
+                        ]
+                    },
+                    "description": "Rules it must obey, in the source's own words, with an "
+                    "origin on each rule. Plain strings remain accepted for old callers.",
                 },
                 "tools": {
                     "type": "array",
@@ -297,6 +345,12 @@ def contract_tools(
                                 '{"priority": ["low", "normal", "urgent"]}.',
                             },
                             "description": {"type": "string"},
+                            "origin": _ORIGIN_SCHEMA,
+                            "effect": {
+                                "type": "string",
+                                "description": "The observable state or external effect of the "
+                                "tool, stated only where the source proves it.",
+                            },
                             "requires": {
                                 "type": "array",
                                 "items": {"type": "string"},
@@ -317,8 +371,29 @@ def contract_tools(
                 },
                 "data_schema": {
                     "type": "object",
-                    "description": "The shape of the records the agent works on: which fields "
-                    "each kind of record has.",
+                    "description": "Database tables keyed by table name. Prefer "
+                    "{table: {columns: [{name, type, enum?, pk, nullable, references?}]}}. "
+                    "Legacy {table: {column: declaration}} remains accepted.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "columns": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "type": {"type": "string"},
+                                        "enum": {"type": "array"},
+                                        "pk": {"type": "boolean"},
+                                        "nullable": {"type": "boolean"},
+                                        "references": {"type": "string"},
+                                    },
+                                    "required": ["name", "type"],
+                                },
+                            }
+                        },
+                    },
                 },
                 "base_environment": {
                     "type": "object",
@@ -411,12 +486,24 @@ def contract_tools(
                 },
                 "real_use_cases": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "What this agent is for, one plain sentence each. These are "
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "origin": _ORIGIN_SCHEMA,
+                                },
+                                "required": ["text", "origin"],
+                            },
+                        ]
+                    },
+                    "description": "What this agent is for, one grounded item each. These are "
                     "capabilities, not test cases: 'cancel an order that has not shipped', not "
                     "a narrated situation with a customer, a name and an outcome. Each one is "
-                    "something the agent's own text says it does, never stretched from a passing "
-                    "word or a tool name. Scenarios are written later, from these.",
+                    "something the agent's own text says it does, with that item's origin. "
+                    "Plain strings remain accepted for old callers.",
                 },
                 "notes": {
                     "type": "string",
@@ -520,6 +607,7 @@ def contract_tools(
                                 "description": "Anything about reaching it that the fields above "
                                 "do not carry, especially why a tool cannot be reached.",
                             },
+                            "origin": _ORIGIN_SCHEMA,
                         },
                     },
                 },
@@ -925,6 +1013,43 @@ def contract_tools(
             payload["chosen_evals"] = wanted
 
         thin = [
+            (
+                "domain",
+                not payload.get("domain"),
+                "no two-word domain tag. Add domain.label with exactly two words grounded in "
+                "the agent's stated purpose, for example Guest Booking or Admin Support.",
+            ),
+            (
+                "item-provenance",
+                any(
+                    isinstance(items, list)
+                    and any(
+                        not isinstance(item, dict) or not item.get("origin")
+                        for item in items
+                    )
+                    for items in (
+                        payload.get("tools"),
+                        payload.get("hard_constraints"),
+                        payload.get("real_use_cases"),
+                    )
+                ),
+                "one or more tools, hard constraints, or real use cases lack item-level origin. "
+                "Use the object form and identify code, prompt, doc, config, "
+                "provider_system_prompt, or provider_tool_list for each item. Do not invent "
+                "an origin where the supplied material does not prove one.",
+            ),
+            (
+                "database-columns",
+                bool(payload.get("data_schema"))
+                and not any(
+                    isinstance(table, dict) and isinstance(table.get("columns"), list)
+                    for table in (payload.get("data_schema") or {}).values()
+                ),
+                "data_schema has no structured columns. For each database table use "
+                "{columns: [{name, type, enum?, pk, nullable, references?}]} so keys and "
+                "nullability remain visible. If this is not a database schema, submit again "
+                "as is.",
+            ),
             (
                 "prompt",
                 bool(payload.get("conversational", True))

@@ -3766,7 +3766,18 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         / "tools.py"
     ).read_text(encoding="utf-8")
     # Set by the amendment tools during later stages, never by whoever submits the contract.
-    ours = {"amendments"}
+    ours = {
+        "amendments",
+        # Normalized from the rich authoring fields before the contract is saved.
+        "data_schema_columns",
+        "hard_constraint_details",
+        "real_use_case_details",
+        # Extracted deterministically from submitted Python after validation.
+        "source",
+        "line_start",
+        "line_end",
+        "code",
+    }
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.

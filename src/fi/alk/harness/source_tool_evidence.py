@@ -12,7 +12,91 @@ import re
 import tokenize
 from pathlib import Path
 
-from .contract import AgentContract
+from .contract import AgentContract, Origin, ToolSource
+
+
+def _module_path(root: Path, module_name: str) -> Path | None:
+    parts = module_name.split(".")
+    if not parts or not all(part.isidentifier() for part in parts):
+        return None
+    module = Path(*parts)
+    candidates = [
+        base / relative
+        for base in (root, root / "src")
+        for relative in (module.with_suffix(".py"), module / "__init__.py")
+    ]
+    return next(
+        (
+            path
+            for path in candidates
+            if path.is_file() and path.resolve().is_relative_to(root)
+        ),
+        None,
+    )
+
+
+def _callable_node(tree: ast.AST, dotted_name: str) -> ast.AST | None:
+    parts = dotted_name.split(".")
+    nodes = list(getattr(tree, "body", []))
+    found: ast.AST | None = None
+    for part in parts:
+        found = next(
+            (
+                node
+                for node in nodes
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                )
+                and node.name == part
+            ),
+            None,
+        )
+        if found is None:
+            return None
+        nodes = list(getattr(found, "body", []))
+    return found
+
+
+def attach_tool_sources(contract: AgentContract, source: Path) -> AgentContract:
+    """Attach exact Python source to resolvable submitted tool entrypoints."""
+
+    root = source.resolve()
+    tools = {tool.name: tool for tool in contract.tools}
+    for entry in contract.tool_entrypoints:
+        if (
+            entry.mode not in {"import", "construct"}
+            or not entry.module
+            or not entry.callable
+        ):
+            continue
+        path = _module_path(root, entry.module)
+        if path is None:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            node = _callable_node(ast.parse(text), entry.callable)
+        except (UnicodeError, SyntaxError):
+            continue
+        if node is None or not getattr(node, "end_lineno", None):
+            continue
+        decorators = getattr(node, "decorator_list", [])
+        start = min(
+            [node.lineno, *(decorator.lineno for decorator in decorators)],
+        )
+        end = int(node.end_lineno)
+        relative = path.resolve().relative_to(root).as_posix()
+        origin = Origin(kind="code", path=relative, line=start)
+        entry.origin = entry.origin or origin
+        entry.source = ToolSource(
+            path=relative,
+            line_start=start,
+            line_end=end,
+            code="\n".join(text.splitlines()[start - 1 : end]),
+        )
+        tool = tools.get(entry.tool)
+        if tool is not None and tool.origin is None:
+            tool.origin = origin
+    return contract
 
 
 def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
@@ -21,19 +105,7 @@ def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
     for entry in contract.tool_entrypoints:
         if entry.mode not in {"import", "construct"} or not entry.module:
             continue
-        parts = entry.module.split(".")
-        if not all(part.isidentifier() for part in parts):
-            continue
-        module = Path(*parts)
-        candidates = [
-            base / relative
-            for base in (root, root / "src")
-            for relative in (module.with_suffix(".py"), module / "__init__.py")
-        ]
-        path = next(
-            (p for p in candidates if p.is_file() and p.resolve().is_relative_to(root)),
-            None,
-        )
+        path = _module_path(root, entry.module)
         if path is None:
             continue
         try:

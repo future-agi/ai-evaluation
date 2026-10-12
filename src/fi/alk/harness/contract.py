@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+
+
 def known_modalities() -> tuple[str, ...]:
     """The modalities a contract may declare: these, plus whatever a kind file adds."""
     from .config import declared_modalities
@@ -28,6 +30,8 @@ def known_modalities() -> tuple[str, ...]:
     known = list(MODALITIES)
     known.extend(one for one in declared_modalities() if one not in known)
     return tuple(known)
+
+
 _RUNTIME_TEMPLATE_INPUTS = frozenset(
     {
         "thread_id",
@@ -98,6 +102,83 @@ _ALIASES = {
 }
 
 
+class Origin(BaseModel):
+    """Where one contract claim came from, without inventing evidence."""
+
+    kind: str
+    path: str = ""
+    line: int | None = Field(default=None, ge=1)
+    field: str = ""
+
+    @field_validator("kind")
+    @classmethod
+    def _kind_required(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("origin kind is required")
+        return value.strip()
+
+
+class DomainTag(BaseModel):
+    """A compact domain label for grouping otherwise unrelated agents."""
+
+    id: str = ""
+    label: str
+
+    @model_validator(mode="after")
+    def _two_words(self) -> "DomainTag":
+        words = self.label.split()
+        if len(words) != 2:
+            raise ValueError("domain label must contain exactly two words")
+        if not self.id:
+            normalized = [re.sub(r"[^a-z0-9]+", "", word.lower()) for word in words]
+            if not all(normalized):
+                raise ValueError("domain label must contain letters or digits")
+            self.id = "-".join(normalized)
+        return self
+
+
+class ContractItem(BaseModel):
+    """A grounded rule or use case and its item-level evidence."""
+
+    text: str
+    origin: Origin | None = None
+    enforced_by: list[str] = Field(default_factory=list)
+    sub_goal: str = ""
+
+
+class SchemaColumn(BaseModel):
+    """One database column as shown in the source schema."""
+
+    name: str
+    type: str
+    enum: list[Any] | None = None
+    pk: bool | None = None
+    nullable: bool | None = None
+    references: str | None = None
+
+    @field_validator("name", "type")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("schema column name and type are required")
+        return value.strip()
+
+
+class ToolSource(BaseModel):
+    """The exact submitted source implementing a tool."""
+
+    path: str
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    code: str
+
+    @model_validator(mode="after")
+    def _ordered_lines(self) -> "ToolSource":
+        if self.line_end < self.line_start:
+            raise ValueError("tool source line_end precedes line_start")
+        return self
+
+
 class ToolSpec(BaseModel):
     """One tool the agent really has.
 
@@ -146,6 +227,8 @@ class ToolSpec(BaseModel):
     arg_types: dict[str, str] = Field(default_factory=dict)
     arg_values: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
+    origin: Origin | None = None
+    effect: str = ""
     # Tools that must have run before this one stops refusing, and only for state the agent builds
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
     # costs every future test of it a preamble it never needed.
@@ -179,6 +262,8 @@ class ToolEntry(BaseModel):
     endpoint: str = ""
     method: str = "POST"
     notes: str = ""
+    origin: Origin | None = None
+    source: ToolSource | None = None
 
 
 class DataStore(BaseModel):
@@ -568,6 +653,61 @@ class AgentContract(BaseModel):
                 if payload.get(other):
                     payload[ours] = payload[other]
                     break
+        for field, details_field in (
+            ("hard_constraints", "hard_constraint_details"),
+            ("real_use_cases", "real_use_case_details"),
+        ):
+            values = payload.get(field)
+            if not isinstance(values, list) or not any(
+                isinstance(item, dict) for item in values
+            ):
+                continue
+            details = []
+            plain = []
+            for item in values:
+                if isinstance(item, dict):
+                    normalized = dict(item)
+                    text = str(
+                        normalized.get("text")
+                        or normalized.get("value")
+                        or normalized.get("description")
+                        or normalized.get("name")
+                        or ""
+                    ).strip()
+                    if not text:
+                        continue
+                    normalized["text"] = text
+                    details.append(normalized)
+                    plain.append(text)
+                elif str(item).strip():
+                    plain.append(str(item).strip())
+            payload[field] = plain
+            payload.setdefault(details_field, details)
+        schema = payload.get("data_schema")
+        if isinstance(schema, dict):
+            columns_by_table: dict[str, list[dict[str, Any]]] = {}
+            legacy_schema: dict[str, Any] = {}
+            for table, declaration in schema.items():
+                columns = (
+                    declaration.get("columns")
+                    if isinstance(declaration, dict)
+                    else None
+                )
+                if not isinstance(columns, list):
+                    legacy_schema[table] = declaration
+                    continue
+                normalized_columns = [
+                    column for column in columns if isinstance(column, dict)
+                ]
+                columns_by_table[str(table)] = normalized_columns
+                legacy_schema[table] = {
+                    str(column.get("name")): str(column.get("type") or "")
+                    for column in normalized_columns
+                    if str(column.get("name") or "").strip()
+                }
+            if columns_by_table:
+                payload["data_schema"] = legacy_schema
+                payload.setdefault("data_schema_columns", columns_by_table)
         for key in _STRING_FIELDS:
             value = payload.get(key)
             if isinstance(value, list):
@@ -600,10 +740,15 @@ class AgentContract(BaseModel):
     # Voice only: the languages the agent's own instructions say it speaks. Empty when they do not say.
     agent_languages: list[str] = Field(default_factory=list)
     conversational: bool = True
+    domain: DomainTag | None = None
+    system_prompt: str = ""
+    system_prompt_origin: Origin | None = None
     system_prompt_excerpt: str = ""
     hard_constraints: list[str] = Field(default_factory=list)
+    hard_constraint_details: list[ContractItem] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
+    data_schema_columns: dict[str, list[SchemaColumn]] = Field(default_factory=dict)
     base_environment: dict[str, Any] = Field(default_factory=dict)
     # What the environment stage has to build before any tool can be answered.
     dependencies: list[Dependency] = Field(default_factory=list)
@@ -619,6 +764,7 @@ class AgentContract(BaseModel):
     data_store: DataStore | None = None
     runtime: Runtime | None = None
     real_use_cases: list[str] = Field(default_factory=list)
+    real_use_case_details: list[ContractItem] = Field(default_factory=list)
     # Free-form. The fields above are the fixed core because code consumes them; this is where
     # the reader records whatever else about *this* agent is worth carrying forward — quirks,
     # traps, names that look real but are not — in whatever form fits. It is shown verbatim to

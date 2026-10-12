@@ -68,6 +68,91 @@ def test_real_or_dynamic_bindings_are_not_rejected(tmp_path, binding):
     )
 
 
+def test_saved_contract_includes_exact_tool_source_and_origin(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text(
+        "class Assistant:\n"
+        "    @function_tool\n"
+        "    async def lookup_weather(self, location):\n"
+        "        return {'location': location}\n"
+    )
+
+    result = accept_contract(payload(), tmp_path / "out", source_root=source)
+
+    assert not result.get("is_error"), result
+    saved = json.loads((tmp_path / "out/contract.json").read_text())
+    entry = saved["tool_entrypoints"][0]
+    assert entry["source"] == {
+        "path": "agent.py",
+        "line_start": 2,
+        "line_end": 4,
+        "code": (
+            "    @function_tool\n"
+            "    async def lookup_weather(self, location):\n"
+            "        return {'location': location}"
+        ),
+    }
+    assert entry["origin"] == {
+        "kind": "code",
+        "path": "agent.py",
+        "line": 2,
+        "field": "",
+    }
+    assert saved["tools"][0]["origin"] == entry["origin"]
+
+
+def test_rich_contract_items_and_database_columns_keep_legacy_execution_shape():
+    contract = AgentContract.model_validate(
+        payload()
+        | {
+            "domain": {"label": "Travel Support"},
+            "hard_constraints": [
+                {
+                    "text": "Never invent availability",
+                    "origin": {"kind": "prompt", "field": "system_prompt"},
+                }
+            ],
+            "real_use_cases": [
+                {
+                    "text": "Answer a weather question",
+                    "origin": {"kind": "code", "path": "agent.py", "line": 3},
+                }
+            ],
+            "data_schema": {
+                "forecast": {
+                    "columns": [
+                        {
+                            "name": "location",
+                            "type": "TEXT",
+                            "pk": True,
+                            "nullable": False,
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    assert contract.domain.model_dump() == {
+        "id": "travel-support",
+        "label": "Travel Support",
+    }
+    assert contract.hard_constraints == ["Never invent availability"]
+    assert contract.real_use_cases == ["Answer a weather question"]
+    assert contract.hard_constraint_details[0].origin.kind == "prompt"
+    assert contract.real_use_case_details[0].origin.path == "agent.py"
+    assert contract.data_schema == {"forecast": {"location": "TEXT"}}
+    assert contract.data_schema_columns["forecast"][0].model_dump() == {
+        "name": "location",
+        "type": "TEXT",
+        "enum": None,
+        "pk": True,
+        "nullable": False,
+        "references": None,
+    }
+
+
 def test_external_modules_and_service_tools_are_not_static_python_claims(tmp_path):
     assert not accept_contract(payload(), tmp_path / "out", source_root=tmp_path).get(
         "is_error"
