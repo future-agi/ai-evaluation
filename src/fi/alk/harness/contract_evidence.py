@@ -268,6 +268,11 @@ def ground_contract(
         for item in contract.amendment_details
         if item.kind == "unreachable_tool" and item.subject in provider_tools
     }
+    disproved.update(
+        f"{entry.tool}: {entry.notes or 'No runnable implementation seam was found.'}"
+        for entry in contract.tool_entrypoints
+        if entry.mode == "unreachable" and entry.tool in provider_tools
+    )
     contract.amendments = [
         item for item in contract.amendments if item not in disproved
     ]

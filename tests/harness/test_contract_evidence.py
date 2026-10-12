@@ -239,17 +239,22 @@ def test_retell_flow_tools_are_grounded_through_named_conversation_nodes(tmp_pat
     assert contract["tools"][0]["effect_kind"] == "external"
 
 
+@pytest.mark.parametrize("rich_amendment", [False, True])
 def test_provider_inventory_overrides_unreachable_display_claim_without_changing_runtime(
     tmp_path,
+    rich_amendment,
 ):
     payload = body(
         tools=[{"name": "finish"}],
         tool_entrypoints=[
             {"tool": "finish", "mode": "unreachable", "notes": "No local code"}
         ],
+        amendments=["finish: No local code", "Keep this unrelated observation"],
         amendment_details=[
             {"subject": "finish", "kind": "unreachable_tool", "reason": "No local code"}
-        ],
+        ]
+        if rich_amendment
+        else [],
     )
     result = submit(
         tmp_path,
@@ -266,7 +271,7 @@ def test_provider_inventory_overrides_unreachable_display_claim_without_changing
         contract["tool_entrypoint_details"][0]["implementation_origin"]
         == "provider_builtin"
     )
-    assert contract["amendments"] == []
+    assert contract["amendments"] == ["Keep this unrelated observation"]
     assert contract["amendment_details"] == []
 
 
