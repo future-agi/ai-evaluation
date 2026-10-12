@@ -5,7 +5,9 @@ persona/instruction rewrites of base scenarios, and complete custom scenarios. I
 whether its work is good: every submission is checked by the caller's validator (sealing,
 proving) inside the tool call, and the reasons go straight back to the model. Structured output
 is a submit tool, the pattern every authoring stage uses; nested documents travel as JSON text
-because Vertex function declarations cannot describe the mapping language's recursive values.
+because some backends' function declarations cannot describe the mapping language's recursive
+values. The backend is the one the harness is configured with (`ALK_HARNESS`): hosted, the
+Claude SDK through the AgentCC gateway, which routes `ALK_HARNESS_MODEL` to Gemini on Vertex.
 """
 
 from __future__ import annotations
@@ -195,9 +197,7 @@ def harness_model() -> str:
 
     model = os.environ.get("ALK_HARNESS_MODEL", "").strip() or DEFAULT_MODEL
     refuse_a_model_we_cannot_afford(model)
-    # Deployments route the authoring harness through a gateway ("vertex_ai/<model>"); the
-    # drafter calls Vertex directly, which knows only the bare model id.
-    return model.rsplit("/", 1)[-1]
+    return model
 
 
 def _say(text: str, *, error: bool = False) -> dict[str, Any]:
@@ -328,7 +328,7 @@ when nothing is done. Use only facts present in the world or created by setup_co
 
 
 class LlmDrafter(Drafter):
-    """The harness model on Vertex Gemini (`ALK_HARNESS_MODEL`, default gemini-3.7-flash)."""
+    """The configured harness backend and model (`ALK_HARNESS`, `ALK_HARNESS_MODEL`)."""
 
     def __init__(self, *, mode: str) -> None:
         self.mode = mode
@@ -346,7 +346,7 @@ class LlmDrafter(Drafter):
             max_turns=40,
             model=self.model,
         )
-        return Stage(spec, name=name, backend=resolve("vertex-gemini"), overheard=False)
+        return Stage(spec, name=name, backend=resolve(), overheard=False)
 
     def _world_tool(self, context: DraftingContext) -> Any:
         from ..backends import tool
