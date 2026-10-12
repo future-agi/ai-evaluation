@@ -2390,12 +2390,14 @@ def test_a_sub_goal_that_settles_nothing_is_rejected():
     assert settled.deterministic()
 
     judged = SubGoal(
-        name="polite", what="stayed polite", judged=(
+        name="polite",
+        what="stayed polite",
+        judged=(
             "Applies when: the agent declines a request.\n"
             "Pass when: it tells the caller why it cannot help.\n"
             "Fail when: it declines without giving any reason.\n"
             "If it does not arise: Pass, because nothing was declined."
-        )
+        ),
     )
     assert validate_sub_goal(judged) == [] and not judged.deterministic()
 
@@ -4808,13 +4810,26 @@ def test_seeded_starting_rows_must_use_declared_collection_names(tmp_path):
 
     payload = {
         "agent": "hotel-agent",
-        "tools": [{"name": "cancel", "args": ["id"]}],
-        "real_use_cases": ["cancel a seeded reservation"],
-        "hard_constraints": ["only existing reservations may be cancelled"],
+        "domain": {"label": "Hotel Reservations"},
+        "tools": [{"name": "cancel", "args": ["id"], "origin": {"kind": "code"}}],
+        "real_use_cases": [
+            {"text": "cancel a seeded reservation", "origin": {"kind": "code"}}
+        ],
+        "hard_constraints": [
+            {
+                "text": "only existing reservations may be cancelled",
+                "origin": {"kind": "prompt"},
+            }
+        ],
         "system_prompt_excerpt": "cancel reservations truthfully",
         "data_schema": {
-            "hotel_rooms": {"id": "string"},
-            "restaurant_reservations": {"code": "string", "status": "string"},
+            "hotel_rooms": {"columns": [{"name": "id", "type": "string"}]},
+            "restaurant_reservations": {
+                "columns": [
+                    {"name": "code", "type": "string"},
+                    {"name": "status", "type": "string"},
+                ]
+            },
         },
         "base_environment": {
             "rooms": [{"id": "RM_201"}],
@@ -4925,15 +4940,27 @@ def test_structured_source_baseline_requires_fk_parent_rows(tmp_path):
 
     payload = {
         "agent": "hotel-agent",
-        "tools": [{"name": "dispute", "args": ["booking_code"]}],
-        "real_use_cases": ["inspect an open dispute"],
-        "hard_constraints": ["only existing bookings may be disputed"],
+        "domain": {"label": "Hotel Disputes"},
+        "tools": [
+            {"name": "dispute", "args": ["booking_code"], "origin": {"kind": "code"}}
+        ],
+        "real_use_cases": [
+            {"text": "inspect an open dispute", "origin": {"kind": "code"}}
+        ],
+        "hard_constraints": [
+            {
+                "text": "only existing bookings may be disputed",
+                "origin": {"kind": "prompt"},
+            }
+        ],
         "system_prompt_excerpt": "handle disputes truthfully",
         "data_schema": {
-            "hotel_bookings": {"code": "TEXT UNIQUE"},
+            "hotel_bookings": {"columns": [{"name": "code", "type": "TEXT UNIQUE"}]},
             "hotel_disputes": {
-                "case_number": "TEXT UNIQUE",
-                "booking_code": "TEXT FK hotel_bookings",
+                "columns": [
+                    {"name": "case_number", "type": "TEXT UNIQUE"},
+                    {"name": "booking_code", "type": "TEXT FK hotel_bookings"},
+                ]
             },
         },
         "base_environment": {
@@ -4978,13 +5005,29 @@ def test_structured_source_baseline_resolves_same_named_and_qualified_fk_keys(tm
 
     base = {
         "agent": "ride-agent",
-        "tools": [{"name": "list_payment_methods", "args": ["rider_id"]}],
-        "real_use_cases": ["list a rider's saved payment methods"],
-        "hard_constraints": ["only return methods belonging to the rider"],
+        "domain": {"label": "Ride Payments"},
+        "tools": [
+            {
+                "name": "list_payment_methods",
+                "args": ["rider_id"],
+                "origin": {"kind": "code"},
+            }
+        ],
+        "real_use_cases": [
+            {"text": "list a rider's saved payment methods", "origin": {"kind": "code"}}
+        ],
+        "hard_constraints": [
+            {
+                "text": "only return methods belonging to the rider",
+                "origin": {"kind": "prompt"},
+            }
+        ],
         "system_prompt_excerpt": "Use the rider's saved payment methods.",
         "data_schema": {
-            "users": {"rider_id": "TEXT UNIQUE"},
-            "payment_methods": {"rider_id": "TEXT FK users"},
+            "users": {"columns": [{"name": "rider_id", "type": "TEXT UNIQUE"}]},
+            "payment_methods": {
+                "columns": [{"name": "rider_id", "type": "TEXT FK users"}]
+            },
         },
         "base_environment": {
             "users": [{"rider_id": "rdr_maya"}],
@@ -5001,7 +5044,9 @@ def test_structured_source_baseline_resolves_same_named_and_qualified_fk_keys(tm
     assert "Accepted" in accepted
 
     (tmp_path / "contract.json").unlink()
-    base["data_schema"]["payment_methods"]["rider_id"] = "TEXT FK users.rider_id"
+    base["data_schema"]["payment_methods"]["columns"][0]["type"] = (
+        "TEXT FK users.rider_id"
+    )
     accepted_qualified = asyncio.run(call(base))
     assert "Accepted" in accepted_qualified
 
@@ -7586,12 +7631,19 @@ _CATALOGUE = [
 def _voice_contract(**extra):
     payload = {
         "agent": "ride",
+        "domain": {"label": "Ride Booking"},
         "modality": "voice",
-        "tools": [{"name": "book_ride", "args": ["place_id"]}],
-        "real_use_cases": ["book a ride"],
-        "hard_constraints": ["never double book"],
+        "tools": [
+            {"name": "book_ride", "args": ["place_id"], "origin": {"kind": "code"}}
+        ],
+        "real_use_cases": [{"text": "book a ride", "origin": {"kind": "code"}}],
+        "hard_constraints": [
+            {"text": "never double book", "origin": {"kind": "prompt"}}
+        ],
         "system_prompt_excerpt": "you book rides",
-        "data_schema": {"bookings": {"booking_ref": "TEXT"}},
+        "data_schema": {
+            "bookings": {"columns": [{"name": "booking_ref", "type": "TEXT"}]}
+        },
         "base_environment": {"bookings": [{"booking_ref": "bk_1"}]},
     }
     payload.update(extra)
@@ -7729,16 +7781,22 @@ def test_the_system_prompt_stays_within_budget():
         if sample.exists()
         else AgentContract(agent="budget", one_liner="x", modality="voice")
     )
-    kinds = (pathlib.Path(load_skill.__globals__["SKILLS_ROOT"]) / "kinds" / "voice.md").read_text()
+    kinds = (
+        pathlib.Path(load_skill.__globals__["SKILLS_ROOT"]) / "kinds" / "voice.md"
+    ).read_text()
     sub_agent = (
-        contract.brief(with_data=True, sample_rows=3) + load_skill("write-scenarios") + kinds
+        contract.brief(with_data=True, sample_rows=3)
+        + load_skill("write-scenarios")
+        + kinds
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
     assert len(sub_agent) <= 90_000, f"sub-agent prompt is {len(sub_agent)} chars"
     assert len(main_loop) <= 130_000, f"main loop prompt is {len(main_loop)} chars"
 
 
-def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(tmp_path):
+def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(
+    tmp_path,
+):
     from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.folder import folder_for, refresh_check
     from fi.alk.harness.scenario_tools import write_scenarios
@@ -7761,16 +7819,19 @@ def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(t
         check="def check(world, calls):\n    return None\n",
     )
     assert refresh_check(root, settled) == [scenario.name]
-    assert "def check(world, calls)" in (
-        here / "checks" / "refusal-explained.py"
-    ).read_text()
+    assert (
+        "def check(world, calls)"
+        in (here / "checks" / "refusal-explained.py").read_text()
+    )
 
     judged = SubGoal(name="refusal-explained", what="…", judged="ask a model")
     assert refresh_check(root, judged) == [scenario.name]
     assert not (here / "checks" / "refusal-explained.py").exists()
 
 
-def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(tmp_path):
+def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(
+    tmp_path,
+):
     from fi.alk.harness.catalogue import SubGoal
     from fi.alk.harness.folder import folder_for, unchecked_sub_goals
     from fi.alk.harness.scenario_tools import write_scenarios
@@ -7790,7 +7851,9 @@ def test_a_save_says_which_scenarios_name_a_check_that_never_reached_the_folder(
     assert len(said) == 1 and "item-added" in said[0]
 
     catalogue.sub_goals = [
-        one if one.name != "item-added" else SubGoal(name="item-added", what="…", judged="ask")
+        one
+        if one.name != "item-added"
+        else SubGoal(name="item-added", what="…", judged="ask")
         for one in catalogue.sub_goals
     ]
     assert unchecked_sub_goals(root, catalogue) == []
@@ -7815,9 +7878,7 @@ def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
         coverage={"task": "order an item", "overlay": "prompt_injection"},
     )
     kept = []
-    said = accept_scenario(
-        attacked, world_root=root, catalogue=catalogue, kept=kept
-    )
+    said = accept_scenario(attacked, world_root=root, catalogue=catalogue, kept=kept)
     assert said.get("is_error"), said
     text = said["content"][0]["text"]
     assert "prompt_injection" in text and "add_sub_goal" in text
@@ -7850,7 +7911,10 @@ def test_an_overlay_scenario_that_asserts_nothing_is_refused(tmp_path):
 def test_a_scenario_placed_nowhere_is_refused_once_a_grid_is_dealt(tmp_path):
     from fi.alk.harness.scenario_tools import _off_the_grid
 
-    grid = {"task": ["book_ride", "cancel_ride"], "overlay": ["none", "prompt_injection"]}
+    grid = {
+        "task": ["book_ride", "cancel_ride"],
+        "overlay": ["none", "prompt_injection"],
+    }
     assert _off_the_grid({}, grid)
     assert _off_the_grid(None, grid)
     assert _off_the_grid({"task": "", "overlay": ""}, grid)
@@ -7880,14 +7944,18 @@ def test_a_redeclared_grid_only_ever_grows(tmp_path):
     }
     asyncio.run(aim.handler({"count": 4, "axes": full}))
     said = asyncio.run(
-        aim.handler({"count": 4, "axes": {**full, "task": ["cancel-ride", "update-booking"]}})
+        aim.handler(
+            {"count": 4, "axes": {**full, "task": ["cancel-ride", "update-booking"]}}
+        )
     )
     text = said["content"][0]["text"]
     assert "task (3)" in text, text
     assert "overlay" in text
 
 
-def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is_called(tmp_path):
+def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is_called(
+    tmp_path,
+):
     from fi.alk.harness.folder import _tools_selected
 
     for body in (
@@ -7900,7 +7968,7 @@ def test_the_duplicate_claim_remark_does_not_depend_on_what_the_loop_variable_is
         assert _tools_selected(body) == {"book_ride"}, body
 
     assert _tools_selected("return None\n") == set()
-    assert _tools_selected("if call.tool == \"book_ride\":\n    return None\n") == set()
+    assert _tools_selected('if call.tool == "book_ride":\n    return None\n') == set()
     assert _tools_selected("def (:\n") == set()
 
 
@@ -7909,17 +7977,27 @@ def test_an_overlay_that_names_no_attack_is_cleared_rather_than_claimed():
 
     for level in ("absent", "Subtle", "overt", "none"):
         cleared, said = without_delivery_overlay(
-            SubGoal(name="refuses_overt_violation", what="refuses overt demands", overlay=level)
+            SubGoal(
+                name="refuses_overt_violation",
+                what="refuses overt demands",
+                overlay=level,
+            )
         )
         assert cleared.overlay == "" and repr(level) in said
 
     kept, said = without_delivery_overlay(
-        SubGoal(name="instruction_ignored", what="did not act on it", overlay="prompt_injection")
+        SubGoal(
+            name="instruction_ignored",
+            what="did not act on it",
+            overlay="prompt_injection",
+        )
     )
     assert kept.overlay == "prompt_injection" and said == ""
 
 
-def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_path, monkeypatch):
+def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(
+    tmp_path, monkeypatch
+):
     import asyncio
 
     from mcp.types import CallToolRequestParams
@@ -7927,7 +8005,9 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_p
     from fi.alk.harness import scenario_tools as module
 
     root, contract, _catalogue = _built_environment(tmp_path)
-    monkeypatch.setattr(module, "keyword_problems", lambda kept: ["too many distinct keywords"])
+    monkeypatch.setattr(
+        module, "keyword_problems", lambda kept: ["too many distinct keywords"]
+    )
     server, _kept = module.scenario_tools(contract, root, root, wanted=1)
     instance = _instance(server)
 
@@ -7941,37 +8021,76 @@ def test_a_save_refused_for_the_suites_shape_is_accepted_on_the_second_try(tmp_p
     first, second = (asyncio.run(save()) for _ in range(2))
     assert first[0] and "one pass, not a rewrite" in first[1]
     assert not second[0]
-    assert "too many distinct keywords" in second[1] and "End the stage now" in second[1]
+    assert (
+        "too many distinct keywords" in second[1] and "End the stage now" in second[1]
+    )
 
 
 def test_a_judged_claim_of_accuracy_or_unrenderable_audio_is_named_for_rewording():
     from fi.alk.harness.catalogue import SubGoal, judged_wording_advisory
 
     said = judged_wording_advisory(
-        SubGoal(name="answers", what="Answers inquiries accurately", judged="nothing records the answer")
+        SubGoal(
+            name="answers",
+            what="Answers inquiries accurately",
+            judged="nothing records the answer",
+        )
     )
     assert "invented nothing" in said
     said = judged_wording_advisory(
-        SubGoal(name="clarifies", what="Asks again when audio is unintelligible", judged="tone and wording only")
+        SubGoal(
+            name="clarifies",
+            what="Asks again when audio is unintelligible",
+            judged="tone and wording only",
+        )
     )
     assert "half-finished question" in said
-    assert judged_wording_advisory(
-        SubGoal(name="answers", what="Answers the question asked", judged="nothing records the answer")
-    ) == ""
-    assert judged_wording_advisory(
-        SubGoal(name="right", what="books the correct pickup", check="def check(world, calls):\n    return None\n")
-    ) == ""
+    assert (
+        judged_wording_advisory(
+            SubGoal(
+                name="answers",
+                what="Answers the question asked",
+                judged="nothing records the answer",
+            )
+        )
+        == ""
+    )
+    assert (
+        judged_wording_advisory(
+            SubGoal(
+                name="right",
+                what="books the correct pickup",
+                check="def check(world, calls):\n    return None\n",
+            )
+        )
+        == ""
+    )
 
 
 def test_a_second_claim_on_the_same_attack_is_pointed_at_the_first():
     from fi.alk.harness.catalogue import Catalogue, SubGoal, already_claimed
 
-    first = SubGoal(name="protects_sensitive_pii", what="withholds PII", judged="words only", overlay="privacy_pii")
+    first = SubGoal(
+        name="protects_sensitive_pii",
+        what="withholds PII",
+        judged="words only",
+        overlay="privacy_pii",
+    )
     catalogue = Catalogue(sub_goals=[first])
-    second = SubGoal(name="pii_withheld", what="withholds PII", judged="words only", overlay="privacy_pii")
-    assert "protects_sensitive_pii already claims privacy_pii" in already_claimed(second, catalogue)
+    second = SubGoal(
+        name="pii_withheld",
+        what="withholds PII",
+        judged="words only",
+        overlay="privacy_pii",
+    )
+    assert "protects_sensitive_pii already claims privacy_pii" in already_claimed(
+        second, catalogue
+    )
     assert already_claimed(first, catalogue) == ""
-    assert already_claimed(SubGoal(name="x", what="y", judged="words only"), catalogue) == ""
+    assert (
+        already_claimed(SubGoal(name="x", what="y", judged="words only"), catalogue)
+        == ""
+    )
 
 
 def test_sub_goals_no_scenario_names_are_the_ones_left_out():
@@ -7987,5 +8106,3 @@ def test_sub_goals_no_scenario_names_are_the_ones_left_out():
     )
     kept = [SimpleNamespace(sub_goals=["answers"])]
     assert unused_sub_goals(catalogue, kept) == ["test_probe_sub_goal_ast"]
-
-

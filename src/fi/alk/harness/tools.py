@@ -851,6 +851,29 @@ def contract_tools(
         data_schema = payload.get("data_schema")
         if not isinstance(data_schema, dict):
             data_schema = {}
+        data_schema = {
+            table: {
+                str(column.get("name")): " ".join(
+                    part
+                    for part in (
+                        str(column.get("type") or ""),
+                        (
+                            f"FK {column['references']}"
+                            if column.get("references")
+                            and " FK " not in f" {column.get('type') or ''} ".upper()
+                            else ""
+                        ),
+                    )
+                    if part
+                )
+                for column in declaration.get("columns", [])
+                if isinstance(column, dict) and str(column.get("name") or "").strip()
+            }
+            if isinstance(declaration, dict)
+            and isinstance(declaration.get("columns"), list)
+            else declaration
+            for table, declaration in data_schema.items()
+        }
         base_environment = payload.get("base_environment")
         if not isinstance(base_environment, dict):
             base_environment = {}
