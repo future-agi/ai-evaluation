@@ -2686,6 +2686,156 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert readiness.path == "/docs"
 
 
+def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
+    tmp_path: Path,
+) -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "gpt_researcher_compose.yml"
+    shutil.copyfile(fixture, tmp_path / "docker-compose.yml")
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12\nCMD uvicorn main:app --port 8000\n"
+    )
+    (tmp_path / "main.py").write_text("print('server')\n")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+        },
+    )
+    assert plan.control_service == "gpt-researcher"
+    assert [process.name for process in plan.processes] == [
+        "world-db",
+        "gpt-researcher",
+    ]
+    agent = plan.processes[1]
+    assert agent.run_command == ["python", "main.py"]
+    assert agent.fixed_port == 8000
+    assert plan.capabilities["target_http"].container_port == 8000
+    assert (
+        next(
+            probe for probe in plan.readiness if probe.capability == "target_http"
+        ).path
+        == "/"
+    )
+
+
+def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: [{target: 8000, published: 8000}]\n"
+        "    depends_on: {cache: {condition: service_started}}\n"
+        "  cache:\n    image: redis:7\n    depends_on: [postgres]\n"
+        "  postgres:\n    image: postgres:16\n"
+        "  unrelated:\n    image: unsupported:latest\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+    assert next(
+        process for process in plan.processes if process.name == "backend"
+    ).depends_on == ["cache"]
+
+
+@pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
+def test_declared_compose_runtime_rejects_ambiguous_or_missing_match(
+    tmp_path: Path, ports: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        f"  first:\n    build: .\n    ports: ['{ports}']\n"
+        f"  second:\n    build: .\n    ports: ['{ports}']\n"
+    )
+    with pytest.raises(BundleAuthorError, match="control_service_ambiguous"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("dependency", "error"),
+    [
+        ("depends_on: [missing]", "compose_dependency_missing"),
+        ("depends_on: worker", "compose_dependency_invalid"),
+        ("depends_on: [{worker: {}}]", "compose_dependency_invalid"),
+        ("links: [worker]", "compose_dependency_unsupported"),
+        ("volumes_from: [worker]", "compose_dependency_unsupported"),
+        ("network_mode: service:worker", "compose_dependency_unsupported"),
+        ("ipc: service:worker", "compose_dependency_unsupported"),
+        ("pid: service:worker", "compose_dependency_unsupported"),
+        (
+            "environment: {CACHE_URL: 'redis://worker:6379'}",
+            "compose_dependency_undeclared",
+        ),
+        ("environment: [CACHE_HOST=worker]", "compose_dependency_undeclared"),
+    ],
+)
+def test_declared_compose_runtime_does_not_drop_dependency_references(
+    tmp_path: Path, dependency: str, error: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        f"    {dependency}\n"
+        "  worker:\n    build: ./worker\n"
+    )
+    with pytest.raises(BundleAuthorError, match=error):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+def test_declared_compose_http_runtime_ignores_udp_port_match(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  tcp:\n    build: .\n    ports: ['8000:8000/tcp']\n"
+        "  udp:\n    build: .\n    ports: [{target: 8000, protocol: udp}]\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert plan.control_service == "tcp"
+    assert [process.name for process in plan.processes] == ["world-db", "tcp"]
+
+
 def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "software_bug_assistant"
