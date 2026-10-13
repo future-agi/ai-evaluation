@@ -4179,7 +4179,7 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     asyncio.run(scenario())
 
 
-def _two_judged(monkeypatch, joint_judge, *, mode="joint"):
+def _two_judged(monkeypatch, joint_judge, *, mode=""):
     """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
     alone: list[str] = []
 
@@ -4249,9 +4249,11 @@ def test_joint_judging_falls_back_to_each_alone_on_any_failure(monkeypatch) -> N
         assert receipt.status == "passed"
 
 
-def test_judging_each_sub_goal_alone_is_the_default(monkeypatch) -> None:
+def test_joint_judging_is_the_default_and_separate_turns_it_off(monkeypatch) -> None:
     async def _all(goals, world, calls, *, messages=()):
-        raise AssertionError("joint judging is off by default")
+        return {goal.name: (True, "held together") for goal in goals}
 
     receipt, alone = _two_judged(monkeypatch, _all, mode="")
+    assert alone == [] and receipt.status == "passed"
+    receipt, alone = _two_judged(monkeypatch, _all, mode="separate")
     assert alone == ["confirmed", "refused_card"] and receipt.status == "passed"

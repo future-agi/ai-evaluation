@@ -1,4 +1,4 @@
-"""Deciding all of a call's judged sub-goals in one conversation (ALK_JUDGE_MODE=joint).
+"""Deciding all of a call's judged sub-goals in one conversation, the default (ALK_JUDGE_MODE=separate turns it off).
 
 The evidence, its tools and the order of looking are `judge.py`'s; only the deciding differs. The
 recording, transcript, actions and records are read once, and each sub-goal is decided against its

@@ -199,7 +199,7 @@ class SubGoal(Protocol):
 
 JudgeFn = Callable[..., Awaitable[tuple[bool | None, str]]]
 JointJudgeFn = Callable[..., Awaitable[dict[str, tuple[bool, str]]]]
-# "joint" judges all of a call's judged sub-goals in one conversation; anything else judges each in its own.
+# By default all of a call's judged sub-goals are judged in one conversation; "separate" judges each in its own.
 JUDGE_MODE_ENV = "ALK_JUDGE_MODE"
 
 
@@ -1589,7 +1589,7 @@ class HostedScheduler:
 
         Any failure, including a single sub-goal left undecided, judges every one of them alone.
         """
-        if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() != "joint":
+        if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
             return None
         try:
             accepted = inspect.signature(self._joint_judge).parameters
