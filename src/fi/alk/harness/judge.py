@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 _STEPS = 12
+_UNPLAYABLE = "The recording could not be played. Judge from the transcript and the actions."
 _TURN_TIMEOUT_SECONDS = 300
 
 _INSTRUCTIONS = """
@@ -58,9 +59,10 @@ How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
    and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names. When listen is offered, the
-   recording is the full record of what was said: listen to it, and read the transcript where it
-   is unclear.
+   use inspect_world to discover them rather than guessing names. When listen is offered, listen
+   first: the recording is the fullest record of what was said. Then read the transcript and
+   check it against what you heard. If the recording is silent, cut off, unclear, or is not this
+   conversation, say so in evidence and judge from the transcript and the actions instead.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
    the criteria say what that means, and whether the agent's own behaviour kept it from arising
    matters.
@@ -76,7 +78,9 @@ How to decide:
    not ask for it, it is not the agent's: judge the agent only on what it said and did itself.
 
 Always decide. The evidence you were given is what there is; never answer that you cannot tell.
-Call decide once, with `passed` true or false.
+Decide only once you have looked at what each part of the criteria turns on. Call decide once,
+with `passed` true or false, and `evidence` saying what supports the verdict and where it came
+from: the recording, the transcript, the actions or the records.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
 said or did and what followed from it, in the terms of their business, citing what actually
@@ -122,7 +126,8 @@ async def judge(
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal: (passed, explanation). Never raises."""
     verdict: dict[str, tuple[bool | None, str]] = {}
-    listened: list[str] = []
+    looked: set[str] = set()
+    audio = "waiting" if recording else "none"
 
     @tool(
         "inspect_world",
@@ -163,6 +168,7 @@ async def judge(
         schema({}, []),
     )
     async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
+        looked.add("transcript")
         if not messages:
             return _say(
                 "Nothing was captured of what was said. Decide from the actions and the records."
@@ -175,8 +181,12 @@ async def judge(
         schema({}, []),
     )
     async def listen(args: dict[str, Any]) -> dict[str, Any]:
-        if not listened:
-            listened.append("asked")
+        nonlocal audio
+        looked.add("listen")
+        if audio == "unplayable":
+            return _say(_UNPLAYABLE)
+        if audio == "waiting":
+            audio = "asked"
         return _say("The recording follows.")
 
     @tool(
@@ -184,7 +194,7 @@ async def judge(
         "Commit to the verdict, once, after looking.",
         schema(
             {"passed": bool, "explanation": str, "evidence": str},
-            ["passed", "explanation"],
+            ["passed", "explanation", "evidence"],
         ),
     )
     async def decide(args: dict[str, Any]) -> dict[str, Any]:
@@ -194,11 +204,14 @@ async def judge(
             return _say("passed must be true or false", error=True)
         if not explanation:
             return _say("a verdict needs an explanation of what the agent did", error=True)
-        if recording and not listened:
-            return _say("listen to the call recording before deciding", error=True)
         evidence = str(args.get("evidence") or "").strip()
-        if evidence:
-            logger.info("judge evidence for %s: %s", getattr(goal, "name", ""), evidence)
+        if not evidence:
+            return _say("a verdict needs the evidence it rests on and where it came from", error=True)
+        if recording and "listen" not in looked:
+            return _say("listen to the call recording before deciding", error=True)
+        if messages and "transcript" not in looked:
+            return _say("read the transcript and check it before deciding", error=True)
+        logger.info("judge evidence for %s: %s", getattr(goal, "name", ""), evidence)
         verdict["it"] = (passed, explanation)
         return _say("recorded")
 
@@ -228,6 +241,7 @@ async def judge(
         {"role": "user", "content": prompt},
     ]
     asked_again = False
+    failed_turns = 0
     for step in range(_STEPS):
         forced = step == _STEPS - 1
         try:
@@ -237,31 +251,38 @@ async def judge(
                 "judge for %s could not run: %s: %s",
                 getattr(goal, "name", ""), type(exc).__name__, exc,
             )
-            if listened != ["asked", "sent"]:
+            if audio == "sent":
+                # The recording itself was refused: judge on, from the transcript.
+                audio = "unplayable"
+                conversation = [
+                    {"role": "user", "content": _UNPLAYABLE} if isinstance(one.get("content"), list) else one
+                    for one in conversation
+                ]
+                continue
+            failed_turns += 1
+            if failed_turns > 1:
                 break
-            # The recording itself was refused: judge on, from the transcript.
-            listened.append("unplayable")
-            conversation = [
-                {"role": "user", "content": "The recording could not be played. Use read_transcript."}
-                if isinstance(one.get("content"), list)
-                else one
-                for one in conversation
-            ]
             continue
         conversation.append(reply)
         for call in reply.get("tool_calls") or []:
             conversation.append(
                 {"role": "tool", "tool_call_id": call.get("id"), "content": await _run(tools, call)}
             )
-        if listened == ["asked"]:
-            listened.append("sent")
-            conversation.append(_recording(recording or ""))
+        if audio == "asked":
+            try:
+                conversation.append(_recording(recording or ""))
+                audio = "sent"
+            except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
+                logger.warning("judge could not read the recording for %s: %s", getattr(goal, "name", ""), exc)
+                audio = "unplayable"
+                conversation.append({"role": "user", "content": _UNPLAYABLE})
         if "it" in verdict:
             return verdict["it"]
         if not reply.get("tool_calls"):
             if asked_again or forced:
                 break
             asked_again = True
+            looked.add("transcript")
             conversation.append({"role": "user", "content": retry})
     logger.warning("judge gave no verdict for %s", getattr(goal, "name", ""))
     return None, ""
@@ -345,7 +366,10 @@ async def _run(tools: Sequence[Any], call: dict[str, Any]) -> str:
         args = json.loads(function.get("arguments") or "{}")
     except json.JSONDecodeError:
         return "the arguments were not valid JSON"
-    result = await found.handler(args if isinstance(args, dict) else {})
+    try:
+        result = await found.handler(args if isinstance(args, dict) else {})
+    except Exception as exc:  # noqa: BLE001 - a failing tool is feedback to the judge, not a crash
+        return f"{function.get('name')} failed: {type(exc).__name__}: {exc}"
     return "\n".join(part.get("text", "") for part in result.get("content", []))
 
 

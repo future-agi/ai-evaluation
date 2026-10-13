@@ -50,7 +50,7 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
         calls = []
         if decision.get("look"):
             calls += [_call("inspect_world", {"table": "contacts"}, 1), _call("query_world", {"sql": "select 1"}, 2)]
-        return {"role": "assistant", "tool_calls": calls + [_call("decide", decision)]}
+        return {"role": "assistant", "tool_calls": calls + [_call("decide", {"evidence": "the records", **decision})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     return asyncio.run(judge_module.judge(_Goal(), world, [])), world
@@ -210,7 +210,7 @@ def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, t
         if "listen" in offered[-1] and not audio:
             return {"role": "assistant", "tool_calls": [_call("listen", {})]}
         heard.extend(audio)
-        return {"role": "assistant", "tool_calls": [_call("decide", {"passed": False, "explanation": "it cancelled without a yes"})]}
+        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": False, "explanation": "it cancelled without a yes"})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     assert asyncio.run(judge_module.judge(_Goal(), _World(), [])) == (False, "it cancelled without a yes")
@@ -230,10 +230,10 @@ def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transc
     said: list[str] = []
     turns = iter(
         [
-            [_call("decide", {"passed": True, "explanation": "it confirmed the order"})],
+            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"})],
             [_call("listen", {})],
             RuntimeError("413 request too large"),
-            [_call("read_transcript", {}), _call("decide", {"passed": True, "explanation": "it confirmed the order"}, 1)],
+            [_call("read_transcript", {}), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
         ]
     )
 
@@ -265,7 +265,7 @@ def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypa
         prompts.append(conversation[-1]["content"])
         if len(prompts) == 1:
             return {"role": "assistant", "content": "I think it passed."}
-        return {"role": "assistant", "tool_calls": [_call("decide", {"passed": True, "explanation": "the agent confirmed the booking"})]}
+        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "the agent confirmed the booking"})]}
 
     class _Scenario:
         instruction = "the caller books a ride to the airport"
@@ -301,7 +301,7 @@ def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monk
 
     def _complete(conversation, tools, forced):
         prompts.append(conversation[1]["content"])
-        return {"role": "assistant", "tool_calls": [_call("decide", {"passed": True, "explanation": "it read the fee first"})]}
+        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it read the fee first"})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     asyncio.run(judge_module.judge(_Goal(), _World(rows=[]), []))
@@ -469,3 +469,32 @@ def test_the_contract_records_the_agents_languages_and_older_contracts_still_loa
         "English",
         "Hindi",
     ]
+
+
+def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_transcript(monkeypatch, tmp_path):
+    said: list[str] = []
+    turns = iter(
+        [
+            [_call("listen", {})],
+            [_call("inspect_world", {}), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
+            [_call("read_transcript", {}, 2), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 3)],
+        ]
+    )
+
+    class _Broken(_World):
+        def state(self, table=None):
+            raise RuntimeError("world is gone")
+
+    def _complete(conversation, tools, forced):
+        said.extend(str(m["content"]) for m in conversation[2:] if m["role"] in ("tool", "user"))
+        return {"role": "assistant", "tool_calls": next(turns)}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "assistant", "content": "your order is confirmed"}]
+    verdict = asyncio.run(
+        judge_module.judge(_Goal(), _Broken(), [], messages=messages, recording=str(tmp_path / "gone.wav"))
+    )
+    assert verdict == (True, "it confirmed the order")
+    assert judge_module._UNPLAYABLE in said
+    assert any(line.startswith("inspect_world failed: RuntimeError") for line in said)
+    assert "read the transcript and check it before deciding" in said
