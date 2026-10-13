@@ -85,7 +85,7 @@ from: the recording, the transcript, the actions or the records.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
 said or did and what followed from it, in the terms of their business, citing what actually
-happened. Never mention tables, rows, queries, tool names, records you could or could not read,
+happened. Write in the third person ("the agent", "the caller"); never address anyone as "you". Never mention tables, rows, queries, tool names, records you could or could not read,
 criteria, this review, a test, a scenario, a simulation, the customer's instructions or any error.
 Put anything about how you checked into `evidence`, which only the reviewers of this process see.
 """.strip()
