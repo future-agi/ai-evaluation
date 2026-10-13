@@ -45,8 +45,6 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
     world = world or _World()
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         if raises:
             raise RuntimeError("provider exploded")
         calls = []
@@ -207,8 +205,6 @@ def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, t
     heard: list[dict] = []
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         offered.append(sorted(t.name for t in tools))
         audio = [m for m in conversation if isinstance(m.get("content"), list)]
         if "listen" in offered[-1] and not audio:
@@ -244,8 +240,6 @@ def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transc
     audio: list[bool] = []
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         if conversation[-1]["role"] == "tool":
             said.append(conversation[-1]["content"])
         audio.append(any(isinstance(m.get("content"), list) for m in conversation))
@@ -268,8 +262,6 @@ def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypa
     prompts: list[str] = []
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         prompts.append(conversation[-1]["content"])
         if len(prompts) == 1:
             return {"role": "assistant", "content": "I think it passed."}
@@ -296,8 +288,6 @@ def test_a_judge_that_never_decides_is_forced_to_then_left_undecided(monkeypatch
     forced_turns: list[bool] = []
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         forced_turns.append(forced)
         return {"role": "assistant", "tool_calls": [_call("inspect_world", {}, len(forced_turns))]}
 
@@ -310,8 +300,6 @@ def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monk
     prompts: list[str] = []
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         prompts.append(conversation[1]["content"])
         return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it read the fee first"})]}
 
@@ -498,8 +486,6 @@ def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_trans
             raise RuntimeError("world is gone")
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         said.extend(str(m["content"]) for m in conversation[2:] if m["role"] in ("tool", "user"))
         return {"role": "assistant", "tool_calls": next(turns)}
 
@@ -529,8 +515,6 @@ def test_the_judge_says_what_it_heard_before_it_reads_the_transcript(monkeypatch
     )
 
     def _complete(conversation, tools, forced):
-        if not tools:
-            return {"role": "assistant", "content": "someone speaks"}
         said[:] = [m["content"] for m in conversation if m["role"] == "tool"]
         return {"role": "assistant", "tool_calls": next(turns)}
 
@@ -547,25 +531,3 @@ def test_the_judge_says_what_it_heard_before_it_reads_the_transcript(monkeypatch
     ]
     assert said[3].startswith("Agent: your order is confirmed")
 
-
-def test_a_silent_recording_is_never_sent_to_be_heard(tmp_path):
-    import wave
-
-    silent = tmp_path / "silent.wav"
-    with wave.open(str(silent), "wb") as sound:
-        sound.setnchannels(1)
-        sound.setsampwidth(2)
-        sound.setframerate(8000)
-        sound.writeframes(b"\0\0" * 8000)
-    with pytest.raises(ValueError, match="holds no sound"):
-        judge_module._recording(str(silent))
-
-
-def test_a_recording_no_one_speaks_in_is_not_given_to_the_judge(monkeypatch, tmp_path):
-    recording = tmp_path / "noise.wav"
-    recording.write_bytes(b"RIFF-noise")
-    monkeypatch.setattr(
-        judge_module, "_complete", lambda conversation, tools, forced: {"role": "assistant", "content": "NO SPEECH."}
-    )
-    with pytest.raises(ValueError, match="holds no speech"):
-        judge_module._audible(str(recording))

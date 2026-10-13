@@ -15,13 +15,11 @@ decide after one retry returns held None.
 
 from __future__ import annotations
 
-import array
 import asyncio
 import base64
 import json
 import logging
 import os
-import wave
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -38,7 +36,6 @@ logger = logging.getLogger(__name__)
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 _STEPS = 12
-_SILENCE = 64
 _UNPLAYABLE = "The recording could not be played. Judge from the transcript and the actions."
 _TURN_TIMEOUT_SECONDS = 300
 
@@ -283,7 +280,7 @@ async def judge(
             )
         if audio == "asked":
             try:
-                conversation.append(await asyncio.to_thread(_audible, recording or ""))
+                conversation.append(_recording(recording or ""))
                 audio = "sent"
             except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
                 logger.warning("judge could not read the recording for %s: %s", getattr(goal, "name", ""), exc)
@@ -390,8 +387,6 @@ async def _run(tools: Sequence[Any], call: dict[str, Any]) -> str:
 def _recording(path: str) -> dict[str, Any]:
     """The whole call recording as a message the judge's model hears."""
     audio = Path(path)
-    if _silent(audio):
-        raise ValueError(f"{audio.name} holds no sound")
     return {
         "role": "user",
         "content": [
@@ -405,45 +400,6 @@ def _recording(path: str) -> dict[str, Any]:
             },
         ],
     }
-
-
-_SPOKEN: dict[str, bool] = {}
-_NO_SPEECH = "NO SPEECH"
-
-
-def _audible(path: str) -> dict[str, Any]:
-    """The recording message, once one request with nothing else in it has heard someone speak.
-
-    Asked inside the judge's conversation, a model given noise describes the call its context
-    implies; asked about the audio alone, it says there is no one speaking.
-    """
-    message = _recording(path)
-    if path not in _SPOKEN:
-        probe = {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Transcribe the first three spoken lines of this recording word for "
-                 f"word. If no one speaks in it, answer exactly: {_NO_SPEECH}."},
-                message["content"][1],
-            ],
-        }
-        said = str(_complete([probe], (), False).get("content") or "")
-        _SPOKEN[path] = bool(said.strip()) and _NO_SPEECH not in said.upper()
-    if not _SPOKEN[path]:
-        raise ValueError(f"{Path(path).name} holds no speech")
-    return message
-
-
-def _silent(audio: Path) -> bool:
-    """A 16-bit wav whose loudest sample is near zero: a model asked to hear it invents a call."""
-    try:
-        with wave.open(str(audio), "rb") as sound:
-            if sound.getsampwidth() != 2:
-                return False
-            samples = array.array("h", sound.readframes(sound.getnframes()))
-    except (wave.Error, EOFError):
-        return False
-    return max(map(abs, samples), default=0) < _SILENCE
 
 
 def _call(call: Any) -> dict[str, Any]:
