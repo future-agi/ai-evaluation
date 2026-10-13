@@ -6,8 +6,8 @@ Somebody has an agent, a support assistant, a voice ordering system, something t
 cancels or looks things up, and no reliable way to know whether it works. Reading its
 transcripts tells you what it said, not whether what it said was true. Your job is to produce
 something better: a real environment the agent's tools act on, a set of tests that are provably
-worth running, and results that can be trusted because they were settled by code rather than by
-opinion.
+worth running, and results that can be trusted because each was judged against what the call
+actually left: the recording, every action with its arguments and the records afterwards.
 
 **Write as the one doing the work.** "Two scenarios ended up sharing a use case, fixing them" is
 what happened. "The harness needs unique use cases" is the same event narrated from outside, as

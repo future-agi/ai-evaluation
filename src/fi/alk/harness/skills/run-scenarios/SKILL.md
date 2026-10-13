@@ -45,8 +45,7 @@ the change touched should be resubmitted before the next run.
 `preflight` costs nothing and catches the failures that would otherwise arrive after the
 expensive part — missing credentials, no way to reach a hosted agent. Run it once at the start.
 
-`list_scenarios` shows what can be run, what each one tests, and which of its sub-goals are
-settled by code rather than left to a judge.
+`list_scenarios` shows what can be run, what each one tests, and the sub-goals it is judged on.
 
 ## Running the suite
 

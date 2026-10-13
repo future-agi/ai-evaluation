@@ -269,6 +269,9 @@ class _CompiledScenario:
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
     source_scenario_key: str | None = None
+    # One correct way through the call, shown to the judge so it can tell the right value from a
+    # wrong one. Never replayed here.
+    solution: tuple[dict[str, Any], ...] = ()
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -540,6 +543,7 @@ def _load_one(
         setup=setup,
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
+        solution=tuple(solution),
     )
 
 

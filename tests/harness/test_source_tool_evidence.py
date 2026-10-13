@@ -250,85 +250,6 @@ def _goal(name, *, check="", judged="", what="a thing"):
     return SubGoal(name=name, what=what, check=check, judged=judged)
 
 
-def test_a_check_that_only_matches_call_names_is_refused():
-    """The exact sub-goal a live run reported: 'transfer_to_licensed_agent was not called
-    successfully'. It passes an agent that called the right tool with the wrong arguments."""
-    from fi.alk.harness.catalogue import validate_sub_goal
-
-    problems = validate_sub_goal(
-        _goal(
-            "transfers_to_human_agent",
-            check=(
-                "def check(world, calls):\n"
-                '    if not any(c.name == "transfer_to_licensed_agent" and c.ok for c in calls):\n'
-                '        return "transfer_to_licensed_agent was not called successfully"\n'
-                "    return None\n"
-            ),
-        )
-    )
-
-    assert problems and "only asks whether a tool was called" in problems[0]
-
-
-def test_a_check_that_asserts_arguments_is_accepted():
-    """Reading what the agent passed is the point: an agent that misheard a name calls exactly the
-    tool it should have."""
-    from fi.alk.harness.catalogue import validate_sub_goal
-
-    assert (
-        validate_sub_goal(
-            _goal(
-                "intake_recorded_for_the_right_person",
-                check=(
-                    "def check(world, calls):\n"
-                    '    done = [c for c in calls if c.name == "record_intake" and c.ok]\n'
-                    '    if not done:\n        return "no intake recorded"\n'
-                    '    if done[0].arguments.get("name") != "Corwin":\n'
-                    "        return f\"recorded {done[0].arguments.get('name')!r}\"\n"
-                    "    return None\n"
-                ),
-            )
-        )
-        == []
-    )
-
-
-def test_a_check_that_reads_world_state_is_accepted():
-    from fi.alk.harness.catalogue import validate_sub_goal
-
-    assert (
-        validate_sub_goal(
-            _goal(
-                "one_lead_written",
-                check=(
-                    "def check(world, calls):\n"
-                    '    rows = world.state()["leads"]\n'
-                    '    return None if len(rows) == 1 else f"{len(rows)} rows"\n'
-                ),
-            )
-        )
-        == []
-    )
-
-
-def test_mentioning_the_world_in_a_comment_does_not_satisfy_the_gate():
-    """The previous gate was a substring test, so a comment naming the world passed it."""
-    from fi.alk.harness.catalogue import validate_sub_goal
-
-    problems = validate_sub_goal(
-        _goal(
-            "looks_right",
-            check=(
-                "def check(world, calls):\n"
-                "    # world is not actually read here\n"
-                '    return None if any(c.name == "x" for c in calls) else "no x"\n'
-            ),
-        )
-    )
-
-    assert problems and "only asks whether a tool was called" in problems[0]
-
-
 def test_a_judged_sub_goal_must_say_why_it_is_judged():
     from fi.alk.harness.catalogue import validate_sub_goal
 
@@ -351,36 +272,35 @@ def test_a_judged_sub_goal_must_say_why_it_is_judged():
     )
 
 
-def test_a_catalogue_that_is_mostly_judged_is_refused():
-    """A judge is the fallback, not the method. One run reported six judged sub-goals."""
-    from fi.alk.harness.catalogue import catalogue_problems
+def test_a_new_sub_goal_with_a_code_check_is_refused():
+    """Code can show that a call happened, never that it was the right one for this caller."""
+    from fi.alk.harness.catalogue import validate_sub_goal
 
-    judged = _goal(
-        "explained",
-        judged="Whether the refusal was explained, which nothing in the world records at all",
-    )
     coded = _goal(
         "row_written",
         check='def check(world, calls):\n    return None if world.state() else "empty"\n',
     )
 
-    problems = catalogue_problems([judged, judged, coded])
-    assert problems and "judged rather than settled by code" in problems[0]
-    assert catalogue_problems([judged, coded, coded]) == []
+    problems = validate_sub_goal(coded)
+    assert problems and "judged, not checked in code" in problems[0]
 
 
-def test_a_target_we_cannot_see_into_may_be_judged_throughout():
-    """A conversational agent with no executable tools and no state leaves nothing behind for a
-    check to read, so judging is the only thing available and is correct rather than lazy."""
-    from fi.alk.harness.catalogue import catalogue_problems
+def test_judged_criteria_may_read_the_actions_and_records():
+    """Whether the booking matched what the caller asked is read from the call and the records."""
+    from fi.alk.harness.catalogue import validate_sub_goal
 
     judged = _goal(
-        "answers_accurately",
-        judged="Whether the answer was accurate, which no world state records because this agent has none",
+        "ride_booked_as_asked",
+        judged=(
+            "Applies when: the caller asks to book a ride.\n"
+            "Pass when: the tool call that booked it and the booking in the world state are from "
+            "the pickup and to the destination the caller gave.\n"
+            "Fail when: it books from or to anywhere else.\n"
+            "If it does not arise: Pass, because the caller never asked for a ride."
+        ),
     )
 
-    assert catalogue_problems([judged, judged], world_is_observable=False) == []
-    assert catalogue_problems([judged, judged], world_is_observable=True)
+    assert validate_sub_goal(judged) == []
 
 
 def test_a_coded_sub_goal_also_carries_its_description():
@@ -415,44 +335,6 @@ def test_a_coded_sub_goal_also_carries_its_description():
     assert by_name["schedules_callback"].judged == "", "a coded sub-goal must not become judged"
     assert by_name["protocol"].what == "the agent stayed on protocol"
     assert by_name["protocol"].judged == "whether it stayed civil"
-
-
-def test_a_truthiness_check_is_told_to_compare_against_an_expected_value():
-    """Measured on the catalogue a live run authored: five of six coded checks read the arguments
-    and tested only that they were present. An agent that mishears a detail and acts confidently
-    on the wrong one passes every one of those."""
-    from fi.alk.harness.catalogue import compares_to_a_value, weak_check_advisory
-
-    truthiness = _goal(
-        "transfers_to_human_agent",
-        check=(
-            "def check(world, calls):\n"
-            '    xfers = [c for c in calls if c.name == "transfer_to_licensed_agent" and c.ok]\n'
-            '    if not xfers:\n        return "not called"\n'
-            '    reason = xfers[0].arguments.get("reason")\n'
-            "    if not reason or not isinstance(reason, str) or not reason.strip():\n"
-            '        return "no reason"\n'
-            "    return None\n"
-        ),
-    )
-    compares = _goal(
-        "intake_recorded_for_the_right_person",
-        check=(
-            "def check(world, calls):\n"
-            '    done = [c for c in calls if c.name == "record_intake" and c.ok]\n'
-            '    if done[0].arguments.get("name") != "Corwin":\n        return "wrong name"\n'
-            "    return None\n"
-        ),
-    )
-
-    assert not compares_to_a_value(truthiness.check)
-    assert compares_to_a_value(compares.check)
-    assert "only tests that they are present" in weak_check_advisory(truthiness)
-    assert weak_check_advisory(compares) == ""
-    # Advisory, never a refusal: it must not block a catalogue from being accepted.
-    from fi.alk.harness.catalogue import validate_sub_goal
-
-    assert validate_sub_goal(truthiness) == []
 
 
 def test_the_writer_and_the_reader_agree_on_where_the_catalogue_lives(tmp_path):
@@ -552,27 +434,6 @@ def test_a_bundle_with_no_catalogue_is_a_warning_not_a_failure(tmp_path):
     bundle.mkdir()
 
     assert _copy_sub_goal_catalogue(authoring, bundle) == []
-
-
-def test_a_presence_only_check_is_reported_as_weak():
-    """add_sub_goal accepts it and says so: an agent that misheard a detail passes such a check."""
-    from fi.alk.harness import catalogue as module
-
-    truthiness = _goal(
-        "transfers_to_human_agent",
-        check=(
-            "def check(world, calls):\n"
-            '    xfers = [c for c in calls if c.name == "transfer_to_licensed_agent" and c.ok]\n'
-            '    if not xfers:\n        return "not called"\n'
-            '    reason = xfers[0].arguments.get("reason")\n'
-            "    if not reason or not isinstance(reason, str):\n"
-            '        return "no reason"\n'
-            "    return None\n"
-        ),
-    )
-
-    assert module.validate_sub_goal(truthiness) == []
-    assert "only tests that they are present" in module.weak_check_advisory(truthiness)
 
 
 def test_a_terse_but_real_judged_claim_is_accepted():

@@ -493,45 +493,37 @@ sub-goal: a request too vague to act on, a caller who corrects a detail they gav
 of subject partway through, a request outside what the agent handles, pressure to break a rule. One
 behaviour each, named once, so the suite can report how often the agent got that moment right.
 
-**Write the check as code for what holds in every scenario.** A sub-goal is shared by every
-scenario that names it, so its check never knows what this caller asked for. Code settles what is
-true whatever they asked: a forbidden change did not happen, an order went on an account that
-exists, a cancelled record is really cancelled.
-
-```python
-def check(world, calls):
-    accounts = {row["id"] for row in world.state()["accounts"]}
-    for call in calls:
-        if call.name == "place_order" and call.ok:
-            if call.arguments.get("account_id") not in accounts:
-                return f"placed an order on {call.arguments.get('account_id')!r}, which is no account"
-    return None
-```
-
-You get the world afterwards and every call that was made, each with `.name`, `.arguments`,
-`.ok` and `.refused`. Return a sentence when something is wrong, `None` when it held. Never write
-one scenario's expected value into a check: it is right for that scenario and wrong for the next.
-
-Whether a step was right for this caller, the right time, address, item or amount, depends on what
-they asked, which only the scenario knows. Make that a judged sub-goal: the judge reads what the
-caller came for, the conversation and every action with its arguments, so criteria such as "Pass
-when: the booking the agent made is for the time and place the caller asked for" settle it.
+**Every sub-goal is judged, and it checks that the step was right, not only that it happened.**
+Code can tell that `book_ride` was called; only something that reads what this caller asked can
+tell that it was booked from their pickup to their destination. So every sub-goal carries criteria,
+and the judge decides it with everything the call left: the recording, the transcript, every
+action with its arguments, the records afterwards, the agent's own instructions, and the
+scenario's reference solution (one correct way through, so it can tell the right value from a
+wrong one without demanding the same steps).
 
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
 situations must not fail an agent that skipped it there.
 
-Use `judged` only where nothing observable settles it, or where what is right depends on what this
-caller asked: whether a refusal was explained, whether a price was invented, tone. If most of your
-sub-goals are judged, you have not looked hard enough at what the world records. (An agent reached
-only by conversation has no world and no calls to read: then every sub-goal is judged, and the rules
-below matter all the more.)
+**Which sub-goals the catalogue needs.** One for each thing the agent is there to get done (what
+a caller comes for: the booking, the change, the answer), one for each step its instructions make
+it take on the way (identify the caller, confirm before acting, disclose a fee), and one for each
+difficulty the suite will test (a vague request, a correction, a refusal it must hold). A quality
+of every call, such as turn length, tone or varied phrasing, is not a sub-goal: the suite evals
+grade that on every call.
+
+**Write each so it survives the next version of the agent.** Sub-goals are how two versions are
+compared, so name the behaviour and where its rule comes from ("asks for the PIN the way its
+instructions require", "states the cancellation fee its instructions give"), never today's
+wording, prices or names copied from the prompt, unless the instructions demand that exact text.
+Then judge the words spoken, not how the transcript spelled them.
 
 ### A judged sub-goal is an eval: write its criteria
 
 A judged sub-goal is decided the way any eval is: a judge reads its criteria and the evidence and
 returns pass or fail (`output` is pass_fail, the only kind judged today). The judge is given
-the criteria, the agent's own instructions, the conversation, the actions the agent took and the
-records it left, plus the customer's side of the scenario as context. It judges the agent only,
+the criteria, the agent's own instructions, the conversation and its recording, the actions the
+agent took with their arguments, the records it left and the scenario's reference solution, plus
+the customer's side of the scenario as context. It judges the agent only,
 never the customer, and never holds the agent to more than its own instructions require. So the
 criteria are the whole standard: whatever they do not say, the judge will not apply, and whatever
 they leave vague, two judges will read two ways.
@@ -540,8 +532,8 @@ Write `judged` as four labelled lines:
 
 ```
 Applies when: the situation in the conversation that makes this sub-goal testable.
-Pass when: what the agent says or does that passes.
-Fail when: what the agent says or does that fails.
+Pass when: what the agent says or does that passes, naming the value when the step has one.
+Fail when: what the agent says or does that fails, including the same step with a wrong value.
 If it does not arise: Pass or Fail, and why.
 ```
 
@@ -552,7 +544,7 @@ behaviour can keep it from arising (it never asked for the booking reference, it
 before the question came), say that this fails, because the missing situation is the failure.
 Where both are possible, say which way each one goes.
 
-Three shapes cover most of them:
+Four shapes cover most of them:
 
 ```
 A condition the agent has to meet when it comes up
@@ -573,13 +565,23 @@ A step the agent is meant to take on its own
   Fail when: it changes the account without confirming who it is speaking to.
   If it does not arise: Fail if the agent changed nothing because it never got as far as asking
   for identity; Pass if the caller asked for nothing that changes the account.
+A step that has to be done with the right value
+  Applies when: the caller asks to book a ride.
+  Pass when: the ride the agent booked is from the pickup and to the destination the caller
+  gave, as last corrected.
+  Fail when: it books from or to anywhere else, or says it booked when nothing was booked.
+  If it does not arise: Pass, because the caller never asked for a ride.
 ```
+
+Pass when and Fail when together cover every way the agent can handle the situation: a safe
+response neither names is otherwise failed for its wording, so ask for the behaviour, not a sentence.
+Two sub-goals must never judge the same answer: one owns whether it was right.
 
 Each line describes behaviour a reader could point at in the conversation. "Handles it well",
 "appropriately", "professionally" point at nothing; say what the agent says or does. Name one
 behaviour per sub-goal: if the Pass line needs "and", it is usually two sub-goals.
 
-Every sub-goal, coded or judged:
+Every sub-goal:
 
 - **Requires exactly what the agent's instructions require, never more.** If the instructions say
   to decline in one of two supported languages, a sub-goal that demands the refusal in the caller's
@@ -662,7 +664,7 @@ Never work around a contract you believe is wrong. Everything after you inherits
 6. `declare_sequence` for at least one flow where state has to carry across calls. Every sequence
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
-8. `add_sub_goal` for each thing worth checking, with its check in code.
+8. `add_sub_goal` for each thing worth checking, with criteria that settle whether it was done right.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.
@@ -680,7 +682,7 @@ or still holds rows left over from your own testing.
 
 Say what you built: the tables and roughly how many rows, anything you stood up beyond the
 database, which tools it answers, which refusals you verified, what the simulator prompt asks
-each scenario for, and the sub-goals with how many are settled by code.
+each scenario for, and the sub-goals.
 
 Then say plainly anything you were unsure about, especially where the contract was thin and you
 had to decide.

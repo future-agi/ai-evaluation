@@ -160,28 +160,6 @@ def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str
     return chosen
 
 
-def _something_to_check(world_root: Path) -> bool:
-    """Whether this world holds anything a check in code could read.
-
-    A world with collections, or a tool with an endpoint bound, can be inspected, so a scenario
-    graded only by a model is a scenario that chose not to look. A world with neither cannot be
-    inspected at all, and insisting on a code check there produces checks that assert on nothing.
-    Unreadable is treated as "there is something", because refusing is the safe direction.
-    """
-    try:
-        world = restore(world_root)
-    except Exception:  # noqa: BLE001 - a world we cannot open is not a world we can excuse
-        return True
-    try:
-        has_rows = any(rows for rows in world.state().values())
-        endpoints = getattr(world, "endpoint_for", {}) or {}
-        return bool(has_rows or any(endpoints.values()))
-    except Exception:  # noqa: BLE001 - same reasoning
-        return True
-    finally:
-        world.close()
-
-
 def prepared(
     scenario: Scenario, world_root: Path
 ) -> tuple[GeneratedWorld, Outcome, Outcome]:
@@ -320,28 +298,13 @@ def prove(
     scenario: Scenario,
     catalogue: Catalogue,
     world_root: Path,
-    *,
-    allow_judged_only_with_state: bool = False,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
-    if (
-        not checks
-        and _something_to_check(world_root)
-        and not allow_judged_only_with_state
-    ):
-        proof.broken = [
-            "none of this sub-goal's checks is in code, and this world has state a check could "
-            "read, so settle what happened by reading it rather than by asking a model"
-        ]
-        return proof
     if not checks:
-        # Nothing observable to check: no store, no bound endpoint. That is the connect-only shape,
-        # an agent hosted elsewhere whose tools we cannot see, and there the conversation is the
-        # only evidence there is. Judged sub-goals are the honest grading, so the scenario is
-        # allowed through with the gates that still mean something: setup and ready ran, and
-        # nothing claims to have been settled by code.
+        # Every sub-goal is judged on the call itself, so the gates that still mean something are
+        # that setup and ready ran; the writer proves the reference solution with try_calls.
         world, applied, ready = prepared(scenario, world_root)
         world.close()
         proof.why_not_ready = (

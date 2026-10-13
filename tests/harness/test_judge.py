@@ -516,3 +516,19 @@ def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_trans
     assert any(line.startswith("inspect_world failed: RuntimeError") for line in said)
     assert "read the transcript and check it before deciding" in said
 
+
+
+def test_the_judge_is_shown_the_reference_solution_as_one_correct_way():
+    """Whether a value was the right one is read against the scenario's solution, not demanded verbatim."""
+    from types import SimpleNamespace
+
+    scenario = SimpleNamespace(
+        instruction="Book a ride home.",
+        tests="",
+        solution=[{"tool": "book_ride", "arguments": {"pickup": "12 Elm St", "dropoff": "Airport"}}],
+    )
+    said = judge_module.describe_call("Book rides.", scenario, [], None)
+    assert 'book_ride({"pickup": "12 Elm St", "dropoff": "Airport"})' in said
+    assert "not a script" in said
+    assert "corrected before it took effect is still right" in said
+    assert "One correct way" not in judge_module.describe_call("Book rides.", SimpleNamespace(), [], None)

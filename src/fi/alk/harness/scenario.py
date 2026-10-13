@@ -562,6 +562,13 @@ def validate_scenario(
             f"them to the catalogue first. It has: {', '.join(sorted(catalogue.names())) or 'none'}"
         )
 
+    if len(set(scenario.sub_goals)) < 2:
+        problems.append(
+            "fewer than two sub-goals: the call passes only when every one it names holds, so one "
+            "leaves the rest of it unmeasured. Name one for what the caller came for, settled with "
+            "the values they gave, and one for the step this scenario's difficulty turns on"
+        )
+
     # setup_code and ready_code are not read here. Whether they work is not a question reading
     # them can answer, and running them is exactly what the first gate does.
     if scenario.setup_code.strip() and "def setup(" not in scenario.setup_code:

@@ -297,6 +297,7 @@ def describe_call(agent_instructions: str, scenario: Any, calls: Sequence[Any], 
     return (
         f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
         f"{_customer_side(scenario)}"
+        f"{_reference_solution(scenario)}"
         f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
         + (
             ""
@@ -390,6 +391,25 @@ def _customer_side(scenario: Any) -> str:
         "The customer's side, for context only (not evaluated):\n"
         f"What they set out to do: {situation or '(not given)'}\n"
         f"What the conversation was meant to show about the agent: {purpose or '(not given)'}\n\n"
+    )
+
+
+def _reference_solution(scenario: Any) -> str:
+    """One correct way through the call, so the values the agent used can be told right or wrong."""
+    steps = []
+    for step in getattr(scenario, "solution", None) or ():
+        tool = step.get("tool") if isinstance(step, dict) else getattr(step, "tool", "")
+        arguments = step.get("arguments") if isinstance(step, dict) else getattr(step, "arguments", None)
+        if tool:
+            steps.append(f"- {tool}({json.dumps(arguments or {}, default=str, ensure_ascii=False)})")
+    if not steps:
+        return ""
+    return (
+        "One correct way to handle this customer, worked out beforehand (context, not a script):\n"
+        + "\n".join(steps)
+        + "\nUse it to tell whether the values the agent used were the right ones for this "
+        "customer. Another order, an extra lookup, a different spelling or format of the same "
+        "value, or a mistake the agent corrected before it took effect is still right.\n\n"
     )
 
 
