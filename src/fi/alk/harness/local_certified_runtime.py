@@ -145,6 +145,7 @@ async def run_local_certified(
         # Runtime children execute as svc-* users and must traverse this controller-owned parent.
         # Per-process trees are chowned by the provider; the credential handoff stays mode 0600.
         work.chmod(0o755)
+        (work / "job.json").write_text(job.model_dump_json(), encoding="utf-8")
         secrets = work / "secrets.json"
         secrets.write_text(json.dumps(values), encoding="utf-8")
         secrets.chmod(0o600)
@@ -195,9 +196,9 @@ async def run_local_certified(
             instances=job.runtime.parallelism,
             outbound=sink,
         )
-        await pool.start()
         call_runner = None
         try:
+            await pool.start()
             scenarios = load_scenarios(bundle_dir)
             context = CallRunnerContext(
                 job=job,
