@@ -205,7 +205,9 @@ class HarnessExecutor:
             authoring_only=job.metadata.get("generic_harness_v1") is True,
         )
         status = await _auto(args)
-        completed_scenarios = _scenario_count(output) if status in (0, 2) else 0
+        completed_scenarios = (
+            _scenario_count(output) if status in (0, 2) and not args.authoring_only else 0
+        )
         generic_failure: HarnessFailure | None = None
         if status == 0 and job.metadata.get("generic_harness_v1") is True:
             from .authoring_runtime_validation import RuntimeValidationError
