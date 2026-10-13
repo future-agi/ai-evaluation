@@ -283,7 +283,7 @@ async def judge(
             )
         if audio == "asked":
             try:
-                conversation.append(_recording(recording or ""))
+                conversation.append(await asyncio.to_thread(_audible, recording or ""))
                 audio = "sent"
             except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
                 logger.warning("judge could not read the recording for %s: %s", getattr(goal, "name", ""), exc)
@@ -341,14 +341,15 @@ def _complete(
     body: dict[str, Any] = {
         "model": env["ANTHROPIC_MODEL"],
         "messages": conversation,
-        "tools": [
+    }
+    if tools:
+        body["tools"] = [
             {
                 "type": "function",
                 "function": {"name": t.name, "description": t.description, "parameters": t.input_schema},
             }
             for t in tools
-        ],
-    }
+        ]
     if forced:
         body["tool_choice"] = {"type": "function", "function": {"name": "decide"}}
     response = requests.post(
@@ -404,6 +405,33 @@ def _recording(path: str) -> dict[str, Any]:
             },
         ],
     }
+
+
+_SPOKEN: dict[str, bool] = {}
+_NO_SPEECH = "NO SPEECH"
+
+
+def _audible(path: str) -> dict[str, Any]:
+    """The recording message, once one request with nothing else in it has heard someone speak.
+
+    Asked inside the judge's conversation, a model given noise describes the call its context
+    implies; asked about the audio alone, it says there is no one speaking.
+    """
+    message = _recording(path)
+    if path not in _SPOKEN:
+        probe = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Transcribe the first three spoken lines of this recording word for "
+                 f"word. If no one speaks in it, answer exactly: {_NO_SPEECH}."},
+                message["content"][1],
+            ],
+        }
+        said = str(_complete([probe], (), False).get("content") or "")
+        _SPOKEN[path] = bool(said.strip()) and _NO_SPEECH not in said.upper()
+    if not _SPOKEN[path]:
+        raise ValueError(f"{Path(path).name} holds no speech")
+    return message
 
 
 def _silent(audio: Path) -> bool:
