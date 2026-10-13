@@ -498,6 +498,12 @@ scenario that names it, so its check never knows what this caller asked for. Cod
 true whatever they asked: a forbidden change did not happen, an order went on an account that
 exists, a cancelled record is really cancelled.
 
+**Code only for what the records settle on their own.** Anything the agent says, a read-back, a
+disclosure, a refusal, an escalation, an explanation, is judged: a check sees that a tool was called,
+never what the caller heard. Tying a spoken behaviour to the call that usually accompanies it passes
+an agent that made the call and said the wrong thing, and fails one that said the right thing
+another way.
+
 ```python
 def check(world, calls):
     accounts = {row["id"] for row in world.state()["accounts"]}
