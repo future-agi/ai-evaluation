@@ -293,7 +293,24 @@ def test_a_judge_that_never_decides_is_forced_to_then_left_undecided(monkeypatch
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     assert asyncio.run(judge_module.judge(_Goal(), _World(), [])) == (None, "")
-    assert forced_turns == [False] * (judge_module._STEPS - 1) + [True]
+    assert forced_turns == [False] * (judge_module._STEPS - 1) + [True, True]
+
+
+def test_a_judge_out_of_steps_gets_one_last_request_with_everything_it_found(monkeypatch):
+    finals: list[tuple[list[str], str]] = []
+
+    def _complete(conversation, tools, forced):
+        if len(conversation) == 2 and "What was found while looking" in conversation[1]["content"]:
+            finals.append(([t.name for t in tools], conversation[1]["content"]))
+            return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "the contacts table", "passed": False, "explanation": "it kept the number"})]}
+        return {"role": "assistant", "tool_calls": [_call("inspect_world", {"table": "contacts"})]}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "assistant", "content": "I have removed your number"}]
+    assert asyncio.run(judge_module.judge(_Goal(), _World(), [], messages=messages)) == (False, "it kept the number")
+    tools, final = finals[0]
+    assert tools == ["decide"]
+    assert "I have removed your number" in final and 'inspect_world({"table": "contacts"})' in final
 
 
 def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monkeypatch):

@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
-_STEPS = 12
+_STEPS = 20
 _UNPLAYABLE = "The recording could not be played. Judge from the transcript and the actions."
 _TURN_TIMEOUT_SECONDS = 300
 
@@ -294,8 +294,38 @@ async def judge(
             asked_again = True
             looked.add("transcript")
             conversation.append({"role": "user", "content": retry})
+    # Every step spent without a verdict: one last request carries everything found and can only decide.
+    found = "\n\n".join(_said(one) for one in conversation[2:])
+    final = (
+        f"{prompt}\n\nWhat was said:\n{_transcript(messages) if messages else '(nothing captured)'}\n\n"
+        f"What was found while looking:\n{found or '(nothing)'}\n\n"
+        "Everything needed is above. Call decide now with passed true or false."
+    )
+    looked.update({"listen", "transcript"})
+    try:
+        reply = await asyncio.to_thread(
+            _complete, [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": final}], [decide], True
+        )
+        for call in reply.get("tool_calls") or []:
+            await _run([decide], call)
+    except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
+        logger.warning("judge's final request for %s could not run: %s", getattr(goal, "name", ""), exc)
+    if "it" in verdict:
+        return verdict["it"]
     logger.warning("judge gave no verdict for %s", getattr(goal, "name", ""))
     return None, ""
+
+
+def _said(message: dict[str, Any]) -> str:
+    """One turn of the judge's own conversation as text, the recording named rather than sent."""
+    content = message.get("content")
+    if isinstance(content, list):
+        return "(the call recording was played here)"
+    calls = [
+        f"{(call.get('function') or {}).get('name')}({(call.get('function') or {}).get('arguments') or ''})"
+        for call in message.get("tool_calls") or []
+    ]
+    return "\n".join(filter(None, [f"{message.get('role')}: {content or ''}".strip(), *calls]))
 
 
 def _customer_side(scenario: Any) -> str:
