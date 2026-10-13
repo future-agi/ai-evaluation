@@ -3802,13 +3802,9 @@ def test_execution_manifest_runs_only_the_selected_trial_entries() -> None:
         ]
         harness.job_path.write_text(json.dumps(job), encoding="utf-8")
 
-        async def _objective_met(goal, world, calls, **_context):
-            return True, "the agent met the caller's objective"
-
-        with mock.patch.object(he, "_judge_sub_goal", _objective_met):
-            code = await he.run_job(
-                harness.job_path, harness.source, harness.output, deps=harness.deps
-            )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
 
         assert code == he.EXIT_OK
         statuses = {

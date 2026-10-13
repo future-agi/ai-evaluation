@@ -517,8 +517,7 @@ they asked, which only the scenario knows. Make that a judged sub-goal: the judg
 caller came for, the conversation and every action with its arguments, so criteria such as "Pass
 when: the booking the agent made is for the time and place the caller asked for" settle it.
 
-Every scenario is also judged on whether the caller's objective was met, so do not add a sub-goal
-for that. Read the agent's whole prompt before writing any sub-goal: a step it skips in some
+Read the agent's whole prompt before writing any sub-goal: a step it skips in some
 situations must not fail an agent that skipped it there.
 
 Use `judged` only where nothing observable settles it, or where what is right depends on what this
