@@ -284,9 +284,10 @@ a line what a wrong agent would do in this scenario to fail it; if you cannot, i
 and a sub-goal whose situation never comes up here is filler that passes for nothing. When the
 catalogue has no sub-goal for what this caller came for, add one rather than naming a filler.
 
-**And, when the agent has tools, that one must be the checked kind, not the judged kind.** The last step is a call, so the call
-log and the world both hold the evidence: a judge asked to read the transcript for it is being asked
-to settle something the arguments already settle. One suite of sixty left its closing status lookup to
+**And, when the agent has tools, settle it from the evidence the call left.** The last step is a call,
+so the call log and the world both hold the evidence, and the judge reads both as well as the
+conversation: name the values in its criteria, and add a check only for what the records settle on
+their own. One suite of sixty left its closing status lookup to
 a judge and nothing else asserted it, which is the same hole as naming no sub-goal for it at all.
 A check reads what the records show; whether the step was right for this caller (their record,
 their values, as last corrected) is a judged sub-goal named alongside it.
@@ -381,9 +382,10 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
   nothing observable can settle, whether a refusal was explained kindly, whether a number was
   invented, and for whether a step matched what this caller asked: the right time, place or amount.
 
-Prefer a check. You have the world afterwards and every call with its arguments, so most things worth
-checking are visible in one of them. A judged sub-goal is reported as judged, and a suite of them
-tells you less than it appears to.
+Use a check only for what the records settle on their own: a forbidden change is absent, a change
+that must happen is there. The judge reads every call with its arguments and the records as well as
+the conversation, so judged does not mean read from the transcript alone, and anything the agent says
+or whether a step was right is judged.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
 that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves

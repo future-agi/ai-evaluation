@@ -485,7 +485,7 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
-**Give every outcome a caller comes for its own sub-goal**, settled with the values (a record
+**Give every outcome a caller comes for its own judged sub-goal**, settled with the values (a record
 changed, a record looked up and told back, a document sent), so a scenario never has to borrow an
 unrelated one to name two.
 
