@@ -64,6 +64,64 @@ def test_successful_authoring_save_is_terminal() -> None:
     )
 
 
+def test_terminal_save_closes_adk_invocation_in_its_original_context(monkeypatch, caplog):
+    from google.adk.models.google_llm import Gemini
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.telemetry import _instrumentation, tracing
+    from google.genai import types
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from fi.alk.harness.backends import SessionSpec, ToolServer, ToolSpec
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiBackend
+    from fi.alk.harness.session import Stage
+
+    async def generate(self, llm_request, stream=False):
+        if llm_request.contents[-1].parts[0].function_response is not None:
+            await asyncio.Event().wait()
+        yield LlmResponse(
+            content=types.Content(
+                role="model",
+                parts=[types.Part(function_call=types.FunctionCall(
+                    id="save", name="mcp__world__save_world", args={}
+                ))],
+            )
+        )
+
+    async def save(args):
+        return {"content": "Saved."}
+
+    provider = TracerProvider()
+    monkeypatch.setattr(tracing, "tracer", provider.get_tracer("regression"))
+    monkeypatch.setattr(_instrumentation, "resolve_schema_version", lambda: 1)
+    monkeypatch.setattr(Gemini, "generate_content_async", generate)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+
+    async def run():
+        async with Stage(
+            SessionSpec(
+                system_prompt="Save the world",
+                servers={"world": ToolServer(
+                    name="world", tools=[ToolSpec("save_world", "Save", {}, save)]
+                )},
+                max_turns=2,
+                model="gemini-3.7-flash",
+            ),
+            backend=VertexGeminiBackend(),
+            overheard=False,
+        ) as stage:
+            events = [event async for event in stage.stream("Save")]
+            assert events[-1].detail["outcome"] == "success"
+            assert stage.history[-1].outcome == "success"
+
+    try:
+        asyncio.run(run())
+        assert "Failed to detach context" not in caplog.text
+    finally:
+        provider.shutdown()
+
+
 def test_rejected_save_and_non_save_tools_are_not_terminal() -> None:
     assert not _successful_terminal_save(
         "mcp__world__save_world", {"is_error": True, "content": "Not saved."}
