@@ -365,8 +365,8 @@ def weak_check_advisory(sub_goal: SubGoal) -> str:
     return (
         f"{sub_goal.name}: the check reads the arguments but only tests that they are present and "
         "non-empty. An agent that mishears a detail and acts confidently on the wrong one passes "
-        "that. Compare the value against what this scenario expected, or against the world row it "
-        "should match"
+        "that. Compare the value against the world row it should match, or judge whether it is "
+        "what this caller asked for"
     )
 
 
@@ -447,9 +447,9 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
     if cited:
         return [
             f"{sub_goal.name}: judged, but the reason says a model settles it from "
-            f"{cited[0]}, which is what a check reads. Anything answerable from the arguments the "
-            "agent passed or the state it left is settled in code; judge only what nothing "
-            "observable can settle, which is words and manner"
+            f"{cited[0]}, which is what a check reads. What holds in every scenario is settled in "
+            "code; judge what nothing observable settles and whether a step matched what this "
+            "caller asked, naming what the agent did (the booking it made) rather than its calls"
         ]
     missing = [label for label in _CRITERIA_LABELS if not re.search(rf"(?im)^\s*{label}\s*:", judged)]
     if missing:

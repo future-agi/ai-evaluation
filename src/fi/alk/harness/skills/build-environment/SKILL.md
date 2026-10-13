@@ -493,31 +493,39 @@ sub-goal: a request too vague to act on, a caller who corrects a detail they gav
 of subject partway through, a request outside what the agent handles, pressure to break a rule. One
 behaviour each, named once, so the suite can report how often the agent got that moment right.
 
-**Write the check as code wherever the answer is observable.**
+**Write the check as code for what holds in every scenario.** A sub-goal is shared by every
+scenario that names it, so its check never knows what this caller asked for. Code settles what is
+true whatever they asked: a forbidden change did not happen, an order went on an account that
+exists, a cancelled record is really cancelled.
 
 ```python
 def check(world, calls):
-    rows = world.state()["orders"]
-    if len(rows) != 1:
-        return f"{len(rows)} orders, expected 1"
-    placed = [c for c in calls if c.name == "place_order" and c.ok]
-    if not placed:
-        return "no order call succeeded"
-    if placed[0].arguments.get("size") != "large":
-        return f"size was {placed[0].arguments.get('size')!r}, asked for large"
+    accounts = {row["id"] for row in world.state()["accounts"]}
+    for call in calls:
+        if call.name == "place_order" and call.ok:
+            if call.arguments.get("account_id") not in accounts:
+                return f"placed an order on {call.arguments.get('account_id')!r}, which is no account"
     return None
 ```
 
 You get the world afterwards and every call that was made, each with `.name`, `.arguments`,
-`.ok` and `.refused`. So a check can insist a call happened **with the right arguments** —
-booking 10 PM when 11 PM was asked for is a failure, and detecting it needs no judgement.
+`.ok` and `.refused`. Return a sentence when something is wrong, `None` when it held. Never write
+one scenario's expected value into a check: it is right for that scenario and wrong for the next.
 
-Return a sentence when something is wrong, `None` when it held.
+Whether a step was right for this caller, the right time, address, item or amount, depends on what
+they asked, which only the scenario knows. Make that a judged sub-goal: the judge reads what the
+caller came for, the conversation and every action with its arguments, so criteria such as "Pass
+when: the booking the agent made is for the time and place the caller asked for" settle it.
 
-Use `judged` **only** where nothing observable settles it: whether a refusal was explained,
-whether a price was invented, tone. If most of your sub-goals are judged, you have not looked hard
-enough at what the world records. (An agent reached only by conversation has no world and no calls to
-read: then every sub-goal is judged, and the rules below matter all the more.)
+Every scenario is also judged on whether the caller's objective was met, so do not add a sub-goal
+for that. Read the agent's whole prompt before writing any sub-goal: a step it skips in some
+situations must not fail an agent that skipped it there.
+
+Use `judged` only where nothing observable settles it, or where what is right depends on what this
+caller asked: whether a refusal was explained, whether a price was invented, tone. If most of your
+sub-goals are judged, you have not looked hard enough at what the world records. (An agent reached
+only by conversation has no world and no calls to read: then every sub-goal is judged, and the rules
+below matter all the more.)
 
 ### A judged sub-goal is an eval: write its criteria
 

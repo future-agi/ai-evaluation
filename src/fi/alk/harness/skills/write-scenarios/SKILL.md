@@ -31,7 +31,8 @@ fail is a scenario nobody needed to run.
 
 Everything you need about the agent is in front of you. The contract above lists its tools with their
 arguments, its hard rules, its data, its real use cases and how its tools report a refusal. A summary
-of the world follows it. Do not restate those; read them.
+of the world follows it. Do not restate those; read them. The agent's own prompt is there whole:
+read all of it before the first scenario.
 
 ## Hard requirements
 
@@ -239,6 +240,12 @@ disqualifying announcement is one test billed four times.
 {"tool": "get_account", "arguments": {"account_id": "..."}}
 ```
 
+**The solution is what the agent's prompt tells it to do in this situation.** Find every part of the
+prompt that applies to what the person wants and the state they are in, including a rule that
+overrides the usual flow or ends the conversation early. The steps follow those parts and stop where
+they say to stop; a step this situation's rules skip is not in the solution, and a sub-goal for that
+step is not named here. `try_calls` shows what the world accepts, not what the agent was told to do.
+
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
 supposedly chose. Put them in `environment_arguments` on the same step, which the proof passes to the
@@ -348,10 +355,11 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
 
 - **Deterministic.** The sub-goal carries a `check`: Python receiving the world as the run left it and
   every call the agent made with its arguments, returning nothing if it held or a sentence saying
-  what was wrong. This is what you want almost always.
-- **Judged.** The sub-goal carries no check, so a model reads the transcript and decides. Reserve
-  this for things nothing observable can settle: whether a refusal was explained kindly, whether a
-  number was invented.
+  what was wrong. It is shared by every scenario naming it, so it settles what holds whatever the
+  caller asked.
+- **Judged.** The sub-goal carries no check, so a model hears the call and decides. Use it for what
+  nothing observable can settle, whether a refusal was explained kindly, whether a number was
+  invented, and for whether a step matched what this caller asked: the right time, place or amount.
 
 Prefer a check. You have the world afterwards and every call with its arguments, so most things worth
 checking are visible in one of them. A judged sub-goal is reported as judged, and a suite of them
@@ -502,7 +510,8 @@ The order for one scenario:
 
 1. `inspect_world` with no collection, then look at the ones that matter. Read the sub-goals that
    already exist.
-2. Read the agent's hard rules. Each one is a branch waiting to be written.
+2. Read the agent's prompt and hard rules. Each rule is a branch waiting to be written, and decides
+   what the solution of every scenario it applies to does.
 3. Work out the solution with `try_calls`, passing your `setup_code` so you see the world the agent
    will actually face. Confirm the sub-goals you intend to name respond to it.
 4. `submit_scenario`. Read what comes back: a refusal names exactly what is wrong.
