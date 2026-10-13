@@ -1196,6 +1196,32 @@ def test_load_without_a_hang_is_unaffected_by_the_budget(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
+def test_every_hosted_scenario_is_also_judged_on_its_objective(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        root = tmp_path / ss.SCENARIOS_DIRNAME
+        _write_scenario(root, "s1", scenario_key="s1", sub_goals=["polite_tone"])
+        _write_scenario(root, "s2", scenario_key="s2", sub_goals=[])
+
+        async def _passthrough(scenarios_client, scenarios, *, run_name, **rest):
+            del scenarios_client, run_name, rest
+            return scenarios
+
+        with mock.patch.object(ss, "register_with_platform", _passthrough):
+            built = await ss.BundleScenarioSource().build(
+                _FakeJob(run_id="job-1"),
+                object(),
+                object(),
+                pool=object(),
+                world_factory=object(),
+                bundle_dir=tmp_path,
+            )
+        goals = {one.scenario_key: [g.name for g in one.sub_goals] for one in built}
+        assert goals == {"s1": ["polite_tone", "objective_met"], "s2": []}
+        assert "Pass when:" in built[0].sub_goals[-1].judged
+
+    asyncio.run(scenario())
+
+
 # =================================================================================================
 # Mutations (work item 6) -- proved via in-memory monkeypatching (`unittest.mock.patch.object`)
 # rather than editing bytes on any tracked file on disk: this module (`scenario_source.py`) is a

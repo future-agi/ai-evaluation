@@ -575,6 +575,30 @@ def _with_claims(
     return replace(scenario, sub_goals=restored)
 
 
+OBJECTIVE_MET = _CompiledSubGoal(
+    name="objective_met",
+    what="the agent achieved what the customer came for, or handled it as its instructions require",
+    judged=(
+        "Applies when: always; the customer's side says what they came for.\n"
+        "Pass when: the agent achieved it, or handled it as its own instructions require, such as a "
+        "refusal, hand-off or explanation of why it cannot be done.\n"
+        "Fail when: the agent left it unresolved with no reason its instructions give, acted on "
+        "something other than what was asked, reached it in a way its instructions forbid, or "
+        "claimed an outcome that did not happen.\n"
+        "If it does not arise: Fail when the agent's own behaviour kept the customer from stating "
+        "it; Pass when only the customer's path kept it away."
+    ),
+    check=_judged_placeholder_check,
+)
+
+
+def _with_objective(scenario: _CompiledScenario) -> _CompiledScenario:
+    """Every scenario with sub-goals is also judged on whether the customer's objective was met."""
+    if not scenario.sub_goals or any(goal.name == OBJECTIVE_MET.name for goal in scenario.sub_goals):
+        return scenario
+    return replace(scenario, sub_goals=(*scenario.sub_goals, OBJECTIVE_MET))
+
+
 def load_scenarios(
     bundle_dir: Path, *, defer_execution: bool = False
 ) -> list[_CompiledScenario]:
@@ -642,7 +666,7 @@ class BundleScenarioSource:
         # event loop the same way `hosted_entrypoint.py` already does for `bundle_source.load` and
         # `preflight_bundle`, rather than stalling every other in-flight scenario behind it.
         try:
-            scenarios = await asyncio.wait_for(
+            loaded = await asyncio.wait_for(
                 asyncio.to_thread(load_scenarios, bundle_dir, defer_execution=True),
                 timeout=_LOAD_TIMEOUT_SECONDS,
             )
@@ -655,6 +679,7 @@ class BundleScenarioSource:
                 f"{bundle_dir / SCENARIOS_DIRNAME}: loading scenario documents exceeded "
                 f"{_LOAD_TIMEOUT_SECONDS:.0f}s"
             ) from exc
+        scenarios = [_with_objective(one) for one in loaded]
         # An empty `scenario_key` is carried VERBATIM off the document by design (module docstring
         # -- never synthesized here), but it is also the one shape `hosted_entrypoint.py`'s own
         # downstream `_validate_scenarios` would reject as a local, deterministic ENVIRONMENT-domain
