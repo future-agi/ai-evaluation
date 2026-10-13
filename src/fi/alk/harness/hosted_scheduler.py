@@ -45,7 +45,7 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .judge import judge as _judge
+from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
@@ -198,6 +198,9 @@ class SubGoal(Protocol):
 
 
 JudgeFn = Callable[..., Awaitable[tuple[bool | None, str]]]
+JointJudgeFn = Callable[..., Awaitable[dict[str, tuple[bool, str]]]]
+# "joint" judges all of a call's judged sub-goals in one conversation; anything else judges each in its own.
+JUDGE_MODE_ENV = "ALK_JUDGE_MODE"
 
 
 class Scenario(Protocol):
@@ -1556,6 +1559,7 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         judge: JudgeFn | None = None,
+        joint_judge: JointJudgeFn | None = None,
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
@@ -1567,10 +1571,35 @@ class HostedScheduler:
         # model call. Resolved here rather than as a default argument, which would bind at import
         # and ignore both injection and patching.
         self._judge = judge or _judge
+        self._joint_judge = joint_judge
         # Calls may run in parallel, but provider-backed judge sessions share one gateway lane.
         # Keep each scenario's batch together so concurrent worlds cannot invalidate both verdicts.
         self._judge_batch_lock = asyncio.Lock()
         self._executor: ThreadPoolExecutor | None = None
+
+    async def _judge_jointly(
+        self,
+        goals: Sequence[Any],
+        world: Any,
+        calls: Sequence[Any],
+        call_outcome: Any,
+        offered: dict[str, Any],
+    ) -> list[tuple[bool, str]] | None:
+        """All of a call's judged sub-goals in one conversation, or None to judge each alone.
+
+        Any failure, including a single sub-goal left undecided, judges every one of them alone.
+        """
+        if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() != "joint":
+            return None
+        try:
+            accepted = inspect.signature(self._joint_judge).parameters
+            context = {name: value for name, value in offered.items() if name in accepted}
+            decided = await self._joint_judge(goals, world, calls, messages=call_outcome.messages, **context)
+            verdicts = [decided[goal.name] for goal in goals]
+        except Exception as exc:  # noqa: BLE001 - a failed shared judge falls back, never errors the call
+            logger.warning("judging %d sub-goals together failed, judging each alone: %r", len(goals), exc)
+            return None
+        return verdicts
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -2201,11 +2230,14 @@ class HostedScheduler:
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
+                offered = {"scenario": scenario, "recording": call_outcome.recording}
+                joint_verdicts = await self._judge_jointly(
+                    [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered
+                )
                 try:
                     accepted = inspect.signature(self._judge).parameters
                 except (TypeError, ValueError):
                     accepted = {}
-                offered = {"scenario": scenario, "recording": call_outcome.recording}
                 context = {name: value for name, value in offered.items() if name in accepted}
 
                 async def _settle(goal: Any) -> Any:
@@ -2221,7 +2253,7 @@ class HostedScheduler:
                         **context,
                     )
 
-                verdicts = await asyncio.gather(
+                verdicts = joint_verdicts or await asyncio.gather(
                     *(_settle(goal) for _, goal in judged_pending),
                     return_exceptions=True,
                 )

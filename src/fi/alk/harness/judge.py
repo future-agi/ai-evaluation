@@ -21,7 +21,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import requests
 
@@ -115,155 +115,133 @@ def _dump_calls(calls: Sequence[Any]) -> str:
     return json.dumps([_short(_call(c)) for c in calls], default=str, indent=1)
 
 
-async def judge(
-    goal: Any,
-    world: Any,
-    calls: Sequence[Any],
-    *,
-    messages: Sequence[Any] = (),
-    scenario: Any = None,
-    agent_instructions: str = "",
-    recording: str | None = None,
-) -> tuple[bool | None, str]:
-    """Decide one judged sub-goal: (passed, explanation). Never raises."""
-    verdict: dict[str, tuple[bool | None, str]] = {}
-    looked: set[str] = set()
-    audio = "waiting" if recording else "none"
+class CallEvidence:
+    """A judge's read-only view of one call, and the order it must look in.
 
-    @tool(
-        "inspect_world",
-        "The world's tables: without a name, every table and its row count; with one, its rows.",
-        schema({"table": str}, []),
-    )
-    async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
-        table = str(args.get("table") or "").strip()
-        state = world.state(table or None)
-        if table:
-            return _say(_dump(state))
-        return _say(_dump({name: len(rows or []) for name, rows in state.items()}))
+    Shared by every judging mode: the world, the transcript and the recording as tools, with the
+    rule that a judge listens first, says what it heard before reading the transcript, and has
+    read the transcript before it decides.
+    """
 
-    @tool(
-        "query_world",
-        "Run one read-only PostgreSQL query for a specific row. Use inspect_world for schema discovery.",
-        schema({"sql": str}, ["sql"]),
-    )
-    async def query_world(args: dict[str, Any]) -> dict[str, Any]:
-        sql = str(args.get("sql") or "")
-        try:
-            return _say(_dump(world.query(sql)))
-        except Exception as exc:  # noqa: BLE001 - bad model SQL is feedback, not a stage crash
-            return _say(
-                _dump(
-                    {
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "dialect": "postgresql",
-                        "recovery": "Use inspect_world to discover real tables, then retry once.",
-                    }
-                ),
-                error=True,
-            )
+    def __init__(self, world: Any, messages: Sequence[Any], recording: str | None, label: str) -> None:
+        self.world = world
+        self.messages = messages
+        self.recording = recording
+        self.label = label
+        self.looked: set[str] = set()
+        self.audio = "waiting" if recording else "none"
 
-    @tool(
-        "read_transcript",
-        "What was said, in order: the Customer and the Agent being judged. After listening, give "
-        "`heard`: what the recording itself let you hear, or that it is silent, cut off, unclear "
-        "or not this conversation.",
-        schema({"heard": str}, []),
-    )
-    async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
-        if audio in ("waiting", "asked"):
-            return _say("listen to the call recording first", error=True)
-        heard = str(args.get("heard") or "").strip()
-        if audio == "sent" and "transcript" not in looked:
-            if not heard:
-                return _say("first say in heard what the recording itself let you hear", error=True)
-            logger.info("judge heard for %s: %s", getattr(goal, "name", ""), heard)
-        looked.add("transcript")
-        if not messages:
-            return _say(
-                "Nothing was captured of what was said. Decide from the actions and the records."
-            )
-        return _say(_transcript(messages))
-
-    @tool(
-        "listen",
-        "Hear the whole call recording. It is added to this conversation once.",
-        schema({}, []),
-    )
-    async def listen(args: dict[str, Any]) -> dict[str, Any]:
-        nonlocal audio
-        looked.add("listen")
-        if audio == "unplayable":
-            return _say(_UNPLAYABLE)
-        if audio == "waiting":
-            audio = "asked"
-        return _say("The recording follows.")
-
-    @tool(
-        "decide",
-        "Commit to the verdict, once, after looking.",
-        schema(
-            {"passed": bool, "explanation": str, "evidence": str},
-            ["passed", "explanation", "evidence"],
-        ),
-    )
-    async def decide(args: dict[str, Any]) -> dict[str, Any]:
-        passed = args.get("passed")
-        explanation = str(args.get("explanation") or "").strip()
-        if not isinstance(passed, bool):
-            return _say("passed must be true or false", error=True)
-        if not explanation:
-            return _say("a verdict needs an explanation of what the agent did", error=True)
-        evidence = str(args.get("evidence") or "").strip()
-        if not evidence:
-            return _say("a verdict needs the evidence it rests on and where it came from", error=True)
-        if recording and "listen" not in looked:
-            return _say("listen to the call recording before deciding", error=True)
-        if messages and "transcript" not in looked:
-            return _say("read the transcript and check it before deciding", error=True)
-        logger.info("judge evidence for %s: %s", getattr(goal, "name", ""), evidence)
-        verdict["it"] = (passed, explanation)
-        return _say("recorded")
-
-    tools = [inspect_world, query_world, read_transcript, decide] + ([listen] if recording else [])
-    prompt = (
-        f"Sub-goal {getattr(goal, 'name', '')!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
-        f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
-        f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
-        f"{_customer_side(scenario)}"
-        f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
-        + (
-            ""
-            if calls
-            else "No actions were recorded, so only the conversation is observable: judge what the "
-            "agent did from what it said, confirmed and did not contradict.\n\n"
+    def tools(self) -> list[Any]:
+        @tool(
+            "inspect_world",
+            "The world's tables: without a name, every table and its row count; with one, its rows.",
+            schema({"table": str}, []),
         )
-        + ("The call's recording is available: listen to it.\n\n" if recording else "")
-        + "Look as needed, then call decide."
-    )
-    retry = (
-        f"No verdict yet for sub-goal {getattr(goal, 'name', '')!r}.\n\nWhat was said:\n"
-        f"{_transcript(messages) if messages else '(nothing captured)'}\n\n"
-        "Everything needed is above. Call decide now with passed true or false."
-    )
-    conversation: list[dict[str, Any]] = [
-        {"role": "system", "content": _INSTRUCTIONS},
-        {"role": "user", "content": prompt},
-    ]
+        async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+            table = str(args.get("table") or "").strip()
+            state = self.world.state(table or None)
+            if table:
+                return _say(_dump(state))
+            return _say(_dump({name: len(rows or []) for name, rows in state.items()}))
+
+        @tool(
+            "query_world",
+            "Run one read-only PostgreSQL query for a specific row. Use inspect_world for schema discovery.",
+            schema({"sql": str}, ["sql"]),
+        )
+        async def query_world(args: dict[str, Any]) -> dict[str, Any]:
+            sql = str(args.get("sql") or "")
+            try:
+                return _say(_dump(self.world.query(sql)))
+            except Exception as exc:  # noqa: BLE001 - bad model SQL is feedback, not a stage crash
+                return _say(
+                    _dump(
+                        {
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "dialect": "postgresql",
+                            "recovery": "Use inspect_world to discover real tables, then retry once.",
+                        }
+                    ),
+                    error=True,
+                )
+
+        @tool(
+            "read_transcript",
+            "What was said, in order: the Customer and the Agent being judged. After listening, give "
+            "`heard`: what the recording itself let you hear, or that it is silent, cut off, unclear "
+            "or not this conversation.",
+            schema({"heard": str}, []),
+        )
+        async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
+            if self.audio in ("waiting", "asked"):
+                return _say("listen to the call recording first", error=True)
+            heard = str(args.get("heard") or "").strip()
+            if self.audio == "sent" and "transcript" not in self.looked:
+                if not heard:
+                    return _say("first say in heard what the recording itself let you hear", error=True)
+                logger.info("judge heard for %s: %s", self.label, heard)
+            self.looked.add("transcript")
+            if not self.messages:
+                return _say(
+                    "Nothing was captured of what was said. Decide from the actions and the records."
+                )
+            return _say(_transcript(self.messages))
+
+        @tool(
+            "listen",
+            "Hear the whole call recording. It is added to this conversation once.",
+            schema({}, []),
+        )
+        async def listen(args: dict[str, Any]) -> dict[str, Any]:
+            self.looked.add("listen")
+            if self.audio == "unplayable":
+                return _say(_UNPLAYABLE)
+            if self.audio == "waiting":
+                self.audio = "asked"
+            return _say("The recording follows.")
+
+        return [inspect_world, query_world, read_transcript] + ([listen] if self.recording else [])
+
+    def verdict_problem(self, args: dict[str, Any]) -> str | None:
+        """Why this `decide` call cannot be accepted, or None when it is a complete, informed verdict."""
+        if not isinstance(args.get("passed"), bool):
+            return "passed must be true or false"
+        if not str(args.get("explanation") or "").strip():
+            return "a verdict needs an explanation of what the agent did"
+        if not str(args.get("evidence") or "").strip():
+            return "a verdict needs the evidence it rests on and where it came from"
+        if self.recording and "listen" not in self.looked:
+            return "listen to the call recording before deciding"
+        if self.messages and "transcript" not in self.looked:
+            return "read the transcript and check it before deciding"
+        return None
+
+
+async def run_judge_conversation(
+    conversation: list[dict[str, Any]],
+    tools: Sequence[Any],
+    evidence: CallEvidence,
+    *,
+    done: Callable[[], bool],
+    nudge: Callable[[], str],
+    steps: int = _STEPS,
+) -> list[dict[str, Any]]:
+    """Run the judge's turns until `done`, the steps run out, or it stops twice without deciding.
+
+    Never raises: an unplayable recording falls back to the transcript, and a failed turn is
+    retried once before the conversation is handed back undecided.
+    """
     asked_again = False
     failed_turns = 0
-    for step in range(_STEPS):
-        forced = step == _STEPS - 1
+    for step in range(steps):
+        forced = step == steps - 1
         try:
             reply = await asyncio.to_thread(_complete, conversation, tools, forced)
         except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
-            logger.warning(
-                "judge for %s could not run: %s: %s",
-                getattr(goal, "name", ""), type(exc).__name__, exc,
-            )
-            if audio == "sent":
+            logger.warning("judge for %s could not run: %s: %s", evidence.label, type(exc).__name__, exc)
+            if evidence.audio == "sent":
                 # The recording itself was refused: judge on, from the transcript.
-                audio = "unplayable"
+                evidence.audio = "unplayable"
                 conversation = [
                     {"role": "user", "content": _UNPLAYABLE} if isinstance(one.get("content"), list) else one
                     for one in conversation
@@ -278,41 +256,124 @@ async def judge(
             conversation.append(
                 {"role": "tool", "tool_call_id": call.get("id"), "content": await _run(tools, call)}
             )
-        if audio == "asked":
+        if evidence.audio == "asked":
             try:
-                conversation.append(_recording(recording or ""))
-                audio = "sent"
+                conversation.append(_recording(evidence.recording or ""))
+                evidence.audio = "sent"
             except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
-                logger.warning("judge could not read the recording for %s: %s", getattr(goal, "name", ""), exc)
-                audio = "unplayable"
+                logger.warning("judge could not read the recording for %s: %s", evidence.label, exc)
+                evidence.audio = "unplayable"
                 conversation.append({"role": "user", "content": _UNPLAYABLE})
-        if "it" in verdict:
-            return verdict["it"]
+        if done():
+            break
         if not reply.get("tool_calls"):
             if asked_again or forced:
                 break
             asked_again = True
-            looked.add("transcript")
-            conversation.append({"role": "user", "content": retry})
-    # Every step spent without a verdict: one last request carries everything found and can only decide.
+            evidence.looked.add("transcript")
+            conversation.append({"role": "user", "content": nudge()})
+    return conversation
+
+
+async def request_final_verdicts(
+    instructions: str,
+    prompt: str,
+    conversation: list[dict[str, Any]],
+    evidence: CallEvidence,
+    decide: Any,
+    ask: str,
+) -> None:
+    """Every step spent without a verdict: one request carries everything found and can only decide."""
     found = "\n\n".join(_said(one) for one in conversation[2:])
+    said = _transcript(evidence.messages) if evidence.messages else "(nothing captured)"
     final = (
-        f"{prompt}\n\nWhat was said:\n{_transcript(messages) if messages else '(nothing captured)'}\n\n"
-        f"What was found while looking:\n{found or '(nothing)'}\n\n"
-        "Everything needed is above. Call decide now with passed true or false."
+        f"{prompt}\n\nWhat was said:\n{said}\n\n"
+        f"What was found while looking:\n{found or '(nothing)'}\n\n{ask}"
     )
-    looked.update({"listen", "transcript"})
+    evidence.looked.update({"listen", "transcript"})
     try:
         reply = await asyncio.to_thread(
-            _complete, [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": final}], [decide], True
+            _complete,
+            [{"role": "system", "content": instructions}, {"role": "user", "content": final}],
+            [decide],
+            True,
         )
         for call in reply.get("tool_calls") or []:
             await _run([decide], call)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
-        logger.warning("judge's final request for %s could not run: %s", getattr(goal, "name", ""), exc)
+        logger.warning("judge's final request for %s could not run: %s", evidence.label, exc)
+
+
+def describe_call(agent_instructions: str, scenario: Any, calls: Sequence[Any], recording: str | None) -> str:
+    """What every judging mode tells the judge about the call, after the sub-goals themselves."""
+    return (
+        f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
+        f"{_customer_side(scenario)}"
+        f"Actions the agent took:\n{_dump_calls(calls)}\n\n"
+        + (
+            ""
+            if calls
+            else "No actions were recorded, so only the conversation is observable: judge what the "
+            "agent did from what it said, confirmed and did not contradict.\n\n"
+        )
+        + ("The call's recording is available: listen to it.\n\n" if recording else "")
+    )
+
+
+async def judge_sub_goal(
+    goal: Any,
+    world: Any,
+    calls: Sequence[Any],
+    *,
+    messages: Sequence[Any] = (),
+    scenario: Any = None,
+    agent_instructions: str = "",
+    recording: str | None = None,
+) -> tuple[bool | None, str]:
+    """Decide one judged sub-goal in its own conversation: (passed, explanation). Never raises."""
+    name = getattr(goal, "name", "")
+    evidence = CallEvidence(world, messages, recording, name)
+    verdict: dict[str, tuple[bool | None, str]] = {}
+
+    @tool(
+        "decide",
+        "Commit to the verdict, once, after looking.",
+        schema(
+            {"passed": bool, "explanation": str, "evidence": str},
+            ["passed", "explanation", "evidence"],
+        ),
+    )
+    async def decide(args: dict[str, Any]) -> dict[str, Any]:
+        refusal = evidence.verdict_problem(args)
+        if refusal:
+            return _say(refusal, error=True)
+        logger.info("judge evidence for %s: %s", name, args["evidence"])
+        verdict["it"] = (args["passed"], str(args["explanation"]).strip())
+        return _say("recorded")
+
+    tools = [*evidence.tools(), decide]
+    prompt = (
+        f"Sub-goal {name!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
+        f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
+        + describe_call(agent_instructions, scenario, calls, recording)
+        + "Look as needed, then call decide."
+    )
+    ask = "Everything needed is above. Call decide now with passed true or false."
+    conversation = await run_judge_conversation(
+        [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": prompt}],
+        tools,
+        evidence,
+        done=lambda: "it" in verdict,
+        nudge=lambda: (
+            f"No verdict yet for sub-goal {name!r}.\n\nWhat was said:\n"
+            f"{_transcript(messages) if messages else '(nothing captured)'}\n\n{ask}"
+        ),
+    )
+    if "it" not in verdict:
+        await request_final_verdicts(_INSTRUCTIONS, prompt, conversation, evidence, decide, ask)
     if "it" in verdict:
         return verdict["it"]
-    logger.warning("judge gave no verdict for %s", getattr(goal, "name", ""))
+    logger.warning("judge gave no verdict for %s", name)
     return None, ""
 
 

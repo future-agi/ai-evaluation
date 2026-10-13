@@ -4177,3 +4177,81 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
         await pool.close()
 
     asyncio.run(scenario())
+
+
+def _two_judged(monkeypatch, joint_judge, *, mode="joint"):
+    """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
+    alone: list[str] = []
+
+    async def _verdict(goal, world, calls, *, messages=()):
+        alone.append(goal.name)
+        return True, f"{goal.name} held"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+    monkeypatch.setenv(hs.JUDGE_MODE_ENV, mode)
+    out: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        class Runner:
+            async def run(self, scenario, runtime):
+                return _call_outcome(turns=4)
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+            joint_judge=joint_judge,
+        )
+        goals = [
+            FakeSubGoal("confirmed", lambda w, c: None, judged="judge"),
+            FakeSubGoal("refused_card", lambda w, c: None, judged="judge"),
+        ]
+        scenarios = [FakeScenario("pay", "id-1", sub_goals=goals, requires_tool_evidence=False)]
+        result = await scheduler.run(scenarios)
+        out["receipt"] = result.receipts[0]
+        await pool.close()
+
+    asyncio.run(scenario())
+    return out["receipt"], alone
+
+
+def test_joint_judging_decides_every_sub_goal_in_one_conversation(monkeypatch) -> None:
+    seen: list[list[str]] = []
+
+    async def _all(goals, world, calls, *, messages=()):
+        seen.append([goal.name for goal in goals])
+        return {"confirmed": (True, "it confirmed"), "refused_card": (False, "it took the card")}
+
+    receipt, alone = _two_judged(monkeypatch, _all)
+    assert seen == [["confirmed", "refused_card"]] and alone == []
+    assert receipt.status == "failed"
+    assert {g.name: (g.held, g.reason) for g in receipt.sub_goals} == {
+        "confirmed": (True, "it confirmed"),
+        "refused_card": (False, "it took the card"),
+    }
+
+
+def test_joint_judging_falls_back_to_each_alone_on_any_failure(monkeypatch) -> None:
+    async def _partial(goals, world, calls, *, messages=()):
+        return {"confirmed": (False, "it never confirmed")}
+
+    async def _broken(goals, world, calls, *, messages=()):
+        raise RuntimeError("gateway down")
+
+    for joint_judge in (_partial, _broken):
+        receipt, alone = _two_judged(monkeypatch, joint_judge)
+        assert alone == ["confirmed", "refused_card"]
+        assert receipt.status == "passed"
+
+
+def test_judging_each_sub_goal_alone_is_the_default(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        raise AssertionError("joint judging is off by default")
+
+    receipt, alone = _two_judged(monkeypatch, _all, mode="")
+    assert alone == ["confirmed", "refused_card"] and receipt.status == "passed"

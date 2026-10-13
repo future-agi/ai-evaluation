@@ -53,7 +53,7 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
         return {"role": "assistant", "tool_calls": calls + [_call("decide", {"evidence": "the records", **decision})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    return asyncio.run(judge_module.judge(_Goal(), world, [])), world
+    return asyncio.run(judge_module.judge_sub_goal(_Goal(), world, [])), world
 
 
 def test_a_judged_sub_goal_can_fail(monkeypatch):
@@ -213,9 +213,9 @@ def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, t
         return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": False, "explanation": "it cancelled without a yes"})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    assert asyncio.run(judge_module.judge(_Goal(), _World(), [])) == (False, "it cancelled without a yes")
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (False, "it cancelled without a yes")
     assert "listen" not in offered[-1]
-    verdict = asyncio.run(judge_module.judge(_Goal(), _World(), [], recording=str(recording)))
+    verdict = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording)))
     assert verdict == (False, "it cancelled without a yes")
     assert "listen" in offered[-1]
     assert heard[0]["content"][1] == {
@@ -251,7 +251,7 @@ def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transc
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "your order is confirmed"}]
     verdict = asyncio.run(
-        judge_module.judge(_Goal(), _World(), [], messages=messages, recording=str(recording))
+        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
     )
     assert verdict == (True, "it confirmed the order")
     assert said[0] == "listen to the call recording before deciding"
@@ -275,7 +275,7 @@ def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypa
     said = [{"role": "assistant", "content": "shall I book it?"}]
     calls = [type("C", (), {"name": f"step_{i}", "arguments": {}, "result": None})() for i in range(30)]
     held, why = asyncio.run(
-        judge_module.judge(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
+        judge_module.judge_sub_goal(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
     )
     assert (held, why) == (True, "the agent confirmed the booking")
     assert "books a ride to the airport" in prompts[0]
@@ -292,7 +292,7 @@ def test_a_judge_that_never_decides_is_forced_to_then_left_undecided(monkeypatch
         return {"role": "assistant", "tool_calls": [_call("inspect_world", {}, len(forced_turns))]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    assert asyncio.run(judge_module.judge(_Goal(), _World(), [])) == (None, "")
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (None, "")
     assert forced_turns == [False] * (judge_module._STEPS - 1) + [True, True]
 
 
@@ -307,7 +307,7 @@ def test_a_judge_out_of_steps_gets_one_last_request_with_everything_it_found(mon
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "I have removed your number"}]
-    assert asyncio.run(judge_module.judge(_Goal(), _World(), [], messages=messages)) == (False, "it kept the number")
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages)) == (False, "it kept the number")
     tools, final = finals[0]
     assert tools == ["decide"]
     assert "I have removed your number" in final and 'inspect_world({"table": "contacts"})' in final
@@ -321,10 +321,10 @@ def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monk
         return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it read the fee first"})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    asyncio.run(judge_module.judge(_Goal(), _World(rows=[]), []))
+    asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(rows=[]), []))
     assert "only the conversation is observable" in prompts[0]
     call = type("C", (), {"name": "lookup", "arguments": {}, "result": None})()
-    asyncio.run(judge_module.judge(_Goal(), _World(), [call]))
+    asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [call]))
     assert "only the conversation is observable" not in prompts[1]
 
 
@@ -509,7 +509,7 @@ def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_trans
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "your order is confirmed"}]
     verdict = asyncio.run(
-        judge_module.judge(_Goal(), _Broken(), [], messages=messages, recording=str(tmp_path / "gone.wav"))
+        judge_module.judge_sub_goal(_Goal(), _Broken(), [], messages=messages, recording=str(tmp_path / "gone.wav"))
     )
     assert verdict == (True, "it confirmed the order")
     assert judge_module._UNPLAYABLE in said
@@ -538,7 +538,7 @@ def test_the_judge_says_what_it_heard_before_it_reads_the_transcript(monkeypatch
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "your order is confirmed"}]
     verdict = asyncio.run(
-        judge_module.judge(_Goal(), _World(), [], messages=messages, recording=str(recording))
+        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
     )
     assert verdict == (True, "it confirmed the order")
     assert said[:3] == [

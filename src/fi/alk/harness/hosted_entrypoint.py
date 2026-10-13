@@ -67,7 +67,8 @@ from .process_runtime import (
     fixed_sandbox_user_resolver,
     RuntimeEndpoint,
 )
-from .judge import judge as _judge_sub_goal
+from .judge import judge_sub_goal as _judge_sub_goal
+from .joint_judge import judge_sub_goals_jointly as _judge_sub_goals_jointly
 from .scenario_source import (
     BundleScenarioSource,
     ScenarioDocumentInvalid,
@@ -2695,6 +2696,9 @@ async def run_job(
             cancel_requested=cancel_requested,
             judge=functools.partial(
                 _judge_sub_goal, agent_instructions=_agent_instructions(job, bundle_dir)
+            ),
+            joint_judge=functools.partial(
+                _judge_sub_goals_jointly, agent_instructions=_agent_instructions(job, bundle_dir)
             ),
         )
         result: RunResult = await scheduler.run(scenarios)
