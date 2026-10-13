@@ -2266,6 +2266,18 @@ def resolve_environment_plan(
                 ),
                 "agent.py",
             )
+        elif (
+            not is_callback
+            and not is_livekit
+            and not runtime_command
+            and contract_interface_kind == "http"
+            and runtime_workdir.strip()
+        ):
+            raise BundleAuthorError(
+                "runtime_http_command_missing: set runtime.command to the source-declared "
+                "native HTTP server command and runtime.workdir to its working directory; "
+                "an internal agent.py is not evidence of an HTTP server"
+            )
         elif not is_callback and not (root / entry).is_file():
             # A submitted checkout may contain a developer's virtualenv or dependency tree.
             # Those files are not agent entrypoints and must not make source discovery

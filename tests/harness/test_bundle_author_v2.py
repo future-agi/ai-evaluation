@@ -2722,6 +2722,79 @@ def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
     )
 
 
+@pytest.mark.parametrize("command", [[], ["python", "agent.py", "start"]])
+def test_voice_runtime_with_http_health_interface_keeps_worker_entrypoint(
+    tmp_path: Path, command: list[str]
+) -> None:
+    (tmp_path / "agent.py").write_text("print('worker')\n")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="livekit"),
+        contract_modality="voice",
+        contract_interface_kind="http",
+        contract_runtime={
+            "workdir": ".",
+            "command": command,
+            "interface": {"kind": "http", "port": 8081},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert "agent.py" in agent.run_command
+    assert agent.started_check.log_marker == "registered worker"
+
+
+def test_http_workspace_requires_native_command_before_selecting_internal_agent(
+    tmp_path: Path,
+) -> None:
+    backend = tmp_path / "backend"
+    harness = backend / "packages" / "harness"
+    extension = backend / "packages" / "extension-api"
+    harness.mkdir(parents=True)
+    extension.mkdir()
+    (backend / "pyproject.toml").write_text(
+        "[project]\nname='gateway'\nversion='1'\n"
+        "[tool.uv.workspace]\nmembers=['packages/harness', 'packages/extension-api']\n"
+    )
+    (backend / "uv.lock").write_text("version = 1\n")
+    (harness / "pyproject.toml").write_text("[project]\nname='harness'\nversion='1'\n")
+    (extension / "pyproject.toml").write_text(
+        "[project]\nname='extension-api'\nversion='1'\n"
+    )
+    (harness / "agent.py").write_text("agent = object()\n")
+    runtime = {
+        "workdir": "backend",
+        "command": [],
+        "interface": {"kind": "http", "port": 8001, "health_path": "/health"},
+    }
+    with pytest.raises(BundleAuthorError, match="runtime_http_command_missing"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime=runtime,
+        )
+
+    runtime["command"] = ["uv", "run", "--no-sync", "uvicorn", "app.gateway.app:app"]
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "backend"
+    assert agent.run_command == runtime["command"]
+    assert "--locked" in agent.build_commands[0][-1]
+    assert (
+        tmp_path / agent.working_directory / "packages/harness/pyproject.toml"
+    ).is_file()
+    assert (
+        tmp_path / agent.working_directory / "packages/extension-api/pyproject.toml"
+    ).is_file()
+
+
 def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) -> None:
     (tmp_path / "Dockerfile").write_text(
         'FROM python:3.12\nCMD ["python", "main.py"]\n'
