@@ -516,35 +516,3 @@ def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_trans
     assert any(line.startswith("inspect_world failed: RuntimeError") for line in said)
     assert "read the transcript and check it before deciding" in said
 
-
-def test_the_judge_says_what_it_heard_before_it_reads_the_transcript(monkeypatch, tmp_path):
-    recording = tmp_path / "call.wav"
-    recording.write_bytes(b"RIFF-audio")
-    said: list[str] = []
-    turns = iter(
-        [
-            [_call("read_transcript", {})],
-            [_call("listen", {}, 1)],
-            [_call("read_transcript", {}, 2)],
-            [_call("read_transcript", {"heard": "silence, nothing is said"}, 3)],
-            [_call("decide", {"evidence": "the recording is silent, so the transcript", "passed": True, "explanation": "it confirmed the order"}, 4)],
-        ]
-    )
-
-    def _complete(conversation, tools, forced):
-        said[:] = [m["content"] for m in conversation if m["role"] == "tool"]
-        return {"role": "assistant", "tool_calls": next(turns)}
-
-    monkeypatch.setattr(judge_module, "_complete", _complete)
-    messages = [{"role": "assistant", "content": "your order is confirmed"}]
-    verdict = asyncio.run(
-        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
-    )
-    assert verdict == (True, "it confirmed the order")
-    assert said[:3] == [
-        "listen to the call recording first",
-        "The recording follows.",
-        "first say in heard what the recording itself let you hear",
-    ]
-    assert said[3].startswith("Agent: your order is confirmed")
-

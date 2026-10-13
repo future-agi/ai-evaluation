@@ -60,10 +60,8 @@ How to decide:
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
    and inspect the records when the criteria are about what changed. The records are PostgreSQL;
    use inspect_world to discover them rather than guessing names. When listen is offered, listen
-   first: the recording is the fullest record of what was said. Say what the recording itself let
-   you hear before you read the transcript, then check the transcript against it. If the recording
-   is silent, cut off, unclear, or is not this conversation, say so and judge from the transcript
-   and the actions instead.
+   to the recording: it is the fullest record of what was said. Use the transcript where it is
+   unclear, and judge from the transcript and the actions when it cannot be heard.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
    the criteria say what that means, and whether the agent's own behaviour kept it from arising
    matters.
@@ -119,8 +117,7 @@ class CallEvidence:
     """A judge's read-only view of one call, and the order it must look in.
 
     Shared by every judging mode: the world, the transcript and the recording as tools, with the
-    rule that a judge listens first, says what it heard before reading the transcript, and has
-    read the transcript before it decides.
+    rule that a judge has listened to the recording and read the transcript before it decides.
     """
 
     def __init__(self, world: Any, messages: Sequence[Any], recording: str | None, label: str) -> None:
@@ -167,19 +164,10 @@ class CallEvidence:
 
         @tool(
             "read_transcript",
-            "What was said, in order: the Customer and the Agent being judged. After listening, give "
-            "`heard`: what the recording itself let you hear, or that it is silent, cut off, unclear "
-            "or not this conversation.",
-            schema({"heard": str}, []),
+            "What was said, in order: the Customer and the Agent being judged.",
+            schema({}, []),
         )
         async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
-            if self.audio in ("waiting", "asked"):
-                return _say("listen to the call recording first", error=True)
-            heard = str(args.get("heard") or "").strip()
-            if self.audio == "sent" and "transcript" not in self.looked:
-                if not heard:
-                    return _say("first say in heard what the recording itself let you hear", error=True)
-                logger.info("judge heard for %s: %s", self.label, heard)
             self.looked.add("transcript")
             if not self.messages:
                 return _say(
@@ -481,7 +469,7 @@ def _recording(path: str) -> dict[str, Any]:
     return {
         "role": "user",
         "content": [
-            {"type": "text", "text": "The call recording. Note what you hear in it before reading the transcript."},
+            {"type": "text", "text": "The call recording:"},
             {
                 "type": "input_audio",
                 "input_audio": {

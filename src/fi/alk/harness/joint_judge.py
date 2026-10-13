@@ -51,10 +51,8 @@ How to decide:
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
    and inspect the records when the criteria are about what changed. The records are PostgreSQL;
    use inspect_world to discover them rather than guessing names. When listen is offered, listen
-   first: the recording is the fullest record of what was said. Say what the recording itself let
-   you hear before you read the transcript, then check the transcript against it. If the recording
-   is silent, cut off, unclear, or is not this conversation, say so and judge from the transcript
-   and the actions instead.
+   to the recording: it is the fullest record of what was said. Use the transcript where it is
+   unclear, and judge from the transcript and the actions when it cannot be heard.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
    the criteria say what that means, and whether the agent's own behaviour kept it from arising
    matters.
