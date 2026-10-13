@@ -15,11 +15,13 @@ decide after one retry returns held None.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import base64
 import json
 import logging
 import os
+import wave
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 _STEPS = 12
+_SILENCE = 64
 _UNPLAYABLE = "The recording could not be played. Judge from the transcript and the actions."
 _TURN_TIMEOUT_SECONDS = 300
 
@@ -60,9 +63,10 @@ How to decide:
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
    and inspect the records when the criteria are about what changed. The records are PostgreSQL;
    use inspect_world to discover them rather than guessing names. When listen is offered, listen
-   first: the recording is the fullest record of what was said. Then read the transcript and
-   check it against what you heard. If the recording is silent, cut off, unclear, or is not this
-   conversation, say so in evidence and judge from the transcript and the actions instead.
+   first: the recording is the fullest record of what was said. Say what the recording itself let
+   you hear before you read the transcript, then check the transcript against it. If the recording
+   is silent, cut off, unclear, or is not this conversation, say so and judge from the transcript
+   and the actions instead.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
    the criteria say what that means, and whether the agent's own behaviour kept it from arising
    matters.
@@ -164,10 +168,19 @@ async def judge(
 
     @tool(
         "read_transcript",
-        "What was said, in order: the Customer and the Agent being judged.",
-        schema({}, []),
+        "What was said, in order: the Customer and the Agent being judged. After listening, give "
+        "`heard`: what the recording itself let you hear, or that it is silent, cut off, unclear "
+        "or not this conversation.",
+        schema({"heard": str}, []),
     )
     async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
+        if audio in ("waiting", "asked"):
+            return _say("listen to the call recording first", error=True)
+        heard = str(args.get("heard") or "").strip()
+        if audio == "sent" and "transcript" not in looked:
+            if not heard:
+                return _say("first say in heard what the recording itself let you hear", error=True)
+            logger.info("judge heard for %s: %s", getattr(goal, "name", ""), heard)
         looked.add("transcript")
         if not messages:
             return _say(
@@ -376,10 +389,12 @@ async def _run(tools: Sequence[Any], call: dict[str, Any]) -> str:
 def _recording(path: str) -> dict[str, Any]:
     """The whole call recording as a message the judge's model hears."""
     audio = Path(path)
+    if _silent(audio):
+        raise ValueError(f"{audio.name} holds no sound")
     return {
         "role": "user",
         "content": [
-            {"type": "text", "text": "The call recording:"},
+            {"type": "text", "text": "The call recording. Note what you hear in it before reading the transcript."},
             {
                 "type": "input_audio",
                 "input_audio": {
@@ -389,6 +404,18 @@ def _recording(path: str) -> dict[str, Any]:
             },
         ],
     }
+
+
+def _silent(audio: Path) -> bool:
+    """A 16-bit wav whose loudest sample is near zero: a model asked to hear it invents a call."""
+    try:
+        with wave.open(str(audio), "rb") as sound:
+            if sound.getsampwidth() != 2:
+                return False
+            samples = array.array("h", sound.readframes(sound.getnframes()))
+    except (wave.Error, EOFError):
+        return False
+    return max(map(abs, samples), default=0) < _SILENCE
 
 
 def _call(call: Any) -> dict[str, Any]:
