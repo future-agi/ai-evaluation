@@ -33,11 +33,13 @@ from ..catalogue import (
     SubGoal,
     load_catalogue,
     save_catalogue,
+    compares_to_a_value,
     validate_sub_goal,
     judged_wording_advisory,
+    weak_check_advisory,
     without_delivery_overlay,
 )
-from ..checks import run_world_check
+from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
     load_simulator_prompt,
@@ -1238,8 +1240,15 @@ def world_tools(
         "Add a named thing this agent can be checked on, shared by every scenario that needs "
         "it. Defined here, once, so results roll up: the same sub-goal failing in seven of "
         "twelve scenarios is one sentence.\n\n"
+        "`check` is Python: define check(world, calls) returning a sentence when something is "
+        "wrong, or None when it held. `world` is the environment afterwards; `calls` is every "
+        "tool call made, each with .name, .arguments, .ok and .refused — so a check can insist "
+        "a call happened with the right arguments, not merely that it happened.\n\n"
         + SUB_GOAL_RULES
-        + "`judged` holds the criteria. `output` is pass_fail.\n"
+        + "Use `check` for what holds whatever the caller asked (a forbidden change did not happen, a "
+        "call that must succeed did), named for what it checks. Use `judged` for whether a step was "
+        "right for this caller (the right record, the right values) and for what nothing observable "
+        "settles; it holds the criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
@@ -1247,8 +1256,8 @@ def world_tools(
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
         "task sub-goal.",
         schema(
-            {"name": str, "what": str, "judged": str, "output": str, "overlay": str},
-            ["name", "what", "judged"],
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str},
+            ["name", "what"],
         ),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
@@ -1264,21 +1273,40 @@ def world_tools(
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
+        # Run it here, the same way a handler is run the moment it is defined. A check that raises
+        # is not a check, and accepting one now means every scenario that names it is refused later
+        # for a reason that looks like the scenario's fault rather than this one's.
+        if sub_goal.deterministic():
+            outcome = run_check(
+                sub_goal.check, world, list(world.calls), name=sub_goal.name
+            )
+            if outcome.broken:
+                return _err(
+                    f"Not added. {sub_goal.name} is not a working check: {outcome.said}\n\n"
+                    f"{world.shapes()}\n\n"
+                    "It does not have to hold against the world as it stands, since a sub-goal is "
+                    "about what a run leaves behind. It does have to run without raising."
+                )
         catalogue.sub_goals = [
             one for one in catalogue.sub_goals if one.name != sub_goal.name
         ]
         catalogue.sub_goals.append(sub_goal)
         save_catalogue(catalogue, destination)
+        # Said on acceptance rather than as a refusal: a truthiness check is weak, not unusable,
+        # and a gate the authoring loop cannot satisfy fails the run instead of improving it.
         advisory = "; ".join(
             one
             for one in (
+                weak_check_advisory(sub_goal),
                 judged_wording_advisory(sub_goal),
                 already_claimed(sub_goal, catalogue),
             )
             if one
         )
+        settled = sum(1 for one in catalogue.sub_goals if one.deterministic())
         return _ok(
-            f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}: "
+            f"{sub_goal.name} added. The catalogue has {len(catalogue.sub_goals)}, "
+            f"{settled} settled by code: "
             + ", ".join(sorted(catalogue.names()))
             + cleared
             + (f"\n\nWorth strengthening: {advisory}" if advisory else "")
@@ -1597,11 +1625,19 @@ def world_tools(
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()
+        # How many checks judge a VALUE rather than the presence of one. Reported as a fact at the
+        # point of saving, because the per-sub-goal note is easy to read past and this number is
+        # what decides whether the suite would catch an agent that acted on a misheard detail.
+        coded = [one for one in catalogue.sub_goals if one.deterministic()]
+        strong = [one for one in coded if compares_to_a_value(one.check)]
         return _ok(
             f"Saved to {path}.\n"
             f"{len(world.handlers)} tools, {len(tables)} collections, "
             f"{sum(_size(held) for held in tables.values())} records, "
-            f"{len(world_checks)} world checks, {len(catalogue.sub_goals)} sub-goals.\n"
+            f"{len(world_checks)} world checks.\n"
+            f"{len(strong)} of {len(coded)} checks compare a value against an expectation; the "
+            "rest only test that an argument was present, which an agent acting on a misheard "
+            "detail would pass.\n"
             + (
                 "Tool/data probes not applicable; conversational runtime proof remains required."
                 if data_free

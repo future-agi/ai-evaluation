@@ -78,10 +78,22 @@ contract carries none, whether an engine you cannot identify is worth guessing a
    Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what
    they need.
 
-4. **`add_sub_goal`** for each thing worth checking, with the criteria a judge decides it by.
-   The judge reads the recording, every action with its arguments and what the store holds
-   afterwards, so write the criteria to settle whether a step was done right, with the right
-   value, not only whether it happened. The sub-goal section of `build-environment` says how.
+4. **`add_sub_goal`** for each thing worth checking, with its check as code.
+
+   A check is given the store and the calls that were recorded, and returns a sentence when
+   something is wrong or `None` when it held. Write it against what the run leaves behind:
+
+   ```python
+   def check(world, calls):
+       rows = world.state()["orders"]
+       if len(rows) != 1:
+           return f"{len(rows)} orders, expected 1"
+       return None
+   ```
+
+   Use `judged` **only** where nothing observable settles it — whether a refusal was explained,
+   whether tone was right. If most of your sub-goals are judged, you have not looked hard enough
+   at what the store records.
 
 5. **`write_simulator_prompt`**, if this agent is conversational.
 
@@ -118,7 +130,7 @@ You do not get to declare the environment sound. `save_environment` runs the gat
 ## Finishing
 
 Say what you stood up: the engine and version, where its schema came from, roughly what is in
-it, how the agent will be pointed at it, and the sub-goals.
+it, how the agent will be pointed at it, and the sub-goals with how many are settled by code.
 
 Then say plainly anything you were unsure about — especially where you could not find the
 agent's migrations, or where its configuration seam was not obvious.
