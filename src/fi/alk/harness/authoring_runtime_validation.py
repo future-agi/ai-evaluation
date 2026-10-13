@@ -570,7 +570,9 @@ async def validate_once(
             # the same unprivileged identities installed in its image. E2B, however, launches
             # the guest as one fixed OS identity and does not grant setuid/chown capabilities.
             user_resolver=(
-                default_user_resolver if local_runtime else fixed_sandbox_user_resolver
+                default_user_resolver
+                if local_runtime and os.environ.get("ALK_FIXED_SANDBOX_USER") != "1"
+                else fixed_sandbox_user_resolver
             ),
             require_declared_user=False,
             public_url_resolver=(
