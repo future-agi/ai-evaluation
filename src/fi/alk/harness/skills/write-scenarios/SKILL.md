@@ -286,8 +286,8 @@ a line what a wrong agent would do in this scenario to fail it; if you cannot, i
 log and the world both hold the evidence: a judge asked to read the transcript for it is being asked
 to settle something the arguments already settle. One suite of sixty left its closing status lookup to
 a judge and nothing else asserted it, which is the same hole as naming no sub-goal for it at all.
-A check settles that the step happened; whether it was right for this caller (their record, their
-values, as last corrected) is a judged sub-goal named alongside it.
+A check reads what the records show; whether the step was right for this caller (their record,
+their values, as last corrected) is a judged sub-goal named alongside it.
 
 The two failures look opposite and are both real. One suite defined thirty-nine sub-goals and used
 twenty-six of them exactly once: a bespoke check wherever a shared one would have done, so nothing

@@ -517,8 +517,9 @@ they asked, which only the scenario knows. Make that a judged sub-goal: the judg
 caller came for, the conversation and every action with its arguments, so criteria such as "Pass
 when: the booking the agent made is for the time and place the caller asked for" settle it.
 
-The judge also reads the records left and the scenario's reference solution. A check settles that
-something happened; a judged sub-goal settles that it was right. Name a check for what it checks.
+The judge also reads the records left and the scenario's reference solution. A check reads what the
+records show; whether a step was taken, and whether it was right, is a judged sub-goal. Name a check
+for what it checks.
 
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
 situations must not fail an agent that skipped it there.

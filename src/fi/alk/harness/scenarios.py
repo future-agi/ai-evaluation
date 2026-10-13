@@ -706,6 +706,17 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
             " Each person is one ordinary, believable person, never a celebrity's or a fictional "
             "character's name: choose their language, home and name together."
         )
+    locations = offered("location")
+    if locations:
+        # Parallel writers otherwise all default to the same country and fill its share at once.
+        homes = [
+            locations[(index + step) % len(locations)]
+            for step in range(min(len(locations), max(2, wanted)))
+        ]
+        said += (
+            " Spread where your callers live rather than defaulting to one country: start from "
+            f"{', '.join(homes)}, where their situation allows."
+        )
     beds = places() if spoken else {}
     if beds:
         order = list(beds)
@@ -779,8 +790,9 @@ def brief_for(
         "proves it\n"
         "  - a solution worked out with try_calls first, so the gates are not where you find "
         "out it cannot be passed\n"
-        "  - sub-goals named from the shared catalogue, and checks that assert the right call "
-        "with the right arguments or the right end state, never that something merely happened\n"
+        "  - at least two sub-goals named from the shared catalogue: one for what the person came "
+        "for, settled with the values they gave, and one for the step this scenario's difficulty "
+        "turns on, each one a wrong agent here would fail\n"
         "  - a scenario a competent agent could plausibly fail. If any correct implementation "
         "passes it for free, it teaches nothing and is not worth the run\n\n"
         "Look at the world first, and read the sub-goals already defined. Submit each scenario "
