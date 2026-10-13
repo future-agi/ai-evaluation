@@ -234,6 +234,8 @@ class CallOutcome:
     # The agent under test's own provider-reported usage, cost and latency; `None` when its
     # provider reports none (a black-box LiveKit or phone target).
     target_metrics: dict[str, Any] | None = None
+    # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
+    recording: str | None = None
 
 
 class CallAborted(RuntimeError):
@@ -2200,13 +2202,11 @@ class HostedScheduler:
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
                 try:
-                    context = (
-                        {"scenario": scenario}
-                        if "scenario" in inspect.signature(self._judge).parameters
-                        else {}
-                    )
+                    accepted = inspect.signature(self._judge).parameters
                 except (TypeError, ValueError):
-                    context = {}
+                    accepted = {}
+                offered = {"scenario": scenario, "recording": call_outcome.recording}
+                context = {name: value for name, value in offered.items() if name in accepted}
 
                 async def _settle(goal: Any) -> Any:
                     # Awaited, not called inline: calling an injected judge whose signature does

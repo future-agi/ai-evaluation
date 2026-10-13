@@ -197,6 +197,11 @@ def _saved_path(text: str) -> str:
     return ""
 
 
+def record_turn(stage: str, model: str, tokens_in: int, tokens_out: int) -> None:
+    """One model turn taken outside a stage, into the same ledger; unpriced here."""
+    spend.record(stage, None, 1, {model}, tokens_in, tokens_out)
+
+
 class Stage:
     """One stage of the harness, held open so it can be talked to."""
 

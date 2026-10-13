@@ -11,7 +11,7 @@ import contextlib
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -3734,6 +3734,41 @@ def test_a_judged_sub_goal_failing_fails_the_scenario(monkeypatch) -> None:
         assert receipt.status == "failed"
         assert [goal.held for goal in receipt.sub_goals] == [False]
         assert receipt.sub_goals[0].reason == "no contacts row records the removal"
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def test_the_judge_is_handed_the_call_recording(monkeypatch) -> None:
+    heard: list[str | None] = []
+
+    async def _verdict(goal, world, calls, *, messages=(), recording=None):
+        heard.append(recording)
+        return True, "the agent confirmed the removal"
+
+    monkeypatch.setattr(hs, "_judge", _verdict)
+
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                return replace(_call_outcome(turns=4), recording="/calls/combined.wav")
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        goal = FakeSubGoal("removal_honoured", lambda w, c: None, judged="judge")
+        scenarios = [FakeScenario("removal", "id-1", sub_goals=[goal], requires_tool_evidence=False)]
+        result = await scheduler.run(scenarios)
+        assert result.receipts[0].status == "passed"
+        assert heard == ["/calls/combined.wav"]
         await pool.close()
 
     asyncio.run(scenario())

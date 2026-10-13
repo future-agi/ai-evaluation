@@ -15,22 +15,28 @@ decide after one retry returns held None.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Sequence
 
-from .backends import SessionSpec, tool, tool_server
+import requests
+
+from .backends import tool
 from .catalogue import criteria_text
-from .config import chosen_model
-from .session import Stage
+from .config import chosen_model, provider_env
+from .session import record_turn
 from .tools import schema
 
 logger = logging.getLogger(__name__)
 
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
-_TRANSCRIPT_LIMIT = 24000
+_STEPS = 12
+_TURN_TIMEOUT_SECONDS = 300
 
 _INSTRUCTIONS = """
 You are a judge. You evaluate one sub-goal of a conversation an agent has already had, and you
@@ -52,7 +58,9 @@ How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
    and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names.
+   use inspect_world to discover them rather than guessing names. When listen is offered, the
+   recording is the full record of what was said: listen to it, and read the transcript where it
+   is unclear.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
    the criteria say what that means, and whether the agent's own behaviour kept it from arising
    matters.
@@ -110,9 +118,11 @@ async def judge(
     messages: Sequence[Any] = (),
     scenario: Any = None,
     agent_instructions: str = "",
+    recording: str | None = None,
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal: (passed, explanation). Never raises."""
     verdict: dict[str, tuple[bool | None, str]] = {}
+    listened: list[str] = []
 
     @tool(
         "inspect_world",
@@ -160,6 +170,16 @@ async def judge(
         return _say(_transcript(messages))
 
     @tool(
+        "listen",
+        "Hear the whole call recording. It is added to this conversation once.",
+        schema({}, []),
+    )
+    async def listen(args: dict[str, Any]) -> dict[str, Any]:
+        if not listened:
+            listened.append("asked")
+        return _say("The recording follows.")
+
+    @tool(
         "decide",
         "Commit to the verdict, once, after looking.",
         schema(
@@ -174,23 +194,15 @@ async def judge(
             return _say("passed must be true or false", error=True)
         if not explanation:
             return _say("a verdict needs an explanation of what the agent did", error=True)
+        if recording and not listened:
+            return _say("listen to the call recording before deciding", error=True)
         evidence = str(args.get("evidence") or "").strip()
         if evidence:
             logger.info("judge evidence for %s: %s", getattr(goal, "name", ""), evidence)
         verdict["it"] = (passed, explanation)
         return _say("recorded")
 
-    spec = SessionSpec(
-        system_prompt=_INSTRUCTIONS,
-        servers={
-            "world": tool_server(
-                name="world",
-                tools=[inspect_world, query_world, read_transcript, decide],
-            )
-        },
-        max_turns=12,
-        model=judge_model(),
-    )
+    tools = [inspect_world, query_world, read_transcript, decide] + ([listen] if recording else [])
     prompt = (
         f"Sub-goal {getattr(goal, 'name', '')!r}: {getattr(goal, 'what', '') or '(no summary)'}\n\n"
         f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n\n"
@@ -203,23 +215,54 @@ async def judge(
             else "No actions were recorded, so only the conversation is observable: judge what the "
             "agent did from what it said, confirmed and did not contradict.\n\n"
         )
+        + ("The call's recording is available: listen to it.\n\n" if recording else "")
         + "Look as needed, then call decide."
     )
     retry = (
-        f"{prompt}\n\nWhat was said:\n{_transcript(messages) if messages else '(nothing captured)'}\n\n"
+        f"No verdict yet for sub-goal {getattr(goal, 'name', '')!r}.\n\nWhat was said:\n"
+        f"{_transcript(messages) if messages else '(nothing captured)'}\n\n"
         "Everything needed is above. Call decide now with passed true or false."
     )
-    for attempt, text in enumerate((prompt, retry), start=1):
+    conversation: list[dict[str, Any]] = [
+        {"role": "system", "content": _INSTRUCTIONS},
+        {"role": "user", "content": prompt},
+    ]
+    asked_again = False
+    for step in range(_STEPS):
+        forced = step == _STEPS - 1
         try:
-            async with Stage(spec, name="judge-sub-goals", overheard=False) as stage:
-                await stage.say(text)
+            reply = await asyncio.to_thread(_complete, conversation, tools, forced)
         except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
             logger.warning(
-                "judge attempt %d for %s could not run: %s: %s",
-                attempt, getattr(goal, "name", ""), type(exc).__name__, exc,
+                "judge for %s could not run: %s: %s",
+                getattr(goal, "name", ""), type(exc).__name__, exc,
             )
+            if listened != ["asked", "sent"]:
+                break
+            # The recording itself was refused: judge on, from the transcript.
+            listened.append("unplayable")
+            conversation = [
+                {"role": "user", "content": "The recording could not be played. Use read_transcript."}
+                if isinstance(one.get("content"), list)
+                else one
+                for one in conversation
+            ]
+            continue
+        conversation.append(reply)
+        for call in reply.get("tool_calls") or []:
+            conversation.append(
+                {"role": "tool", "tool_call_id": call.get("id"), "content": await _run(tools, call)}
+            )
+        if listened == ["asked"]:
+            listened.append("sent")
+            conversation.append(_recording(recording or ""))
         if "it" in verdict:
             return verdict["it"]
+        if not reply.get("tool_calls"):
+            if asked_again or forced:
+                break
+            asked_again = True
+            conversation.append({"role": "user", "content": retry})
     logger.warning("judge gave no verdict for %s", getattr(goal, "name", ""))
     return None, ""
 
@@ -244,14 +287,84 @@ _SPEAKERS = {"user": "Customer", "assistant": "Agent"}
 
 
 def _transcript(messages: Sequence[Any]) -> str:
-    """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
-    body = "\n".join(
+    """The turns as spoken, oldest first."""
+    return "\n".join(
         f"{_SPEAKERS.get(str(m.get('role')), m.get('role') or 'unknown')}: "
         f"{str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )
-    return body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
+
+
+def _complete(
+    conversation: list[dict[str, Any]], tools: Sequence[Any], forced: bool
+) -> dict[str, Any]:
+    """One turn of the judge on the gateway's OpenAI-compatible chat completions."""
+    env = provider_env(judge_model())
+    base, key = env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN")
+    if not base or not key:
+        raise RuntimeError("no gateway configured for the judge")
+    body: dict[str, Any] = {
+        "model": env["ANTHROPIC_MODEL"],
+        "messages": conversation,
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": t.name, "description": t.description, "parameters": t.input_schema},
+            }
+            for t in tools
+        ],
+    }
+    if forced:
+        body["tool_choice"] = {"type": "function", "function": {"name": "decide"}}
+    response = requests.post(
+        f"{base}/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json=body,
+        timeout=_TURN_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    answer = response.json()
+    usage = answer.get("usage") or {}
+    record_turn(
+        "judge-sub-goals",
+        body["model"],
+        int(usage.get("prompt_tokens") or 0),
+        int(usage.get("completion_tokens") or 0),
+    )
+    return answer["choices"][0]["message"]
+
+
+async def _run(tools: Sequence[Any], call: dict[str, Any]) -> str:
+    """Run one tool the judge called and return what it said."""
+    function = call.get("function") or {}
+    found = next((t for t in tools if t.name == function.get("name")), None)
+    if found is None:
+        return f"no tool named {function.get('name')!r}"
+    try:
+        args = json.loads(function.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        return "the arguments were not valid JSON"
+    result = await found.handler(args if isinstance(args, dict) else {})
+    return "\n".join(part.get("text", "") for part in result.get("content", []))
+
+
+def _recording(path: str) -> dict[str, Any]:
+    """The whole call recording as a message the judge's model hears."""
+    audio = Path(path)
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "The call recording:"},
+            {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": base64.b64encode(audio.read_bytes()).decode("ascii"),
+                    "format": audio.suffix.lstrip(".").lower() or "wav",
+                },
+            },
+        ],
+    }
 
 
 def _call(call: Any) -> dict[str, Any]:
