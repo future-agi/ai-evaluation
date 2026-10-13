@@ -30,7 +30,11 @@ from .hosted_entrypoint import (
 )
 from .hosted_scheduler import HostedScheduler, ResultReceipt, WorldPool
 from .job import HarnessJob
-from .process_runtime import ProcessRuntimeProvider, default_user_resolver
+from .process_runtime import (
+    ProcessRuntimeProvider,
+    default_user_resolver,
+    fixed_sandbox_user_resolver,
+)
 from .scenario_source import load_scenarios
 from .secrets import runtime_configuration_value
 
@@ -172,7 +176,11 @@ async def run_local_certified(
         provider = ProcessRuntimeProvider(
             secrets_path=secrets,
             secret_purpose_map=purposes,
-            user_resolver=default_user_resolver,
+            user_resolver=(
+                fixed_sandbox_user_resolver
+                if os.environ.get("ALK_FIXED_SANDBOX_USER") == "1"
+                else default_user_resolver
+            ),
             require_declared_user=False,
             generic_artifact_root=authoring / "generic-harness",
         )
