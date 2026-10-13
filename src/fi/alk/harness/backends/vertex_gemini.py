@@ -575,7 +575,7 @@ class VertexGeminiSession:
 
     async def replies(self) -> AsyncIterator[Any]:
         from google.adk.agents.run_config import RunConfig, StreamingMode
-        from google.adk.sessions import GetSessionConfig
+        from google.adk.sessions.base_session_service import GetSessionConfig
         from google.genai import types
 
         if self._runner is None or (

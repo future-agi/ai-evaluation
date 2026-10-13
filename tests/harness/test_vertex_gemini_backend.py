@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from fi.alk.harness.backends.vertex_gemini import (
@@ -5,6 +6,44 @@ from fi.alk.harness.backends.vertex_gemini import (
     _forget_old_reads,
     _successful_terminal_save,
 )
+
+
+def test_session_replies_with_installed_adk(monkeypatch) -> None:
+    from google.adk.models.google_llm import Gemini
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    from fi.alk.harness.backends import ModelReply, SessionSpec, StageDone
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiSession
+
+    async def generate(self, llm_request, stream=False):
+        assert llm_request.contents[-1].parts[0].text == "Hello"
+        yield LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text="Hello back")])
+        )
+
+    monkeypatch.setattr(Gemini, "generate_content_async", generate)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+
+    async def run():
+        session = VertexGeminiSession(
+            SessionSpec(system_prompt="Reply briefly", max_turns=1),
+            model="gemini-3.7-flash",
+        )
+        await session.start()
+        try:
+            await session.send("Hello")
+            return [event async for event in session.replies()]
+        finally:
+            await session.stop()
+
+    events = asyncio.run(run())
+    replies = [event for event in events if isinstance(event, ModelReply)]
+    assert replies[0].parts[0].text == "Hello back"
+    assert isinstance(events[-1], StageDone)
+    assert events[-1].outcome == "success"
 
 
 def test_successful_authoring_save_is_terminal() -> None:
