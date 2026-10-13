@@ -450,7 +450,7 @@ def _read_scenario_document(bundle_dir: Path, scenario_key: str) -> dict[str, An
 
 
 # Edits a call actually plays; everything else is as sealed.
-_EDITABLE_FIELDS = ("background_noise",)
+_EDITABLE_FIELDS = ("background_noise", "max_turns")
 _EDITABLE_PERSONA_FIELDS = (
     "personality",
     "communication_style",
