@@ -1251,9 +1251,10 @@ def world_tools(
         "tool call made, each with .name, .arguments, .ok and .refused — so a check can insist "
         "a call happened with the right arguments, not merely that it happened.\n\n"
         + SUB_GOAL_RULES
-        + "Use `check` only for what the records left show whatever the caller asked (a forbidden "
-        "change is absent, a change that must happen is in the records), reading the world and the "
-        "call that made it, never only a call's name. A check that a step comes before something "
+        + "Use `check` only for a change the call must leave in the records, made as it should be "
+        "whatever the caller asked, reading the world and the call that made it, never only a "
+        "call's name. Whether a forbidden thing happened is judged from the records: a check that "
+        "holds on an untouched world grades nothing and is refused. A check that a step comes before something "
         "fails only when that something happened without it, and accepts every tool for the step. Use `judged` for whether a step was right for "
         "this caller (the right record, the right values), whether a step was taken at all, and "
         "what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"
