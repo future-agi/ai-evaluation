@@ -842,7 +842,12 @@ def accept_scenario(
             "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
         )
 
-    proof = prove(scenario, catalogue, world_root)
+    proof = prove(
+        scenario,
+        catalogue,
+        world_root,
+        allow_judged_only_with_state=allow_empty_solution,
+    )
     if not proof.holds:
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
