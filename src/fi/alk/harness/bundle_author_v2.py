@@ -1029,6 +1029,92 @@ def _load_compose(path: Path) -> dict[str, Any]:
     return body
 
 
+def _runtime_compose_services(
+    root: Path, services: dict[str, Any], workdir: str, port: int
+) -> tuple[str, dict[str, Any]]:
+    """Select a declared HTTP runtime and retain its submitted dependency graph."""
+    component = _runtime_component(root, workdir)
+    matches = []
+    for name, service in services.items():
+        if not isinstance(service, dict) or not service.get("build"):
+            continue
+        build = service["build"]
+        context = build.get("context", ".") if isinstance(build, dict) else build
+        if (root / str(context)).resolve() != component:
+            continue
+        ports = service.get("ports") or []
+        targets = [
+            str(value.get("target", ""))
+            if isinstance(value, dict)
+            else str(value).split("/")[0].rsplit(":", 1)[-1]
+            for value in ports
+            if (
+                value.get("protocol", "tcp") == "tcp"
+                if isinstance(value, dict)
+                else "/" not in str(value) or str(value).endswith("/tcp")
+            )
+        ]
+        if str(port) in targets:
+            matches.append(name)
+    if len(matches) != 1:
+        raise BundleAuthorError(
+            "control_service_ambiguous: declared runtime must match exactly one "
+            f"Compose build context and container port; found {matches}"
+        )
+    control = matches[0]
+    selected: set[str] = set()
+    pending = [control]
+    while pending:
+        name = pending.pop()
+        if name in selected:
+            continue
+        service = services.get(name)
+        if not isinstance(service, dict):
+            raise BundleAuthorError(f"compose_dependency_missing: {name}")
+        unsupported = [
+            key
+            for key in ("links", "volumes_from", "network_mode", "ipc", "pid")
+            if service.get(key)
+            and (
+                key in {"links", "volumes_from"}
+                or str(service[key]).startswith("service:")
+            )
+        ]
+        if unsupported:
+            raise BundleAuthorError(
+                f"compose_dependency_unsupported: {name} uses {', '.join(unsupported)}"
+            )
+        dependencies = service.get("depends_on") or []
+        if not isinstance(dependencies, (list, dict)) or not all(
+            isinstance(dependency, str) for dependency in dependencies
+        ):
+            raise BundleAuthorError(f"compose_dependency_invalid: {name}")
+        selected.add(name)
+        pending.extend(dependencies)
+    omitted = set(services) - selected
+    for name in selected:
+        environment = services[name].get("environment") or {}
+        values = (
+            environment.values()
+            if isinstance(environment, dict)
+            else (str(item).partition("=")[2] for item in environment)
+        )
+        for value in values:
+            value = str(value or "")
+            try:
+                hostname = urlsplit(value if "://" in value else "//" + value).hostname
+            except ValueError:
+                continue
+            if hostname in omitted:
+                raise BundleAuthorError(
+                    f"compose_dependency_undeclared: {name} environment references {hostname}; "
+                    "declare it in depends_on"
+                )
+    return control, {
+        name: service for name, service in services.items() if name in selected
+    }
+
+
 _RUNTIME_ENVIRONMENT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _SECRET_ENVIRONMENT_NAME = re.compile(
     r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_?KEY)", re.IGNORECASE
@@ -1882,6 +1968,11 @@ def resolve_environment_plan(
     if compose is not None:
         body = _load_compose(compose)
         services = body["services"]
+        declared_control = None
+        if runtime_command and interface.get("kind") == "http" and interface_port:
+            declared_control, services = _runtime_compose_services(
+                root, services, runtime_workdir, int(interface_port)
+            )
         # Compile the submitted topology.  Supported managed services become snapshot engines;
         # source services remain source processes.  Unknown image-only dependencies are rejected
         # explicitly instead of being silently emulated.
@@ -1922,7 +2013,7 @@ def resolve_environment_plan(
                 )
 
         source_services = [name for name in services if name not in managed_names]
-        control_name = (
+        control_name = declared_control or (
             "agent"
             if "agent" in source_services
             else (
@@ -1995,6 +2086,9 @@ def resolve_environment_plan(
                 or (service_name == control_name and not is_livekit)
                 else None
             )
+            declared_runtime = service_name == declared_control
+            if declared_runtime:
+                port = int(interface_port)
             process = _plan_python(
                 root,
                 name=service_name,
@@ -2006,7 +2100,9 @@ def resolve_environment_plan(
                 environment=environment,
                 depends_on=[item for item in depends if item != "postgres"],
                 livekit_download=is_livekit and service_name == control_name,
-                run_override=_dockerfile_run(service_root),
+                run_override=runtime_command
+                if declared_runtime
+                else _dockerfile_run(service_root),
             )
             if (
                 port
@@ -2093,7 +2189,9 @@ def resolve_environment_plan(
                 )
                 readiness.append(
                     ReadinessProbeV2(
-                        capability=slug, path="/health", timeout_seconds=180
+                        capability=slug,
+                        path=interface_health_path if declared_runtime else "/health",
+                        timeout_seconds=180,
                     )
                 )
         if "tools-api" in source_services:
