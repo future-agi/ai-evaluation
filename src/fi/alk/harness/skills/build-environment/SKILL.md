@@ -512,6 +512,12 @@ You get the world afterwards and every call that was made, each with `.name`, `.
 `.ok` and `.refused`. Return a sentence when something is wrong, `None` when it held. Never write
 one scenario's expected value into a check: it is right for that scenario and wrong for the next.
 
+A check about a step that must come before something (identify the caller before disclosing,
+confirm before changing) fails only when that something happened without the step. When neither
+happened it holds, because nothing was disclosed or changed, and it accepts every tool the agent has
+for that step. Demanding the step on its own fails a correct agent whose instructions skip it in
+that situation.
+
 Whether a step was right for this caller, the right time, address, item or amount, depends on what
 they asked, which only the scenario knows. Make that a judged sub-goal: the judge reads what the
 caller came for, the conversation and every action with its arguments, so criteria such as "Pass
