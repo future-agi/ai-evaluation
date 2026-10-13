@@ -566,7 +566,9 @@ def validate_scenario(
         problems.append(
             "fewer than two sub-goals: the call passes only when every one it names holds, so one "
             "leaves the rest of it unmeasured. Name one for what the caller came for, settled with "
-            "the values they gave, and one for the step this scenario's difficulty turns on"
+            "the values they gave, and one for the step this scenario's difficulty turns on, adding "
+            "either with add_sub_goal if the catalogue has none. Never one whose situation this "
+            "scenario cannot bring about"
         )
 
     # setup_code and ready_code are not read here. Whether they work is not a question reading

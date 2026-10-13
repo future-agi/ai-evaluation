@@ -280,7 +280,9 @@ settles what the world must still hold; a completed task settles the call and th
 has to assert it.** Scenarios whose solution ended on a final lookup named sub-goals only for the
 step before it, so an agent that skipped the lookup passed them all. Name at least two: the call
 passes only when every one holds, so one leaves the rest of it unmeasured. Before naming one, say in
-a line what a wrong agent would do in this scenario to fail it; if you cannot, it does not belong.
+a line what a wrong agent would do in this scenario to fail it; if you cannot, it does not belong,
+and a sub-goal whose situation never comes up here is filler that passes for nothing. When the
+catalogue has no sub-goal for what this caller came for, add one rather than naming a filler.
 
 **And, when the agent has tools, that one must be the checked kind, not the judged kind.** The last step is a call, so the call
 log and the world both hold the evidence: a judge asked to read the transcript for it is being asked

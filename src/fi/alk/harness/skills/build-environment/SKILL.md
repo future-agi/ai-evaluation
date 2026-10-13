@@ -485,6 +485,10 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
+**Give every outcome a caller comes for its own sub-goal**, settled with the values (a record
+changed, a record looked up and told back, a document sent), so a scenario never has to borrow an
+unrelated one to name two.
+
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
 checked by the same few lines, and a scenario built around a hard moment passes whether or not the
