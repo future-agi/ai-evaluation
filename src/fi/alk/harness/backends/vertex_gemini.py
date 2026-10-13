@@ -593,7 +593,6 @@ class VertexGeminiSession:
 
     async def replies(self) -> AsyncIterator[Any]:
         from google.adk.agents.run_config import RunConfig, StreamingMode
-
         # google.adk.sessions does not re-export it in the locked ADK (2.7.1).
         from google.adk.sessions.base_session_service import GetSessionConfig
         from google.genai import types
