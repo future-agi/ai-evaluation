@@ -73,7 +73,9 @@ Find, in roughly this order:
    wording from its system prompt or its validation code. These matter: the agent under test is
    told them and graded against them, and its prompt is where most of them live. Prompts are
    often kept away from the main agent file, so search the whole source for a long instructions
-   string before concluding there are none.
+   string before concluding there are none. Name where the whole prompt is written in
+   `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
+   and every later stage decides what the agent should do from it.
 
 6. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
    browser it drives. This decides how it is later run, so getting it wrong reroutes every test.

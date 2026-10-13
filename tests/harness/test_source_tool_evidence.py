@@ -638,3 +638,30 @@ def test_empty_runtime_owned_tool_world_does_not_invent_world_checks(tmp_path):
     saved = asyncio.run(tools["save_world"]({}))
     assert not saved.get("is_error"), saved
     assert world.runtime_tools == {"get_weather"}
+
+
+def test_the_agents_whole_prompt_is_copied_from_its_source(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("from real_tools import lookup_weather\n")
+    (source / "prompt.py").write_text('PROMPT = """\nGreet the caller.\nIf injured, transfer now.\n"""\n')
+    out = tmp_path / "out"
+    named = payload() | {
+        "system_prompt_excerpt": "Greet the caller.",
+        "system_prompt_from": [{"path": "prompt.py", "start_line": 2, "end_line": 3}],
+    }
+    assert not accept_contract(named, out, source_root=source).get("is_error")
+    contract = AgentContract.model_validate(json.loads((out / "contract.json").read_text()))
+    assert contract.system_prompt_excerpt == "Greet the caller.\nIf injured, transfer now."
+    assert "If injured, transfer now." in contract.brief()
+
+    outside = named | {"system_prompt_from": [{"path": "../x.py", "start_line": 1, "end_line": 1}]}
+    assert "system_prompt_from[0]" in accept_contract(outside, out, source_root=source)["content"][0]["text"]
+    past_end = named | {"system_prompt_from": [{"path": "prompt.py", "start_line": 2, "end_line": 9}]}
+    assert "outside prompt.py" in accept_contract(past_end, out, source_root=source)["content"][0]["text"]
+
+
+def test_a_contract_without_a_prompt_source_keeps_its_quoted_excerpt():
+    contract = AgentContract.model_validate(payload() | {"system_prompt_excerpt": "Be brief."})
+    assert contract.system_prompt_from == []
+    assert "Be brief." in contract.brief()

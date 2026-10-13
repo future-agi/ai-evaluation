@@ -717,18 +717,21 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
     config = getattr(getattr(job, "agent", None), "config", None) or {}
     prompt = str(config.get("target_system_prompt") or "").strip()
     if prompt:
-        parts.append(prompt[:12000])
+        parts.append(prompt)
     try:
         body = json.loads((bundle_dir / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         body = {}
     if isinstance(body, dict):
+        excerpt = str(body.get("system_prompt_excerpt") or "").strip()
+        if excerpt and not prompt:
+            parts.append(excerpt)
         summary = str(body.get("one_liner") or "").strip()
         rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
         if summary:
             parts.append(f"Summary: {summary}")
         if rules:
-            parts.append("Rules:\n- " + "\n- ".join(rules[:30]))
+            parts.append("Rules:\n- " + "\n- ".join(rules))
     return "\n\n".join(parts)
 
 

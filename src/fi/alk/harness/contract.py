@@ -181,6 +181,14 @@ class ToolEntry(BaseModel):
     notes: str = ""
 
 
+class PromptSource(BaseModel):
+    """Lines of the agent's source that hold part of its prompt."""
+
+    path: str
+    start_line: int
+    end_line: int
+
+
 class DataStore(BaseModel):
     """What the agent's tools read and write, and how to be there instead of it.
 
@@ -601,6 +609,8 @@ class AgentContract(BaseModel):
     agent_languages: list[str] = Field(default_factory=list)
     conversational: bool = True
     system_prompt_excerpt: str = ""
+    # When given, the excerpt is replaced by these lines copied from the source as written.
+    system_prompt_from: list[PromptSource] = Field(default_factory=list)
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
@@ -680,10 +690,15 @@ class AgentContract(BaseModel):
                     else "people dial in to this agent"
                 ),
             )
+        if self.system_prompt_excerpt.strip():
+            parts.append(
+                "THE AGENT'S OWN PROMPT (what it does in each situation, including where a rule "
+                "overrides its usual flow):\n" + self.system_prompt_excerpt.strip()
+            )
         if self.hard_constraints:
             parts.append(
                 "HARD CONSTRAINTS the agent MUST follow (nothing may contradict these):\n  - "
-                + "\n  - ".join(self.hard_constraints[:14])
+                + "\n  - ".join(self.hard_constraints)
             )
         if self.data_schema and full_schema:
             parts.append(

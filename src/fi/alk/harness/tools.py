@@ -142,6 +142,7 @@ def accept_contract(
         from .source_tool_evidence import tool_evidence_problems
 
         problems.extend(tool_evidence_problems(contract, source_root))
+        problems.extend(_copy_prompt(contract, source_root))
     if problems:
         return _problems(problems, arrived)
 
@@ -158,6 +159,29 @@ def accept_contract(
         f"{len(contract.real_use_cases)} use cases, "
         f"{len(contract.open_questions)} open questions."
     )
+
+
+def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
+    """Replace the quoted excerpt with the lines `system_prompt_from` names, as written."""
+    root = source_root.resolve()
+    parts: list[str] = []
+    problems: list[str] = []
+    for index, where in enumerate(contract.system_prompt_from):
+        path = (root / where.path).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
+            continue
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not 1 <= where.start_line <= where.end_line <= len(lines):
+            problems.append(
+                f"system_prompt_from[{index}]: lines {where.start_line}-{where.end_line} are "
+                f"outside {where.path}, which has {len(lines)} lines"
+            )
+            continue
+        parts.append("\n".join(lines[where.start_line - 1 : where.end_line]))
+    if parts and not problems:
+        contract.system_prompt_excerpt = "\n\n".join(parts)
+    return problems
 
 
 def _without_nulls(value: Any) -> Any:
@@ -262,6 +286,21 @@ def contract_tools(
                     "type": "string",
                     "description": "The agent's own instructions, quoted. Often lives away from "
                     "the main agent file.",
+                },
+                "system_prompt_from": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "start_line": {"type": "integer"},
+                            "end_line": {"type": "integer"},
+                        },
+                        "required": ["path", "start_line", "end_line"],
+                    },
+                    "description": "Where the agent's whole prompt is written: every part it is "
+                    "assembled from, in order, as a path relative to the source root and the first "
+                    "and last line of each. These lines replace system_prompt_excerpt as written.",
                 },
                 "hard_constraints": {
                     "type": "array",
