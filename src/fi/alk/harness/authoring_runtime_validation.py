@@ -473,6 +473,18 @@ async def validate_once(
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
 
+    if getattr(job, "require_tool_workflow", False):
+        from .contract import validate_tool_workflow
+
+        try:
+            validate_tool_workflow(
+                AgentContract.model_validate_json(
+                    (authoring / "contract.json").read_text(encoding="utf-8")
+                )
+            )
+        except (ValueError, OSError) as exc:
+            raise RuntimeValidationError("environment", str(exc)) from exc
+
     external_provider = (
         getattr(getattr(job, "source", None), "kind", None) is SourceKind.PROVIDER
         and getattr(getattr(job, "agent", None), "mode", None)
@@ -939,6 +951,11 @@ async def validate_and_repair(
     sleeper=asyncio.sleep,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    from .job import HarnessJob
+
+    base_guidance = (
+        "\n".join(job.authoring_guidance()) if isinstance(job, HarnessJob) else ""
+    )
     generic = bool(
         job is not None
         and isinstance(getattr(job, "metadata", None), dict)
@@ -959,7 +976,7 @@ async def validate_and_repair(
                         (authoring / "contract.json").read_text(encoding="utf-8")
                     )
                     return await request_runtime_plan_patch(
-                        source, contract, _active_repair_diagnostics
+                        source, contract, _active_repair_diagnostics, guidance=guidance
                     )
                 if generic and all(
                     (artifact_root / name).is_file()
@@ -981,6 +998,7 @@ async def validate_and_repair(
                             store.read_source_model(),
                             store.read_world_ir(),
                             _active_repair_diagnostics,
+                            guidance=guidance,
                         )
                     except RepairPatchNotSubmittedError:
                         return 1
@@ -1094,6 +1112,8 @@ async def validate_and_repair(
                     "Do not modify source, disable constraints, weaken checks, drop scenarios, "
                     "or invent services/tools. Resolve this complete, redacted diagnostic set:\n"
                     + _repair_guidance(diagnostics)
+                    + "\n\n"
+                    + base_guidance
                 )
                 _active_repair_diagnostics = diagnostics
                 scenarios_before = None
@@ -1247,7 +1267,7 @@ async def validate_and_repair(
                 "or scenario setup using the submitted source as authority. Do not modify source, "
                 "disable database constraints, weaken checks or ready conditions, drop scenarios, "
                 "or replace tools with invented implementations. Preserve scenario count and intent. "
-                f"Diagnostic: {str(exc)[:4000]}"
+                f"Diagnostic: {str(exc)[:4000]}" + "\n\n" + base_guidance
             )
             if await repair(exc.phase, guidance):
                 raise

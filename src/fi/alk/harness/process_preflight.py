@@ -47,6 +47,7 @@ from .bundle_v2 import (
 )
 from .provider_import import ProviderImportSpec
 from .provider_lifecycle import ProviderLifecycleSpec, ProviderScope
+from .public_material import is_public_pem
 
 _SECRET_PURPOSE_VALUES = {member.value for member in SecretPurpose}
 
@@ -328,7 +329,7 @@ def _scan_bundle_files_for_secrets(bundle_dir: Path, walked_files: list[Path]) -
         posix_path = PurePosixPath(relative)
         if (
             posix_path.name in _SECRET_FILES
-            or posix_path.suffix.lower() in _SECRET_SUFFIXES
+            or (posix_path.suffix.lower() in _SECRET_SUFFIXES and not is_public_pem(path))
         ):
             raise PreflightError(
                 "secret_in_bundle", f"{relative}: forbidden secret-shaped file"

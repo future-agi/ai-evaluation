@@ -13,12 +13,16 @@ import json
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Iterable
+from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 import yaml
 
 from fi.simulate.runtime.spec import SecretRef
+
+if TYPE_CHECKING:
+    from .contract import Runtime
+    from .runtime_selection import ComposeSelection, NativeSelection
 
 CREDENTIAL_MANIFEST_VERSION = "futureagi.credential-requirements.v1"
 
@@ -734,3 +738,80 @@ __all__ = [
     "RequirementStatus",
     "discover_credentials",
 ]
+
+
+class EnvironmentObligation(BaseModel):
+    process: str
+    environment_name: str
+    origin: Literal["runtime_declaration", "compose_required"]
+    source_location: str
+
+
+class ConfigurationAdmission(BaseModel):
+    status: Literal["selection_pending", "validation_pending"] = "selection_pending"
+    missing: list[EnvironmentObligation] = Field(default_factory=list)
+
+    def require_no_missing_declarations(self) -> None:
+        if self.missing:
+            raise ValueError(
+                "target_runtime_configuration_missing: "
+                + ", ".join(
+                    f"{item.process}:{item.environment_name} ({item.source_location})"
+                    for item in self.missing
+                )
+            )
+
+
+def assess_configuration(
+    *,
+    runtime: Runtime | None = None,
+    selected: NativeSelection | ComposeSelection | None = None,
+    supplied_by_process: Mapping[str, AbstractSet[str]] | None = None,
+) -> ConfigurationAdmission:
+    from .runtime_selection import ComposeSelection
+
+    if runtime is None or selected is None:
+        return ConfigurationAdmission()
+    supplied_by_process = supplied_by_process or {}
+    unknown = set(runtime.required_environment) - set(supplied_by_process)
+    if unknown:
+        raise ValueError(
+            "runtime_required_environment_scope_unknown: " + ", ".join(sorted(unknown))
+        )
+    obligations = [
+        EnvironmentObligation(
+            process=process,
+            environment_name=name,
+            origin="runtime_declaration",
+            source_location=f"runtime.required_environment.{process}",
+        )
+        for process, names in runtime.required_environment.items()
+        for name in names
+    ]
+    if isinstance(selected, ComposeSelection):
+        for process, service in selected.services.items():
+            environment = service.get("environment") or {}
+            values = (
+                environment.values() if isinstance(environment, dict) else environment
+            )
+            for value in values:
+                for match in re.finditer(
+                    r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\?[^}]*\}", str(value)
+                ):
+                    obligations.append(
+                        EnvironmentObligation(
+                            process=process,
+                            environment_name=match.group(1),
+                            origin="compose_required",
+                            source_location=f"{selected.compose_file.name}:services.{process}.environment",
+                        )
+                    )
+    return ConfigurationAdmission(
+        status="validation_pending",
+        missing=[
+            obligation
+            for obligation in obligations
+            if obligation.environment_name
+            not in supplied_by_process.get(obligation.process, set())
+        ],
+    )

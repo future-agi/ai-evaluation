@@ -431,7 +431,8 @@ def test_hosted_authoring_repairs_scenario_adjustment_without_marker(
     assert status == 0
     assert len(observed_guidance) == 2
     assert adjustment_id in observed_guidance[0][0]
-    assert "No saved scenario currently carries this marker" in observed_guidance[1][0]
+    assert any("No saved scenario currently carries this marker" in item for item in observed_guidance[1])
+    assert observed_guidance[0][0] in observed_guidance[1]
     statuses = [
         json.loads(line)
         for line in (tmp_path / "adjustment-status.jsonl")

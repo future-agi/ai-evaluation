@@ -140,9 +140,18 @@ def validate_runtime_plan_patch(
         (runtime.compose_file, "compose_file"),
         (runtime.dockerfile, "dockerfile"),
     ):
-        if configured and not (workdir / configured).is_file():
+        if configured and (
+            not (root / configured).resolve().is_relative_to(root)
+            or not (root / configured).is_file()
+        ):
             raise ValueError(f"runtime_repair_{label}_missing")
 
+    from .bundle_author_v2 import _declared_runtime_environment
+    from .runtime_selection import select_runtime
+
+    select_runtime(
+        root, runtime, public_environment=_declared_runtime_environment(root)
+    )
     candidate = contract.model_copy(update={"runtime": runtime})
     # Revalidate the whole contract so nested updates cannot bypass canonical validators.
     return AgentContract.model_validate(candidate.model_dump(mode="python"))
@@ -186,6 +195,8 @@ async def request_runtime_plan_patch(
     source_root: Path,
     contract: AgentContract,
     diagnostics: tuple[HarnessDiagnostic, ...],
+    *,
+    guidance: str = "",
 ) -> RuntimePlanPatch:
     """Inspect an unfamiliar repository and submit one constrained runtime-plan revision."""
 
@@ -245,6 +256,7 @@ repository. Call the tool once the smallest complete correction is known, then s
         + json.dumps(diagnostics_json, sort_keys=True, indent=2)[:20000]
         + "\n\nCURRENT CONTRACT\n"
         + contract.model_dump_json(indent=2)[:36000]
+        + ("\n\nREQUIRED JOB INTENT\n" + guidance if guidance else "")
     )
     stage = Stage(
         SessionSpec(

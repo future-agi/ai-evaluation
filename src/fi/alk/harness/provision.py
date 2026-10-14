@@ -1791,6 +1791,15 @@ def provision(
     """Start and record the environment described by one source repository."""
     source_root = Path(source).expanduser().resolve()
     destination = Path(destination)
+    runtime = getattr(contract, "runtime", None)
+    if (
+        getattr(runtime, "execution", "auto") != "auto"
+        or getattr(runtime, "service", "")
+        or getattr(runtime, "required_environment", {})
+    ):
+        raise ProvisionError(
+            "runtime_selection_unsupported: explicit selection and process admission require the certified process lane"
+        )
     packaging = inspect_packaging(source_root)
     generated_runtime: GeneratedRuntimePlan | None = None
     explicit_compose = str(

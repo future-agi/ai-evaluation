@@ -10,6 +10,8 @@ import urllib.request
 from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 
+from fi._diagnostics import safe_endpoint, sanitize_diagnostic
+
 from fi.simulate.agent.wrapper import (
     AgentInput,
     AgentResponse,
@@ -17,6 +19,18 @@ from fi.simulate.agent.wrapper import (
     SimulationEvent,
 )
 from fi.simulate.agent.wrapper import AgentWrapper
+
+
+class HTTPCallFailure(RuntimeError):
+    def __init__(self, trace: Mapping[str, Any]) -> None:
+        super().__init__(str(trace.get("error") or "HTTP target failed"))
+        self.trace = dict(trace)
+
+
+class _ResponseFailure(RuntimeError):
+    def __init__(self, stage: str, status: int, message: str) -> None:
+        super().__init__(message)
+        self.stage, self.status = stage, status
 
 
 class HTTPAgentWrapper(AgentWrapper):
@@ -38,6 +52,8 @@ class HTTPAgentWrapper(AgentWrapper):
         request_template: Any = None,
         response_path: str = "",
         setup_requests: Optional[Sequence[Mapping[str, Any]]] = None,
+        failure_rule: Optional[Mapping[str, Any]] = None,
+        secret_values: Optional[Mapping[str, str]] = None,
     ) -> None:
         if not endpoint:
             raise ValueError("endpoint is required")
@@ -54,38 +70,97 @@ class HTTPAgentWrapper(AgentWrapper):
         self.request_template = request_template
         self.response_path = str(response_path or "").strip()
         self.setup_requests = [dict(item) for item in (setup_requests or [])]
+        self.failure_rule = dict(failure_rule) if failure_rule else None
+        self.secret_values = dict(secret_values) if secret_values is not None else None
+        self._response_text = ""
+        self._response_status = 0
         self._setup_complete = False
         self._setup_values: dict[str, Any] = {}
 
     async def call(self, input: AgentInput) -> AgentResponse:
         started = time.time()
-        headers = self._request_headers()
+        headers: dict[str, str] = {}
         status_code = 0
-        response_payload: dict[str, Any] = {}
         error: Optional[str] = None
+        stage = "setup"
+        failure_stage = None
+        response = AgentResponse(content="")
+        self._response_text = ""
+        self._response_status = 0
+        secrets = None
         try:
+            headers = self._request_headers()
             await asyncio.to_thread(self._ensure_setup, input, headers)
+            self._response_text = ""
+            self._response_status = 0
+            stage = "transport"
             request_payload = self._request_payload(input)
             status_code, response_payload = await asyncio.to_thread(
-                self._post_json,
-                request_payload,
-                headers,
+                self._post_json, request_payload, headers
             )
-            if status_code >= 400:
-                error = _response_error_text(response_payload) or (
-                    f"HTTP target returned status {status_code}"
+            if not 200 <= status_code < 300:
+                raise _ResponseFailure(
+                    "http",
+                    status_code,
+                    _response_error_text(response_payload)
+                    or f"HTTP target returned status {status_code}",
                 )
+            if self.failure_rule:
+                stage = "application"
+                status = _select_response_value(
+                    response_payload, self.failure_rule["status_path"]
+                )
+                if any(
+                    type(status) is type(value) and status == value
+                    for value in self.failure_rule["failure_values"]
+                ):
+                    message_path = self.failure_rule.get("message_path", "")
+                    message = (
+                        _content_text(
+                            _select_response_value(response_payload, message_path)
+                        )
+                        if message_path
+                        else "Declared application failure"
+                    )
+                    raise _ResponseFailure("application", status_code, message)
+            stage = "extract"
             response = self._agent_response_from_payload(response_payload)
         except Exception as exc:
-            error = str(exc)
-            response = AgentResponse(content=f"HTTP target failed: {exc}")
+            if self.secret_values is not None:
+                secrets = {
+                    str(index): value
+                    for index, value in enumerate(
+                        (
+                            *self.secret_values.values(),
+                            self._resolved_api_key(),
+                            *self.headers.values(),
+                            json.dumps(self._setup_values, default=str),
+                        )
+                    )
+                }
+            status_code = getattr(exc, "status", self._response_status or status_code)
+            failure_stage = (
+                "setup" if stage == "setup" else getattr(exc, "stage", stage)
+            )
+            error = sanitize_diagnostic(str(exc), secrets)
 
         latency_ms = round((time.time() - started) * 1000, 4)
+        safe_metadata = self.metadata
+        if error:
+            try:
+                safe_metadata = json.loads(
+                    sanitize_diagnostic(json.dumps(self.metadata, default=str), secrets)
+                )
+            except ValueError:
+                safe_metadata = {}
         trace = {
+            **safe_metadata,
             "kind": "external_agent_http_trace",
             "protocol": self.protocol,
-            "endpoint": _redacted_endpoint(self.endpoint),
-            "endpoint_host": urlparse(self.endpoint).netloc,
+            "endpoint": sanitize_diagnostic(_redacted_endpoint(self.endpoint), secrets)
+            if error
+            else _redacted_endpoint(self.endpoint),
+            "endpoint_host": urlparse(self.endpoint).hostname,
             "model": self.model,
             "status_code": status_code,
             "latency_ms": latency_ms,
@@ -100,7 +175,10 @@ class HTTPAgentWrapper(AgentWrapper):
                 "redacted": bool(self._resolved_api_key()),
             },
             "error": error,
-            **self.metadata,
+            "failure_stage": failure_stage,
+            "response_excerpt": sanitize_diagnostic(self._response_text, secrets)
+            if error
+            else "",
         }
         response.events.append(
             SimulationEvent(
@@ -237,6 +315,8 @@ class HTTPAgentWrapper(AgentWrapper):
         payload: Any,
         headers: Mapping[str, str],
     ) -> tuple[int, Any]:
+        self._response_text = ""
+        self._response_status = 0
         body = (
             None
             if method == "GET"
@@ -251,13 +331,30 @@ class HTTPAgentWrapper(AgentWrapper):
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 status = int(getattr(response, "status", 200))
-                text = response.read().decode("utf-8")
+                self._response_status = status
+                raw = response.read(1024 * 1024 + 1)
         except urllib.error.HTTPError as exc:
             status = int(exc.code)
-            text = exc.read().decode("utf-8")
+            self._response_status = status
+            with exc:
+                raw = exc.read(1024 * 1024 + 1)
+        self._response_status = status
+        # An incomplete response can split a credential, so retain no excerpt on overflow.
+        if len(raw) > 1024 * 1024:
+            self._response_text = ""
+            raise _ResponseFailure(
+                "size", status, "HTTP response exceeds 1048576 bytes"
+            )
+        text = raw.decode("utf-8", errors="replace")
+        self._response_text = text
         if not text:
             return status, {}
-        return status, _decode_json_or_sse(text)
+        try:
+            return status, _decode_json_or_sse(text)
+        except ValueError as exc:
+            if status >= 400:
+                return status, text
+            raise _ResponseFailure("decode", status, str(exc)) from exc
 
     def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
         if self.protocol == "json_template":
@@ -666,7 +763,4 @@ def _response_error_text(payload: Any) -> str:
 
 
 def _redacted_endpoint(endpoint: str) -> str:
-    parsed = urlparse(endpoint)
-    if not parsed.query:
-        return endpoint
-    return parsed._replace(query="<redacted>").geturl()
+    return safe_endpoint(endpoint)

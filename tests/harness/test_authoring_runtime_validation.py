@@ -243,7 +243,7 @@ def test_generic_repair_without_typed_patch_keeps_validation_failure(
         GenericHarnessArtifactStore, "read_world_ir", lambda self: object()
     )
 
-    async def no_patch(*args):
+    async def no_patch(*args, **kwargs):
         raise repair_authoring.RepairPatchNotSubmittedError("no patch submitted")
 
     monkeypatch.setattr(repair_authoring, "request_world_ir_patch", no_patch)
@@ -1290,7 +1290,9 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     )
     inspected = []
 
-    async def inspect(source_root, current_contract, diagnostics):
+    async def inspect(source_root, current_contract, diagnostics, *, guidance=""):
+        assert "Preserve the submitted identifiers." in guidance
+        assert "require_tool_workflow" in guidance
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(current_contract),
@@ -1312,7 +1314,16 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
             )
         return 1
 
-    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    job = HarnessJob(
+        job_id="repair",
+        run_id="repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=["Preserve the submitted identifiers."],
+        require_tool_workflow=True,
+    )
     asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
 
     assert inspected == [

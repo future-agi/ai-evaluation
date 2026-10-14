@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .public_material import is_public_pem
 
 GENERATED_DOCKERFILE = ".alk-generated.Dockerfile"
 GENERATED_PLAN = "generated-runtime.json"
@@ -101,6 +102,15 @@ def detect_generated_runtime(
     source: str | Path, runtime: Any | None = None
 ) -> GeneratedRuntimePlan:
     """Return an auditable runtime plan, or one actionable admission error."""
+    if (
+        getattr(runtime, "execution", "auto") == "compose"
+        or getattr(runtime, "compose_file", "")
+        or getattr(runtime, "service", "")
+        or getattr(runtime, "required_environment", {})
+    ):
+        raise GeneratedRuntimeError(
+            "runtime_selection_unsupported: generated runtime cannot enforce selected Compose services or process obligations"
+        )
     root = Path(source).expanduser().resolve()
     component = _component_root(root, str(getattr(runtime, "workdir", "") or ""))
     language = str(getattr(runtime, "language", "") or "").strip().lower()
@@ -681,6 +691,10 @@ def _context_excludes(
     )
     values: set[str] = set()
     for raw in getattr(runtime, "context_excludes", None) or []:
+        if any(char in str(raw) for char in "*?[]"):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_glob_unsupported: {raw}"
+            )
         relative = Path(str(raw))
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise GeneratedRuntimeError(
@@ -724,7 +738,7 @@ def _copy_sanitized_context(
 
     def copy_file(path: Path, relative: Path) -> None:
         nonlocal count, total
-        if _sensitive_file(relative):
+        if _sensitive_file(relative, path):
             return
         info = path.stat()
         if not stat.S_ISREG(info.st_mode):
@@ -795,12 +809,15 @@ def _copy_sanitized_context(
     copy_directory(source, Path(), frozenset())
 
 
-def _sensitive_file(relative: Path) -> bool:
+def _sensitive_file(relative: Path, source: Path) -> bool:
     name = relative.name.lower()
     return (
         name in _SECRET_NAMES
         or name.startswith(".env.")
-        or relative.suffix.lower() in _SECRET_SUFFIXES
+        or (
+            relative.suffix.lower() in _SECRET_SUFFIXES
+            and not (relative.suffix.lower() == ".pem" and is_public_pem(source))
+        )
     )
 
 

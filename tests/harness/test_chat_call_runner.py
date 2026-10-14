@@ -731,3 +731,66 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
 
     assert result is not None
     assert result.result == {"account_id": "ACC-2048", "status": "active"}
+
+
+def test_failed_second_turn_retains_partial_transcript_and_http_trace(
+    tmp_path, monkeypatch
+):
+    from fi.simulate.agent.wrappers.http import HTTPCallFailure
+
+    context = _context(tmp_path)
+    adapter = _Adapter()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+
+    async def failed(*_args, **_kwargs):
+        failure = HTTPCallFailure(
+            {
+                "success": False,
+                "status_code": 502,
+                "failure_stage": "http",
+                "error": "upstream refused",
+                "response_excerpt": "upstream refused",
+            }
+        )
+        failure.partial_transcript = Transcript(
+            exchanges=[
+                Exchange("customer", "first question"),
+                Exchange("agent", "first answer"),
+                Exchange("customer", "second question"),
+            ]
+        )
+        raise failure
+
+    monkeypatch.setattr(chat, "_drive_conversation", failed)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+    )
+    with pytest.raises(CallAborted) as caught:
+        asyncio.run(
+            chat.HostedChatCallRunner(adapter, context).run(
+                SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+            )
+        )
+    partial = caught.value.partial
+    assert partial is not None
+    assert partial.transcript_artifact == "transcript-1"
+    assert partial.started_at and partial.ended_at
+    assert partial.turns == 3
+    assert [
+        message["content"]
+        for message in partial.messages
+        if message["role"] == "assistant"
+    ] == ["first answer"]
+    trace, transcript = [json.loads(data) for data in adapter.uploads]
+    assert trace["status_code"] == 502
+    assert len(transcript["messages"]) == 3
