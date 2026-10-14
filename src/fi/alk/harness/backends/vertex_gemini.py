@@ -117,6 +117,7 @@ _SCHEMA_KEYS = (
     "required",
     "type",
     "anyOf",
+    "additionalProperties",
 )
 
 
@@ -145,6 +146,8 @@ def _gemini_schema(schema: Any) -> dict[str, Any]:
             cleaned["properties"] = {
                 name: _gemini_schema(inner) for name, inner in value.items()
             }
+        elif key == "additionalProperties" and isinstance(value, dict):
+            cleaned[key] = _gemini_schema(value)
         elif key == "items":
             cleaned["items"] = _gemini_schema(value)
         elif key == "anyOf" and isinstance(value, list):
