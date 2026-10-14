@@ -392,37 +392,49 @@ def _language_version(value: str, default: str) -> str:
     return match.group(1) if match else default
 
 
-def _python_language_version(root: Path, configured: str) -> str:
-    """Choose a concrete image version that satisfies a declared Python range.
+def _python_language_version(
+    root: Path, configured: str, *, interpreter_selector: bool = False
+) -> str:
+    """Choose an image version or a native interpreter constraint.
 
     ``>=3.10`` is a compatibility floor, not an instruction to use 3.10. Selecting the first
     number from it makes otherwise reproducible projects fail as transitive dependencies retire
-    old interpreter wheels. Exact values remain exact; ranges prefer the harness' stable default.
+    old interpreter wheels. Exact patch values remain exact; native minor selectors let uv
+    resolve a compatible patch. Image ranges prefer the harness' stable default.
     """
-    declared = configured.strip()
-    if not declared:
-        requires = (
-            _pyproject_document(root / "pyproject.toml")
-            .get("project", {})
-            .get("requires-python", "")
-        )
-        declared = str(requires or "").strip()
-    if not declared:
-        return "3.12"
-    if not any(marker in declared for marker in "<>=!~,*"):
-        return _language_version(declared, "3.12")
-    try:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
-        from packaging.version import Version
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    from packaging.version import Version
 
-        specifier = SpecifierSet(declared)
-        for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
-            if Version(candidate) in specifier:
-                return candidate
+    declared = configured.strip()
+    requires = str(
+        _pyproject_document(root / "pyproject.toml")
+        .get("project", {})
+        .get("requires-python", "")
+        or ""
+    ).strip()
+    try:
+        project = SpecifierSet(requires)
+        if re.fullmatch(r"3\.\d+", declared):
+            if interpreter_selector:
+                return str(SpecifierSet(f"=={declared}.*,{requires}".rstrip(",")))
+            # Image tags select a moving patch; installation validates Requires-Python.
+            return declared
+        if declared and not any(marker in declared for marker in "<>=!~,*"):
+            if (
+                re.fullmatch(r"3\.\d+(?:\.\d+)?", declared)
+                and Version(declared) in project
+            ):
+                return declared
+        else:
+            specifier = SpecifierSet(declared)
+            for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
+                if Version(candidate) in specifier and Version(candidate) in project:
+                    return candidate
     except (InvalidSpecifier, ValueError):
         pass
     raise GeneratedRuntimeError(
-        f"generated_runtime_python_version_unsupported: {declared}"
+        f"generated_runtime_python_version_unsupported: {declared or requires}"
+        f" (project requires-python: {requires or 'unspecified'})"
     )
 
 

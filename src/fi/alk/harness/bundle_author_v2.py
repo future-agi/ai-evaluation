@@ -61,6 +61,7 @@ from .bundle_v2 import (
 from .contract import Runtime, ToolEntry
 from .generated_runtime import (
     GeneratedRuntimeError,
+    _python_language_version,
     select_python_extras,
     select_python_requirements,
     supplemental_requirements_command,
@@ -1140,6 +1141,7 @@ def _plan_python(
     run_override: list[str] | None = None,
     extras: list[str] | None = None,
     install: str = "",
+    version: str = "",
     requirements_files: list[str] | None = None,
     context_excludes: tuple[str, ...] = (),
 ) -> SourceProcess:
@@ -1168,8 +1170,13 @@ def _plan_python(
         environment=environment,
         depends_on=depends_on,
     )
-    python = _docker_python(root)
     try:
+        if version:
+            python = _python_language_version(root, version, interpreter_selector=True)
+            if not any(marker in python for marker in "<>=!~,*"):
+                python = f"python{python}"
+        else:
+            python = _docker_python(root)
         validate_local_install_extras(root, install, extras or [], context_excludes=context_excludes)
         selection = select_python_extras(root, extras or [], context_excludes=context_excludes)
         requirements = select_python_requirements(root, requirements_files or [], context_excludes=context_excludes)
@@ -1200,20 +1207,20 @@ def _plan_python(
         ]
     elif (root / "requirements.txt").is_file():
         commands = [
-            [python, "-m", "venv", ".venv"],
+            ["uv", "venv", "--python", python, ".venv"]
+            if version else [python, "-m", "venv", ".venv"],
             [
-                ".venv/bin/python",
-                "-m",
-                "pip",
+                *(["uv", "pip"] if version else [".venv/bin/python", "-m", "pip"]),
                 "install",
+                *(["--python", ".venv/bin/python"] if version else []),
                 "--requirement",
                 "requirements.txt",
             ],
         ]
         run = [".venv/bin/python", *([entry] if entry is not None else [])]
     else:
-        commands = []
-        run = [python, *([entry] if entry is not None else [])]
+        commands = [["uv", "venv", "--python", python, ".venv"]] if version else []
+        run = [".venv/bin/python" if version else python, *([entry] if entry is not None else [])]
     if requirements:
         if not commands:
             commands.append([python, "-m", "venv", ".venv"])
@@ -2394,6 +2401,7 @@ def resolve_environment_plan(
             livekit_download=is_livekit,
             extras=runtime_model.extras,
             install=runtime_model.install,
+            version=runtime_model.version,
             requirements_files=runtime_model.requirements_files,
             context_excludes=tuple(runtime_model.context_excludes),
             run_override=(

@@ -3278,3 +3278,34 @@ def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_
     )
     assert unused["status"] == "missing"
     assert unused["required"] is True
+
+@pytest.mark.parametrize("version", ["3.12", "3.12.8"])
+def test_native_runtime_honors_declared_python_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="http"),
+        contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    command = process.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "==3.12.*,>=3.12" if version == "3.12" else "python3.12.8"
+    )
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+@pytest.mark.parametrize("version", ["3.11.9", "nonsense", "3.12garbage"])
+def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="http"),
+            contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+        )
