@@ -2049,6 +2049,12 @@ def world_summary(world_root: Path) -> str:
         return (
             "NATIVE RUNTIME: no local database or tool replay exists. Write setup(world) using "
             "world.request(capability, method, relative_path, json=payload) against the real API. "
+            " Use form=fields instead of json for form login; never both. Cookies persist privately "
+            "per capability across setup/ready/checks. In setup, world.set_headers(capability, "
+            "{header: value}) sets private default auth headers from a real login response. "
+            "request(headers=...) overrides defaults for that request only. Use "
+            "capture_headers=[name] to read selected response headers via response['headers']. "
+            "No session credentials enter public world state or artifacts. "
             "ready(world) must read and verify the exact fixture. Checks may read GET/HEAD "
             "responses and actual calls. Local proof is DEFERRED until live validation. "
             "Do not invent login credentials or fixture IDs; declare fixed values the native "
