@@ -61,9 +61,6 @@ class RepoSource:
             ".venv",
             "node_modules",
             "__pycache__",
-            "artifacts",
-            "build",
-            "dist",
         }
         indexed: list[str] = []
         for path in sorted(self.root.rglob("*")):

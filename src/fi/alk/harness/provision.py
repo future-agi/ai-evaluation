@@ -143,23 +143,29 @@ _FINGERPRINT_IGNORED = {
     ".ruff_cache",
     ".venv",
     "__pycache__",
-    "artifacts",
-    "build",
-    "dist",
     "node_modules",
 }
 
 
-def source_fingerprint(source: str | Path) -> str:
+def source_fingerprint(source: str | Path, *, exclude: str | Path | None = None) -> str:
     """Identify the exact submitted source used to build an environment.
 
     A path is not a version. Reusing a healthy Compose project after files at that path changed
     silently runs yesterday's image against today's contract and scenarios. Hash the build
-    context while excluding local caches and generated artifacts so reuse is both safe and fast.
+    context while excluding explicit metadata and caches so reuse is both safe and fast.
     """
     root = Path(source).expanduser().resolve()
+    excluded = Path(exclude).expanduser().resolve() if exclude is not None else None
+    if excluded == root:
+        raise ProvisionError("source_fingerprint_exclusion_is_source")
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*")):
+        if (
+            excluded is not None
+            and excluded.is_relative_to(root)
+            and path.is_relative_to(excluded)
+        ):
+            continue
         if any(part in _FINGERPRINT_IGNORED for part in path.relative_to(root).parts):
             continue
         if path.is_symlink():
@@ -671,7 +677,7 @@ def _published_port(
 
 def _url_settings(source: Path) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
-    ignored = {".git", ".venv", "node_modules", "dist", "build", "__pycache__"}
+    ignored = {".git", ".venv", "node_modules", "__pycache__"}
     for path in source.rglob("*"):
         if (
             path.suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx"}
@@ -699,7 +705,7 @@ def _url_settings(source: Path) -> list[tuple[str, str]]:
 def _declared_configuration_names(source: Path) -> set[str]:
     """Configuration variables the submitted source actually reads or documents."""
     found = {name for name, _ in _url_settings(source)}
-    ignored = {".git", ".venv", "node_modules", "dist", "build", "__pycache__"}
+    ignored = {".git", ".venv", "node_modules", "__pycache__"}
     for path in source.rglob("*"):
         if (
             path.suffix.lower() not in {".py", ".js", ".jsx", ".ts", ".tsx"}
@@ -1790,7 +1796,9 @@ def provision(
 ) -> ProvisionedEnvironment:
     """Start and record the environment described by one source repository."""
     source_root = Path(source).expanduser().resolve()
-    destination = Path(destination)
+    destination = Path(destination).expanduser().resolve()
+    if destination == source_root:
+        raise ProvisionError("provision_destination_is_source")
     runtime = getattr(contract, "runtime", None)
     if (
         getattr(runtime, "execution", "auto") != "auto"
@@ -1929,7 +1937,7 @@ def provision(
         raise ProvisionError(
             f"{source_root} does not ship a Compose file; a non-Compose runtime adapter is required"
         )
-    fingerprint = source_fingerprint(source_root)
+    fingerprint = source_fingerprint(source_root, exclude=destination)
     runtime_fingerprint = generated_runtime.fingerprint if generated_runtime else ""
     runtime_configuration_names = sorted(
         {

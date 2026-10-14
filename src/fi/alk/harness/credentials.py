@@ -103,9 +103,6 @@ _IGNORED_PARTS = {
     "test",
     "tests",
     "__pycache__",
-    "artifacts",
-    "build",
-    "dist",
     "vendor",
 }
 _SOURCE_SUFFIXES = {
