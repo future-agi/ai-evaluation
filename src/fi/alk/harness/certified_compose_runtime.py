@@ -63,6 +63,7 @@ _SERVICE_KEYS = {
     "logging",
     "extra_hosts",
     "container_name",
+    "deploy",
 }
 _NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
@@ -217,6 +218,21 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
             raise ComposeRuntimeError(
                 f"compose_service_fields_forbidden: {name}: {','.join(sorted(set(service) - _SERVICE_KEYS))}"
             )
+        if "deploy" in service:
+            deploy = service["deploy"]
+            if not isinstance(deploy, dict) or set(deploy) != {"replicas"}:
+                raise ComposeRuntimeError(
+                    f"compose_deploy_fields_unsupported: {name}: only replicas is supported"
+                )
+            replicas = deploy["replicas"]
+            if not (
+                (type(replicas) is int and replicas == 1)
+                or (isinstance(replicas, str) and replicas == "1")
+            ):
+                raise ComposeRuntimeError(
+                    f"compose_replicas_unsupported: {name}: exactly one replica is supported"
+                )
+            deploy["replicas"] = 1
         scoped_alias = _local_service_options(service)
         if not service.get("image") and not service.get("build"):
             raise ComposeRuntimeError("compose_service_image_or_build_required")
