@@ -503,6 +503,7 @@ class HostedChatCallRunner:
                 endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
             ),
             protocol=adapter_protocol,
+            model=interface.model,
             include_tools=interface.include_tools,
             request_template=interface.request_template,
             response_path=interface.response_path,

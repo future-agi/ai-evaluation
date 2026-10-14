@@ -684,6 +684,13 @@ def contract_tools(
                                     "envelope. Use json_template for any other source-owned JSON "
                                     "API and describe its exact envelope below.",
                                 },
+                                "model": {
+                                    "type": "string",
+                                    "description": "For openai_chat: exact source-owned model "
+                                    "or profile identifier accepted by this endpoint. Read it "
+                                    "from the source API or configuration; do not substitute "
+                                    "the backing provider model unless the endpoint expects it.",
+                                },
                                 "port": {
                                     "type": "integer",
                                     "description": "Container port the submitted chat service "

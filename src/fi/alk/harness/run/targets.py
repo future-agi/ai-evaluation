@@ -322,6 +322,7 @@ class RepositoryChatTarget:
                     base.rstrip("/") + "/", self.interface.path.lstrip("/")
                 ),
                 protocol=self.interface.protocol,
+                model=self.interface.model,
                 include_tools=self.interface.include_tools,
                 request_template=self.interface.request_template,
                 response_path=self.interface.response_path,

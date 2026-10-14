@@ -364,6 +364,11 @@ class RuntimeInterface(BaseModel):
 
     kind: str = ""
     protocol: str = "fi.alk"
+    model: str | None = Field(
+        default=None,
+        description="Source-owned model or profile identifier accepted by the OpenAI-compatible "
+        "endpoint. Preserve its exact value; it need not be the backing provider model.",
+    )
     port: int | None = Field(default=None, ge=1, le=65535)
     path: str = ""
     health_path: str = ""
