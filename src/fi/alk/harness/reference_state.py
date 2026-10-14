@@ -102,6 +102,59 @@ def normalise(value: Any) -> str:
     return re.sub(r"[\W_]+", "", text.casefold())
 
 
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september",
+           "october", "november", "december")
+
+
+def given_text(*facts: Any, said: Any = "", world: dict[str, Any] | None = None) -> str:
+    """What a scenario fixes as one normalised text: its structured facts (the caller's details,
+    the fixture), the identifiers, numbers and dates in what the caller is told, and the values
+    that identify one record in the world. A word in a sentence vouches for nothing."""
+    found: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+        elif value not in (None, "") and not isinstance(value, bool):
+            found.append(normalise(value))
+
+    for part in facts:
+        walk(part)
+    text = str(said or "")
+    found.extend(normalise(token) for token in re.findall(r"[\w$.,:/+-]*\d[\w.,:/+-]*", text))
+    words = re.sub(r"[\W_]+", "", text.casefold())
+    found.extend(f"{month}{day}" for month in _MONTHS for day in range(1, 32) if f"{month}{day}" in words)
+    counts: dict[str, int] = {}
+    for rows in _tables(world).values():
+        for row in rows:
+            for value in row.values():
+                if value not in (None, "") and not isinstance(value, (bool, dict, list)):
+                    counts[normalise(value)] = counts.get(normalise(value), 0) + 1
+    found.extend(form for form, seen in counts.items() if seen == 1)
+    return " " + " ".join(form for form in found if form) + " "
+
+
+def _from_scenario(value: Any, given: str | None) -> bool:
+    """Whether a value is a fact the scenario or the world fixed, rather than something the
+    reference's author chose (a wording, a routing, a flag): only those have one right answer."""
+    if given is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    form = normalise(value)
+    if form and f" {form} " in given:
+        return True
+    when = _when(value)
+    if when is not None:
+        month = _MONTHS[when.month - 1]
+        return f" {normalise(when.date().isoformat())} " in given or f" {month}{when.day} " in given
+    return False
+
+
 def _rule(rules: dict[str, Any] | None, table: str, field: str) -> dict[str, Any]:
     """The scenario's own comparison rule for a field, by `table.field` or by field alone."""
     rules = rules or {}
@@ -227,7 +280,11 @@ def _effects(calls: list[Any]) -> list[dict[str, Any]]:
 
 
 def compare_calls(
-    solution: list[Any], calls: list[Any], *, rules: dict[str, Any] | None = None
+    solution: list[Any],
+    calls: list[Any],
+    *,
+    rules: dict[str, Any] | None = None,
+    given: str | None = None,
 ) -> str | None:
     """None when every solution step marked as the outcome has a successful call to its tool
     carrying its arguments; otherwise whether it was not done, done wrong or done twice. Each step
@@ -242,11 +299,19 @@ def compare_calls(
     steps = [step for step in solution or () if field_of(step, "outcome") is True]
     for step in steps:
         tool = str(field_of(step, "tool") or "")
-        want = _flat(field_of(step, "arguments") or {})
+        want = {
+            field: value
+            for field, value in _flat(field_of(step, "arguments") or {}).items()
+            if _from_scenario(value, given)
+        }
         done = [
             call for call in calls
             if getattr(call, "name", "") == tool and getattr(call, "ok", False) and not getattr(call, "refused", False)
         ]
+        if not want:
+            if not done:
+                said.append(f"not done: no successful {tool} call")
+            continue
         if not done:
             stated = ", ".join(f"{field} {value}" for field, value in sorted(want.items()))
             said.append(f"not done: no successful {tool} call" + (f"; expected one with {stated}" if stated else ""))
@@ -265,7 +330,8 @@ def compare_calls(
         same = sum(fit(effect) == len(want) for effect in effects)
         wanted = sum(
             1 for one in steps
-            if str(field_of(one, "tool") or "") == tool and _flat(field_of(one, "arguments") or {}) == want
+            if str(field_of(one, "tool") or "") == tool
+            and {f: v for f, v in _flat(field_of(one, "arguments") or {}).items() if _from_scenario(v, given)} == want
         )
         if want and same > wanted:
             said.append(f"done wrong: {same} successful {tool} calls with these values where the reference makes {wanted} (a duplicate)")
@@ -279,6 +345,7 @@ def compare(
     *,
     rules: dict[str, Any] | None = None,
     expect_nothing: bool = False,
+    given: str | None = None,
 ) -> str | None:
     """None when the final records hold every expected row and nothing more of it; otherwise, per
     row, whether it was not done at all, done wrong or done twice. With `expect_nothing` (the
@@ -292,6 +359,12 @@ def compare(
                 "reference solution changes nothing"
             )
         return "; ".join(said) or None
+    expected = {
+        name: [want for want in (
+            {field: value for field, value in row.items() if _from_scenario(value, given)} for row in rows
+        ) if want]
+        for name, rows in expected.items()
+    }
     for name in sorted(expected):
         candidates = actual.get(name, [])
 

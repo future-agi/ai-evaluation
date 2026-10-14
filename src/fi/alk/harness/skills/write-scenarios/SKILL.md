@@ -281,6 +281,11 @@ More of the same record than the solution leaves is graded a duplicate. When the
 record at all, any record the call changes is graded wrong, so a solution that correctly changes
 nothing must still include every step a correct agent would take that leaves a record.
 
+The outcome must be reachable inside the conversation. When a step waits on something nobody in it
+can do, such as a link opened on another device or a reply that arrives after the call, either make
+the setup bring it about, or end the solution at what the agent can do (the link sent) and make that
+the outcome.
+
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
 supposedly chose. Put them in `environment_arguments` on the same step, which the proof passes to the

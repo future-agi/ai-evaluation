@@ -55,6 +55,7 @@ from .joint_judge import OFF_SCRIPT
 from .reference_state import NAME as REFERENCE_SUB_GOAL
 from .reference_state import compare as compare_records
 from .reference_state import compare_calls
+from .reference_state import given_text
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
@@ -2098,7 +2099,11 @@ class HostedScheduler:
 
         expected = getattr(scenario, "expected_changes", None) or {}
         expect_nothing = getattr(scenario, "reference_changes_nothing", False) is True
-        before = await self._records_now(read_only) if expected or expect_nothing else None
+        marked = any(
+            isinstance(step, dict) and step.get("outcome") is True
+            for step in getattr(scenario, "solution", None) or ()
+        )
+        before = await self._records_now(read_only) if expected or expect_nothing or marked else None
         try:
             call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
         except WorldUnavailable as exc:
@@ -2319,7 +2324,12 @@ class HostedScheduler:
         ):
             # The reference could not be replayed to records (the agent's tools run in its own
             # process), so its outcome steps are compared with the calls the agent made.
-            said = compare_calls(solution, list(calls), rules=getattr(scenario, "comparisons", None) or {})
+            said = compare_calls(
+                solution,
+                list(calls),
+                rules=getattr(scenario, "comparisons", None) or {},
+                given=self._given(scenario, before),
+            )
             sub_goal_results.append(
                 SubGoalResult(
                     name=REFERENCE_SUB_GOAL,
@@ -2338,6 +2348,7 @@ class HostedScheduler:
                     after,
                     rules=getattr(scenario, "comparisons", None) or {},
                     expect_nothing=expect_nothing,
+                    given=self._given(scenario, before),
                 )
                 sub_goal_results.append(
                     SubGoalResult(
@@ -2397,6 +2408,15 @@ class HostedScheduler:
             call=self._call_summary(call_outcome),
             failure=failure,
         )
+
+    @staticmethod
+    def _given(scenario: Any, before: dict[str, Any] | None) -> str | None:
+        """What the scenario fixes for the caller and what the world held, or None (compare every
+        value) for a scenario compiled without it."""
+        fixed = getattr(scenario, "given", None)
+        if not fixed:
+            return None
+        return f"{fixed}{given_text(world=before)}" if before else fixed
 
     async def _records_now(self, handle: Any) -> dict[str, Any] | None:
         """The world's records, or None when they cannot be read; the comparison is then skipped."""

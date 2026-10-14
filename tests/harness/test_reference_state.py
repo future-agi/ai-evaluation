@@ -264,3 +264,20 @@ def test_the_same_tool_marked_twice_matches_each_step_to_its_own_call():
     assert compare_calls(solution, right) is None
     wrong = [_Call("confirm_address", role="pickup", place="SFO"), _Call("confirm_address", role="dropoff", place="SJC")]
     assert compare_calls(solution, wrong) == "done wrong: confirm_address.place expected OAK, got SJC"
+
+
+def test_only_values_the_scenario_or_world_fixed_are_compared():
+    from fi.alk.harness.reference_state import compare_calls, given_text
+
+    given = given_text(
+        {"policy_number": "MM-8846099"},
+        said="You call about claim CLM-91234 from October 13th and want a human for customer service.",
+        world={"queues": [{"name": "general"}, {"name": "general"}], "policies": [{"id": "pol_henrik"}]},
+    )
+    solution = [{"tool": "transfer", "arguments": {"queue": "customer_service", "claim": "CLM-91234",
+                                                   "policy": "pol_henrik", "date": "2026-10-13"}, "outcome": True}]
+    right = [_Call("transfer", queue="general", claim="CLM-91234", policy="pol_henrik", date="2026-10-13")]
+    assert compare_calls(solution, right, given=given) is None
+    wrong = [_Call("transfer", queue="general", claim="CLM-91235", policy="pol_henrik", date="2026-10-14")]
+    said = compare_calls(solution, wrong, given=given)
+    assert "claim expected CLM-91234" in said and "date expected 2026-10-13" in said and "queue" not in said

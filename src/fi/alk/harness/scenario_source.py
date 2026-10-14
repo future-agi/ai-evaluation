@@ -19,6 +19,7 @@ always matched by `scenario_key`, never response position.
 
 from __future__ import annotations
 
+
 import asyncio
 import ast
 import json
@@ -30,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 from . import outbound as ob
 from .catalogue import CATALOGUE
 from .job import FailureDomain
+from .reference_state import given_text
 
 if TYPE_CHECKING:
     from .hosted_entrypoint import ScenariosClient
@@ -280,6 +282,9 @@ class _CompiledScenario:
     expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     reference_changes_nothing: bool = False
     comparisons: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # What the scenario fixes for the caller, normalised; a reference value is compared only if
+    # it traces here or to the world's records.
+    given: str = ""
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -559,6 +564,9 @@ def _load_one(
         ),
         reference_changes_nothing=body.get("reference_changes_nothing") is True,
         comparisons=body["comparisons"] if isinstance(body.get("comparisons"), dict) else {},
+        given=given_text(
+            body.get("fixture"), body.get("variables"), body.get("persona"), said=body.get("instruction")
+        ),
     )
 
 
