@@ -20,6 +20,8 @@ import yaml
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .secrets import process_secret_environment_names
+
 if TYPE_CHECKING:
     from .contract import Runtime
     from .runtime_selection import ComposeSelection, NativeSelection
@@ -422,11 +424,7 @@ def discover_credentials(
         configured.add(str(alias).upper())
         configured.add(str(ref.key).upper())
         configured.add(_identifier(ref.purpose).upper())
-    # Hosted process runtime materializes this vault value to a private file and exports the
-    # conventional Google variable to the child.  Discovery deals in names only; no credential
-    # value is read or persisted here.
-    if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in configured:
-        configured.add("GOOGLE_APPLICATION_CREDENTIALS")
+    configured.update(process_secret_environment_names(configured))
 
     findings: dict[str, dict[str, object]] = {}
     connector_hits: set[str] = set()

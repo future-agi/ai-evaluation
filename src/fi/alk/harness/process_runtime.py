@@ -66,6 +66,7 @@ from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .job import FailureDomain
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT
 from .provider_import import (
     ProviderImportError,
     ProviderImportSpec,
@@ -918,7 +919,7 @@ _INHERITED_ENV_ALLOWLIST = (
     "NODE_EXTRA_CA_CERTS",
 )
 _GOOGLE_ADC_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
-_GOOGLE_ADC_PATH_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
+_GOOGLE_ADC_PATH_ALIAS = PROCESS_SECRET_FILE_ENVIRONMENT[_GOOGLE_ADC_JSON_ALIAS]
 
 
 def _allowlisted_ambient_env(source: dict[str, str]) -> dict[str, str]:
