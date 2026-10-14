@@ -822,7 +822,7 @@ def contract_tools(
                                                     "null",
                                                 ]
                                             },
-                                            "description": "Alternative to failure_values. Any status outside this explicit successful set fails, including missing status fields.",
+                                            "description": "Alternative to failure_values. Any status outside this explicit successful set fails, including missing status fields. Preserve JSON scalar types: [null] for JSON null, [0] for numeric zero, [false] for boolean false. An empty list is invalid.",
                                         },
                                         "message_path": {
                                             "type": "string",
