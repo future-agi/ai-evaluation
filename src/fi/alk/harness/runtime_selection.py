@@ -102,6 +102,7 @@ def select_runtime(
             public_environment or {},
             validate_environment_dependencies,
             service_bases,
+            additional_services=runtime.additional_services,
         )
     services = {
         name: {
@@ -133,6 +134,8 @@ def _runtime_compose_services(
     public_environment: dict[str, str],
     validate_environment_dependencies: bool = True,
     service_bases: dict[str, Path] | None = None,
+    *,
+    additional_services: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Select a declared HTTP runtime and retain its submitted dependency graph."""
     component = (root / workdir).resolve()
@@ -169,7 +172,7 @@ def _runtime_compose_services(
         )
     control = control or matches[0]
     selected: set[str] = set()
-    pending = [control]
+    pending = [control, *(additional_services or [])]
     while pending:
         name = pending.pop()
         if name in selected:
