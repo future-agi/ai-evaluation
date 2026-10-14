@@ -25,6 +25,7 @@ from .catalogue import criteria_text
 from .config import chosen_model
 from .session import Stage
 from .tools import schema
+from .world.observation import ObservationWorld
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,9 @@ What you are given:
 How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
-   and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names.
+   and inspect the records when the criteria are about what changed. Use inspect_world to discover
+   what the environment supports. Only query records when a query tool is available; never invent
+   records or infer unobserved state from capability names.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
    the criteria say what that means, and whether the agent's own behaviour kept it from arising
    matters.
@@ -113,13 +115,29 @@ async def judge(
 ) -> tuple[bool | None, str]:
     """Decide one judged sub-goal: (passed, explanation). Never raises."""
     verdict: dict[str, tuple[bool | None, str]] = {}
+    native = isinstance(world, ObservationWorld)
 
     @tool(
         "inspect_world",
-        "The world's tables: without a name, every table and its row count; with one, its rows.",
-        schema({"table": str}, []),
+        (
+            "The native environment's declared capabilities and evidence limits; no database state."
+            if native
+            else "The world's tables: without a name, every table and its row count; with one, its rows."
+        ),
+        schema({} if native else {"table": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        if native:
+            return _say(
+                _dump(
+                    {
+                        "kind": "native_observation",
+                        "capabilities": list(world.capabilities),
+                        "state_access": "No local database or SQL query is available to the judge. Capability names are not state evidence.",
+                        "evidence": "Use recorded actions and their results, and read_transcript for the captured conversation.",
+                    }
+                )
+            )
         table = str(args.get("table") or "").strip()
         state = world.state(table or None)
         if table:
@@ -185,7 +203,9 @@ async def judge(
         servers={
             "world": tool_server(
                 name="world",
-                tools=[inspect_world, query_world, read_transcript, decide],
+                tools=[inspect_world, read_transcript, decide]
+                if native
+                else [inspect_world, query_world, read_transcript, decide],
             )
         },
         max_turns=12,

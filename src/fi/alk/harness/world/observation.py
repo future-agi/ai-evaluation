@@ -31,6 +31,11 @@ class ObservationWorld:
         self._sessions = {}
         self._http_events = []
 
+    @property
+    def capabilities(self):
+        """Declared HTTP capability names, without endpoints or session credentials."""
+        return tuple(sorted(self._endpoints))
+
     def read_only(self):
         world = ObservationWorld(
             self.world_index, self.rng, self._endpoints, read_only=True
