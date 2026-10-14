@@ -74,7 +74,18 @@ def select_runtime(
     compose = compose.resolve()
     if not compose.is_relative_to(root):
         raise RuntimeSelectionError("runtime_compose_file_invalid")
-    body, service_bases = _load_compose(root, compose, public_environment or {})
+    if runtime.compose_overrides:
+        from .compose_merge import merge_compose
+
+        try:
+            body = merge_compose(
+                root, [compose, *(root / name for name in runtime.compose_overrides)]
+            )
+        except ValueError as exc:
+            raise RuntimeSelectionError(str(exc)) from None
+        service_bases = {name: compose.parent for name in body["services"]}
+    else:
+        body, service_bases = _load_compose(root, compose, public_environment or {})
     if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
         raise RuntimeSelectionError("compose_invalid: services must be an object")
     services = {
@@ -172,6 +183,36 @@ def _runtime_compose_services(
         )
     control = control or matches[0]
     selected: set[str] = set()
+    inactive_optional: dict[str, set[str]] = {}
+    roots = {control, *(additional_services or [])}
+
+    def profiles(service):
+        values = _interpolate_structure(
+            service.get("profiles") or [], public_environment
+        )
+        if (
+            not isinstance(values, list)
+            or len(values) > 32
+            or any(
+                not isinstance(value, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value)
+                for value in values
+            )
+        ):
+            raise RuntimeSelectionError("compose_profiles_invalid")
+        return set(values)
+
+    active_profiles = set(
+        filter(None, public_environment.get("COMPOSE_PROFILES", "").split(","))
+    )
+    if len(active_profiles) > 32 or any(
+        value != "*" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value)
+        for value in active_profiles
+    ):
+        raise RuntimeSelectionError("compose_profiles_invalid")
+    for name in roots:
+        if isinstance(services.get(name), dict):
+            active_profiles.update(profiles(services[name]))
     pending = [control, *(additional_services or [])]
     while pending:
         name = pending.pop()
@@ -202,7 +243,27 @@ def _runtime_compose_services(
         ):
             raise RuntimeSelectionError(f"compose_dependency_invalid: {name}")
         selected.add(name)
-        pending.extend(dependencies)
+        for dependency in dependencies:
+            options = dependencies[dependency] if isinstance(dependencies, dict) else {}
+            target = services.get(dependency, {})
+            dependency_profiles = profiles(target)
+            if (
+                isinstance(options, dict)
+                and options.get("required") is False
+                and dependency_profiles
+                and not dependency_profiles.intersection(active_profiles)
+                and "*" not in active_profiles
+                and dependency not in roots
+            ):
+                inactive_optional.setdefault(name, set()).add(dependency)
+                continue
+            pending.append(dependency)
+    for name in selected:
+        dependencies = services[name].get("depends_on")
+        if isinstance(dependencies, dict):
+            services[name]["depends_on"] = {
+                key: value for key, value in dependencies.items() if key in selected
+            }
     omitted = set(services) - selected
     for name in selected if validate_environment_dependencies else ():
         environment = services[name].get("environment") or {}
@@ -220,7 +281,9 @@ def _runtime_compose_services(
                 hostname = urlsplit(value if "://" in value else "//" + value).hostname
             except ValueError:
                 continue
-            if hostname in omitted:
+            if hostname in omitted and hostname not in inactive_optional.get(
+                name, set()
+            ):
                 raise RuntimeSelectionError(
                     f"compose_dependency_undeclared: {name} environment references {hostname}; "
                     "declare it in depends_on"

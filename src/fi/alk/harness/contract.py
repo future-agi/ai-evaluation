@@ -693,6 +693,7 @@ class Runtime(BaseModel):
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
+    compose_overrides: list[str] = Field(default_factory=list, max_length=8)
     service: str = ""
     additional_services: list[str] = Field(default_factory=list, max_length=32)
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
@@ -723,6 +724,23 @@ class Runtime(BaseModel):
 
         validate_bindings(self.workspaces)
         validate_runtime_resource_paths(self.config_files, self.directories)
+        if self.compose_overrides:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_overrides_require_compose_selection")
+            if (
+                len(set([self.compose_file, *self.compose_overrides]))
+                != len(self.compose_overrides) + 1
+            ):
+                raise ValueError("runtime_compose_overrides_duplicate")
+            if any(
+                not path
+                or len(path) > 1024
+                or "\\" in path
+                or "$" in path
+                or any(ord(c) < 32 for c in path)
+                for path in self.compose_overrides
+            ):
+                raise ValueError("runtime_compose_overrides_path_invalid")
         if self.additional_services:
             if self.execution == "native" or not (self.compose_file and self.service):
                 raise ValueError(
@@ -750,7 +768,7 @@ class Runtime(BaseModel):
             )
         if self.service and not self.compose_file:
             raise ValueError("runtime_selection_incomplete: service needs compose_file")
-        for path in (self.compose_file, self.dockerfile):
+        for path in (self.compose_file, self.dockerfile, *self.compose_overrides):
             if path and (path.startswith("/") or ".." in path.split("/")):
                 raise ValueError(
                     "runtime_selection_path_invalid: use a repository-relative path"
