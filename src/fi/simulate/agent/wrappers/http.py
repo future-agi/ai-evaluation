@@ -96,6 +96,27 @@ class _ResponseFailure(RuntimeError):
         self.stage, self.status = stage, status
 
 
+def _raise_for_application_failure(payload, rule, status_code):
+    status = _select_response_value(payload, rule["status_path"])
+    success_values = rule.get("success_values")
+    failure_values = rule.get("failure_values")
+    if (success_values is None) == (failure_values is None):
+        raise ValueError("HTTP failure rule requires one predicate")
+    matched = any(
+        type(status) is type(value) and status == value
+        for value in (success_values if success_values is not None else failure_values)
+    )
+    failed = not matched if success_values is not None else matched
+    if failed:
+        message_path = rule.get("message_path", "")
+        message = (
+            _content_text(_select_response_value(payload, message_path))
+            if message_path
+            else "Declared application failure"
+        )
+        raise _ResponseFailure("application", status_code, message)
+
+
 _SAFE_TOOL_EVIDENCE_ERRORS = frozenset(
     {
         "missing or invalid event correlation",
@@ -271,30 +292,9 @@ class HTTPAgentWrapper(AgentWrapper):
                 )
             if self.failure_rule:
                 stage = "application"
-                status = _select_response_value(
-                    response_payload, self.failure_rule["status_path"]
+                _raise_for_application_failure(
+                    response_payload, self.failure_rule, status_code
                 )
-                success_values = self.failure_rule.get("success_values")
-                failure_values = self.failure_rule.get("failure_values")
-                if (success_values is None) == (failure_values is None):
-                    raise ValueError("HTTP failure rule requires one predicate")
-                matched = any(
-                    type(status) is type(value) and status == value
-                    for value in (
-                        success_values if success_values is not None else failure_values
-                    )
-                )
-                failed = not matched if success_values is not None else matched
-                if failed:
-                    message_path = self.failure_rule.get("message_path", "")
-                    message = (
-                        _content_text(
-                            _select_response_value(response_payload, message_path)
-                        )
-                        if message_path
-                        else "Declared application failure"
-                    )
-                    raise _ResponseFailure("application", status_code, message)
             stage = "extract"
             response = self._agent_response_from_payload(response_payload)
             if self.completed_tool_events or self.completed_tools:
@@ -527,6 +527,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     f"HTTP setup request returned status {status}"
                     + (f": {detail}" if detail else "")
                 )
+            if item.get("failure_rule"):
+                _raise_for_application_failure(payload, item["failure_rule"], status)
             captures = item.get("capture") or {}
             if not isinstance(captures, Mapping):
                 raise ValueError("HTTP setup capture must be an object")

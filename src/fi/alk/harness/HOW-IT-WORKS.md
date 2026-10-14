@@ -391,6 +391,12 @@ that returns application failures with a successful HTTP status, declare
 {"status_path": "state", "failure_values": ["failed"], "message_path": "detail"}
 ```
 
+Each `runtime.interface.setup_requests` entry also accepts `failure_rule`. Its
+application status is checked after the accepted HTTP status and before captures or
+the next request. For example, `{"status_path":"code","success_values":[0]}`
+rejects an HTTP 200 setup response whose application code is 102. Comparisons preserve
+JSON scalar types; numeric zero does not match boolean false or the string "0".
+
 ALK does not infer failure merely because an arbitrary response contains an `error`
 field. Failed calls retain partial conversation evidence and bounded diagnostics.
 Excerpts are omitted when the caller cannot supply credential context. HTTP bodies
