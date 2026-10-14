@@ -1097,3 +1097,30 @@ def test_real_unpackaged_node_agent_builds_and_starts(
     finally:
         stop_runtime(session)
         stop(session)
+
+@pytest.mark.parametrize("version", ["3.11.9", "not-a-version", "<3.12"])
+def test_generated_python_rejects_incompatible_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    with pytest.raises(GeneratedRuntimeError, match="generated_runtime_python_version_unsupported"):
+        detect_generated_runtime(tmp_path, Runtime(language="python", version=version))
+
+
+def test_generated_python_range_intersects_project_requirement(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.13'\n"
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    plan = detect_generated_runtime(tmp_path, Runtime(language="python", version=">=3.12"))
+    assert "FROM python:3.13-slim" in plan.dockerfile
+
+
+def test_generated_python_minor_image_allows_source_patch_floor(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12.1,<3.13'\n"
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    plan = detect_generated_runtime(tmp_path, Runtime(language="python", version="3.12"))
+    assert "FROM python:3.12-slim" in plan.dockerfile
