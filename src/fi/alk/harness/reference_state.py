@@ -178,7 +178,11 @@ def _same(expected: Any, actual: Any, rule: dict[str, Any] | None = None) -> boo
         minutes = rule.get("tolerance_minutes")
         tolerance = timedelta(minutes=float(minutes)) if minutes is not None else _TIME_TOLERANCE
         return abs(when - then) <= tolerance + timedelta(seconds=59)
-    return any(normalise(one) == normalise(actual) for one in aliases)
+    if any(normalise(one) == normalise(actual) for one in aliases):
+        return True
+    # One identifier written qualified ("saved_card:pm_1") is still that identifier.
+    parts = [part for part in re.split(r"[:/|#]", str(actual or "")) if part]
+    return len(parts) > 1 and any(normalise(one) == normalise(parts[-1]) for one in aliases)
 
 
 def _given(solution: list[Any]) -> tuple[set[str], set[tuple[str, str]]]:
@@ -254,29 +258,50 @@ def _flat(arguments: Any, prefix: str = "") -> dict[str, Any]:
     return found
 
 
-def _effect(call: Any) -> str:
-    """What a call did, as one key: the same effect reported twice (a trace that records a call
-    from two sources) has the same result, a second effect has its own."""
+def _result(call: Any) -> Any:
     result = getattr(call, "result", None)
     if isinstance(result, str):
         try:
-            result = json.loads(result)
+            return json.loads(result)
         except ValueError:
             try:
-                result = ast.literal_eval(result)
+                return ast.literal_eval(result)
             except (ValueError, SyntaxError):
-                pass
-    if result in (None, "", {}, []):
-        return f"call:{id(call)}"
-    return json.dumps(result, sort_keys=True, default=str)
+                return result
+    return result
+
+
+def _agree(one: Any, other: Any) -> bool:
+    """Whether two reports say nothing contradictory: equal, or mappings equal on shared keys."""
+    if isinstance(one, dict) and isinstance(other, dict):
+        return all(normalise(one[key]) == normalise(other[key]) for key in one.keys() & other.keys()
+                   if not isinstance(one[key], (dict, list)))
+    return one in (None, "", {}, []) or other in (None, "", {}, []) or one == other
 
 
 def _effects(calls: list[Any]) -> list[dict[str, Any]]:
-    """Each distinct effect once, in order, with the arguments of every report of it merged."""
-    merged: dict[str, dict[str, Any]] = {}
+    """Each distinct effect once, in order, with the arguments of every report of it merged. A
+    trace can report one call from two sources, one stamped with a time and one not; two reports
+    that agree on their arguments and result, and either carry the same result or come one from
+    each source, are one call."""
+    merged: list[dict[str, Any]] = []
     for call in calls:
-        merged.setdefault(_effect(call), {}).update(_flat(getattr(call, "arguments", {})))
-    return list(merged.values())
+        arguments, result, timed = _flat(getattr(call, "arguments", {})), _result(call), bool(getattr(call, "at", 0))
+        for effect in merged:
+            same_result = result not in (None, "", {}, []) and result == effect["result"]
+            if (
+                effect["reports"] == 1
+                and (same_result or effect["timed"] != timed)
+                and _agree(effect["arguments"], arguments)
+                and _agree(effect["result"], result)
+            ):
+                effect["arguments"].update(arguments)
+                effect["timed"] = effect["timed"] or timed
+                effect["reports"] += 1
+                break
+        else:
+            merged.append({"arguments": dict(arguments), "result": result, "timed": timed, "reports": 1})
+    return [effect["arguments"] for effect in merged]
 
 
 def compare_calls(
@@ -287,7 +312,9 @@ def compare_calls(
     given: str | None = None,
 ) -> str | None:
     """None when every solution step marked as the outcome has a successful call to its tool
-    carrying its arguments; otherwise whether it was not done, done wrong or done twice. Each step
+    carrying its arguments; otherwise whether it was not done or done wrong. A second call is not
+    read as a duplicate: calls cannot tell a second record from an update of the first, the final
+    records can. Each step
     is matched to the call that fits it best, the later one on a tie, so the same tool used twice
     (two addresses) and a value corrected mid-call both read right. None too when no step is
     marked, so older scenarios are not graded this way."""
@@ -327,14 +354,6 @@ def compare_calls(
             for field, value in sorted(want.items())
             if not _same(value, got.get(field), _rule(rules, tool, field))
         )
-        same = sum(fit(effect) == len(want) for effect in effects)
-        wanted = sum(
-            1 for one in steps
-            if str(field_of(one, "tool") or "") == tool
-            and {f: v for f, v in _flat(field_of(one, "arguments") or {}).items() if _from_scenario(v, given)} == want
-        )
-        if want and same > wanted:
-            said.append(f"done wrong: {same} successful {tool} calls with these values where the reference makes {wanted} (a duplicate)")
     return "; ".join(dict.fromkeys(said)) or None
 
 

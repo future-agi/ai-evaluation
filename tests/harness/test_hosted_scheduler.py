@@ -4361,3 +4361,18 @@ def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(mon
     assert receipt.failure.code == "caller_off_script"
     assert receipt.failure.domain == "simulator"
     assert [g.held for g in receipt.sub_goals] == [False, True]
+
+
+def test_an_unreachable_outcome_marks_the_call_invalid(monkeypatch) -> None:
+    from fi.alk.harness.joint_judge import UNREACHABLE
+
+    async def _all(goals, world, calls, *, messages=()):
+        return {
+            "confirmed": (False, "no booking"),
+            "refused_card": (True, "it refused"),
+            UNREACHABLE: (False, "the booking waited on a payment link nobody in the call could pay"),
+        }
+
+    receipt, _ = _two_judged(monkeypatch, _all)
+    assert receipt.status == "errored"
+    assert receipt.failure.code == "outcome_unreachable"

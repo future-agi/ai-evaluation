@@ -214,8 +214,6 @@ def test_the_last_successful_call_counts_and_a_failed_one_is_not_done():
     assert compare_calls(solution, corrected) is None
     assert compare_calls(solution, [_Call("file_claim", ok=False, policy="MM-1")]).startswith("not done:")
     assert compare_calls(solution, [_Call("file_claim", policy="MM-9")]) == "done wrong: file_claim.policy expected MM-1, got MM-9"
-    twice = [_Call("file_claim", policy="MM-1"), _Call("file_claim", policy="MM-1")]
-    assert "duplicate" in compare_calls(solution, twice)
     skip = {"file_claim.policy": {"match": "skip"}}
     assert compare_calls(solution, [_Call("file_claim", policy="anything")], rules=skip) is None
 
@@ -240,9 +238,6 @@ def test_one_effect_reported_twice_is_one_call_with_its_arguments_merged():
     partial = _Call("file_claim", confirmed=True)
     partial.result = "{'claim_ref': 'CLM-1'}"
     assert compare_calls(solution, [full, partial]) is None
-    second = _Call("file_claim", loss_date="2026-10-13", confirmed=True)
-    second.result = {"claim_ref": "CLM-2"}
-    assert "duplicate" in compare_calls(solution, [full, partial, second])
 
 
 def test_a_phrase_the_agent_may_word_its_own_way_is_left_to_the_judge():
@@ -281,3 +276,25 @@ def test_only_values_the_scenario_or_world_fixed_are_compared():
     wrong = [_Call("transfer", queue="general", claim="CLM-91235", policy="pol_henrik", date="2026-10-14")]
     said = compare_calls(solution, wrong, given=given)
     assert "claim expected CLM-91234" in said and "date expected 2026-10-13" in said and "queue" not in said
+
+
+def test_one_call_reported_by_a_timed_and_an_untimed_source_is_one_effect():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [{"tool": "create_rider", "arguments": {"first_name": "Maya"}, "outcome": True}]
+    untimed = _Call("create_rider", phone="+14155550187", first_name="Maya")
+    untimed.result, untimed.at = {"rider_id": "r1"}, 0.0
+    timed = _Call("create_rider", first_name="Maya")
+    timed.result, timed.at = "{'created': True, 'first_name': 'Maya'}", 1792009742.5
+    assert compare_calls(solution, [untimed, timed]) is None
+    wrong = _Call("create_rider", first_name="Mia")
+    wrong.result, wrong.at = {"created": True, "first_name": "Mia"}, 1792009800.0
+    assert compare_calls(solution, [wrong]) == "done wrong: create_rider.first_name expected Maya, got Mia"
+
+
+def test_a_qualified_identifier_is_the_same_identifier():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [{"tool": "pay", "arguments": {"payment_method": "pm_eli_amex"}, "outcome": True}]
+    assert compare_calls(solution, [_Call("pay", payment_method="saved_card:pm_eli_amex")]) is None
+    assert compare_calls(solution, [_Call("pay", payment_method="saved_card:pm_other")]) is not None

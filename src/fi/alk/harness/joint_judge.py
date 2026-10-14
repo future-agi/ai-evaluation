@@ -80,9 +80,11 @@ actions or the records.
 The customer is simulated and was given a side to play. Separately from the sub-goals, if the
 customer contradicted a fact their side fixed for them (not a detail they were free to choose), or
 never gave the agent the chance the conversation was meant to show although they could have, call
-customer_off_script once with what they did. The call is then not counted for or against the agent.
-Never call it because the agent kept something from happening, or for a detail the customer was
-free to choose.
+customer_off_script once with what they did. If instead the outcome could not be reached because it
+needed something nobody in the conversation can do (a payment completed on another device, a reply
+that only comes after the call) while the agent did what its instructions say meanwhile, call it with
+`unreachable` true. Either way the call is not counted for or against the agent. Never call it
+because the agent kept something from happening, or for a detail the customer was free to choose.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
 said or did and what followed from it, in the terms of their business, citing what actually
@@ -93,6 +95,8 @@ Put anything about how you checked into `evidence`, which only the reviewers of 
 
 # The key under which a report that the simulated customer left their side comes back.
 OFF_SCRIPT = "__customer_off_script__"
+# The key under which a report that the outcome needed something nobody in the call could do comes back.
+UNREACHABLE = "__outcome_unreachable__"
 
 
 async def judge_sub_goals_jointly(
@@ -118,14 +122,14 @@ async def judge_sub_goals_jointly(
         "customer_off_script",
         "Report, once, that the simulated customer contradicted a fact fixed for them or withheld "
         "the chance the conversation was meant to show.",
-        schema({"what": str, "evidence": str}, ["what", "evidence"]),
+        schema({"what": str, "evidence": str, "unreachable": bool}, ["what", "evidence"]),
     )
     async def customer_off_script(args: dict[str, Any]) -> dict[str, Any]:
         what = str(args.get("what") or "").strip()
         if not what:
             return _say("say what the customer did", error=True)
         logger.info("customer off script: %s (%s)", what, args.get("evidence"))
-        verdict[OFF_SCRIPT] = (False, what)
+        verdict[UNREACHABLE if args.get("unreachable") is True else OFF_SCRIPT] = (False, what)
         return _say("recorded")
 
     @tool(

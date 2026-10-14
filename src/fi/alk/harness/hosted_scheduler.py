@@ -51,7 +51,7 @@ from .outbound import (
     HostedChannelFailedError,
     HostedFencedError,
 )
-from .joint_judge import OFF_SCRIPT
+from .joint_judge import OFF_SCRIPT, UNREACHABLE
 from .reference_state import NAME as REFERENCE_SUB_GOAL
 from .reference_state import compare as compare_records
 from .reference_state import compare_calls
@@ -399,6 +399,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
     "caller_off_script": FailureDomain.SIMULATOR,
+    "outcome_unreachable": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
@@ -1602,7 +1603,11 @@ class HostedScheduler:
             accepted = inspect.signature(self._joint_judge).parameters
             context = {name: value for name, value in offered.items() if name in accepted}
             decided = await self._joint_judge(goals, world, calls, messages=call_outcome.messages, **context)
-            off_script = decided.get(OFF_SCRIPT, (None, ""))[1] if isinstance(decided, dict) else ""
+            off_script = ""
+            if isinstance(decided, dict):
+                for key, code in ((OFF_SCRIPT, "caller_off_script"), (UNREACHABLE, "outcome_unreachable")):
+                    if key in decided:
+                        off_script = f"{code}|{decided[key][1]}"
             verdicts = [decided[goal.name] for goal in goals]
         except Exception as exc:  # noqa: BLE001 - a failed shared judge falls back, never errors the call
             logger.warning("judging %d sub-goals together failed, judging each alone: %r", len(goals), exc)
@@ -2375,7 +2380,7 @@ class HostedScheduler:
                 scenario,
                 world_index,
                 attempt,
-                _failure("caller_off_script", off_script),
+                _failure(*off_script.split("|", 1)),
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
                 retry=False,
