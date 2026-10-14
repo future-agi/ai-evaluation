@@ -143,8 +143,8 @@ def compile_bundle(*, source, job, authoring, output, contract):
         return "./" + path.relative_to(source).as_posix()
 
     for service in document["services"].values():
-        # The explicitly selected service and its dependency closure are enabled regardless
-        # of discovery profiles; unrelated profiled services never enter this document.
+        # Explicit roots and their dependency closures are enabled regardless of discovery
+        # profiles; unrelated profiled services never enter this document.
         service.pop("profiles", None)
         build = service.get("build")
         if build:

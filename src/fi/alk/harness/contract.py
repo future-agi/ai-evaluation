@@ -694,6 +694,7 @@ class Runtime(BaseModel):
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
     service: str = ""
+    additional_services: list[str] = Field(default_factory=list, max_length=32)
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
     secret_files: dict[str, list[RuntimeSecretFile]] = Field(default_factory=dict)
     config_files: dict[str, RuntimeConfigFile] = Field(default_factory=dict)
@@ -722,6 +723,21 @@ class Runtime(BaseModel):
 
         validate_bindings(self.workspaces)
         validate_runtime_resource_paths(self.config_files, self.directories)
+        if self.additional_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError(
+                    "runtime_additional_services_require_compose_selection"
+                )
+            if (
+                len(set(self.additional_services)) != len(self.additional_services)
+                or self.service in self.additional_services
+                or any(
+                    len(name) > 128
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+                    for name in self.additional_services
+                )
+            ):
+                raise ValueError("runtime_additional_services_invalid")
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:

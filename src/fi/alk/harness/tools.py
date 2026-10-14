@@ -674,6 +674,17 @@ def contract_tools(
                             "type": "string",
                             "description": "Exact selected Compose service. Its dependency closure is retained.",
                         },
+                        "additional_services": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
                         "required_environment": {
                             "type": "object",
                             "additionalProperties": {
