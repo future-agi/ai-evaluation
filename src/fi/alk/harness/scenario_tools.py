@@ -1226,7 +1226,8 @@ def scenario_tools(
         "whatever the caller asked, reading the world and the call that made it, never only a "
         "call's name. Whether a forbidden thing happened is judged from the records: a check that "
         "holds on an untouched world grades nothing and is refused. A check that a step comes before something "
-        "fails only when that something happened without it, and accepts every tool for the step. Use `judged` for whether a step was right for "
+        "fails only when that something happened without it, and accepts every tool for the step. "
+        "A call's `ok` only means the tool ran without an error or refusal; what it decided (verified or not, found or not) is in its `result` or the records, so read those. Use `judged` for whether a step was right for "
         "this caller (the right record, the right values), whether a step was taken at all, and "
         "what nothing observable settles; it holds the criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES

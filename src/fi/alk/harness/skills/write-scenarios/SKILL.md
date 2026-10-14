@@ -244,7 +244,9 @@ disqualifying announcement is one test billed four times.
 prompt that applies to what the person wants and the state they are in, including a rule that
 overrides the usual flow or ends the conversation early. The steps follow those parts and stop where
 they say to stop; a step this situation's rules skip is not in the solution, and a sub-goal for that
-step is not named here. `try_calls` shows what the world accepts, not what the agent was told to do.
+step is not named here. Never add a step the rules skip just so a sub-goal's check passes: that check
+is wrong for this situation, so leave it off the scenario. `try_calls` shows what the world accepts, not what
+the agent was told to do.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
