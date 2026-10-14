@@ -422,6 +422,8 @@ class ClaudeBackend:
                     tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
                 )
         environment = dict(provider_env(spec.model))
+        # A whole skill with its references is one tool result; the default cap refuses it.
+        environment.setdefault("MAX_MCP_OUTPUT_TOKENS", "60000")
         context = spec.conversation
         if context is not None:
             environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
