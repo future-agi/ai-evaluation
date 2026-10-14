@@ -333,6 +333,11 @@ class _HostedChatTarget:
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
                 raise HTTPCallFailure(trace)
+            for observed in (response.metadata or {}).get("native_completed_tools", []):
+                _record_completed_tool_call(
+                    self.world, name=observed["name"],
+                    arguments=observed["arguments"], response=observed,
+                )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
             )

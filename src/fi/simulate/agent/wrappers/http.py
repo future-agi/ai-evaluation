@@ -8,7 +8,9 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Optional, Sequence
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit, urlencode
+
+from .http_events import CompletedToolEvents
 
 from fi._diagnostics import safe_endpoint, sanitize_diagnostic
 
@@ -19,6 +21,11 @@ from fi.simulate.agent.wrapper import (
     SimulationEvent,
 )
 from fi.simulate.agent.wrapper import AgentWrapper
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class HTTPCallFailure(RuntimeError):
@@ -55,6 +62,7 @@ class HTTPAgentWrapper(AgentWrapper):
         setup_requests: Optional[Sequence[Mapping[str, Any]]] = None,
         failure_rule: Optional[Mapping[str, Any]] = None,
         secret_values: Optional[Mapping[str, str]] = None,
+        completed_tool_events: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if not endpoint:
             raise ValueError("endpoint is required")
@@ -75,6 +83,13 @@ class HTTPAgentWrapper(AgentWrapper):
         self.setup_requests = [dict(item) for item in (setup_requests or [])]
         self.failure_rule = dict(failure_rule) if failure_rule else None
         self.secret_values = dict(secret_values) if secret_values is not None else None
+        self.completed_tool_events = (
+            CompletedToolEvents.model_validate(completed_tool_events)
+            if completed_tool_events is not None
+            else None
+        )
+        self._correlation_id: str | None = None
+        self._observed_event_ids: set[tuple[str, str]] = set()
         self._response_text = ""
         self._response_status = 0
         self._setup_complete = False
@@ -85,6 +100,8 @@ class HTTPAgentWrapper(AgentWrapper):
         self._deadline = (
             time.monotonic() + self.total_timeout
             if self.total_timeout is not None
+            else time.monotonic() + self.timeout
+            if self.completed_tool_events
             else None
         )
         headers: dict[str, str] = {}
@@ -137,6 +154,17 @@ class HTTPAgentWrapper(AgentWrapper):
                     raise _ResponseFailure("application", status_code, message)
             stage = "extract"
             response = self._agent_response_from_payload(response_payload)
+            if self.completed_tool_events:
+                stage = "tool_events"
+                if response.tool_calls:
+                    raise ValueError(
+                        "completed event collection cannot accompany tool requests"
+                    )
+                observed = await self._run_request(self._completed_tools, headers)
+                response.metadata = {
+                    **(response.metadata or {}),
+                    "native_completed_tools": observed,
+                }
         except Exception as exc:
             network_error = isinstance(
                 exc, (urllib.error.URLError, TimeoutError, ConnectionError)
@@ -161,7 +189,13 @@ class HTTPAgentWrapper(AgentWrapper):
             failure_stage = (
                 "setup" if stage == "setup" else getattr(exc, "stage", stage)
             )
-            error = sanitize_diagnostic(str(exc), secrets)
+            if stage == "tool_events":
+                self._response_text = ""
+                error = (
+                    "Completed tool evidence collection failed: " + type(exc).__name__
+                )
+            else:
+                error = sanitize_diagnostic(str(exc), secrets)
 
         latency_ms = round((time.time() - started) * 1000, 4)
         safe_metadata = self.metadata
@@ -186,6 +220,9 @@ class HTTPAgentWrapper(AgentWrapper):
             "request_message_count": len(input.messages),
             "request_tool_count": len(input.tools) if self.include_tools else 0,
             "response_tool_call_count": len(response.tool_calls or []),
+            "response_completed_tool_count": len(
+                (response.metadata or {}).get("native_completed_tools", [])
+            ),
             "success": error is None and 200 <= status_code < 300,
             "request_header_names": sorted(headers),
             "auth": {
@@ -197,7 +234,7 @@ class HTTPAgentWrapper(AgentWrapper):
             "failure_stage": failure_stage,
             "network_error": network_error,
             "response_excerpt": sanitize_diagnostic(self._response_text, secrets)
-            if error
+            if error and stage != "tool_events"
             else "",
         }
         response.events.append(
@@ -363,6 +400,7 @@ class HTTPAgentWrapper(AgentWrapper):
         method: str,
         payload: Any,
         headers: Mapping[str, str],
+        event_request: bool = False,
     ) -> tuple[int, Any]:
         self._response_text = ""
         self._response_status = 0
@@ -378,9 +416,17 @@ class HTTPAgentWrapper(AgentWrapper):
             method=method,
         )
         try:
-            with urllib.request.urlopen(
-                request, timeout=self._remaining_timeout()
-            ) as response:
+            opener = (
+                urllib.request.build_opener(_NoRedirect())
+                if event_request
+                else urllib.request
+            )
+            open_request = opener.open if event_request else opener.urlopen
+            with open_request(request, timeout=self._remaining_timeout()) as response:
+                if self.completed_tool_events and not event_request:
+                    self._correlation_id = response.headers.get(
+                        self.completed_tool_events.correlation_header
+                    )
                 status = int(getattr(response, "status", 200))
                 self._response_status = status
                 raw = self._read_response(response)
@@ -407,6 +453,140 @@ class HTTPAgentWrapper(AgentWrapper):
                 return status, text
             raise _ResponseFailure("decode", status, str(exc)) from exc
 
+    def _completed_tools(self, headers: Mapping[str, str]) -> list[dict[str, Any]]:
+        spec = self.completed_tool_events
+        assert spec is not None
+        correlation = self._correlation_id
+        if (
+            not correlation
+            or len(correlation) > 1024
+            or any(ord(c) < 32 for c in correlation)
+        ):
+            raise _ResponseFailure(
+                "tool_events",
+                self._response_status,
+                "missing or invalid event correlation",
+            )
+        base = urlsplit(self.endpoint)
+        relative = spec.path.replace("{{correlation_id}}", _encoded_path_segment(correlation))
+        endpoint = urlunsplit(
+            (
+                base.scheme,
+                base.netloc,
+                urlsplit(relative).path,
+                urlsplit(relative).query,
+                "",
+            )
+        )
+        actions: dict[str, dict[str, Any]] = {}
+        observations: dict[str, dict[str, Any]] = {}
+        pages: set[str] = set()
+        cursor = None
+        count = 0
+        for page in range(spec.max_pages):
+            page_endpoint = endpoint
+            if cursor is not None:
+                page_endpoint += ("&" if "?" in endpoint else "?") + urlencode(
+                    {spec.page_parameter: cursor}
+                )
+            status, payload = self._request_json(
+                page_endpoint,
+                method="GET",
+                payload=None,
+                headers=headers,
+                event_request=True,
+            )
+            if not 200 <= status < 300:
+                raise _ResponseFailure(
+                    "tool_events", self._response_status, "event endpoint failed"
+                )
+            items = _select_response_value(payload, spec.items_path)
+            if not isinstance(items, list):
+                raise _ResponseFailure(
+                    "tool_events", self._response_status, "event items must be an array"
+                )
+            count += len(items)
+            if count > 2000:
+                raise _ResponseFailure(
+                    "tool_events",
+                    self._response_status,
+                    "event collection exceeds limit",
+                )
+            for event in items:
+                kind = _select_response_value(event, spec.kind_path)
+                if kind == spec.action_kind:
+                    key = _select_response_value(event, spec.action_id_path)
+                    target = actions
+                elif kind == spec.observation_kind:
+                    key = _select_response_value(event, spec.observation_action_id_path)
+                    target = observations
+                else:
+                    continue
+                if not isinstance(key, str) or not key or key in target:
+                    raise _ResponseFailure(
+                        "tool_events",
+                        self._response_status,
+                        "invalid or duplicate tool event identity",
+                    )
+                target[key] = event
+            cursor = _select_response_value(payload, spec.next_page_path)
+            if cursor is None or cursor == "":
+                break
+            if not isinstance(cursor, str) or len(cursor) > 1024 or cursor in pages:
+                raise _ResponseFailure(
+                    "tool_events", self._response_status, "invalid event pagination"
+                )
+            pages.add(cursor)
+        else:
+            raise _ResponseFailure(
+                "tool_events", self._response_status, "event pagination exceeds limit"
+            )
+        if actions.keys() != observations.keys():
+            raise _ResponseFailure(
+                "tool_events",
+                self._response_status,
+                "tool events are missing a paired action or completion",
+            )
+        completed = []
+        identities = set()
+        for key, action in actions.items():
+            identity = (correlation, key)
+            if identity in self._observed_event_ids:
+                continue
+            name = _select_response_value(action, spec.name_path)
+            arguments = _select_response_value(action, spec.arguments_path)
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            result = _select_response_value(observations[key], spec.result_path)
+            error = _select_response_value(observations[key], spec.error_path)
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(arguments, dict)
+                or type(error) is not bool
+            ):
+                raise _ResponseFailure(
+                    "tool_events", self._response_status, "invalid completed tool data"
+                )
+            completed.append(
+                {
+                    "name": name,
+                    "arguments": arguments,
+                    "result": result,
+                    "ok": not error,
+                }
+            )
+            identities.add(identity)
+        if len(self._observed_event_ids) + len(identities) > 10000:
+            raise _ResponseFailure(
+                "tool_events",
+                self._response_status,
+                "completed tool evidence exceeds call limit",
+            )
+        self._observed_event_ids.update(identities)
+        self._response_text = ""
+        return completed
+
     def _read_response(self, response):
         if self._deadline is None:
             return response.read(1024 * 1024 + 1)
@@ -432,7 +612,9 @@ class HTTPAgentWrapper(AgentWrapper):
         if self.protocol == "json_template":
             selected = _select_response_value(payload, self.response_path)
             if isinstance(selected, Mapping):
-                raise ValueError("response_path must select chat content, not a JSON object")
+                raise ValueError(
+                    "response_path must select chat content, not a JSON object"
+                )
             tool_calls, tool_responses = _nested_tool_evidence(payload)
             return AgentResponse(
                 content=_content_text(selected),
