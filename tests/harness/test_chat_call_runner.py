@@ -394,6 +394,146 @@ def test_hosted_chat_executes_response_carried_tool_and_uploads_transcript(
     assert b'"name": "lookup_account"' in adapter.uploads[1]
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "tool_calls": [
+                {
+                    "tool": "quick_search",
+                    "query": "quantum research",
+                    "search_metadata": {"sources": []},
+                }
+            ]
+        },
+        {
+            "tool_calls": [
+                {
+                    "id": "search-1",
+                    "name": "quick_search",
+                    "args": {"query": "quantum research"},
+                }
+            ]
+        },
+        {
+            "tool_calls": [
+                {
+                    "id": "search-1",
+                    "name": "quick_search",
+                    "args": {"query": "quantum research"},
+                }
+            ],
+            "tool_responses": [
+                {
+                    "tool_call_id": "search-1",
+                    "name": "quick_search",
+                    "result": {"sources": []},
+                }
+            ],
+        },
+    ],
+    ids=["descriptive", "canonical", "completed-pair"],
+)
+def test_hosted_chat_does_not_execute_response_metadata(
+    tmp_path: Path, metadata: dict[str, Any]
+) -> None:
+    context = _context(tmp_path)
+    contract = chat.AgentContract.model_validate_json(
+        (context.bundle_dir / "contract.json").read_text()
+    )
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://agent/chat",
+        protocol="json_template",
+        request_template={"messages": "{{messages}}"},
+        response_path="response.content",
+    )
+    requests: list[Any] = []
+
+    def request_json(*_args: Any, **kwargs: Any) -> tuple[int, Any]:
+        requests.append(kwargs["payload"])
+        return 200, {
+            "response": {
+                "content": "Research complete."
+                if len(requests) == 1
+                else "Unexpected continuation.",
+                "metadata": metadata if len(requests) == 1 else {},
+            }
+        }
+
+    wrapper._request_json = request_json  # type: ignore[method-assign]
+    world = _ToolWorld()
+    target = chat._HostedChatTarget(
+        wrapper=wrapper,
+        contract=contract,
+        world=world,
+        scenario_key="research",
+        scenario_id="research-1",
+    )
+
+    answer = asyncio.run(target.say("Research quantum computing."))
+
+    assert answer == "Research complete."
+    assert len(requests) == 1
+    assert world.calls == []
+
+
+def test_hosted_chat_executes_nested_message_call_despite_metadata_response(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    contract = chat.AgentContract.model_validate_json(
+        (context.bundle_dir / "contract.json").read_text()
+    )
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://agent/chat",
+        protocol="json_template",
+        request_template={"messages": "{{messages}}"},
+        response_path="response.content",
+    )
+    requests: list[Any] = []
+
+    def request_json(*_args: Any, **kwargs: Any) -> tuple[int, Any]:
+        requests.append(kwargs["payload"])
+        if len(requests) > 1:
+            return 200, {"response": {"content": "The account is active."}}
+        return 200, {
+            "response": {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "account-1",
+                        "name": "lookup_account",
+                        "args": {"account_id": "ACC-2048"},
+                    }
+                ],
+                "metadata": {
+                    "functionResponse": {
+                        "id": "account-1",
+                        "name": "lookup_account",
+                        "response": {"status": "stale"},
+                    },
+                },
+            }
+        }
+
+    wrapper._request_json = request_json  # type: ignore[method-assign]
+    world = _ToolWorld()
+    target = chat._HostedChatTarget(
+        wrapper=wrapper,
+        contract=contract,
+        world=world,
+        scenario_key="account",
+        scenario_id="account-1",
+    )
+
+    assert asyncio.run(target.say("Look up my account.")) == "The account is active."
+    assert len(requests) == 2
+    assert len(world.calls) == 1
+    assert world.calls[0].name == "lookup_account"
+    assert world.calls[0].arguments == {"account_id": "ACC-2048"}
+    assert world.calls[0].result == {"ok": True}
+
+
 def test_hosted_callable_accepts_completed_tool_response_without_second_call(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

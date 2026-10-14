@@ -627,6 +627,9 @@ def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
     found: list[Any] = []
     if isinstance(value, Mapping):
         for key, item in value.items():
+            # Metadata describes native execution; it does not request harness tools.
+            if key == "metadata":
+                continue
             if str(key) in names:
                 found.append(item)
             found.extend(_nested_named_values(item, names))
