@@ -40,6 +40,14 @@ def test_missing_resources_normalize_without_writing_original(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+def test_unused_resource_error_identifies_only_unconsumed_paths(tmp_path):
+    doc = document()
+    doc["x-alk-directories"].extend(["unused-b", "unused-a"])
+    with pytest.raises(ComposeRuntimeError) as failure:
+        normalize_compose(doc, tmp_path, capabilities={})
+    assert str(failure.value) == "compose_resource_unused: unused-a, unused-b"
+
+
 @pytest.mark.parametrize(
     "path", ["../.env", "/.env", "app.py", "Dockerfile", ".git/a.env"]
 )
