@@ -25,6 +25,7 @@ from .contract import (
     Runtime,
     RuntimeSecretFile,
     RuntimeConfigFile,
+    RuntimeHttpFailureRule,
     known_modalities,
     validate_contract,
 )
@@ -879,6 +880,14 @@ def contract_tools(
                                                 },
                                                 "maxProperties": 16,
                                                 "description": "Map placeholder names to response header names. Use capture for JSON response fields; cookies are automatic.",
+                                            },
+                                            "failure_rule": {
+                                                **RuntimeHttpFailureRule.model_json_schema(),
+                                                "oneOf": [
+                                                    {"required": ["failure_values"]},
+                                                    {"required": ["success_values"]},
+                                                ],
+                                                "description": "Optional source-declared application status rule for this setup response. Checked after HTTP status and before captures or the next request. Use it when HTTP success can contain application failure.",
                                             },
                                             "accepted_statuses": {
                                                 "type": "array",

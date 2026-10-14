@@ -275,6 +275,45 @@ class Reached(BaseModel):
         )
 
 
+class RuntimeHttpFailureRule(BaseModel):
+    status_path: str = Field(min_length=1, max_length=512)
+    failure_values: list[str | int | float | bool | None] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
+    success_values: list[str | int | float | bool | None] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
+    message_path: str = Field(default="", max_length=512)
+
+    @field_validator("status_path", "message_path")
+    @classmethod
+    def _path(cls, value: str) -> str:
+        if value and not re.fullmatch(r"(?:\$\.)?[^.\s]+(?:\.[^.\s]+)*", value):
+            raise ValueError("runtime_http_failure_path_invalid")
+        return value
+
+    @field_validator("failure_values", "success_values", mode="before")
+    @classmethod
+    def _scalars(cls, values):
+        import math
+
+        if values is None:
+            return values
+        if not isinstance(values, list) or any(
+            type(value) not in (str, int, float, bool, type(None))
+            or (isinstance(value, float) and not math.isfinite(value))
+            for value in values
+        ):
+            raise ValueError("runtime_http_failure_values_must_be_finite_scalars")
+        return values
+
+    @model_validator(mode="after")
+    def _one_predicate(self):
+        if (self.failure_values is None) == (self.success_values is None):
+            raise ValueError("runtime_http_failure_requires_one_predicate")
+        return self
+
+
 class RuntimeHttpSetupRequest(BaseModel):
     """One source-evidenced request required before conversational turns begin."""
 
@@ -285,6 +324,7 @@ class RuntimeHttpSetupRequest(BaseModel):
     headers_template: dict[str, str] = Field(default_factory=dict)
     capture_headers: dict[str, str] = Field(default_factory=dict)
     accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
+    failure_rule: RuntimeHttpFailureRule | None = None
     # Captured response values become placeholders for later setup requests and turns. This
     # models generic create-then-use APIs without teaching the harness about a framework.
     capture: dict[str, str] = Field(default_factory=dict)
@@ -351,45 +391,6 @@ class RuntimeHttpSetupRequest(BaseModel):
                 raise ValueError("runtime_http_setup_capture_path_required")
             normalized[name] = path
         return normalized
-
-
-class RuntimeHttpFailureRule(BaseModel):
-    status_path: str = Field(min_length=1, max_length=512)
-    failure_values: list[str | int | float | bool | None] | None = Field(
-        default=None, min_length=1, max_length=32
-    )
-    success_values: list[str | int | float | bool | None] | None = Field(
-        default=None, min_length=1, max_length=32
-    )
-    message_path: str = Field(default="", max_length=512)
-
-    @field_validator("status_path", "message_path")
-    @classmethod
-    def _path(cls, value: str) -> str:
-        if value and not re.fullmatch(r"(?:\$\.)?[^.\s]+(?:\.[^.\s]+)*", value):
-            raise ValueError("runtime_http_failure_path_invalid")
-        return value
-
-    @field_validator("failure_values", "success_values", mode="before")
-    @classmethod
-    def _scalars(cls, values):
-        import math
-
-        if values is None:
-            return values
-        if not isinstance(values, list) or any(
-            type(value) not in (str, int, float, bool, type(None))
-            or (isinstance(value, float) and not math.isfinite(value))
-            for value in values
-        ):
-            raise ValueError("runtime_http_failure_values_must_be_finite_scalars")
-        return values
-
-    @model_validator(mode="after")
-    def _one_predicate(self):
-        if (self.failure_values is None) == (self.success_values is None):
-            raise ValueError("runtime_http_failure_requires_one_predicate")
-        return self
 
 
 class RuntimeInterface(BaseModel):
