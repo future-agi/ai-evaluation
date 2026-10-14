@@ -807,6 +807,7 @@ class CertifiedComposeRuntimeProvider:
         (directory / "configuration.env").write_text(configuration + "\n")
         (directory / "configuration.env").chmod(0o600)
         redactions = set(self._redactions)
+        public_log_values = set(public_values.values())
         env_index = 0
         for service in document["services"].values():
             build = service.get("build", {})
@@ -816,7 +817,9 @@ class CertifiedComposeRuntimeProvider:
             ):
                 raise ComposeRuntimeError("compose_build_configuration_forbidden")
             redactions.update(
-                str(value) for value in service["environment"].values() if value
+                str(value)
+                for value in service["environment"].values()
+                if value and str(value) not in public_log_values
             )
             for entry in service["env_file"]:
                 snapshot = directory / f"service-{env_index}.env"
@@ -844,7 +847,7 @@ class CertifiedComposeRuntimeProvider:
                 redactions.update(
                     str(value)
                     for value in service.get("environment", {}).values()
-                    if value
+                    if value and str(value) not in public_log_values
                 )
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ComposeRuntimeError("compose_configuration_invalid") from None
