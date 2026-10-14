@@ -298,3 +298,38 @@ def test_a_qualified_identifier_is_the_same_identifier():
     solution = [{"tool": "pay", "arguments": {"payment_method": "pm_eli_amex"}, "outcome": True}]
     assert compare_calls(solution, [_Call("pay", payment_method="saved_card:pm_eli_amex")]) is None
     assert compare_calls(solution, [_Call("pay", payment_method="saved_card:pm_other")]) is not None
+
+
+def test_a_prohibition_check_is_kept_when_the_reference_grades_whether_anything_was_done(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "claims"
+        tools = [{"name": "file_claim"}]
+        handlers = {
+            "file_claim": (
+                "def handle(args, db):\n"
+                "    db.execute('INSERT INTO claims VALUES (?, ?)', ('gen-' + args['policy'], args['policy']))\n"
+                "    return {'filed': True}\n"
+            )
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE claims(id TEXT, policy TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    world.close()
+
+    never_twice = SubGoal(
+        name="never_two_claims",
+        what="no second claim is filed for one loss",
+        check="def check(world, calls):\n    return 'two claims' if len(world.state()['claims']) > 1 else None\n",
+    )
+    catalogue = Catalogue(sub_goals=[never_twice])
+    step = Step(tool="file_claim", arguments={"policy": "MM-7"})
+    with_reference = prove(Scenario(name="a", instruction="File it.", sub_goals=["never_two_claims"], solution=[step]), catalogue, tmp_path)
+    assert with_reference.expected_changes and with_reference.reference_grades and with_reference.holds

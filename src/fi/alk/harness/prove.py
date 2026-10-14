@@ -34,7 +34,7 @@ from typing import Any
 from .catalogue import Catalogue
 from .checks import Outcome, run_check
 from .folder import apply_setup, check_ready
-from .reference_state import changed_rows, expected_changes
+from .reference_state import changed_rows, compare_calls, expected_changes
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import restore
@@ -67,6 +67,9 @@ class Proof:
     expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     # The solution ran in full and changed no record, so any change a call makes is graded wrong.
     reference_changes_nothing: bool = False
+    # The reference comparison fails a run where nothing was done, so the scenario grades whether
+    # its outcome happened; a check may then be a prohibition that holds when nothing happens.
+    reference_grades: bool = False
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -77,7 +80,7 @@ class Proof:
             self.ready
             and self.solvable
             and not self.vacuous
-            and not self.weak
+            and (not self.weak or self.reference_grades)
             and not self.failed_attempts
             and not self.broken
         )
@@ -416,9 +419,24 @@ def prove(
         for name in scenario.sub_goals
         if (found := catalogue.named(name)) is not None and not found.deterministic()
     ]
+    proof.reference_grades = _reference_fails_on_nothing(scenario, proof)
     proof.vacuous = (
         bool(proof.with_nothing)
         and len(proof.weak) == len(proof.with_nothing)
         and not judged
+        and not proof.reference_grades
     )
     return proof
+
+
+def _reference_fails_on_nothing(scenario: Scenario, proof: Proof) -> bool:
+    """Whether the reference comparison fails a run in which the agent did nothing."""
+    solution = [
+        step.model_dump() if hasattr(step, "model_dump") else step
+        for step in getattr(scenario, "solution", None) or ()
+    ]
+    if any(isinstance(step, dict) and step.get("outcome") is True for step in solution):
+        if compare_calls(solution, []) is not None:
+            return True
+    # Expected changes are rows the solution added or changed, which a run doing nothing never has.
+    return bool(proof.expected_changes)

@@ -499,12 +499,14 @@ of subject partway through, a request outside what the agent handles, pressure t
 behaviour each, named once, so the suite can report how often the agent got that moment right.
 
 **Write the check as code for what holds in every scenario.** A sub-goal is shared by every
-scenario that names it, so its check never knows what this caller asked for. Code settles what is
-true whatever they asked: a forbidden change did not happen, an order went on an account that
-exists, a cancelled record is really cancelled. Read the final records in two layers, in order: did
-it happen (the record exists; return "not done: ..." when not), then was it right in what holds for
-every caller (return "done wrong: ..."). Only the final state counts, so a retry, a correction
-mid-call or another route to the same records passes.
+scenario that names it, so its check never knows what this caller asked for. Whether this caller's
+outcome happened, and with their values, is graded per scenario from the reference solution's
+outcome steps, so a shared check never asks that a tool was called or an argument was given. Code
+settles what is true whatever they asked: a forbidden change did not happen, a required order was
+kept, an order went on an account that exists, a cancelled record is really cancelled. Such a check
+may hold when nothing happened; the scenario's reference outcome already fails a run that did
+nothing. Only the final state counts, so a retry, a correction mid-call or another route to the same
+records passes.
 
 **Code only for what the records settle on their own.** Anything the agent says, a read-back, a
 disclosure, a refusal, an escalation, an explanation, is judged: a check sees that a tool was called,
