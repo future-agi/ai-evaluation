@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Optional, Sequence
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urlparse
 
 from fi._diagnostics import safe_endpoint, sanitize_diagnostic
 
@@ -95,8 +95,11 @@ class HTTPAgentWrapper(AgentWrapper):
             self._response_status = 0
             stage = "transport"
             request_payload = self._request_payload(input)
+            endpoint = _render_endpoint_path(
+                self.endpoint, _template_context(input, extra=self._setup_values)
+            )
             status_code, response_payload = await asyncio.to_thread(
-                self._post_json, request_payload, headers
+                self._post_json, request_payload, headers, endpoint=endpoint
             )
             if not 200 <= status_code < 300:
                 raise _ResponseFailure(
@@ -135,6 +138,10 @@ class HTTPAgentWrapper(AgentWrapper):
                             self._resolved_api_key(),
                             *self.headers.values(),
                             json.dumps(self._setup_values, default=str),
+                            *(
+                                _encoded_path_segment(str(value))
+                                for value in self._setup_values.values()
+                            ),
                         )
                     )
                 }
@@ -258,7 +265,9 @@ class HTTPAgentWrapper(AgentWrapper):
         parsed = urlparse(self.endpoint)
         origin = f"{parsed.scheme}://{parsed.netloc}/"
         for item in self.setup_requests:
-            path = _render_template(str(item.get("path") or ""), context)
+            endpoint = _render_endpoint_path(
+                origin + str(item.get("path") or "").lstrip("/"), context
+            )
             method = str(item.get("method") or "POST").upper()
             body = _render_template(item.get("body_template", {}), context)
             accepted = {
@@ -266,7 +275,7 @@ class HTTPAgentWrapper(AgentWrapper):
                 for value in item.get("accepted_statuses", [200, 201, 204, 409])
             }
             status, payload = self._request_json(
-                urljoin(origin, str(path).lstrip("/")),
+                endpoint,
                 method=method,
                 payload=body,
                 headers=headers,
@@ -299,9 +308,11 @@ class HTTPAgentWrapper(AgentWrapper):
         self,
         payload: Mapping[str, Any],
         headers: Mapping[str, str],
+        *,
+        endpoint: str | None = None,
     ) -> tuple[int, Any]:
         return self._request_json(
-            self.endpoint,
+            endpoint if endpoint is not None else self.endpoint,
             method="POST",
             payload=payload,
             headers=headers,
@@ -420,13 +431,43 @@ def _template_context(
         "situation": input.situation,
         "expected_outcome": input.expected_outcome,
         "messages": [dict(message) for message in input.messages],
-        "new_message": dict(input.new_message),
-        "new_message_content": str(input.new_message.get("content") or ""),
+        "new_message": dict(input.new_message or {}),
+        "new_message_content": str((input.new_message or {}).get("content") or ""),
         "tools": list(input.tools),
         "metadata": dict(input.metadata),
     }
     context.update(dict(extra or {}))
     return context
+
+
+def _encoded_path_segment(value: str) -> str:
+    return quote(value, safe="").replace(".", "%2E")
+
+
+def _render_endpoint_path(endpoint: str, context: Mapping[str, Any]) -> str:
+    if not _PLACEHOLDER.search(endpoint):
+        return endpoint
+    parsed = urlparse(endpoint)
+    if any(
+        _PLACEHOLDER.search(part)
+        for part in (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    ):
+        raise ValueError("HTTP endpoint placeholders are supported only in the path")
+    encoded = {}
+    for name in _PLACEHOLDER.findall(parsed.path):
+        value = context.get(name)
+        if value is None or value == "":
+            raise ValueError(f"HTTP path placeholder {name!r} has no value")
+        if not isinstance(value, (str, int, float, bool)):
+            raise ValueError(f"HTTP path placeholder {name!r} requires a scalar")
+        encoded[name] = _encoded_path_segment(str(value))
+    return parsed._replace(path=_render_template(parsed.path, encoded)).geturl()
 
 
 def _render_template(value: Any, context: Mapping[str, Any]) -> Any:

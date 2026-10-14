@@ -710,7 +710,9 @@ def contract_tools(
                                 },
                                 "path": {
                                     "type": "string",
-                                    "description": "Exact POST path for one conversational turn.",
+                                    "description": "Exact POST path for one conversational turn. "
+                                    "Path placeholders may use canonical inputs or prior setup "
+                                    "captures; substituted values are encoded as path segments.",
                                 },
                                 "health_path": {
                                     "type": "string",

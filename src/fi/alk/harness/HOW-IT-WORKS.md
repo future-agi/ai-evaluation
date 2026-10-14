@@ -356,6 +356,14 @@ the same selection. Source manifests and lockfiles are not rewritten by selectio
 are not executed by the process compiler. Declare supported optional groups through
 `runtime.extras` rather than relying on that string.
 
+HTTP endpoint paths can reference canonical inputs and earlier setup captures, such
+as `/threads/{{session_id}}/turns`. Setup runs first; the main path then renders for
+each call without changing the stored endpoint. Each substituted value is encoded
+as one path segment, so it cannot introduce a new host, path separator, query, or
+fragment. Missing values fail before the dependent request. Placeholders outside
+the URL path are unsupported. Traces retain the endpoint template and redact captured
+values, including their encoded forms, from failure diagnostics.
+
 ## Failure evidence
 
 HTTP status failures take precedence over success-response extraction. For an API
