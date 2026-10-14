@@ -251,3 +251,16 @@ def test_a_phrase_the_agent_may_word_its_own_way_is_left_to_the_judge():
     solution = [{"tool": "transfer", "arguments": {"queue": "claims", "reason": "Caller disputes the denied claim"}, "outcome": True}]
     assert compare_calls(solution, [_Call("transfer", queue="claims", reason="denial dispute, wants an adjuster")]) is None
     assert compare_calls(solution, [_Call("transfer", queue="billing", reason="x")]).startswith("done wrong: transfer.queue")
+
+
+def test_the_same_tool_marked_twice_matches_each_step_to_its_own_call():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [
+        {"tool": "confirm_address", "arguments": {"role": "pickup", "place": "SFO"}, "outcome": True},
+        {"tool": "confirm_address", "arguments": {"role": "dropoff", "place": "OAK"}, "outcome": True},
+    ]
+    right = [_Call("confirm_address", role="pickup", place="SFO"), _Call("confirm_address", role="dropoff", place="OAK")]
+    assert compare_calls(solution, right) is None
+    wrong = [_Call("confirm_address", role="pickup", place="SFO"), _Call("confirm_address", role="dropoff", place="SJC")]
+    assert compare_calls(solution, wrong) == "done wrong: confirm_address.place expected OAK, got SJC"

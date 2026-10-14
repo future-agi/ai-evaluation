@@ -229,17 +229,20 @@ def _effects(calls: list[Any]) -> list[dict[str, Any]]:
 def compare_calls(
     solution: list[Any], calls: list[Any], *, rules: dict[str, Any] | None = None
 ) -> str | None:
-    """None when, for every solution step marked as the outcome, the call's last successful call
-    to that tool carries the step's arguments; otherwise whether it was not done, done wrong or
-    done twice. None too when no step is marked, so older scenarios are not graded this way."""
+    """None when every solution step marked as the outcome has a successful call to its tool
+    carrying its arguments; otherwise whether it was not done, done wrong or done twice. Each step
+    is matched to the call that fits it best, the later one on a tie, so the same tool used twice
+    (two addresses) and a value corrected mid-call both read right. None too when no step is
+    marked, so older scenarios are not graded this way."""
     said = []
-    steps = [
-        step for step in solution or ()
-        if (step.get("outcome") if isinstance(step, dict) else getattr(step, "outcome", False)) is True
-    ]
+
+    def field_of(step: Any, name: str) -> Any:
+        return step.get(name) if isinstance(step, dict) else getattr(step, name, None)
+
+    steps = [step for step in solution or () if field_of(step, "outcome") is True]
     for step in steps:
-        tool = str(step.get("tool") if isinstance(step, dict) else getattr(step, "tool", ""))
-        want = _flat(step.get("arguments") if isinstance(step, dict) else getattr(step, "arguments", {}))
+        tool = str(field_of(step, "tool") or "")
+        want = _flat(field_of(step, "arguments") or {})
         done = [
             call for call in calls
             if getattr(call, "name", "") == tool and getattr(call, "ok", False) and not getattr(call, "refused", False)
@@ -249,19 +252,20 @@ def compare_calls(
             said.append(f"not done: no successful {tool} call" + (f"; expected one with {stated}" if stated else ""))
             continue
         effects = _effects(done)
-        got = effects[-1]
+
+        def fit(effect: dict[str, Any]) -> int:
+            return sum(_same(v, effect.get(f), _rule(rules, tool, f)) for f, v in want.items())
+
+        got = max(reversed(effects), key=fit)
         said.extend(
             f"done wrong: {tool}.{field} expected {value}, got {got.get(field)}"
             for field, value in sorted(want.items())
             if not _same(value, got.get(field), _rule(rules, tool, field))
         )
-        same = sum(
-            all(_same(v, effect.get(f), _rule(rules, tool, f)) for f, v in want.items())
-            for effect in effects
-        )
+        same = sum(fit(effect) == len(want) for effect in effects)
         wanted = sum(
             1 for one in steps
-            if str(one.get("tool") if isinstance(one, dict) else getattr(one, "tool", "")) == tool
+            if str(field_of(one, "tool") or "") == tool and _flat(field_of(one, "arguments") or {}) == want
         )
         if want and same > wanted:
             said.append(f"done wrong: {same} successful {tool} calls with these values where the reference makes {wanted} (a duplicate)")

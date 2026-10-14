@@ -1499,10 +1499,11 @@ def scenario_tools(
                             "outcome": {
                                 "type": "boolean",
                                 "description": "True on each step that is the outcome this "
-                                "caller came for (what the call must leave done), never on a "
-                                "lookup. A call is graded on its last successful call to that "
-                                "tool carrying these arguments, so they must be this caller's "
-                                "values as last corrected.",
+                                "caller came for, and on each step whose arguments carry this "
+                                "caller's values that outcome is built from; never on a step the "
+                                "agent may fairly take another way. A call is graded on the "
+                                "successful call to that tool that fits these arguments best, so "
+                                "they must be this caller's values as last corrected.",
                             },
                             "environment_arguments": {
                                 "type": "object",

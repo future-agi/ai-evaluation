@@ -256,10 +256,12 @@ exists (*not done*), then whether its fields match (*done wrong*). Only the fina
 retry, a correction mid-call or another route to the same records passes. A wrong solution fails a
 correct agent.
 
-Mark with `outcome` each step that is what this caller came for: the change the call must leave done,
-never a lookup or a step the agent may take another way. When the proof says steps were recorded
-without running, no records can be kept, and the call is graded instead on its last successful call to
-each outcome tool carrying that step's arguments: not done when there is none, done wrong when a value
+Mark with `outcome` each step that is what this caller came for, and each step whose arguments carry
+this caller's values that outcome is built from: when the final call only commits what earlier steps
+set (an address confirmed, an item chosen), mark those steps too, or the values go unchecked. Never mark
+a step the agent may fairly take another way. When the proof says steps were recorded without
+running, no records can be kept, and each outcome step is graded instead against the successful call
+to its tool that fits it best: not done when there is none, done wrong when a value
 differs, a duplicate when the same call succeeded more often than your solution makes it. A value your
 solution cannot know in advance, such as an identifier or token the system issues during the call, is
 set to `skip` in `comparisons`.
