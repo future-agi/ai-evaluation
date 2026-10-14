@@ -75,6 +75,52 @@ class _RuntimeSubmission(BaseModel):
     summary: str = Field(min_length=1, max_length=1000)
 
 
+def _dependency_root(root: Path, runtime: Runtime) -> Path:
+    from .bundle_author_v2 import (
+        _declared_runtime_environment,
+        _discover_callback_entrypoint,
+        _discovered_python_component,
+        _runtime_component,
+    )
+    from .runtime_selection import ComposeSelection, select_runtime
+
+    selected = select_runtime(
+        root, runtime, public_environment=_declared_runtime_environment(root)
+    )
+    if isinstance(selected, ComposeSelection):
+        source_services = [
+            name for name, service in selected.services.items() if service.get("build")
+        ]
+        control = selected.control_service or (
+            "agent"
+            if "agent" in source_services
+            else "api"
+            if "api" in source_services
+            else source_services[-1]
+            if source_services
+            else ""
+        )
+        build = selected.services.get(control, {}).get("build")
+        if not build:
+            raise ValueError("runtime_repair_control_build_missing")
+        context = build.get("context") or "." if isinstance(build, dict) else build
+        component = (selected.compose_file.parent / str(context)).resolve()
+        if not component.is_relative_to(root):
+            raise ValueError("runtime_repair_build_context_escape")
+        return component
+    if runtime.execution == "native" and runtime.command:
+        return _runtime_component(root, runtime.workdir)
+    if (
+        runtime.interface and runtime.interface.kind == "callable"
+    ) or _discover_callback_entrypoint(root):
+        return root
+    if runtime.command or runtime.workdir:
+        return _runtime_component(root, runtime.workdir)
+    if (root / "agent.py").is_file():
+        return root
+    return _discovered_python_component(root)[0]
+
+
 def validate_runtime_plan_patch(
     source_root: Path,
     contract: AgentContract,
@@ -152,6 +198,32 @@ def validate_runtime_plan_patch(
     select_runtime(
         root, runtime, public_environment=_declared_runtime_environment(root)
     )
+    from .generated_runtime import (
+        local_editable_install_operands,
+        local_install_extra_claims,
+        validate_local_install_extras,
+    )
+
+    original_claims = ()
+    if contract.runtime and local_editable_install_operands(contract.runtime.install):
+        from .bundle_author_v2 import BundleAuthorError
+        from .runtime_selection import RuntimeSelectionError
+
+        try:
+            original_root = _dependency_root(root, contract.runtime)
+        except (BundleAuthorError, RuntimeSelectionError, ValueError):
+            original_root = None
+        if original_root is not None:
+            original_claims = local_install_extra_claims(
+                original_root, contract.runtime.install
+            )
+    if original_claims or local_editable_install_operands(runtime.install):
+        validate_local_install_extras(
+            _dependency_root(root, runtime),
+            runtime.install,
+            runtime.extras,
+            original_claims=original_claims,
+        )
     candidate = contract.model_copy(update={"runtime": runtime})
     # Revalidate the whole contract so nested updates cannot bypass canonical validators.
     return AgentContract.model_validate(candidate.model_dump(mode="python"))
@@ -250,7 +322,9 @@ existing deterministic plan when it is already supported; change only fields pro
 diagnostics. Never edit source, invent agent behavior or services, add credentials, widen egress,
 change tools/scenarios, or hide a failure. Your only write capability is
 submit_runtime_plan_patch. The replacement must use paths and commands that exist in the submitted
-repository. Call the tool once the smallest complete correction is known, then stop."""
+repository. runtime.install is evidence only and is never executed. Select required source-declared
+optional dependency groups in runtime.extras. Deleting install evidence cannot repair an omitted
+group. Call the tool once the smallest complete correction is known, then stop."""
     briefing = (
         "Repair the generated runtime plan for this repository.\n\nDIAGNOSTICS\n"
         + json.dumps(diagnostics_json, sort_keys=True, indent=2)[:20000]

@@ -58,7 +58,11 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .contract import Runtime, ToolEntry
-from .generated_runtime import GeneratedRuntimeError, select_python_extras
+from .generated_runtime import (
+    GeneratedRuntimeError,
+    select_python_extras,
+    validate_local_install_extras,
+)
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
 from .runtime_selection import ComposeSelection, select_runtime
@@ -1132,6 +1136,7 @@ def _plan_python(
     livekit_download: bool = False,
     run_override: list[str] | None = None,
     extras: list[str] | None = None,
+    install: str = "",
 ) -> SourceProcess:
     if (
         run_override
@@ -1160,6 +1165,7 @@ def _plan_python(
     )
     python = _docker_python(root)
     try:
+        validate_local_install_extras(root, install, extras or [])
         selection = select_python_extras(root, extras or [])
     except GeneratedRuntimeError as exc:
         raise BundleAuthorError(str(exc)) from exc
@@ -1472,6 +1478,32 @@ def _subprocess_adapter_source() -> str:
         .with_name("subprocess_http_adapter.py")
         .read_text(encoding="utf-8")
     )
+
+
+def _discovered_python_component(root: Path) -> tuple[Path, str]:
+    candidates = sorted(
+        path
+        for path in root.glob("**/agent.py")
+        if not any(
+            part in _IGNORED_ARTIFACT_PARTS
+            for part in path.relative_to(root).parts[:-1]
+        )
+    )
+    if len(candidates) != 1:
+        raise BundleAuthorError("component_ambiguous: expected exactly one agent.py")
+    component = candidates[0].parent
+    # An entrypoint directory is not necessarily its Python project root. Preserve
+    # the nearest enclosing manifest and its sibling packages instead of flattening
+    # src/ and silently running without the repository's dependencies.
+    for parent in (component, *component.parents):
+        if not parent.is_relative_to(root):
+            break
+        if any(
+            (parent / name).is_file() for name in ("pyproject.toml", "requirements.txt")
+        ):
+            component = parent
+            break
+    return component, candidates[0].relative_to(component).as_posix()
 
 
 def _runtime_component(root: Path, configured_workdir: str) -> Path:
@@ -2107,6 +2139,7 @@ def resolve_environment_plan(
                 depends_on=[item for item in depends if item != "postgres"],
                 livekit_download=is_livekit and service_name == control_name,
                 extras=runtime_model.extras if service_name == control_name else [],
+                install=runtime_model.install if service_name == control_name else "",
                 run_override=(
                     runtime_command
                     or _compose_command(service.get("command"))
@@ -2300,35 +2333,7 @@ def resolve_environment_plan(
                 "an internal agent.py is not evidence of an HTTP server"
             )
         elif not is_callback and not (root / entry).is_file():
-            # A submitted checkout may contain a developer's virtualenv or dependency tree.
-            # Those files are not agent entrypoints and must not make source discovery
-            # ambiguous.  Apply the same generated-artifact exclusions used by staging.
-            candidates = sorted(
-                path
-                for path in root.glob("**/agent.py")
-                if not any(
-                    part in _IGNORED_ARTIFACT_PARTS
-                    for part in path.relative_to(root).parts[:-1]
-                )
-            )
-            if len(candidates) != 1:
-                raise BundleAuthorError(
-                    "component_ambiguous: expected exactly one agent.py"
-                )
-            component = candidates[0].parent
-            # An entrypoint directory is not necessarily its Python project root. Preserve
-            # the nearest enclosing manifest and its sibling packages instead of flattening
-            # src/ and silently running without the repository's dependencies.
-            for parent in (component, *component.parents):
-                if not parent.is_relative_to(root):
-                    break
-                if any(
-                    (parent / name).is_file()
-                    for name in ("pyproject.toml", "requirements.txt")
-                ):
-                    component = parent
-                    break
-            entry = candidates[0].relative_to(component).as_posix()
+            component, entry = _discovered_python_component(root)
         else:
             component = root
         control_name = "agent"
@@ -2374,6 +2379,7 @@ def resolve_environment_plan(
             environment=environment,
             livekit_download=is_livekit,
             extras=runtime_model.extras,
+            install=runtime_model.install,
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph

@@ -468,10 +468,16 @@ class Runtime(BaseModel):
     # an otherwise unambiguous Node repository fail the generated-runtime admission path.
     language: str = ""
     version: str = ""
-    install: str = ""
+    install: str = Field(
+        default="",
+        description="Source install command recorded as evidence only; never executed. Required source-declared optional groups must also appear in extras.",
+    )
     # Optional dependency groups declared by the repository itself (for example ``voice`` in
     # pyproject.toml). Generated packaging validates these names against the manifest.
-    extras: list[str] = Field(default_factory=list)
+    extras: list[str] = Field(
+        default_factory=list,
+        description="Executable selection of source-declared optional dependency groups required by this runtime. Include groups required by install evidence; never invent undeclared groups.",
+    )
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
     execution: Literal["auto", "native", "compose"] = "auto"

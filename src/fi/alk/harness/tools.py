@@ -17,6 +17,7 @@ from .backends import tool, tool_server
 from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
+    Runtime,
     known_modalities,
     validate_contract,
 )
@@ -601,16 +602,12 @@ def contract_tools(
                         "version": {"type": "string"},
                         "install": {
                             "type": "string",
-                            "description": "Its own install command, e.g. from its lockfile or "
-                            "requirements. Recorded as evidence; generated packaging derives "
-                            "the executable install from the submitted manifest/lockfile.",
+                            "description": Runtime.model_fields["install"].description,
                         },
                         "extras": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional dependency groups declared by the source "
-                            "manifest that this runtime needs, such as voice or qdrant. Never "
-                            "invent a group that the manifest does not declare.",
+                            "description": Runtime.model_fields["extras"].description,
                         },
                         "workdir": {
                             "type": "string",
