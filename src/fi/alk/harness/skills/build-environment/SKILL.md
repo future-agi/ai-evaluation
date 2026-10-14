@@ -526,6 +526,11 @@ You get the world afterwards and every call that was made, each with `.name`, `.
 `.ok` and `.refused`. Return a sentence when something is wrong, `None` when it held. Never write
 one scenario's expected value into a check: it is right for that scenario and wrong for the next.
 
+A check never fixes one value among several the instructions allow (which queue a transfer goes to,
+which wording a reason uses): it holds for any of them, and a judged sub-goal decides whether the
+choice suited the situation when the instructions tie it to one. A check reads what a call decided
+from its result or the records, never from `ok`.
+
 A check about a step that must come before something (identify the caller before disclosing,
 confirm before changing) fails only when that something happened without the step. When neither
 happened it holds, because nothing was disclosed or changed, and it accepts every tool the agent has
