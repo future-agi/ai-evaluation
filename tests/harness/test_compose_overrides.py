@@ -398,3 +398,51 @@ def test_live_native_active_profile_matches_selection(tmp_path, cli, activation)
         )
     finally:
         compose("down", "--volumes", "--remove-orphans")
+
+
+@pytest.mark.parametrize(
+    "options", [{"nocopy": True}, {"subpath": "nested"}, [], None, False]
+)
+def test_named_volume_nonempty_or_malformed_options_remain_rejected(tmp_path, options):
+    document = {
+        "services": {
+            "gateway": {
+                "image": "example/image:1",
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": "storage",
+                        "target": "/data",
+                        "volume": options,
+                    }
+                ],
+            }
+        },
+        "volumes": {"storage": {}},
+    }
+    with pytest.raises(ComposeRuntimeError, match="mount_fields_forbidden"):
+        normalize_compose(document, tmp_path, capabilities={})
+
+
+def test_native_plain_named_volume_normalizes_like_short_syntax(tmp_path, cli):
+    base, overlay = files(tmp_path)
+    overlay.write_text(
+        "services:\n  gateway:\n    volumes: [storage:/data]\nvolumes:\n  storage: {}\n"
+    )
+    merged = merge_compose(tmp_path, [base, overlay])
+    assert merged["services"]["gateway"]["volumes"] == [
+        {
+            "type": "volume",
+            "source": "storage",
+            "target": "/data",
+            "volume": {},
+        }
+    ]
+    normalized = normalize_compose(merged, tmp_path, capabilities={})
+    merged["services"]["gateway"]["volumes"] = ["storage:/data"]
+    short = normalize_compose(merged, tmp_path, capabilities={})
+    native_mount = normalized["services"]["gateway"]["volumes"][0]
+    short_mount = short["services"]["gateway"]["volumes"][0]
+    assert native_mount == {"type": "volume", "source": "storage", "target": "/data"}
+    assert native_mount.get("read_only", False) is short_mount.pop("read_only") is False
+    assert native_mount == short_mount
