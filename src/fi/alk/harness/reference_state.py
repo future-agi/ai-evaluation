@@ -18,6 +18,8 @@ from typing import Any
 NAME = "records_match_reference_solution"
 # Longer values are free text (a description, a note), which the judge reads instead.
 _LONGEST_COMPARED = 80
+# Shorter values (a count, a flag) trace to the solution only under the argument name they came from.
+_SHORTEST_TRACED = 3
 _TIME_TOLERANCE = timedelta(hours=float(os.environ.get("ALK_REFERENCE_TIME_TOLERANCE_HOURS") or 6))
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y", "%d %B %Y")
 
@@ -87,27 +89,43 @@ def _same(expected: Any, actual: Any) -> bool:
     return normalise(expected) == normalise(actual)
 
 
-def _given(solution: list[Any]) -> set[str]:
-    """Every value the reference solution passed, normalised, nested values included; a date or a
-    time also by its calendar day, so a stored timestamp still traces to the date it was given."""
+def _given(solution: list[Any]) -> tuple[set[str], set[tuple[str, str]]]:
+    """Every value the reference solution passed, normalised, nested values included, alone and with
+    the argument name it was passed under; a date or a time also by its calendar day, so a stored
+    timestamp still traces to the date it was given."""
     found: set[str] = set()
+    named: set[tuple[str, str]] = set()
 
-    def walk(value: Any) -> None:
+    def walk(value: Any, key: str = "") -> None:
         if isinstance(value, dict):
-            for item in value.values():
-                walk(item)
+            for name, item in value.items():
+                walk(item, str(name))
         elif isinstance(value, list):
             for item in value:
-                walk(item)
+                walk(item, key)
         elif value not in (None, "") and len(str(value)) <= _LONGEST_COMPARED:
-            found.add(normalise(value))
+            forms = {normalise(value)}
             if (when := _when(value)) is not None:
-                found.add(when.date().isoformat())
+                forms.add(when.date().isoformat())
+            found.update(forms)
+            named.update((normalise(key), form) for form in forms)
 
     for step in solution or []:
         arguments = step.get("arguments") if isinstance(step, dict) else getattr(step, "arguments", None)
         walk(arguments or {})
-    return found
+    return found, named
+
+
+def _traced(field: str, value: Any, given: tuple[set[str], set[tuple[str, str]]]) -> bool:
+    """Whether a stored value came from the solution: any long value it passed, or a short one
+    (a count, a flag, a code) only under the same name, since short values repeat by chance."""
+    found, named = given
+    forms = {normalise(value)}
+    if (when := _when(value)) is not None:
+        forms.add(when.date().isoformat())
+    if any(len(form) >= _SHORTEST_TRACED and form in found for form in forms):
+        return True
+    return any((normalise(field), form) in named for form in forms)
 
 
 def expected_changes(
@@ -123,10 +141,7 @@ def expected_changes(
                 for field, value in row.items()
                 if value not in (None, "")
                 and len(str(value)) <= _LONGEST_COMPARED
-                and (
-                    normalise(value) in given
-                    or ((when := _when(value)) is not None and when.date().isoformat() in given)
-                )
+                and _traced(field, value, given)
             }
             for row in rows
         ]

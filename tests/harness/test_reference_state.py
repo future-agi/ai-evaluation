@@ -120,3 +120,13 @@ def test_an_older_scenario_without_expected_changes_compiles_to_none():
     from fi.alk.harness.scenario import Scenario
 
     assert Scenario(name="old", instruction="x").expected_changes == {}
+
+
+def test_a_short_value_counts_only_under_its_own_argument_name():
+    from fi.alk.harness.reference_state import expected_changes
+
+    before = {"bookings": []}
+    after = {"bookings": [{"party_size": 2, "version": 2, "city": "Pune"}]}
+    solution = [{"tool": "book", "arguments": {"party_size": 2, "city": "Pune"}}]
+
+    assert expected_changes(before, after, solution) == {"bookings": [{"party_size": 2, "city": "Pune"}]}
