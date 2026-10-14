@@ -162,6 +162,7 @@ def preflight_bundle(
     *,
     parallelism: int,
     secret_refs: dict[str, str],
+    allow_compose: bool = False,
 ) -> None:
     """Run the complete §2e checklist against a sealed v2 bundle directory, in the contract's own
     numbered order. Raises ``PreflightError`` on the first violation; returns ``None`` when clean.
@@ -193,7 +194,7 @@ def preflight_bundle(
                 f"secret_refs[{alias!r}] = {purpose!r} is not a SecretPurpose value"
             )
 
-    if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
+    if manifest.runtime.kind is RuntimeKindV2.COMPOSE and not allow_compose:
         # §2a: "a hosted job with kind: compose fails preflight" — not one of §2e's seven numbered
         # items, so ahead of item 1 rather than slotted between them: every item below assumes
         # v2's processes/seed shape, which a compose bundle need not carry, and a compose bundle's

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import http.cookiejar
+import http.cookies
 import os
 import re
 import time
@@ -21,6 +23,60 @@ from fi.simulate.agent.wrapper import (
     SimulationEvent,
 )
 from fi.simulate.agent.wrapper import AgentWrapper
+
+
+def validate_http_headers(values: Mapping[str, str]) -> dict[str, str]:
+    forbidden = {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "proxy-authorization",
+        "proxy-authenticate",
+        "proxy-connection",
+        "upgrade",
+        "te",
+        "trailer",
+        "expect",
+        "set-cookie",
+    }
+    if not isinstance(values, Mapping) or len(values) > 32:
+        raise ValueError("http_headers_invalid")
+    result = {}
+    seen = set()
+    for name, value in values.items():
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", name)
+            or name.lower() in forbidden
+            or name.lower() in seen
+            or not isinstance(value, str)
+            or len(value) > 8192
+            or any(
+                ord(char) < 32 or ord(char) == 127 or ord(char) > 255 for char in value
+            )
+        ):
+            raise ValueError("http_header_invalid")
+        seen.add(name.lower())
+        result[name] = value
+    if sum(len(name) + len(value) for name, value in result.items()) > 16384:
+        raise ValueError("http_headers_too_large")
+    return result
+
+
+def _template_headers(base, template, context):
+    rendered = validate_http_headers(_render_template(template, context))
+    replaced = {name.lower() for name in rendered}
+    return validate_http_headers(
+        {
+            **{
+                name: value
+                for name, value in base.items()
+                if name.lower() not in replaced
+            },
+            **rendered,
+        }
+    )
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -52,6 +108,7 @@ class HTTPAgentWrapper(AgentWrapper):
         api_key: Optional[str] = None,
         api_key_env: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
+        headers_template: Optional[Mapping[str, str]] = None,
         timeout: float = 30.0,
         total_timeout: Optional[float] = None,
         include_tools: bool = True,
@@ -71,7 +128,8 @@ class HTTPAgentWrapper(AgentWrapper):
         self.model = model
         self.api_key = api_key
         self.api_key_env = api_key_env
-        self.headers = {str(k): str(v) for k, v in dict(headers or {}).items()}
+        self.headers = validate_http_headers(dict(headers or {}))
+        self.headers_template = validate_http_headers(dict(headers_template or {}))
         self.timeout = float(timeout)
         self.total_timeout = total_timeout
         self._deadline: float | None = None
@@ -94,6 +152,14 @@ class HTTPAgentWrapper(AgentWrapper):
         self._response_status = 0
         self._setup_complete = False
         self._setup_values: dict[str, Any] = {}
+        self._response_headers = {}
+        self._auth_values: set[str] = set()
+        self._cookies = http.cookiejar.CookieJar()
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirect(),
+            urllib.request.HTTPCookieProcessor(self._cookies),
+        )
 
     async def call(self, input: AgentInput) -> AgentResponse:
         started = time.time()
@@ -117,6 +183,11 @@ class HTTPAgentWrapper(AgentWrapper):
         try:
             headers = self._request_headers()
             await self._run_request(self._ensure_setup, input, headers)
+            headers = _template_headers(
+                headers,
+                self.headers_template,
+                _template_context(input, extra=self._setup_values),
+            )
             self._response_text = ""
             self._response_status = 0
             stage = "transport"
@@ -174,7 +245,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     str(index): value
                     for index, value in enumerate(
                         (
-                            *self.secret_values.values(),
+                            *(self.secret_values or {}).values(),
+                            *self._auth_values,
                             self._resolved_api_key(),
                             *self.headers.values(),
                             json.dumps(self._setup_values, default=str),
@@ -226,9 +298,13 @@ class HTTPAgentWrapper(AgentWrapper):
             "success": error is None and 200 <= status_code < 300,
             "request_header_names": sorted(headers),
             "auth": {
-                "mode": "bearer" if self._resolved_api_key() else "none",
+                "mode": "bearer"
+                if self._resolved_api_key()
+                else "session"
+                if self.setup_requests or self.headers_template
+                else "none",
                 "api_key_env": self.api_key_env,
-                "redacted": bool(self._resolved_api_key()),
+                "redacted": bool(self._resolved_api_key() or self._auth_values),
             },
             "error": error,
             "failure_stage": failure_stage,
@@ -349,11 +425,17 @@ class HTTPAgentWrapper(AgentWrapper):
                 int(value)
                 for value in item.get("accepted_statuses", [200, 201, 204, 409])
             }
+            request_headers = _template_headers(
+                headers, item.get("headers_template", {}), context
+            )
+            encoding = item.get("encoding", "json")
+            options = {"encoding": encoding} if encoding != "json" else {}
             status, payload = self._request_json(
                 endpoint,
                 method=method,
                 payload=body,
-                headers=headers,
+                headers=request_headers,
+                **options,
             )
             if status not in accepted:
                 detail = _response_error_text(payload)
@@ -370,6 +452,17 @@ class HTTPAgentWrapper(AgentWrapper):
                     payload, str(raw_path)
                 )
                 context[name] = self._setup_values[name]
+            for name, header in (item.get("capture_headers") or {}).items():
+                value = self._response_headers.get(str(header).lower())
+                if (
+                    not value
+                    or len(value) > 8192
+                    or any(ord(char) < 32 or ord(char) == 127 for char in value)
+                ):
+                    raise ValueError("HTTP setup response header missing or invalid")
+                self._setup_values[name] = value
+                self._auth_values.add(value)
+                context[name] = value
         self._setup_complete = True
 
     def _resolved_api_key(self) -> str:
@@ -401,14 +494,51 @@ class HTTPAgentWrapper(AgentWrapper):
         payload: Any,
         headers: Mapping[str, str],
         event_request: bool = False,
+        encoding: str = "json",
     ) -> tuple[int, Any]:
         self._response_text = ""
         self._response_status = 0
+        self._response_headers = {}
+        headers = validate_http_headers(headers)
+        if encoding not in {"json", "form"}:
+            raise ValueError("HTTP request encoding unsupported")
+        if encoding == "form":
+            if not isinstance(payload, Mapping) or any(
+                not isinstance(key, str)
+                or not isinstance(value, (str, int, float, bool))
+                for key, value in payload.items()
+            ):
+                raise ValueError("HTTP form body must contain scalar fields")
+            headers = {
+                key: value
+                for key, value in headers.items()
+                if key.lower() != "content-type"
+            }
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
         body = (
             None
             if method == "GET"
-            else json.dumps(payload, default=str).encode("utf-8")
+            else (
+                urlencode(payload).encode("utf-8")
+                if encoding == "form"
+                else json.dumps(payload, default=str).encode("utf-8")
+            )
         )
+        self._auth_values.update(
+            value
+            for name, value in headers.items()
+            if name.lower() != "content-type" and value
+        )
+        for name, value in headers.items():
+            if name.lower() == "cookie" and value:
+                cookies = http.cookies.SimpleCookie()
+                try:
+                    cookies.load(value)
+                except http.cookies.CookieError:
+                    raise ValueError("HTTP Cookie header invalid") from None
+                if not cookies:
+                    raise ValueError("HTTP Cookie header invalid")
+                self._auth_values.update(item.value for item in cookies.values())
         request = urllib.request.Request(
             endpoint,
             data=body,
@@ -416,13 +546,12 @@ class HTTPAgentWrapper(AgentWrapper):
             method=method,
         )
         try:
-            opener = (
-                urllib.request.build_opener(_NoRedirect())
-                if event_request
-                else urllib.request
-            )
-            open_request = opener.open if event_request else opener.urlopen
-            with open_request(request, timeout=self._remaining_timeout()) as response:
+            with self._opener.open(
+                request, timeout=self._remaining_timeout()
+            ) as response:
+                self._response_headers = {
+                    name.lower(): value for name, value in response.headers.items()
+                }
                 if self.completed_tool_events and not event_request:
                     self._correlation_id = response.headers.get(
                         self.completed_tool_events.correlation_header
@@ -433,8 +562,21 @@ class HTTPAgentWrapper(AgentWrapper):
         except urllib.error.HTTPError as exc:
             status = int(exc.code)
             self._response_status = status
+            self._response_headers = {
+                name.lower(): value for name, value in exc.headers.items()
+            }
             with exc:
                 raw = self._read_response(exc)
+        finally:
+            self._auth_values.update(
+                cookie.value for cookie in self._cookies if cookie.value
+            )
+            if (
+                len(self._cookies) > 64
+                or sum(len(cookie.value) for cookie in self._cookies) > 65536
+            ):
+                self._cookies.clear()
+                raise ValueError("HTTP session cookies exceed safe limits")
         self._response_status = status
         # An incomplete response can split a credential, so retain no excerpt on overflow.
         if len(raw) > 1024 * 1024:

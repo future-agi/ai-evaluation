@@ -1109,6 +1109,7 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "build_requires_root",
         "user_assignment_invalid",
         "configuration_name_duplicate",
+        "workspace_name_duplicate",
         "configuration_name_required",
         "configuration_name_reserved",
         "sentinel_shape_invalid",

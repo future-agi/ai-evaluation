@@ -11,7 +11,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import urljoin
 
 from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
@@ -167,6 +166,10 @@ def _tool_world(
     runtime: EnvironmentRuntime,
     source_directory: Path | None = None,
 ) -> GeneratedWorld:
+    if runtime.metadata.get("observation_mode") == "native":
+        import random
+        from .world.observation import ObservationWorld, http_endpoints
+        return ObservationWorld(runtime.world_index, random.Random(0), http_endpoints(runtime))
     endpoint = runtime.endpoints.get("world_db")
     if endpoint is None or endpoint.protocol != "postgres":
         raise CallAborted(

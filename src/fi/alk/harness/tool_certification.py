@@ -103,6 +103,7 @@ def certify_tool_inventory(
     bundle_dir: Path,
     *,
     external_provider: bool,
+    native_observation: bool = False,
 ) -> ToolCertificationReport:
     """Classify every declared tool, rejecting missing or ambiguous implementation seams."""
 
@@ -145,7 +146,34 @@ def certify_tool_inventory(
             continue
 
         entry = matches[0]
-        if entry.mode in {"import", "construct"}:
+        if native_observation and entry.mode in {"import", "construct", "service"}:
+            if entry.mode == "service":
+                declared = bool(
+                    (entry.endpoint.strip() or entry.service.strip()) and entry.method.strip()
+                )
+            else:
+                declared = bool(
+                    entry.module.strip()
+                    and entry.callable.strip()
+                    and (entry.mode != "construct" or entry.factory.strip())
+                )
+            results.append(
+                ToolCertification(
+                    tool=tool.name,
+                    entrypoint_mode=entry.mode,
+                    probe_mode=ToolProbeMode.RUNTIME_ONLY,
+                    availability=(
+                        ToolAvailability.RUNTIME_ONLY if declared else ToolAvailability.REJECTED
+                    ),
+                    schema_validated=True,
+                    implementation_validated=False,
+                    reason=(
+                        "native implementation is declared; execution is observed only in agent responses"
+                        if declared else "native implementation declaration is incomplete"
+                    ),
+                )
+            )
+        elif entry.mode in {"import", "construct"}:
             handler = bundle_dir / "handlers" / f"{tool.name}.py"
             reachable = handler.is_file() and not handler.is_symlink()
             results.append(

@@ -28,6 +28,8 @@ from .hosted_entrypoint import (
     ProcessWorldFactory,
     _default_build_call_runner,
     job_secret_purposes,
+    peek_target_provider_secret_values,
+    peek_simulator_provider_secret_values,
 )
 from .hosted_scheduler import HostedScheduler, ResultReceipt, WorldPool
 from .job import HarnessJob
@@ -150,6 +152,8 @@ async def run_local_certified(
         secrets = work / "secrets.json"
         secrets.write_text(json.dumps(values), encoding="utf-8")
         secrets.chmod(0o600)
+        target_values = peek_target_provider_secret_values(secrets, purposes)
+        simulator_values = peek_simulator_provider_secret_values(secrets, purposes)
 
         async def local_validate(candidate_job, candidate_source, candidate_authoring):
             return await validate_once(
@@ -196,6 +200,14 @@ async def run_local_certified(
             require_declared_user=False,
             generic_artifact_root=run_root / "generic-harness",
         )
+        from .bundle_v2 import RuntimeKindV2
+        from .world.observation import ObservationWorldFactory
+        if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
+            from .compose_integration import provider as compose_provider
+            provider = compose_provider(target_values, run_root / "compose-logs")
+            world_factory = ObservationWorldFactory()
+        else:
+            world_factory = ProcessWorldFactory(work)
         pool = WorldPool(
             provider,
             bundle=manifest,
@@ -214,17 +226,15 @@ async def run_local_certified(
                 bundle_dir=bundle_dir,
                 work_directory=work,
                 evidence_seam=manifest.runtime.evidence_seam,
-                target_provider_secret_values=values,
-                # A local test intentionally shares its explicitly admitted values with the
-                # simulator. Hosted execution keeps the two vault purposes separate.
-                simulator_provider_secret_values=values,
+                target_provider_secret_values=target_values,
+                simulator_provider_secret_values=simulator_values,
                 attempt_number=1,
                 source_directory=source,
             )
             call_runner = _default_build_call_runner(sink, context)
             scheduler = HostedScheduler(
                 pool=pool,
-                world_factory=ProcessWorldFactory(work),
+                world_factory=world_factory,
                 call_runner=call_runner,
                 outbound=sink,
                 job_seed=job.seed or 0,

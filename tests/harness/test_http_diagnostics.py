@@ -164,7 +164,7 @@ def test_setup_and_transport_failure_stages(endpoint, monkeypatch):
     def timeout(*args, **kwargs):
         raise TimeoutError("timed out password=secret123")
 
-    monkeypatch.setattr(urllib.request, "urlopen", timeout)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", timeout)
     result = asyncio.run(
         HTTPAgentWrapper(endpoint=url, secret_values={"token": "secret123"}).call(
             AgentInput(thread_id="t", messages=[], new_message={})

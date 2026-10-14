@@ -370,3 +370,43 @@ def test_readiness_patch_adds_source_requirements_without_changing_extras(
         validate_runtime_plan_patch(
             tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
         )
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("public_image", [False, True])
+def test_compose_repair_uses_same_native_selection_policy(
+    tmp_path, monkeypatch, native, public_image
+):
+    monkeypatch.delenv("ALK_COMPOSE_BROKER_SOCKET", raising=False)
+    monkeypatch.delenv("ALK_TRUSTED_COMPOSE_SOCKET", raising=False)
+    if native:
+        monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service/app.py").write_text("print('source')")
+    (tmp_path / "service/pyproject.toml").write_text(
+        '[project]\nname="fixture"\nversion="1"\n'
+    )
+    image = "${IMAGE}" if public_image else "example/app:1"
+    (tmp_path / "compose.yaml").write_text(
+        f'services:\n  app:\n    build: service\n    image: {image}\n'
+        '    environment: ["OPTIONAL_URL=http://optional:8080"]\n'
+        '  optional:\n    image: example/optional:1\n'
+    )
+    contract = AgentContract(agent="fixture")
+    patch = _patch(
+        contract, execution="compose", compose_file="compose.yaml", service="app",
+        config_files={".env": {"format": "dotenv", "values": {"IMAGE": "example/app:1"}}},
+    )
+    if native:
+        repaired = validate_runtime_plan_patch(
+            tmp_path, contract, patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+        from fi.alk.harness.runtime_repair import _dependency_root
+        assert _dependency_root(tmp_path, repaired.runtime) == tmp_path / "service"
+    else:
+        with pytest.raises(ValueError, match="compose_dependency_undeclared"):
+            validate_runtime_plan_patch(
+                tmp_path, contract, patch,
+                allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            )

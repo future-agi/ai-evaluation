@@ -26,6 +26,7 @@ Only a scenario that clears all three is kept. That is the green light.
 
 from __future__ import annotations
 
+import ast
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -35,13 +36,14 @@ from .checks import Outcome, run_check
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import restore
+from .world.snapshot import restore, read_manifest
 
 
 @dataclass
 class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
 
+    deferred: bool = False
     ready: bool = False
     solvable: bool = False
     vacuous: bool = True
@@ -86,6 +88,8 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
+        if self.deferred and not self.broken:
+            return "DEFERRED: native setup, readiness and outcome checks require the live runtime."
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:
@@ -186,6 +190,8 @@ def prepared(
     scenario: Scenario, world_root: Path
 ) -> tuple[GeneratedWorld, Outcome, Outcome]:
     """A fresh world with this scenario's setup applied, and how that went."""
+    if native_runtime(world_root):
+        raise RuntimeError("native_fixture_proof_deferred_to_live_runtime")
     world = restore(world_root)
     world.reset()
     applied = apply_setup(scenario, world)
@@ -316,6 +322,29 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
+def native_runtime(world_root: Path) -> bool:
+    try:
+        return bool(read_manifest(world_root).get("native_runtime", False))
+    except FileNotFoundError:
+        return False
+
+
+def native_source_problem(source: str, entry: str) -> str:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return f"{entry} syntax error: {exc.msg}"
+    if not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry
+               for node in tree.body):
+        return f"missing {entry} function"
+    forbidden = {"state", "query", "put", "change", "drop", "call", "read_file", "write_file",
+                 "checkpoint", "restore", "handle_tool_call"}
+    if any(isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+           and node.value.id == "world" and node.attr in forbidden for node in ast.walk(tree)):
+        return "native fixtures/checks must use actual API responses or native call observations, not shadow state"
+    return ""
+
+
 def prove(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -326,6 +355,20 @@ def prove(
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
+    if native_runtime(world_root):
+        proof.deferred = True
+        sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]
+        sources += [("check", source) for _, source in checks]
+        for entry, source in sources:
+            if not source.strip():
+                continue
+            problem = native_source_problem(source, entry)
+            if problem:
+                proof.broken.append(problem)
+        if scenario.setup_code.strip() and not scenario.ready_code.strip():
+            proof.broken.append("native fixture setup requires ready(world) to verify actual API state")
+        return proof
+
     if (
         not checks
         and _something_to_check(world_root)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
@@ -27,6 +28,7 @@ class ComposeSelection:
     compose_file: Path
     control_service: str
     services: dict[str, Any]
+    document: dict[str, Any]
 
 
 def select_runtime(
@@ -34,6 +36,7 @@ def select_runtime(
     runtime: Runtime | dict[str, Any],
     *,
     public_environment: dict[str, str] | None = None,
+    validate_environment_dependencies: bool = True,
 ) -> NativeSelection | ComposeSelection:
     raw = runtime.model_dump() if isinstance(runtime, Runtime) else runtime
     interface = raw.get("interface") or {}
@@ -71,10 +74,7 @@ def select_runtime(
     compose = compose.resolve()
     if not compose.is_relative_to(root):
         raise RuntimeSelectionError("runtime_compose_file_invalid")
-    try:
-        body = yaml.safe_load(compose.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise RuntimeSelectionError("compose_invalid") from exc
+    body, service_bases = _load_compose(root, compose, public_environment or {})
     if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
         raise RuntimeSelectionError("compose_invalid: services must be an object")
     services = {
@@ -100,6 +100,8 @@ def select_runtime(
             int(interface.get("port") or 0),
             control,
             public_environment or {},
+            validate_environment_dependencies,
+            service_bases,
         )
     services = {
         name: {
@@ -110,7 +112,16 @@ def select_runtime(
         }
         for name, service in services.items()
     }
-    return ComposeSelection(compose, control, services)
+    for name, service in services.items():
+        if service_bases[name] != compose.parent:
+            _rebase_service(
+                service,
+                service_bases[name],
+                compose.parent,
+                root,
+                public_environment or {},
+            )
+    return ComposeSelection(compose, control, services, body)
 
 
 def _runtime_compose_services(
@@ -120,6 +131,8 @@ def _runtime_compose_services(
     port: int,
     control: str,
     public_environment: dict[str, str],
+    validate_environment_dependencies: bool = True,
+    service_bases: dict[str, Path] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Select a declared HTTP runtime and retain its submitted dependency graph."""
     component = (root / workdir).resolve()
@@ -131,7 +144,9 @@ def _runtime_compose_services(
             continue
         build = _interpolate_structure(service["build"], public_environment)
         context = build.get("context", ".") if isinstance(build, dict) else build
-        if (root / str(context)).resolve() != component:
+        if (
+            (service_bases or {}).get(name, root) / str(context)
+        ).resolve() != component:
             continue
         ports = _interpolate_structure(service.get("ports") or [], public_environment)
         targets = [
@@ -186,7 +201,7 @@ def _runtime_compose_services(
         selected.add(name)
         pending.extend(dependencies)
     omitted = set(services) - selected
-    for name in selected:
+    for name in selected if validate_environment_dependencies else ():
         environment = services[name].get("environment") or {}
         values = (
             environment.values()
@@ -194,7 +209,10 @@ def _runtime_compose_services(
             else (str(item).partition("=")[2] for item in environment)
         )
         for value in values:
-            value = str(value or "")
+            try:
+                value = _interpolate_structure(str(value or ""), public_environment)
+            except RuntimeSelectionError:
+                continue
             try:
                 hostname = urlsplit(value if "://" in value else "//" + value).hostname
             except ValueError:
@@ -232,16 +250,185 @@ def _interpolate_structure(value: Any, public_environment: dict[str, str]) -> An
     if not isinstance(value, str):
         return value
 
-    def replace(match: re.Match[str]) -> str:
-        name, operator, default = match.groups()
-        supplied = public_environment.get(name)
-        if supplied is not None and (supplied or not (operator or "").startswith(":")):
-            return supplied
-        if operator in {"-", ":-"}:
-            return default
-        raise RuntimeSelectionError(f"compose_structural_configuration_missing: {name}")
+    if len(value) > 65536:
+        raise RuntimeSelectionError("compose_structural_interpolation_limit")
+    result = []
+    position = 0
+    while position < len(value):
+        if value[position] != "$":
+            result.append(value[position])
+            position += 1
+            continue
+        if value.startswith("$$", position):
+            result.append("$")
+            position += 2
+            continue
+        if value.startswith("${", position):
+            start = position + 2
+            end, depth = start, 1
+            while end < len(value) and depth:
+                if value.startswith("${", end):
+                    depth += 1
+                    if depth > 32:
+                        raise RuntimeSelectionError(
+                            "compose_structural_interpolation_limit"
+                        )
+                    end += 2
+                elif value[end] == "}":
+                    depth -= 1
+                    end += 1
+                else:
+                    end += 1
+            if depth:
+                raise RuntimeSelectionError(
+                    "compose_structural_interpolation_unsupported"
+                )
+            expression = value[start : end - 1]
+            match = re.fullmatch(
+                r"([A-Za-z_][A-Za-z0-9_]*)(?:(:?[?+\-])(.*))?", expression, re.S
+            )
+            if not match:
+                raise RuntimeSelectionError(
+                    "compose_structural_interpolation_unsupported"
+                )
+            name, operator, default = match.groups()
+            supplied = public_environment.get(name)
+            present = supplied is not None and (
+                bool(supplied) or not (operator or "").startswith(":")
+            )
+            if operator in {"+", ":+"}:
+                replacement = (
+                    _interpolate_structure(default, public_environment)
+                    if present
+                    else ""
+                )
+            elif present:
+                replacement = supplied
+            elif operator in {"-", ":-"}:
+                replacement = _interpolate_structure(default, public_environment)
+            else:
+                raise RuntimeSelectionError(
+                    f"compose_structural_configuration_missing: {name}"
+                )
+            result.append(replacement)
+            position = end
+        else:
+            match = re.match(r"\$([A-Za-z_][A-Za-z0-9_]*)", value[position:])
+            if not match:
+                raise RuntimeSelectionError(
+                    "compose_structural_interpolation_unsupported"
+                )
+            name = match.group(1)
+            if name not in public_environment:
+                raise RuntimeSelectionError(
+                    f"compose_structural_configuration_missing: {name}"
+                )
+            result.append(public_environment[name])
+            position += len(match.group(0))
+    return "".join(result)
 
-    result = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])(.*?))?\}", replace, value)
-    if "$" in result:
-        raise RuntimeSelectionError("compose_structural_interpolation_unsupported")
-    return result
+
+def _load_compose(
+    root: Path, compose: Path, environment: dict[str, str]
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    seen = set()
+    active = set()
+    service_bases = {}
+    total_bytes = 0
+
+    def load(path):
+        nonlocal total_bytes
+        path = path.resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise RuntimeSelectionError("compose_include_path_invalid")
+        if path in active:
+            raise RuntimeSelectionError("compose_include_cycle")
+        if path in seen:
+            raise RuntimeSelectionError("compose_include_duplicate")
+        seen.add(path)
+        active.add(path)
+        if len(seen) > 32 or len(active) > 16:
+            raise RuntimeSelectionError("compose_include_limit")
+        total_bytes += path.stat().st_size
+        if total_bytes > 2 * 1024 * 1024:
+            raise RuntimeSelectionError("compose_include_limit")
+        try:
+            body = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise RuntimeSelectionError("compose_invalid") from exc
+        if not isinstance(body, dict):
+            raise RuntimeSelectionError("compose_invalid")
+        includes = body.pop("include", [])
+        if not isinstance(includes, list):
+            raise RuntimeSelectionError("compose_include_invalid")
+        for key in ("services", "volumes", "networks"):
+            if key in body and not isinstance(body[key], dict):
+                raise RuntimeSelectionError("compose_invalid")
+        for name, service in body.get("services", {}).items():
+            if not isinstance(service, dict):
+                raise RuntimeSelectionError("compose_invalid")
+            service_bases[name] = path.parent
+        for include in includes:
+            if not isinstance(include, str):
+                raise RuntimeSelectionError("compose_include_unsupported")
+            include = _interpolate_structure(include, environment)
+            if Path(include).is_absolute() or "://" in include:
+                raise RuntimeSelectionError("compose_include_path_invalid")
+            child = load(path.parent / include)
+            for key, value in child.items():
+                if key in {"name", "version"} or key.startswith("x-"):
+                    continue
+                if key not in {"services", "volumes", "networks"}:
+                    raise RuntimeSelectionError("compose_include_top_level_unsupported")
+                target = body.setdefault(key, {})
+                if target.keys() & value.keys():
+                    raise RuntimeSelectionError(
+                        f"compose_include_resource_conflict: {key}"
+                    )
+                target.update(value)
+        active.remove(path)
+        return body
+
+    return load(compose), service_bases
+
+
+def _rebase_service(service, base, destination, root, environment):
+    def relative(value, *, interpolate=True):
+        if interpolate:
+            value = _interpolate_structure(value, environment)
+        if (
+            not isinstance(value, str)
+            or Path(value).is_absolute()
+            or value.startswith("~")
+        ):
+            raise RuntimeSelectionError("compose_source_path_invalid")
+        path = (base / value).resolve()
+        if not path.is_relative_to(root):
+            raise RuntimeSelectionError("compose_source_path_escape")
+        return "./" + os.path.relpath(path, destination)
+
+    build = service.get("build")
+    if build:
+        build = {"context": build} if isinstance(build, str) else build
+        build["context"] = relative(build.get("context", "."), interpolate=False)
+        service["build"] = build
+    envfiles = service.get("env_file", [])
+    envfiles = [envfiles] if isinstance(envfiles, str) else envfiles
+    for index, entry in enumerate(envfiles):
+        if isinstance(entry, str):
+            envfiles[index] = relative(entry)
+        elif isinstance(entry, dict) and "path" in entry:
+            entry["path"] = relative(entry["path"])
+        else:
+            raise RuntimeSelectionError("compose_env_file_invalid")
+    if envfiles:
+        service["env_file"] = envfiles
+    mounts = service.get("volumes", [])
+    for index, mount in enumerate(mounts):
+        if isinstance(mount, str):
+            parts = mount.split(":")
+            if parts[0].startswith((".", "/", "~")):
+                parts[0] = relative(parts[0])
+                mounts[index] = ":".join(parts)
+        elif isinstance(mount, dict) and mount.get("type") == "bind":
+            mount["source"] = relative(mount["source"])

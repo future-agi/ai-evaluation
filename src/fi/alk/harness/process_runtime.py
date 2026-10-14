@@ -6671,10 +6671,6 @@ class ProcessRuntimeProvider:
         for item in self._manifest.processes:
             if isinstance(item, SourceProcess):
                 for name, relative in item.workspaces.items():
-                    if name in workspace_roots:
-                        raise ProcessRuntimeError(
-                            "spawn", "workspace_name_collision", name
-                        )
                     workspace_roots[name] = str(
                         world_scratch_dir(
                             self._context.work_directory, world_index, item.name

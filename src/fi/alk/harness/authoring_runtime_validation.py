@@ -74,6 +74,7 @@ def _write_runtime_evidence(
     reset_equivalence,
     world_isolation,
     chat_ingress,
+    native_observation: bool = False,
 ) -> None:
     """Seal facts which would otherwise disappear with the validation sandbox."""
 
@@ -93,16 +94,20 @@ def _write_runtime_evidence(
         limitations.append(
             "chat ingress is not applicable to voice or external connect-only runtimes"
         )
-    if external_provider:
+    if external_provider or native_observation:
         source_schema_hash = manifest.provenance.source_digest
         world_ir_hash = _artifact_digest(Path("__external_provider_world__"))
         compiler_version = "external-provider-black-box"
         schema_and_seed = CheckStatus.NOT_APPLICABLE
         source_invariants = CheckStatus.NOT_APPLICABLE
-        limitations.append(
-            "external provider state and tool implementations were not available for local inspection"
-        )
-    if not external_provider:
+        if external_provider:
+            limitations.append(
+                "external provider state and tool implementations were not available for local inspection"
+            )
+    if native_observation:
+        compiler_version = "native-compose-observation-v1"
+        limitations.append("Native application state is opaque: schema, seed, source invariants, value-level reset equivalence and state isolation are not certified. Compose lifecycle rebuilds private source copies and volumes; checks may observe only native responses. Source actions are not probed by the harness.")
+    if not external_provider and not native_observation:
         source_model = store.read_source_model()
         world_ir = store.read_world_ir()
         source_schema_hash = source_model.fingerprint
@@ -118,7 +123,7 @@ def _write_runtime_evidence(
         limitations.append(
             "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
         )
-    elif world_isolation is CheckStatus.NOT_APPLICABLE and not external_provider:
+    elif world_isolation is CheckStatus.NOT_APPLICABLE and not external_provider and not native_observation:
         limitations.append(
             "concurrent world isolation is not applicable because a fixed-port runtime is "
             "enforced at single-world parallelism; reset equivalence remains certified"
@@ -351,9 +356,10 @@ def _fallback_diagnostic(error, *, authoring: Path | None = None):
         == "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
         and authoring is not None
         and (authoring / "world.sqlite").is_file()
-        and json.loads(
-            (authoring / "contract.json").read_text(encoding="utf-8")
-        ).get("data_store") is None
+        and json.loads((authoring / "contract.json").read_text(encoding="utf-8")).get(
+            "data_store"
+        )
+        is None
     ):
         code = "generated_storage_declaration_missing"
         stage = HarnessStage.BUILDING_ENVIRONMENT
@@ -498,6 +504,7 @@ async def validate_once(
 ) -> int:
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
+    from .compose_integration import enabled as compose_enabled
     from .contract import AgentContract
     from .hosted_entrypoint import (
         ProcessWorldFactory,
@@ -634,7 +641,9 @@ async def validate_once(
             generic_artifact_root=(authoring / "generic-harness") if generic else None,
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
-        requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
+        requested_lanes = max(
+            1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4)
+        )
         executor = ThreadPoolExecutor(
             max_workers=requested_lanes, thread_name_prefix="runtime-validation"
         )
@@ -659,7 +668,15 @@ async def validate_once(
                 manifest,
                 parallelism=validation_parallelism,
                 secret_refs=job_secret_purposes(job),
+                allow_compose=local_runtime and compose_enabled(),
             )
+            from .bundle_v2 import RuntimeKindV2
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
+                from .compose_integration import validate_native
+                return await validate_native(job=job, source=source, authoring=authoring,
+                    bundle=bundle, manifest=manifest, work=work, values=target_secret_values,
+                    redactions=redaction_values, executor=executor)
+
             runtimes = await provider.provision(
                 manifest,
                 source=source,
@@ -838,7 +855,9 @@ async def validate_once(
                 active = [
                     scenario
                     for scenario in scenarios
-                    if not (does_nothing(scenario.setup) and does_nothing(scenario.ready))
+                    if not (
+                        does_nothing(scenario.setup) and does_nothing(scenario.ready)
+                    )
                 ]
                 print(
                     f"runtime validation: {len(scenarios) - len(active)} of {len(scenarios)} "
@@ -890,7 +909,10 @@ async def validate_once(
                             "runtime",
                             "generated_runtime_plan_invalid: target_http is absent",
                         )
-                    source_key = getattr(scenarios[0], "source_scenario_key", None) or scenarios[0].scenario_key
+                    source_key = (
+                        getattr(scenarios[0], "source_scenario_key", None)
+                        or scenarios[0].scenario_key
+                    )
                     document = _with_scenario_edits(
                         _scenario_document(bundle, source_key), job.metadata, source_key
                     )
@@ -1092,7 +1114,9 @@ async def validate_and_repair(
                     )
                     if contract.data_store is not None:
                         return 1
-                    with tempfile.TemporaryDirectory(prefix="alk-storage-repair-") as candidate_dir:
+                    with tempfile.TemporaryDirectory(
+                        prefix="alk-storage-repair-"
+                    ) as candidate_dir:
                         status = await _understand(
                             argparse.Namespace(
                                 kind="repo",
@@ -1281,7 +1305,11 @@ async def validate_and_repair(
                     + base_guidance
                 )
                 if exc.process_evidence:
-                    guidance += "\n<untrusted_current_attempt_process_logs>\n" + exc.process_evidence + "\n</untrusted_current_attempt_process_logs>"
+                    guidance += (
+                        "\n<untrusted_current_attempt_process_logs>\n"
+                        + exc.process_evidence
+                        + "\n</untrusted_current_attempt_process_logs>"
+                    )
                 _active_repair_diagnostics = diagnostics
                 scenarios_before = None
                 if repair_phase == "scenarios":
@@ -1301,7 +1329,9 @@ async def validate_and_repair(
 
                     from .repair_controller import is_chat_dependency_investigation
 
-                    if is_chat_dependency_investigation(diagnostics) and not isinstance(repair_result, RuntimePlanPatch):
+                    if is_chat_dependency_investigation(diagnostics) and not isinstance(
+                        repair_result, RuntimePlanPatch
+                    ):
                         status = 1
                     elif isinstance(repair_result, WorldIRRepairPatch):
                         source_model = artifacts.read_source_model()
