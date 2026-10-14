@@ -628,6 +628,17 @@ def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
     if isinstance(value, Mapping):
         if value.get("role") == "tool" or value.get("type") == "tool":
             return found
+        if (
+            "tool_calls" in names
+            and (
+                value.get("role") == "assistant"
+                or value.get("type") in ("ai", "assistant")
+            )
+            and isinstance(value.get("tool_calls"), list)
+            and value["tool_calls"]
+        ):
+            # Canonical calls own IDs; provider aliases in this message are not new requests.
+            return [value["tool_calls"]]
         for key, item in value.items():
             # Descriptions and tool payloads cannot request harness tools.
             if key in {"metadata", "args", "arguments"}:

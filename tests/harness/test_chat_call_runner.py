@@ -1184,3 +1184,91 @@ def test_hosted_chat_function_response_payload_cannot_request_tools(
     assert world.calls[0].arguments == {"path": "notes.json"}
     assert world.calls[0].result == result
     assert world.calls[0].ok is True
+
+
+@pytest.mark.parametrize("canonical", ["present", "empty", "absent"])
+@pytest.mark.parametrize("message_kind", ["ai", "assistant"])
+def test_hosted_chat_prefers_canonical_calls_within_assistant_message(
+    tmp_path: Path, canonical: str, message_kind: str
+) -> None:
+    context = _context(tmp_path)
+    contract = chat.AgentContract.model_validate_json(
+        (context.bundle_dir / "contract.json").read_text()
+    )
+    arguments = {"path": "notes/summary.md", "content": "Project summary"}
+    assistant = {
+        "type" if message_kind == "ai" else "role": message_kind,
+        "content": "",
+        "additional_kwargs": {
+            "function_call": {
+                "name": "write_file",
+                "arguments": json.dumps(arguments),
+            }
+        },
+    }
+    if canonical != "absent":
+        assistant["tool_calls"] = (
+            []
+            if canonical == "empty"
+            else [
+                {
+                    "name": "write_file",
+                    "args": arguments,
+                    "id": call_id,
+                    "type": "tool_call",
+                }
+                for call_id in ["native-1", "native-2"]
+            ]
+        )
+    messages = [assistant]
+    if canonical == "present":
+        messages.extend(
+            {"type": "tool", "tool_call_id": call_id, "content": "OK"}
+            for call_id in ["native-1", "native-2"]
+        )
+    messages.append({"type": "ai", "content": "Native final answer."})
+    wrapper = HTTPAgentWrapper(
+        endpoint="http://agent/chat",
+        protocol="json_template",
+        request_template={"messages": "{{messages}}"},
+        response_path="messages.-1.content",
+    )
+    requests = []
+
+    def request_json(*_args: Any, **kwargs: Any) -> tuple[int, Any]:
+        requests.append(kwargs["payload"])
+        return 200, {
+            "messages": messages
+            if len(requests) == 1
+            else [{"type": "ai", "content": "Continued."}]
+        }
+
+    wrapper._request_json = request_json
+    world = _ToolWorld()
+    executions = []
+    original = world.handle_tool_call
+
+    def execute(call: dict[str, Any]) -> Any:
+        executions.append(call)
+        return original(call)
+
+    world.handle_tool_call = execute
+    target = chat._HostedChatTarget(
+        wrapper=wrapper,
+        contract=contract,
+        world=world,
+        scenario_key="write",
+        scenario_id="write-1",
+    )
+    answer = asyncio.run(target.say("Write a project summary."))
+    completed = canonical == "present"
+    assert len(executions) == (0 if completed else 1)
+    assert len(requests) == (1 if completed else 2)
+    assert answer == ("Native final answer." if completed else "Continued.")
+    assert len(world.calls) == (2 if completed else 1)
+    assert all(
+        call.name == "write_file" and call.arguments == arguments
+        for call in world.calls
+    )
+    if completed:
+        assert all(call.result == "OK" and call.ok for call in world.calls)
