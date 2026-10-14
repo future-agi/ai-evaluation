@@ -687,6 +687,13 @@ def contract_tools(
                             "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
                         },
+                        "compose_overrides": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "maxLength": 1024},
+                            "description": "Ordered repository-relative source Compose overlays applied after compose_file using the native Compose CLI. Requires explicit compose_file and service. Never synthesize overlays or change upstream files.",
+                        },
                         "dockerfile": {
                             "type": "string",
                             "description": "Path to its own Dockerfile, if it has one. Theirs is "
