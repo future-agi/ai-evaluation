@@ -574,3 +574,77 @@ def test_generated_callback_adapter_does_not_need_conventional_agent_script(tmp_
     process = next(process for process in plan.processes if process.name == "agent")
     assert process.run_command[-2] == "-c"
     assert process.environment["ALK_CALLBACK_ENTRYPOINT"] == "callbacks:agent_callback"
+
+
+def test_required_environment_accepts_process_materialized_secret_path(tmp_path):
+    from fi.simulate.runtime.spec import SecretRef
+
+    (tmp_path / "server.py").write_text("print('source')")
+    configured = job()
+    configured.agent.secret_refs["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = SecretRef(
+        manager="mounted", key="fixture-document", purpose="target_provider"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        configured,
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            **native(),
+            "required_environment": {"agent": ["GOOGLE_APPLICATION_CREDENTIALS"]},
+        },
+    )
+    assert plan.control_service == "agent"
+
+
+@pytest.mark.parametrize("purpose", [None, "simulator_provider"])
+def test_materialized_secret_requires_an_input_routed_to_the_process(tmp_path, purpose):
+    from fi.simulate.runtime.spec import SecretRef
+
+    (tmp_path / "server.py").write_text("print('source')")
+    configured = job()
+    if purpose:
+        configured.agent.secret_refs["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = SecretRef(
+            manager="mounted", key="fixture-document", purpose=purpose
+        )
+    with pytest.raises(BundleAuthorError, match="agent:GOOGLE_APPLICATION_CREDENTIALS"):
+        resolve_environment_plan(
+            tmp_path,
+            configured,
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                **native(),
+                "required_environment": {"agent": ["GOOGLE_APPLICATION_CREDENTIALS"]},
+            },
+        )
+
+
+def test_materialized_secret_path_does_not_satisfy_sibling_process(tmp_path):
+    from fi.simulate.runtime.spec import SecretRef
+
+    (tmp_path / "server.py").write_text("print('source')")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  dialogue:\n    build: .\n    depends_on: [worker]\n"
+        "  worker:\n    build: .\n    command: [python, server.py]\n"
+    )
+    configured = job()
+    configured.agent.secret_refs["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = SecretRef(
+        manager="mounted", key="fixture-document", purpose="target_provider"
+    )
+    with pytest.raises(
+        BundleAuthorError, match="worker:GOOGLE_APPLICATION_CREDENTIALS"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            configured,
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                **native(),
+                "execution": "compose",
+                "compose_file": "compose.yaml",
+                "service": "dialogue",
+                "required_environment": {"worker": ["GOOGLE_APPLICATION_CREDENTIALS"]},
+            },
+        )

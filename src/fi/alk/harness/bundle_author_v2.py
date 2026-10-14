@@ -60,6 +60,7 @@ from .bundle_v2 import (
 )
 from .contract import Runtime, ToolEntry
 from .credentials import assess_configuration, discover_credentials
+from .secrets import process_secret_environment_names
 from .runtime_selection import ComposeSelection, select_runtime
 from .job import HarnessJob
 from .job import ProviderExecutionMode, SourceKind
@@ -2475,12 +2476,14 @@ def resolve_environment_plan(
             normalized_processes.append(process)
             continue
         purposes = {purpose.value for purpose in process.secret_purposes}
-        secret_names = {
-            alias
-            for alias, reference in job.agent.secret_refs.items()
-            if reference.purpose in purposes
-            and reference.purpose not in {"source_checkout", "simulator_provider"}
-        }
+        secret_names = process_secret_environment_names(
+            {
+                alias
+                for alias, reference in job.agent.secret_refs.items()
+                if reference.purpose in purposes
+                and reference.purpose not in {"source_checkout", "simulator_provider"}
+            }
+        )
         environment: dict[str, str] = {}
         for name, value in process.environment.items():
             if "${" not in value:

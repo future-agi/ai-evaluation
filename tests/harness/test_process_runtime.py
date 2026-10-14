@@ -1798,14 +1798,23 @@ def test_spawn_source_process_rematerializes_google_credentials_after_world_rese
     assert credential_path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize(
+    "raw, message", [("not-json", "not valid JSON"), ("[]", "must contain an object")]
+)
 def test_spawn_source_process_rejects_invalid_uploaded_google_credentials(
-    tmp_path: Path,
+    tmp_path: Path, raw: str, message: str
 ) -> None:
     build_dir = tmp_path / "build" / "agent"
     build_dir.mkdir(parents=True)
     process = _source_process(secret_purposes=["target_provider"])
 
-    with pytest.raises(pr.ProcessRuntimeError, match="not valid JSON") as excinfo:
+    invoked = []
+
+    def runner(*args, **kwargs):
+        invoked.append(True)
+        return FakeHandle()
+
+    with pytest.raises(pr.ProcessRuntimeError, match=message) as excinfo:
         pr.spawn_source_process(
             process,
             build_dir=build_dir,
@@ -1813,10 +1822,11 @@ def test_spawn_source_process_rejects_invalid_uploaded_google_credentials(
             world_index=0,
             port_plan=_solo_port_plan("svc"),
             configuration_addresses={},
-            secret_values={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "not-json"},
+            secret_values={"GOOGLE_APPLICATION_CREDENTIALS_JSON": raw},
             secret_purposes={"GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider"},
-            runner=lambda *args, **kwargs: FakeHandle(),
+            runner=runner,
         )
+    assert invoked == []
     assert excinfo.value.code == "spawn_failed"
     assert excinfo.value.domain is FailureDomain.AGENT
 
