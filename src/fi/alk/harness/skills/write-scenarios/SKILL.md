@@ -427,9 +427,10 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
   invented, and for what the records cannot show: what was said or read back, a refusal, an
   escalation. Never name a judged sub-goal for a record outcome; the records settle it.
 
-Use a check only for a change the call must leave in the records, made as it should be. Whether a
-forbidden thing happened is judged from the records: a check that holds on an untouched world grades
-nothing and is refused. The judge reads every call with its arguments and the records as well as
+Use a check only for what must hold whatever the caller asked: a forbidden action or state did not
+happen, a required order was kept, a change that was made is complete. Whether this caller's outcome
+happened, with their values, is graded from your solution's `outcome` steps, so a check never asks
+that a tool was called. The judge reads every call with its arguments and the records as well as
 the conversation, so judged does not mean read from the transcript alone, and anything the agent says
 or whether a step was right is judged.
 
@@ -668,13 +669,15 @@ is wrong.
 For a conversation-only target with no real tools, `solution: []` is intentional and behavioral
 sub-goals are judged from the transcript. Never fabricate a tool call merely to satisfy this gate.
 
-**3. Not vacuous.** The same checks run again with nothing done, and must fail. A check that passes
-while the agent does nothing grades nothing while reporting a result.
+**3. Not vacuous.** With nothing done, the scenario must fail: through its reference outcome (a step
+marked `outcome`, or the records your solution leaves), or, when it has none, through every check it
+names. A scenario that passes while the agent does nothing grades nothing while reporting a result.
 
 Gate 3 has a common trap. If your scenario is about something that must **not** happen, checking the
 world alone cannot show it: an untouched world looks exactly like one where the agent correctly
-refused. Check the calls instead: that the agent tried, and that the attempt was refused rather than
-succeeding.
+refused. Mark as `outcome` what the agent must do instead (the transfer, the explanation's record),
+so a run that did nothing fails, and let the prohibition check hold whenever the forbidden thing did
+not happen.
 
 ## What will be refused, and what to do
 
