@@ -107,7 +107,7 @@ def select_runtime(
     services = {
         name: {
             key: _interpolate_structure(value, public_environment or {})
-            if key in {"build", "image", "ports", "depends_on"}
+            if key in {"build", "image", "ports", "depends_on", "deploy"}
             else value
             for key, value in service.items()
         }
