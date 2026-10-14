@@ -243,3 +243,11 @@ def test_one_effect_reported_twice_is_one_call_with_its_arguments_merged():
     second = _Call("file_claim", loss_date="2026-10-13", confirmed=True)
     second.result = {"claim_ref": "CLM-2"}
     assert "duplicate" in compare_calls(solution, [full, partial, second])
+
+
+def test_a_phrase_the_agent_may_word_its_own_way_is_left_to_the_judge():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [{"tool": "transfer", "arguments": {"queue": "claims", "reason": "Caller disputes the denied claim"}, "outcome": True}]
+    assert compare_calls(solution, [_Call("transfer", queue="claims", reason="denial dispute, wants an adjuster")]) is None
+    assert compare_calls(solution, [_Call("transfer", queue="billing", reason="x")]).startswith("done wrong: transfer.queue")

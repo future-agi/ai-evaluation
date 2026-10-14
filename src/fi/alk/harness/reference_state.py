@@ -17,13 +17,20 @@ from datetime import datetime, timedelta
 from typing import Any
 
 NAME = "records_match_reference_solution"
-# Longer values are free text (a description, a note), which the judge reads instead.
+# Longer values are free text (a description, a note, a reason), which the judge reads instead.
 _LONGEST_COMPARED = 80
+_MOST_WORDS_COMPARED = 3
 # Shorter values (a count, a flag) trace to the solution only under the argument name they came from.
 _SHORTEST_TRACED = 3
 # A time matches to the minute unless the scenario allows a tolerance for that field.
 _TIME_TOLERANCE = timedelta(hours=float(os.environ.get("ALK_REFERENCE_TIME_TOLERANCE_HOURS") or 0))
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y", "%d %B %Y")
+
+
+def _comparable(value: Any) -> bool:
+    """A value with one right form: short, and not a phrase the agent may word its own way."""
+    text = str(value)
+    return value not in (None, "") and len(text) <= _LONGEST_COMPARED and len(text.split()) <= _MOST_WORDS_COMPARED
 
 
 def _rows(value: Any) -> list[dict[str, Any]]:
@@ -135,7 +142,7 @@ def _given(solution: list[Any]) -> tuple[set[str], set[tuple[str, str]]]:
         elif isinstance(value, list):
             for item in value:
                 walk(item, key)
-        elif value not in (None, "") and len(str(value)) <= _LONGEST_COMPARED:
+        elif _comparable(value):
             forms = {normalise(value)}
             if (when := _when(value)) is not None:
                 forms.add(when.date().isoformat())
@@ -171,8 +178,7 @@ def expected_changes(
             {
                 field: value
                 for field, value in row.items()
-                if value not in (None, "")
-                and len(str(value)) <= _LONGEST_COMPARED
+                if _comparable(value)
                 and _traced(field, value, given)
             }
             for row in rows
@@ -190,7 +196,7 @@ def _flat(arguments: Any, prefix: str = "") -> dict[str, Any]:
         name = f"{prefix}{key}"
         if isinstance(value, dict):
             found.update(_flat(value, f"{name}."))
-        elif value not in (None, "") and not isinstance(value, list) and len(str(value)) <= _LONGEST_COMPARED:
+        elif not isinstance(value, list) and _comparable(value):
             found[name] = value
     return found
 
