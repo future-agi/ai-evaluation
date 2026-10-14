@@ -22,7 +22,7 @@ from .session import Stage
 
 ARTIFACT = "source-data-invariants.json"
 _SUFFIXES = {".py", ".sql", ".ts", ".js", ".go", ".rs", ".java"}
-_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
+_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 
 def source_files(root: Path) -> dict[str, Path]:
