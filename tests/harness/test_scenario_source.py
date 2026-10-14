@@ -2632,6 +2632,22 @@ def test_a_level_past_a_third_of_the_suite_is_refused_while_somewhere_thinner_ex
     assert _over_its_share({"task": "book_ride"}, grid, everywhere, 20) == ""
 
 
+def test_a_level_the_person_asked_for_is_not_held_to_its_share() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"interface": ["noisy_line", "quiet_line", "accented"]}
+    quiet = [Scenario(name=f"q{one}", coverage={"interface": "quiet_line"}) for one in range(5)]
+
+    assert "whole share" in _over_its_share({"interface": "quiet_line"}, grid, quiet, 25)
+    assert _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["quiet_line"]}
+    ) == ""
+    assert "whole share" in _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["accented"]}
+    )
+
+
 def test_interface_and_overlay_levels_are_not_held_to_a_third() -> None:
     from fi.alk.harness.scenario import Scenario
     from fi.alk.harness.scenario_tools import _over_its_share
