@@ -48,6 +48,17 @@ def provider(values, artifact_root):
     )
 
 
+def validate_source(source: Path) -> None:
+    from .bundle import _inspect_file
+    from .certified_compose_runtime import validate_source_tree
+
+    source = Path(source).resolve()
+    validate_source_tree(source)
+    for path in sorted(source.rglob("*")):
+        if not path.is_symlink() and path.is_file():
+            _inspect_file(source, path)
+
+
 def compile_bundle(*, source, job, authoring, output, contract):
     from .bundle_author_v2 import (
         _copy_scenarios,
@@ -85,6 +96,7 @@ def compile_bundle(*, source, job, authoring, output, contract):
     )
     if not isinstance(selection, ComposeSelection):
         return None
+    validate_source(source)
     interface = runtime.get("interface") or {}
     if contract.get("modality") != "chat" or interface.get("kind") != "http":
         raise ValueError("compose_native_http_chat_required")

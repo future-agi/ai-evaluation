@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from .public_material import is_public_pem
+from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
 
 BUNDLE_SCHEMA_VERSION = "futureagi.environment-bundle.v1"
 BUNDLE_MANIFEST = "manifest.json"
@@ -145,12 +145,6 @@ _SECRET_FIELD = re.compile(
     re.IGNORECASE,
 )
 _SECRET_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "credentials", "id_rsa"}
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
 
 
 def _safe_relative(value: str) -> PurePosixPath:

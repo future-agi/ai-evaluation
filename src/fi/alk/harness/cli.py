@@ -408,6 +408,21 @@ async def _build(args: argparse.Namespace) -> int:
     if not world_saved(destination):
         print("\nNo world was saved.", file=sys.stderr)
         return 1
+    if native_runtime:
+        from .bundle import BundleError
+        from .certified_compose_runtime import ComposeRuntimeError
+        from .compose_integration import validate_source
+
+        try:
+            await asyncio.to_thread(validate_source, Path(source_root))
+        except (BundleError, ComposeRuntimeError) as failed:
+            print(f"Cannot admit the native source: {failed}", file=sys.stderr)
+            return 1
+        print(f"\nworld: {destination}")
+        print("Native bundle sealing follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
     from .bundle import BundleError
 
     try:
