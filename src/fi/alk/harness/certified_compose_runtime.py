@@ -321,6 +321,13 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                     "target": target,
                     "read_only": len(parts) == 3 and parts[2] == "ro",
                 }
+            # Native Compose expands plain named mounts with an empty options object.
+            if (
+                isinstance(mount, dict)
+                and mount.get("type") == "volume"
+                and mount.get("volume") == {}
+            ):
+                mount = {key: value for key, value in mount.items() if key != "volume"}
             if not isinstance(mount, dict) or set(mount) - {
                 "type",
                 "source",
