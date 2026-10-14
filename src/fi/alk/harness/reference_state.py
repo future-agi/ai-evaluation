@@ -108,8 +108,8 @@ _MONTHS = ("january", "february", "march", "april", "may", "june", "july", "augu
 
 def given_text(*facts: Any, said: Any = "", world: dict[str, Any] | None = None) -> str:
     """What a scenario fixes as one normalised text: its structured facts (the caller's details,
-    the fixture), the identifiers, numbers and dates in what the caller is told, and the values
-    that identify one record in the world. A word in a sentence vouches for nothing."""
+    the fixture), the identifiers, numbers, dates and single words in what the caller is told,
+    and the values that identify one record in the world. A phrase vouches for nothing."""
     found: list[str] = []
 
     def walk(value: Any) -> None:
@@ -126,6 +126,8 @@ def given_text(*facts: Any, said: Any = "", world: dict[str, Any] | None = None)
         walk(part)
     text = str(said or "")
     found.extend(normalise(token) for token in re.findall(r"[\w$.,:/+-]*\d[\w.,:/+-]*", text))
+    # A single word the caller says (a choice they name) is their fact; a phrase is not.
+    found.extend(word for word in re.findall(r"[a-z]{4,}", text.casefold()))
     words = re.sub(r"[\W_]+", "", text.casefold())
     found.extend(f"{month}{day}" for month in _MONTHS for day in range(1, 32) if f"{month}{day}" in words)
     counts: dict[str, int] = {}

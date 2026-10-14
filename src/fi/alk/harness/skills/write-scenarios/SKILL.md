@@ -267,7 +267,9 @@ solution cannot know in advance, such as an identifier or token the system issue
 set to `skip` in `comparisons`.
 
 Compare a value only when there is one right way to write it: an identifier, a code, a number, an
-amount, a date or time, a choice from a fixed set, a name the caller spells. A value the agent may
+amount, a date or time, a choice from a fixed set, a name the caller spells. On a spoken channel a name
+the caller only says has no one right spelling the agent could know: have the caller spell it, or give
+the spellings that sound the same as `aliases`. A value the agent may
 fairly put in its own words, such as a place described in words, a summary or a reason, is `skip`
 there, and a judged sub-goal decides whether it says what the caller said.
 
