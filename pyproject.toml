@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-learning-kit"
-version = "0.3.0"
+version = "0.3.1"
 description = "Unified Future AGI SDK for agent learning workflows."
 readme = "README.md"
 requires-python = ">=3.10"
