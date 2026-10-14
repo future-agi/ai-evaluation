@@ -527,7 +527,11 @@ def _needs_livekit_model_download(path: Path) -> bool:
 
 
 def select_python_extras(
-    root: Path, requested: list[str], *, required_owner: Path | None = None
+    root: Path,
+    requested: list[str],
+    *,
+    required_owner: Path | None = None,
+    context_excludes: tuple[str, ...] = (),
 ) -> PythonExtraSelection:
     """Resolve explicit extras in the selected project or unambiguous uv workspace members."""
     if not requested:
@@ -564,6 +568,10 @@ def select_python_extras(
                     paths.add(resolved)
     owners = {name: [root] if name in root_names else [] for name in names}
     for member in sorted(members - excluded):
+        if _context_path_excluded(
+            member.relative_to(root) / "pyproject.toml", context_excludes
+        ):
+            continue
         available = declared(_pyproject_document(member / "pyproject.toml"))
         for name in names:
             if name in available:
@@ -613,7 +621,11 @@ def local_editable_install_operands(install: str) -> tuple[tuple[str, list[str]]
 
 
 def local_install_extra_claims(
-    root: Path, install: str, *, reject_unselectable: bool = False
+    root: Path,
+    install: str,
+    *,
+    reject_unselectable: bool = False,
+    context_excludes: tuple[str, ...] = (),
 ) -> tuple[tuple[Path, str], ...]:
     operands = []
     for relative, groups in local_editable_install_operands(install):
@@ -639,7 +651,12 @@ def local_install_extra_claims(
             }:
                 continue
             try:
-                selection = select_python_extras(root, [group], required_owner=owner)
+                selection = select_python_extras(
+                    root,
+                    [group],
+                    required_owner=owner,
+                    context_excludes=context_excludes,
+                )
             except GeneratedRuntimeError as exc:
                 if reject_unselectable and str(exc).startswith(
                     (
@@ -660,13 +677,18 @@ def validate_local_install_extras(
     extras: list[str],
     *,
     original_claims: tuple[tuple[Path, str], ...] = (),
+    context_excludes: tuple[str, ...] = (),
 ) -> None:
     selected = {canonicalize_name(name) for name in extras}
     for owner, name in (
         *original_claims,
-        *local_install_extra_claims(root, install, reject_unselectable=True),
+        *local_install_extra_claims(
+            root, install, reject_unselectable=True, context_excludes=context_excludes
+        ),
     ):
-        select_python_extras(root, [name], required_owner=owner)
+        select_python_extras(
+            root, [name], required_owner=owner, context_excludes=context_excludes
+        )
         if name not in selected:
             raise GeneratedRuntimeError(
                 f"generated_runtime_extra_omitted: {owner.relative_to(root.resolve()) / 'pyproject.toml'} requires {name} in runtime.extras"
@@ -676,9 +698,10 @@ def validate_local_install_extras(
 def _python_extras(
     root: Path, runtime: Any | None, command: list[str]
 ) -> PythonExtraSelection:
+    exclusions = _context_excludes(root, runtime, "pyproject.toml", command)
     requested = [str(item) for item in (getattr(runtime, "extras", None) or [])]
     if requested:
-        return select_python_extras(root, requested)
+        return select_python_extras(root, requested, context_excludes=exclusions)
     document = _pyproject_document(root / "pyproject.toml")
     declared = document.get("project", {}).get("optional-dependencies", {})
     available = (
@@ -693,6 +716,7 @@ def _python_extras(
             if extra.lower() not in {"all", "dev", "test", "tests"}
             and extra.lower() in tokens
         ],
+        context_excludes=exclusions,
     )
 
 
@@ -896,16 +920,19 @@ def _context_excludes(
     return tuple(sorted(values))
 
 
+def _context_path_excluded(relative: Path, exclusions: tuple[str, ...]) -> bool:
+    return any(
+        relative == Path(value) or Path(value) in relative.parents
+        for value in exclusions
+    )
+
+
 def _copy_sanitized_context(
     source: Path, destination: Path, exclusions: tuple[str, ...] = ()
 ) -> None:
     count = 0
     total = 0
     source = source.resolve()
-    excluded = tuple(Path(value) for value in exclusions)
-
-    def is_excluded(relative: Path) -> bool:
-        return any(relative == value or value in relative.parents for value in excluded)
 
     def copy_file(path: Path, relative: Path) -> None:
         nonlocal count, total
@@ -952,7 +979,7 @@ def _copy_sanitized_context(
         next_ancestors = ancestors | {resolved_directory}
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
             relative = relative_directory / path.name
-            if is_excluded(relative):
+            if _context_path_excluded(relative, exclusions):
                 continue
             if path.name in _IGNORED_DIRECTORIES and path.is_dir():
                 continue

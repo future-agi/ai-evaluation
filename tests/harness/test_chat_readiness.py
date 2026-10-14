@@ -252,7 +252,10 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     secrets = tmp_path / "secrets.json"
-    secrets.write_text("{}")
+    secrets.write_text('{"key": "secret123"}')
+    log_dir = authoring / "generic-harness/process-logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "old.log").write_text("unrelated old attempt")
     contract = AgentContract(
         runtime=Runtime(
             language="python", command=["python", "app.py"], interface=interface()
@@ -306,7 +309,13 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
             state["profile"] = False
 
         async def close(self, **kwargs):
+            from fi.alk.harness.process_diagnostics import retain_process_log
+
             calls.append("close")
+            work = kwargs["work_directory"]
+            log = work / "process.log"
+            log.write_text("current attempt detail secret123")
+            retain_process_log(log, work=work, destination=authoring / "generic-harness", secrets={"key": "secret123"})
 
     class World:
         def read_only(self):
@@ -384,6 +393,9 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         asyncio.run(validate())
     assert error.value.diagnostics[0].code == "chat_ingress_configuration_invalid"
     assert calls == ["provision", "reset", "setup", "close"]
+    assert "current attempt detail" in error.value.process_evidence
+    assert "secret123" not in error.value.process_evidence
+    assert "unrelated old attempt" not in error.value.process_evidence
     assert len(receipts(authoring)) == 1
     repaired_runtime = contract.runtime.model_copy(
         update={"interface": interface(setup_requests=[{"path": "/profiles"}])}
@@ -393,6 +405,9 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
     repairs = []
 
     async def request_patch(source_path, current_contract, diagnostics, **kwargs):
+        assert "current attempt detail" in kwargs["guidance"]
+        assert "secret123" not in kwargs["guidance"]
+        assert "unrelated old attempt" not in kwargs["guidance"]
         repairs.append(tuple(item.code for item in diagnostics))
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(current_contract),
@@ -482,3 +497,65 @@ def test_all_tool_calls_must_be_usable_even_with_text(
             asyncio.run(probe(tmp_path, url))
         assert error.value.diagnostics[0].code == "chat_ingress_failed"
     assert len(state["calls"]) == 1
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_dependency_patch_repeats_identical_http_request_once(tmp_path, profile_app, recovers):
+    from fi.alk.harness.authoring_runtime_validation import validate_and_repair
+
+    url, state = profile_app
+    state.update(profile=True)
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "app.py").write_text("# immutable source")
+    (source / "pyproject.toml").write_text(
+        '[project]\nname="fixture"\nversion="1"\n'
+        '[project.optional-dependencies]\nrenamed_transport=["declared-package"]\n'
+    )
+    (authoring / "scenarios.json").write_text('{"original": true}')
+    target = interface(protocol="json_template", request_template={"messages": "{{messages}}"}, response_path="response")
+    contract = AgentContract(agent="fixture", runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"], interface=target,
+    ))
+    (authoring / "contract.json").write_text(contract.model_dump_json())
+    snapshots = {path: path.read_bytes() for path in source.iterdir()}
+    repairs = []
+    builds = []
+
+    async def validate(_job, _source, _authoring):
+        current = AgentContract.model_validate_json((authoring / "contract.json").read_text())
+        builds.append(current.runtime.extras)
+        state["body"] = (
+            {"response": "Ready"} if current.runtime.extras and recovers
+            else {"error": "Cannot import declared-package secret123"}
+        )
+        await probe(authoring, url, interface=current.runtime.interface, candidate_hash=_contract_hash(current))
+        return 1
+
+    async def repair(_phase, guidance):
+        assert "Cannot import declared-package" in guidance
+        assert "secret123" not in guidance
+        repairs.append(guidance)
+        return RuntimePlanPatch(
+            base_contract_hash=_contract_hash(contract),
+            runtime=contract.runtime.model_copy(update={"extras": ["renamed_transport"]}),
+            evidence_paths=("pyproject.toml",), diagnostic_codes=("chat_ingress_failed",),
+            summary="Investigate the declared transport dependency group.",
+        )
+
+    run = validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring, validate=validate, repair=repair)
+    if recovers:
+        asyncio.run(run)
+    else:
+        with pytest.raises(RuntimeValidationError):
+            asyncio.run(run)
+    assert len(repairs) == 1
+    assert builds == [[], ["renamed_transport"]]
+    assert len(state["calls"]) == 2
+    assert state["calls"][0] == state["calls"][1]
+    assert sorted(item["status"] for item in receipts(authoring)) == (["failed", "passed"] if recovers else ["failed", "failed"])
+    assert (authoring / "generic-harness/runtime-plan-repair-1.json").is_file()
+    assert all(path.read_bytes() == body for path, body in snapshots.items())
+    assert (authoring / "scenarios.json").read_text() == '{"original": true}'

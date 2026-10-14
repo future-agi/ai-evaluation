@@ -1137,6 +1137,7 @@ def _plan_python(
     run_override: list[str] | None = None,
     extras: list[str] | None = None,
     install: str = "",
+    context_excludes: tuple[str, ...] = (),
 ) -> SourceProcess:
     if (
         run_override
@@ -1165,8 +1166,8 @@ def _plan_python(
     )
     python = _docker_python(root)
     try:
-        validate_local_install_extras(root, install, extras or [])
-        selection = select_python_extras(root, extras or [])
+        validate_local_install_extras(root, install, extras or [], context_excludes=context_excludes)
+        selection = select_python_extras(root, extras or [], context_excludes=context_excludes)
     except GeneratedRuntimeError as exc:
         raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
@@ -2140,6 +2141,7 @@ def resolve_environment_plan(
                 livekit_download=is_livekit and service_name == control_name,
                 extras=runtime_model.extras if service_name == control_name else [],
                 install=runtime_model.install if service_name == control_name else "",
+                context_excludes=tuple(runtime_model.context_excludes) if service_name == control_name else (),
                 run_override=(
                     runtime_command
                     or _compose_command(service.get("command"))
@@ -2380,6 +2382,7 @@ def resolve_environment_plan(
             livekit_download=is_livekit,
             extras=runtime_model.extras,
             install=runtime_model.install,
+            context_excludes=tuple(runtime_model.context_excludes),
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph

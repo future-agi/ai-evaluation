@@ -177,3 +177,21 @@ def test_close_captures_output_flushed_during_termination(tmp_path):
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def test_current_attempt_evidence_excludes_old_symlink_and_large_logs(tmp_path):
+    from fi.alk.harness.process_diagnostics import retained_process_evidence
+
+    old = tmp_path / "old.log"
+    old.write_text("OLD")
+    current = tmp_path / "current.log"
+    current.write_text("missing declared dependency token-secret")
+    (tmp_path / "link.log").symlink_to(old)
+    (tmp_path / "large.log").write_text("x" * 32769)
+    evidence = retained_process_evidence(tmp_path, {old}, {"key": "token-secret"})
+    assert "missing declared dependency" in evidence
+    assert "token-secret" not in evidence
+    assert "OLD" not in evidence
+    assert "large.log" not in evidence
+    assert "link.log" not in evidence
+    assert len(evidence) <= 12000

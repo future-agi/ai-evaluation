@@ -1514,3 +1514,25 @@ def test_storage_diagnostic_accepts_only_known_exception_wrapper(
     assert (
         diagnostic.code == "generated_storage_declaration_missing"
     ) is storage_repair
+
+
+@pytest.mark.parametrize("repair_result", [None, 0, 1])
+def test_dependency_investigation_rejects_untyped_repair_results(tmp_path, repair_result):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application failed")
+    calls = []
+
+    async def validate(*_args):
+        calls.append("validate")
+        raise RuntimeValidationError("environment", "application failed", diagnostics=(diagnostic,))
+
+    async def repair(*_args):
+        calls.append("repair")
+        return repair_result
+
+    with pytest.raises(RuntimeValidationError, match="application failed"):
+        asyncio.run(validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring, validate=validate, repair=repair))
+    assert calls == ["validate", "repair"]

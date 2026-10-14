@@ -116,6 +116,11 @@ async def probe_chat_ingress(
                 if not valid_tools
                 else "Chat returned no text or tool calls"
             )
+            excerpt = trace.get("response_excerpt")
+            if excerpt:
+                detail = (
+                    f"{detail}\n<untrusted_response>\n{excerpt}\n</untrusted_response>"
+                )
             diagnostic = HarnessDiagnostic.create(
                 stage=HarnessStage.CONNECTING_AGENT,
                 component="chat_ingress",
