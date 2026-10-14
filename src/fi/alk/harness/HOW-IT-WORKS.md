@@ -362,6 +362,17 @@ through the runtime-plan repair path. A repair must preserve the proven source
 owner and select the group; deleting the install text does not resolve the error.
 Unsupported install syntax remains documentary and never executes.
 
+`runtime.requirements_files` selects additional Python dependency manifests relative
+to the selected component. Both compilers install these into the same environment
+after project dependencies and extras, preserving every installed package version.
+Conflicting supplemental requirements fail instead of replacing the selected baseline.
+Selection accepts registry package requirements
+and local `-r` / `-c` includes; paths must remain inside the submitted component,
+exist in the build context, and have an acyclic bounded include graph. URLs and
+other pip options fail explicitly. The bounded chat-readiness repair may add
+source-evidenced manifests while retaining existing selections and all other runtime
+fields. `runtime.install` alone does not select a requirements file.
+
 HTTP endpoint paths can reference canonical inputs and earlier setup captures, such
 as `/threads/{{session_id}}/turns`. Setup runs first; the main path then renders for
 each call without changing the stored endpoint. Each substituted value is encoded

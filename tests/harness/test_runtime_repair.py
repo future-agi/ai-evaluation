@@ -345,3 +345,28 @@ def test_runtime_patch_cannot_select_context_excluded_extra_owner(
         validate_runtime_plan_patch(
             tmp_path, contract, patch, allowed_diagnostic_codes={code}
         )
+
+
+def test_readiness_patch_adds_source_requirements_without_changing_extras(
+    tmp_path, dependency_patch
+):
+    contract, patch = dependency_patch
+    (tmp_path / "backend.txt").write_text("client>=1\n")
+    patch = patch.model_copy(
+        update={
+            "runtime": contract.runtime.model_copy(
+                update={"requirements_files": ["backend.txt"]}
+            ),
+            "evidence_paths": ("backend.txt",),
+        }
+    )
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+    )
+    assert repaired.runtime.requirements_files == ["backend.txt"]
+    assert repaired.runtime.extras == ["existing"]
+    (tmp_path / "backend.txt").write_text("-r missing.txt\n")
+    with pytest.raises(ValueError, match="requirements_path_invalid"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+        )

@@ -676,7 +676,12 @@ class ProcessWorldFactory:
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
         store = AttachedPostgresStore(endpoint.address)
         return await asyncio.to_thread(
-            HostedWorld, store, runtime.world_index, rng, row_counts
+            HostedWorld,
+            store,
+            runtime.world_index,
+            rng,
+            row_counts,
+            workspace_roots=runtime.metadata.get("workspace_roots", {}),
         )
 
 
@@ -724,7 +729,11 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
         body = {}
     if isinstance(body, dict):
         summary = str(body.get("one_liner") or "").strip()
-        rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
+        rules = [
+            str(rule).strip()
+            for rule in body.get("hard_constraints") or []
+            if str(rule).strip()
+        ]
         if summary:
             parts.append(f"Summary: {summary}")
         if rules:

@@ -61,6 +61,8 @@ from .contract import Runtime, ToolEntry
 from .generated_runtime import (
     GeneratedRuntimeError,
     select_python_extras,
+    select_python_requirements,
+    supplemental_requirements_command,
     validate_local_install_extras,
 )
 from .credentials import assess_configuration, discover_credentials
@@ -1137,6 +1139,7 @@ def _plan_python(
     run_override: list[str] | None = None,
     extras: list[str] | None = None,
     install: str = "",
+    requirements_files: list[str] | None = None,
     context_excludes: tuple[str, ...] = (),
 ) -> SourceProcess:
     if (
@@ -1168,6 +1171,7 @@ def _plan_python(
     try:
         validate_local_install_extras(root, install, extras or [], context_excludes=context_excludes)
         selection = select_python_extras(root, extras or [], context_excludes=context_excludes)
+        requirements = select_python_requirements(root, requirements_files or [], context_excludes=context_excludes)
     except GeneratedRuntimeError as exc:
         raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
@@ -1209,6 +1213,12 @@ def _plan_python(
     else:
         commands = []
         run = [python, *([entry] if entry is not None else [])]
+    if requirements:
+        if not commands:
+            commands.append([python, "-m", "venv", ".venv"])
+            run = [".venv/bin/python", *([entry] if entry is not None else [])]
+        commands.append(supplemental_requirements_command(".venv/bin/python", requirements))
+        commands.append(["uv", "pip", "check", "--python", ".venv/bin/python"])
     return process.model_copy(
         update={"build_commands": commands, "run_command": run_override or run}
     )
@@ -2141,6 +2151,7 @@ def resolve_environment_plan(
                 livekit_download=is_livekit and service_name == control_name,
                 extras=runtime_model.extras if service_name == control_name else [],
                 install=runtime_model.install if service_name == control_name else "",
+                requirements_files=runtime_model.requirements_files if service_name == control_name else [],
                 context_excludes=tuple(runtime_model.context_excludes) if service_name == control_name else (),
                 run_override=(
                     runtime_command
@@ -2382,6 +2393,7 @@ def resolve_environment_plan(
             livekit_download=is_livekit,
             extras=runtime_model.extras,
             install=runtime_model.install,
+            requirements_files=runtime_model.requirements_files,
             context_excludes=tuple(runtime_model.context_excludes),
             run_override=(
                 None
@@ -2556,7 +2568,12 @@ def resolve_environment_plan(
         admission.require_no_missing_declarations()
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
-    processes = normalized_processes
+    processes = [
+        process.model_copy(update={"workspaces": dict(runtime_model.workspaces)})
+        if isinstance(process, SourceProcess) and process.name == control_name
+        else process
+        for process in normalized_processes
+    ]
 
     return EnvironmentPlanV2(
         packaging=packaging,

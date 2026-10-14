@@ -182,6 +182,25 @@ def _world_state_digest(world) -> str:
         )
         for table, rows in sorted(state.items())
     }
+    workspace_snapshot = getattr(world, "_workspace_snapshot", None)
+    if workspace_snapshot is not None:
+        workspaces = workspace_snapshot()
+        if workspaces:
+            canonical = {
+                "database": canonical,
+                "workspaces": {
+                    name: {
+                        path: {
+                            "mode": entry.mode,
+                            "digest": hashlib.sha256(entry.data).hexdigest()
+                            if entry.data is not None
+                            else None,
+                        }
+                        for path, entry in sorted(entries.items())
+                    }
+                    for name, entries in sorted(workspaces.items())
+                },
+            }
     encoded = json.dumps(
         canonical,
         sort_keys=True,

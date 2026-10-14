@@ -322,14 +322,190 @@ def test_excluded_only_extra_is_not_an_executable_claim(tmp_path):
 
 @pytest.mark.parametrize("excluded", ["sdk", "sdk/pyproject.toml"])
 @pytest.mark.parametrize("compiler", ["generated", "bundle"])
-def test_compilers_reject_extra_owner_removed_from_context(tmp_path, excluded, compiler):
+def test_compilers_reject_extra_owner_removed_from_context(
+    tmp_path, excluded, compiler
+):
     from fi.alk.harness.bundle_author_v2 import BundleAuthorError, _plan_python
     from fi.alk.harness.generated_runtime import detect_generated_runtime
 
     workspace(tmp_path)
-    runtime = Runtime(language="python", execution="native", command=["python", "server.py"], extras=["cloud-sdk"], install=INSTALL, context_excludes=[excluded])
-    with pytest.raises((GeneratedRuntimeError, BundleAuthorError), match="extra_unknown"):
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", "server.py"],
+        extras=["cloud-sdk"],
+        install=INSTALL,
+        context_excludes=[excluded],
+    )
+    with pytest.raises(
+        (GeneratedRuntimeError, BundleAuthorError), match="extra_unknown"
+    ):
         if compiler == "generated":
             detect_generated_runtime(tmp_path, runtime)
         else:
-            _plan_python(tmp_path, name="agent", root=tmp_path, entry="server.py", control=True, needs_secrets=False, extras=runtime.extras, install=runtime.install, context_excludes=tuple(runtime.context_excludes))
+            _plan_python(
+                tmp_path,
+                name="agent",
+                root=tmp_path,
+                entry="server.py",
+                control=True,
+                needs_secrets=False,
+                extras=runtime.extras,
+                install=runtime.install,
+                context_excludes=tuple(runtime.context_excludes),
+            )
+
+
+def test_explicit_requirements_supplement_project_extras(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+    from fi.alk.harness.generated_runtime import detect_generated_runtime
+
+    workspace(tmp_path)
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend/requirements.txt").write_text("tavily-python>=0.7.12\n")
+    runtime = Runtime(
+        language="python",
+        command=["python", "server.py"],
+        extras=["cloud-sdk"],
+        requirements_files=["backend/requirements.txt"],
+    )
+    process = _plan_python(
+        tmp_path,
+        name="agent",
+        root=tmp_path,
+        entry="server.py",
+        control=True,
+        needs_secrets=False,
+        extras=runtime.extras,
+        requirements_files=runtime.requirements_files,
+    )
+    assert process.build_commands[-1] == [
+        "uv",
+        "pip",
+        "check",
+        "--python",
+        ".venv/bin/python",
+    ]
+    assert process.build_commands[-2][0:2] == [".venv/bin/python", "-c"]
+    assert process.build_commands[-2][-1] == "backend/requirements.txt"
+    assert "cloud-sdk" in process.build_commands[0]
+    generated = detect_generated_runtime(tmp_path, runtime)
+    assert "backend/requirements.txt" in generated.dockerfile
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "escape",
+        "absolute",
+        "excluded",
+        "nested_escape",
+        "nested_excluded",
+        "sensitive",
+        "nested_sensitive",
+        "cycle",
+        "url",
+        "option",
+        "symlink",
+    ],
+)
+def test_selected_requirements_reject_unsafe_graph(tmp_path, case):
+    from fi.alk.harness.generated_runtime import select_python_requirements
+
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "requirements.txt").write_text("client>=1\n")
+    (tmp_path / "outside.txt").write_text("client>=1\n")
+    names = ["requirements.txt"]
+    excluded = ()
+    if case == "escape":
+        names = ["../outside.txt"]
+    elif case == "absolute":
+        names = [str(root / "requirements.txt")]
+    elif case == "excluded":
+        excluded = ("requirements.txt",)
+    elif case == "nested_escape":
+        (root / "requirements.txt").write_text("-r ../outside.txt\n")
+    elif case == "nested_excluded":
+        (root / "other.txt").write_text("client\n")
+        (root / "requirements.txt").write_text("-r other.txt\n")
+        excluded = ("other.txt",)
+    elif case in {"sensitive", "nested_sensitive"}:
+        (root / ".env.production").write_text("client>=1\n")
+        if case == "sensitive":
+            names = [".env.production"]
+        else:
+            (root / "requirements.txt").write_text("-r .env.production\n")
+    elif case == "cycle":
+        (root / "requirements.txt").write_text("-r requirements.txt\n")
+    elif case == "url":
+        (root / "requirements.txt").write_text("client @ file:///etc/client\n")
+    elif case == "option":
+        (root / "requirements.txt").write_text("--index-url https://example.com\n")
+    else:
+        (root / "requirements.txt").unlink()
+        (root / "requirements.txt").symlink_to(tmp_path / "outside.txt")
+    with pytest.raises(GeneratedRuntimeError, match="generated_runtime_requirements"):
+        select_python_requirements(root, names, context_excludes=excluded)
+
+
+def test_selected_requirements_allow_nested_constraints_and_deduplicate(tmp_path):
+    from fi.alk.harness.generated_runtime import select_python_requirements
+
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend/requirements.txt").write_text(
+        "-r ../common.txt\n-c ../constraints.txt\n"
+    )
+    (tmp_path / "common.txt").write_text("client>=1 # source comment\n")
+    (tmp_path / "constraints.txt").write_text("client<3\n")
+    assert select_python_requirements(tmp_path, ["backend/requirements.txt"] * 2) == (
+        "backend/requirements.txt",
+    )
+
+
+@pytest.mark.parametrize("baseline", ["wheel", "workspace"])
+@pytest.mark.parametrize("requested_version, succeeds", [("1", True), ("2", False)])
+def test_supplemental_requirements_preserve_installed_extra_resolution(
+    tmp_path, requested_version, succeeds, baseline
+):
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import zipfile
+
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv executable required for offline resolver regression")
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    for name, version, extra in [
+        ("client", "1", ""), ("client", "2", ""), ("supplement", "1", ""),
+        ("agent", "1", 'Provides-Extra: search\nRequires-Dist: client<2; extra == "search"\n'),
+    ]:
+        dist = f"{name}-{version}.dist-info"
+        with zipfile.ZipFile(wheels / f"{name}-{version}-py3-none-any.whl", "w") as wheel:
+            wheel.writestr(f"{dist}/METADATA", f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n{extra}")
+            wheel.writestr(f"{dist}/WHEEL", "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+            wheel.writestr(f"{dist}/RECORD", "")
+    env = dict(os.environ, UV_OFFLINE="1", UV_NO_INDEX="1", UV_FIND_LINKS=str(wheels), UV_CACHE_DIR=str(tmp_path / "cache"))
+    subprocess.run([uv, "venv", "--python", sys.executable, ".venv"], cwd=tmp_path, env=env, check=True, capture_output=True)
+    if baseline == "wheel":
+        subprocess.run([uv, "pip", "install", "--python", ".venv/bin/python", "agent[search]"], cwd=tmp_path, env=env, check=True, capture_output=True)
+    else:
+        (tmp_path / "pyproject.toml").write_text('[project]\nname="root"\nversion="1"\n[tool.uv]\npackage=false\n[tool.uv.workspace]\nmembers=["sdk"]\n')
+        (tmp_path / "sdk").mkdir()
+        (tmp_path / "sdk/pyproject.toml").write_text('[project]\nname="sdk"\nversion="1"\n[project.optional-dependencies]\nsearch=["client<2"]\n[tool.uv]\npackage=false\n')
+        subprocess.run([uv, "sync", "--all-packages", "--extra", "search"], cwd=tmp_path, env=env, check=True, capture_output=True)
+    (tmp_path / "server.py").write_text("")
+    (tmp_path / "supplement.txt").write_text(f"client=={requested_version}\nsupplement==1\n")
+    process = _plan_python(tmp_path, name="agent", root=tmp_path, entry="server.py", control=True, needs_secrets=False, requirements_files=["supplement.txt"])
+    # The existing environment represents a successful source-owned sync, including extras.
+    result = subprocess.run(process.build_commands[-2], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert (result.returncode == 0) is succeeds, result.stderr
+    version = subprocess.check_output([str(tmp_path / ".venv/bin/python"), "-c", "from importlib.metadata import version; print(version('client'))"], text=True).strip()
+    assert version == "1"
+    if succeeds:
+        assert subprocess.check_output([str(tmp_path / ".venv/bin/python"), "-c", "from importlib.metadata import version; print(version('supplement'))"], text=True).strip() == "1"
