@@ -272,6 +272,8 @@ class _CompiledScenario:
     # One correct way through the call, shown to the judge so it can tell the right value from a
     # wrong one. Never replayed here.
     solution: tuple[dict[str, Any], ...] = ()
+    # The rows the reference solution leaves, on the fields it supplied; empty for older scenarios.
+    expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -544,6 +546,9 @@ def _load_one(
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
         solution=tuple(solution),
+        expected_changes=(
+            body["expected_changes"] if isinstance(body.get("expected_changes"), dict) else {}
+        ),
     )
 
 

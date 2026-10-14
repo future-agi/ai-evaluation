@@ -4267,3 +4267,54 @@ def test_joint_judging_is_the_default_and_separate_turns_it_off(monkeypatch) -> 
     assert alone == [] and receipt.status == "passed"
     receipt, alone = _two_judged(monkeypatch, _all, mode="separate")
     assert alone == ["confirmed", "refused_card"] and receipt.status == "passed"
+
+
+class _SharedWorld(InMemoryWorld):
+    """A read-only view over the same rows, as the real handle is."""
+
+    def read_only(self) -> "InMemoryWorld":
+        view = InMemoryWorld(self.world_index, self.rng, read_only=True)
+        view.rows = self.rows
+        return view
+
+
+@dataclass
+class _ScenarioWithExpected(FakeScenario):
+    expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+
+def test_a_call_is_graded_on_leaving_the_records_the_reference_solution_leaves() -> None:
+    async def scenario(left: dict[str, Any]) -> hs.ResultReceipt:
+        outbound = FakeOutbound()
+        pool, _ = _pool(1, outbound=outbound)
+        await pool.start()
+        made: list[_SharedWorld] = []
+
+        class Factory:
+            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
+                made.append(_SharedWorld(runtime.world_index, rng))
+                return made[-1]
+
+        class Runner(FakeCallRunner):
+            async def run(self, scenario: Any, runtime: EnvironmentRuntime) -> hs.CallOutcome:
+                made[-1].rows.setdefault("claims", []).append({"id": "generated", **left})
+                return _call_outcome(calls=(hs.Call(name="file_claim", arguments=left),))
+
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=Factory(), call_runner=Runner({}), outbound=outbound, job_seed=1
+        )
+        one = _ScenarioWithExpected(
+            "s1",
+            "id-1",
+            sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+            expected_changes={"claims": [{"policy": "MM-7", "loss_date": "2026-10-11"}]},
+        )
+        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        return result.receipts[0]
+
+    right = asyncio.run(scenario({"policy": "mm 7", "loss_date": "2026-10-11"}))
+    assert right.status == "passed"
+    assert [g.name for g in right.sub_goals] == ["g", "records_match_reference_solution"]
+    wrong = asyncio.run(scenario({"policy": "MM-7", "loss_date": "2026-10-12"}))
+    assert wrong.status == "failed"
+    assert wrong.sub_goals[-1].reason == "claims row: loss_date expected 2026-10-11, got 2026-10-12"

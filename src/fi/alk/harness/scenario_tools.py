@@ -863,6 +863,7 @@ def accept_scenario(
             finally:
                 world.close()
         return _err(said)
+    scenario = scenario.model_copy(update={"expected_changes": proof.expected_changes})
 
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:

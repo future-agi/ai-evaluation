@@ -29,10 +29,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from .catalogue import Catalogue
 from .checks import Outcome, run_check
 from .folder import apply_setup, check_ready
+from .reference_state import expected_changes
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import restore
@@ -61,6 +63,8 @@ class Proof:
     # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
     # whoever keeps the scenario is told what the proof did not cover.
     assumed: list[str] = field(default_factory=list)
+    # The rows the solution left, kept with the scenario so a call is graded on leaving them too.
+    expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -258,9 +262,11 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 def _run(
     scenario: Scenario, world_root: Path, *, with_solution: bool
-) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
-    """A world set up for this scenario, optionally with the solution played through it."""
+) -> tuple[GeneratedWorld, list[Call], list[str], list[str], dict[str, Any]]:
+    """A world set up for this scenario, optionally with the solution played through it, and the
+    records it held before the solution."""
     world, _applied, _ready = prepared(scenario, world_root)
+    before = world.state() if with_solution else {}
     refused: list[str] = []
     assumed: list[str] = []
     if with_solution:
@@ -291,7 +297,17 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused, sorted(set(assumed))
+    return world, list(world.calls), refused, sorted(set(assumed)), before
+
+
+def _expected_changes(
+    world: GeneratedWorld, before: dict[str, Any], scenario: Scenario, refused: list[str], assumed: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """What the solution left behind, unless part of it never ran against the world."""
+    solution = getattr(scenario, "solution", None)
+    if refused or assumed or not solution:
+        return {}
+    return expected_changes(before, world.state(), solution)
 
 
 def prove(
@@ -316,6 +332,12 @@ def prove(
         proof.solvable = proof.ready
         proof.vacuous = False
         proof.judged_only = True
+        if proof.ready and getattr(scenario, "solution", None):
+            world, _, refused, assumed, before = _run(scenario, world_root, with_solution=True)
+            try:
+                proof.expected_changes = _expected_changes(world, before, scenario, refused, assumed)
+            finally:
+                world.close()
         return proof
 
     # Gate 1: is the world ready for this scenario at all?
@@ -334,7 +356,7 @@ def prove(
     proof.ready = True
 
     # Gate 2: does the reference solution pass this scenario's own checks?
-    world, calls, refused, assumed = _run(scenario, world_root, with_solution=True)
+    world, calls, refused, assumed, before = _run(scenario, world_root, with_solution=True)
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
@@ -342,6 +364,7 @@ def prove(
         proof.with_solution = [
             run_check(source, world, calls, name=name) for name, source in checks
         ]
+        proof.expected_changes = _expected_changes(world, before, scenario, refused, assumed)
     finally:
         world.close()
     proof.refused = refused
@@ -349,7 +372,7 @@ def prove(
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
-    untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
+    untouched, nothing, _, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [
             run_check(source, untouched, nothing, name=name) for name, source in checks

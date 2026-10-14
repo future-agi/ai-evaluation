@@ -51,6 +51,8 @@ from .outbound import (
     HostedChannelFailedError,
     HostedFencedError,
 )
+from .reference_state import NAME as REFERENCE_SUB_GOAL
+from .reference_state import compare as compare_records
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
@@ -2089,6 +2091,8 @@ class HostedScheduler:
                 sub_goals=_unjudged(scenario.sub_goals),
             )
 
+        expected = getattr(scenario, "expected_changes", None) or {}
+        before = await self._records_now(read_only) if expected else None
         try:
             call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
         except WorldUnavailable as exc:
@@ -2279,6 +2283,19 @@ class HostedScheduler:
                     name=goal.name, held=held, reason=why, judged=True
                 )
 
+        if expected and before is not None and broken_failure is None:
+            after = await self._records_now(check_handle)
+            if after is not None:
+                said = compare_records(expected, before, after)
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=REFERENCE_SUB_GOAL,
+                        held=said is None,
+                        reason=said or "the records match the reference solution on the caller's values",
+                        judged=False,
+                    )
+                )
+
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2316,6 +2333,13 @@ class HostedScheduler:
             call=self._call_summary(call_outcome),
             failure=failure,
         )
+
+    async def _records_now(self, handle: Any) -> dict[str, Any] | None:
+        """The world's records, or None when they cannot be read; the comparison is then skipped."""
+        read = await _run_phase(
+            handle.state, timeout=CHECK_TIMEOUT_SECONDS, phase="check", executor=self._executor
+        )
+        return read.value if read.failure is None and isinstance(read.value, dict) else None
 
     @staticmethod
     def _call_summary(outcome: CallOutcome | None) -> CallSummary | None:

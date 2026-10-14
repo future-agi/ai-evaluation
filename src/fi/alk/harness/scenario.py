@@ -256,6 +256,9 @@ class Scenario(BaseModel):
 
     # What a correct agent would do. Run by the gates, never by the agent under test.
     solution: list[Step] = Field(default_factory=list)
+    # The rows the solution leaves, on the fields whose values it supplied. Set when the scenario is
+    # proved; a call is then graded on leaving the same records.
+    expected_changes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
 
     # Level per plan axis, e.g. {"task": "book_ride", "overlay": "interruption"}. Optional.
     coverage: dict[str, str] = Field(default_factory=dict)
