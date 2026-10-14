@@ -43,6 +43,12 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
+    # What is compared with what: where the right answer comes from, what of the run is read, how
+    # the two are compared and over which span. Shown with every verdict.
+    compares: str = ""
+    # Both the check and the judged criteria must hold. Without it a sub-goal with a check is
+    # settled by the check alone, as before.
+    both: bool = False
 
     def deterministic(self) -> bool:
         return bool(self.check.strip())
@@ -242,6 +248,17 @@ SUB_GOAL_RULES = (
     "Write it to survive a new version of the agent: the behaviour and where its rule comes from "
     "('what its instructions require it to say'), not today's wording, amounts or names, unless "
     "the instructions demand that exact text.\n\n"
+    "Say in `compares` what the sub-goal compares with what, before writing it: where the right "
+    "answer comes from (the scenario's reference solution, a record set up before the call, or "
+    "what the caller said), what of the run is read (records afterwards, the calls and their "
+    "results, or what the agent said), how the two are compared (exactly, ignoring format, by "
+    "meaning) and over which span (the final records, or every call including ones later "
+    "undone). If you cannot say where the right answer comes from, the sub-goal cannot be "
+    "graded. Code settles structured facts and effects; the judge settles meaning and behaviour. "
+    "When an outcome needs both, such as a record that must be saved and also say what the "
+    "caller actually reported, give the check and the criteria and set `both`: it passes only "
+    "when each does. An agent that skipped a required step fails; the sub-goal is not "
+    "inapplicable because the agent avoided it.\n\n"
 )
 
 
@@ -260,6 +277,11 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         problems.append(
             f"{sub_goal.name}: settles nothing. Give a check in code, or criteria a judge decides "
             "it by"
+        )
+    if sub_goal.both and not (sub_goal.check.strip() and sub_goal.judged.strip()):
+        problems.append(
+            f"{sub_goal.name}: `both` needs a check and judged criteria; drop `both` to settle it "
+            "by one of them"
         )
     if sub_goal.output != "pass_fail":
         problems.append(f"{sub_goal.name}: output {sub_goal.output!r}; only pass_fail is judged today")
@@ -451,7 +473,7 @@ _CRITERIA_LABELS = ("Applies when", "Pass when", "Fail when", "If it does not ar
 def _judged_problems(sub_goal: SubGoal) -> list[str]:
     """Hold a judged sub-goal to criteria a judge can apply the same way twice."""
     judged = sub_goal.judged.strip()
-    if not judged or sub_goal.check.strip():
+    if not judged or (sub_goal.check.strip() and not sub_goal.both):
         return []
     missing = [label for label in _CRITERIA_LABELS if not re.search(rf"(?im)^\s*{label}\s*:", judged)]
     if missing:

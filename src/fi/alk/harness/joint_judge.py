@@ -14,13 +14,17 @@ from typing import Any, Sequence
 from .backends import tool
 from .catalogue import criteria_text
 from .judge import (
+    VERDICT_FIELD,
+    VERDICT_RULES,
     _STEPS,
+    compared,
     CallEvidence,
     _say,
     _transcript,
     describe_call,
     request_final_verdicts,
     run_judge_conversation,
+    verdict_of,
 )
 from .tools import schema
 
@@ -67,18 +71,28 @@ How to decide:
    notice a phone line plays or a system message around a chat. When the agent's instructions do
    not ask for it, it is not the agent's: judge the agent only on what it said and did itself.
 
-Always decide. The evidence you were given is what there is; never answer that you cannot tell.
+{VERDICT_RULES}
 Decide a sub-goal only once you have looked at what each part of its criteria turns on. Call decide
-once per sub-goal, with its name in `sub_goal` (never its criteria), `passed` true or false, and
-`evidence` saying what supports that verdict and where it came from: the recording, the
-transcript, the actions or the records.
+once per sub-goal, with its name in `sub_goal` (never its criteria), its `verdict`, and `evidence`
+saying what supports that verdict and where it came from: the recording, the transcript, the
+actions or the records.
+
+The customer is simulated and was given a side to play. Separately from the sub-goals, if the
+customer contradicted a fact their side fixed for them (not a detail they were free to choose), or
+never gave the agent the chance the conversation was meant to show although they could have, call
+customer_off_script once with what they did. The call is then not counted for or against the agent.
+Never call it because the agent kept something from happening, or for a detail the customer was
+free to choose.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
 said or did and what followed from it, in the terms of their business, citing what actually
 happened. Write in the third person ("the agent", "the caller"); never address anyone as "you". Never mention tables, rows, queries, tool names, records you could or could not read,
 criteria, this review, a test, a scenario, a simulation, the customer's instructions or any error.
 Put anything about how you checked into `evidence`, which only the reviewers of this process see.
-""".strip()
+""".strip().replace("{VERDICT_RULES}", VERDICT_RULES)
+
+# The key under which a report that the simulated customer left their side comes back.
+OFF_SCRIPT = "__customer_off_script__"
 
 
 async def judge_sub_goals_jointly(
@@ -90,21 +104,36 @@ async def judge_sub_goals_jointly(
     scenario: Any = None,
     agent_instructions: str = "",
     recording: str | None = None,
-) -> dict[str, tuple[bool, str]]:
-    """Decide a call's judged sub-goals in one conversation: {name: (passed, explanation)}.
+) -> dict[str, tuple[bool | None, str]]:
+    """Decide a call's judged sub-goals in one conversation: {name: (held, explanation)}, plus
+    `OFF_SCRIPT` when the simulated customer left their side.
 
     A sub-goal missing from the result was not decided. Never raises.
     """
     names = [str(getattr(goal, "name", "")) for goal in goals]
     evidence = CallEvidence(world, messages, recording, ", ".join(names))
-    verdict: dict[str, tuple[bool, str]] = {}
+    verdict: dict[str, tuple[bool | None, str]] = {}
+
+    @tool(
+        "customer_off_script",
+        "Report, once, that the simulated customer contradicted a fact fixed for them or withheld "
+        "the chance the conversation was meant to show.",
+        schema({"what": str, "evidence": str}, ["what", "evidence"]),
+    )
+    async def customer_off_script(args: dict[str, Any]) -> dict[str, Any]:
+        what = str(args.get("what") or "").strip()
+        if not what:
+            return _say("say what the customer did", error=True)
+        logger.info("customer off script: %s (%s)", what, args.get("evidence"))
+        verdict[OFF_SCRIPT] = (False, what)
+        return _say("recorded")
 
     @tool(
         "decide",
         "Commit to one sub-goal's verdict, once, after looking. Name the sub-goal; never repeat its criteria.",
         schema(
-            {"sub_goal": str, "passed": bool, "explanation": str, "evidence": str},
-            ["sub_goal", "passed", "explanation", "evidence"],
+            {"sub_goal": str, "verdict": VERDICT_FIELD, "explanation": str, "evidence": str},
+            ["sub_goal", "verdict", "explanation", "evidence"],
         ),
     )
     async def decide(args: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +146,7 @@ async def judge_sub_goals_jointly(
         if refusal:
             return _say(refusal, error=True)
         logger.info("judge evidence for %s: %s", name, args["evidence"])
-        verdict[name] = (args["passed"], str(args["explanation"]).strip())
+        verdict[name] = verdict_of(args)
         return _say(f"recorded {name}")
 
     def missing() -> list[str]:
@@ -126,15 +155,16 @@ async def judge_sub_goals_jointly(
     def ask() -> str:
         return (
             f"No verdict yet for: {', '.join(missing())}. Judge each on its own criteria and call "
-            "decide once for each, with passed true or false."
+            "decide once for each, with its verdict."
         )
 
-    tools = [*evidence.tools(), decide]
+    tools = [*evidence.tools(), decide, customer_off_script]
     prompt = (
         f"Sub-goals to judge ({len(goals)}). Judge each one on its own criteria only.\n\n"
         + "".join(
             f"=== Sub-goal {index} of {len(goals)}: {name} ===\n"
             f"What it checks: {getattr(goal, 'what', '') or '(no summary)'}\n"
+            f"{compared(goal)}"
             f"Criteria:\n{criteria_text(getattr(goal, 'judged', ''))}\n"
             f"=== End of {name} ===\n\n"
             for index, (name, goal) in enumerate(zip(names, goals), start=1)

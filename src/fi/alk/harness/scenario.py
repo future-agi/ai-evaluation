@@ -259,6 +259,12 @@ class Scenario(BaseModel):
     # The rows the solution leaves, on the fields whose values it supplied. Set when the scenario is
     # proved; a call is then graded on leaving the same records.
     expected_changes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # The solution ran in full and changed no record: any record a call changes is graded wrong.
+    reference_changes_nothing: bool = False
+    # How a field is compared when plain normalising is wrong for it, set by the scenario's author,
+    # by `table.field` or field: {"match": "exact"}, {"match": "skip"}, {"aliases": [...]} or
+    # {"tolerance_minutes": 15}.
+    comparisons: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Level per plan axis, e.g. {"task": "book_ride", "overlay": "interruption"}. Optional.
     coverage: dict[str, str] = Field(default_factory=dict)

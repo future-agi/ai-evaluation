@@ -34,7 +34,7 @@ from typing import Any
 from .catalogue import Catalogue
 from .checks import Outcome, run_check
 from .folder import apply_setup, check_ready
-from .reference_state import expected_changes
+from .reference_state import changed_rows, expected_changes
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import restore
@@ -65,6 +65,8 @@ class Proof:
     assumed: list[str] = field(default_factory=list)
     # The rows the solution left, kept with the scenario so a call is graded on leaving them too.
     expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # The solution ran in full and changed no record, so any change a call makes is graded wrong.
+    reference_changes_nothing: bool = False
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -301,13 +303,20 @@ def _run(
 
 
 def _expected_changes(
-    world: GeneratedWorld, before: dict[str, Any], scenario: Scenario, refused: list[str], assumed: list[str]
-) -> dict[str, list[dict[str, Any]]]:
-    """What the solution left behind, unless part of it never ran against the world."""
+    proof: Proof,
+    world: GeneratedWorld,
+    before: dict[str, Any],
+    scenario: Scenario,
+    refused: list[str],
+    assumed: list[str],
+) -> None:
+    """Keep what the solution left behind, unless part of it never ran against the world."""
     solution = getattr(scenario, "solution", None)
     if refused or assumed or not solution:
-        return {}
-    return expected_changes(before, world.state(), solution)
+        return
+    after = world.state()
+    proof.expected_changes = expected_changes(before, after, solution)
+    proof.reference_changes_nothing = not changed_rows(before, after)
 
 
 def prove(
@@ -335,7 +344,7 @@ def prove(
         if proof.ready and getattr(scenario, "solution", None):
             world, _, refused, assumed, before = _run(scenario, world_root, with_solution=True)
             try:
-                proof.expected_changes = _expected_changes(world, before, scenario, refused, assumed)
+                _expected_changes(proof, world, before, scenario, refused, assumed)
             finally:
                 world.close()
         return proof
@@ -364,7 +373,7 @@ def prove(
         proof.with_solution = [
             run_check(source, world, calls, name=name) for name, source in checks
         ]
-        proof.expected_changes = _expected_changes(world, before, scenario, refused, assumed)
+        _expected_changes(proof, world, before, scenario, refused, assumed)
     finally:
         world.close()
     proof.refused = refused

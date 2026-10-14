@@ -51,11 +51,67 @@ def test_normalising_case_spacing_punctuation_phones_and_numbers():
     assert normalise("0123") != normalise("123")
 
 
-def test_times_compare_within_the_tolerance():
+def test_times_match_to_the_minute_unless_the_scenario_allows_a_tolerance():
     expected = {"bookings": [{"pickup_at": "2026-10-15T16:00:00"}]}
     before = {"bookings": []}
-    assert compare(expected, before, {"bookings": [{"pickup_at": "2026-10-15T17:30:00"}]}) is None
-    assert compare(expected, before, {"bookings": [{"pickup_at": "2026-10-16T16:00:00"}]}) is not None
+    assert compare(expected, before, {"bookings": [{"pickup_at": "2026-10-15T16:00:30+00:00"}]}) is None
+    assert compare(expected, before, {"bookings": [{"pickup_at": "2026-10-15T16:20:00"}]}) is not None
+    rules = {"bookings.pickup_at": {"tolerance_minutes": 30}}
+    assert compare(expected, before, {"bookings": [{"pickup_at": "2026-10-15T16:20:00"}]}, rules=rules) is None
+
+
+def test_exact_ids_keep_leading_zeros_and_an_exact_rule_keeps_case():
+    before = {"accounts": []}
+    assert compare({"accounts": [{"pin": "0742"}]}, before, {"accounts": [{"pin": "742"}]}) is not None
+    rules = {"name": {"match": "exact"}}
+    assert compare({"accounts": [{"name": "Reshav"}]}, before, {"accounts": [{"name": "reshav"}]}, rules=rules)
+
+
+def test_another_form_passes_only_as_a_declared_alias_and_a_skipped_field_is_not_compared():
+    before = {"trips": []}
+    want = {"trips": [{"pickup": "12 Main Street, Apartment 4", "day": "2026-10-15"}]}
+    got = {"trips": [{"pickup": "12 Main St Apt 4", "day": "2026-10-17"}]}
+    assert compare(want, before, got) is not None
+    rules = {"trips.pickup": {"aliases": ["12 Main St Apt 4"]}, "day": {"match": "skip"}}
+    assert compare(want, before, got, rules=rules) is None
+    assert compare(want, before, {"trips": [{"pickup": "12 Main St Apt 5", "day": "x"}]}, rules=rules)
+
+
+def test_names_pass_only_by_spelling_or_a_declared_alias():
+    before = {"guests": []}
+    want = {"guests": [{"name": "Rishav"}]}
+    assert compare(want, before, {"guests": [{"name": "Reshav"}]}) is not None
+    rules = {"guests.name": {"aliases": ["Reshav"]}}
+    assert compare(want, before, {"guests": [{"name": "Reshav"}]}, rules=rules) is None
+
+
+def test_a_duplicate_booking_fails_even_when_one_is_right():
+    want = {"bookings": [{"pickup": "SFO", "rider": "Ana"}]}
+    twice = {"bookings": [{"id": 1, "pickup": "SFO", "rider": "Ana"}, {"id": 2, "pickup": "SFO", "rider": "Ana"}]}
+    said = compare(want, {"bookings": []}, twice)
+    assert said is not None and "duplicate" in said
+
+
+def test_a_wrong_value_corrected_before_the_end_passes():
+    want = {"bookings": [{"pickup": "SFO"}]}
+    corrected = {"bookings": [{"id": 1, "pickup": "SFO"}]}
+    assert compare(want, {"bookings": []}, corrected) is None
+
+
+def test_a_refusal_fails_when_the_call_changed_records_the_reference_leaves_alone():
+    before = {"refunds": []}
+    assert compare({}, before, {"refunds": []}, expect_nothing=True) is None
+    said = compare({}, before, {"refunds": [{"id": 1, "amount": 500}]}, expect_nothing=True)
+    assert said is not None and "changes nothing" in said
+    assert compare({}, before, {"refunds": [{"id": 1}]}) is None
+
+
+def test_a_wrong_entity_is_done_wrong_and_a_failed_save_is_not_done():
+    want = {"claims": [{"policy": "MM-5590318", "loss_date": "2026-10-11"}]}
+    before = {"claims": []}
+    wrong = compare(want, before, {"claims": [{"policy": "MM-5590319", "loss_date": "2026-10-11"}]})
+    assert wrong == "done wrong: claims.policy expected MM-5590318, got MM-5590319"
+    assert compare(want, before, before).startswith("not done:")
 
 
 def test_long_free_text_is_left_to_the_judge():

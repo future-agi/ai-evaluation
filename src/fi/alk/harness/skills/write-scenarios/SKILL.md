@@ -257,6 +257,16 @@ retry, a correction mid-call or another route to the same records passes. A wron
 correct agent. When the proof says a step was recorded without running, no record changes are kept for that
 scenario, so name a judged sub-goal for whether the record carries this caller's values instead.
 
+The comparison ignores case, spacing and punctuation, reads phone numbers as digits and numbers by
+value, and matches a time to the minute. Where that is wrong for a value this caller gives, say so in
+`comparisons`, decided from this agent and this caller, never from habit: `exact` where case or format
+is part of the value, `aliases` for other forms that are equally right, `tolerance_minutes` where an
+approximate time is right, `skip` where the right value depends on something the solution cannot fix
+in advance (such as the day the call happens), with a judged sub-goal saying what makes it right.
+More of the same record than the solution leaves is graded a duplicate. When the solution changes no
+record at all, any record the call changes is graded wrong, so a solution that correctly changes
+nothing must still include every step a correct agent would take that leaves a record.
+
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
 supposedly chose. Put them in `environment_arguments` on the same step, which the proof passes to the

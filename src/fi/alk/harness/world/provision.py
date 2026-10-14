@@ -325,7 +325,7 @@ def provision_tools(
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
         "task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str},
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, "compares": str, "both": bool},
             ["name", "what"],
         ),
     )
@@ -337,6 +337,8 @@ def provision_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            compares=str(args.get("compares") or ""),
+            both=args.get("both") is True,
         )
         problems = validate_sub_goal(one)
         if problems:

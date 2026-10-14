@@ -248,7 +248,8 @@ def writer_worker(
                 "constraints say for that situation. Flag it when a solution step is one the "
                 "rules skip or forbid here, when a sub-goal demands such a step or forbids one "
                 "they require, or when it names a code sub-goal checking one tool, field or step "
-                "where the catalogue has one for the outcome the caller came for. Quote the rule. "
+                "where the catalogue has one for the outcome the caller came for, or when a "
+                "sub-goal it names has no source for its right answer in `compares`. Quote the rule. "
                 "Flag nothing on taste: a scenario the rules allow stays. Then call "
                 "flag_conflicts once with every entry, empty if none, and report the count."
             ),

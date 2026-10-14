@@ -248,6 +248,10 @@ class _CompiledSubGoal:
     judged: str
     check: Callable[[Any, Any], object]
     what: str = ""
+    # The check and the judged criteria must both hold (`judged` then carries the criteria).
+    both: bool = False
+    # What the sub-goal compares with what, as its author stated it.
+    compares: str = ""
 
 
 @dataclass(frozen=True)
@@ -274,6 +278,8 @@ class _CompiledScenario:
     solution: tuple[dict[str, Any], ...] = ()
     # The rows the reference solution leaves, on the fields it supplied; empty for older scenarios.
     expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    reference_changes_nothing: bool = False
+    comparisons: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -420,6 +426,8 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
+            "compares": str(entry.get("compares") or ""),
+            "both": "yes" if entry.get("both") is True else "",
         }
     return claims
 
@@ -549,6 +557,8 @@ def _load_one(
         expected_changes=(
             body["expected_changes"] if isinstance(body.get("expected_changes"), dict) else {}
         ),
+        reference_changes_nothing=body.get("reference_changes_nothing") is True,
+        comparisons=body["comparisons"] if isinstance(body.get("comparisons"), dict) else {},
     )
 
 
@@ -569,13 +579,20 @@ def _with_claims(
     """
     if not claims:
         return scenario
+
+    def combined(goal: _CompiledSubGoal) -> bool:
+        claim = claims[goal.name]
+        return bool(claim.get("both")) and not goal.judged and bool(claim.get("judged"))
+
     restored = tuple(
         replace(
             goal,
             judged=(claims[goal.name].get("judged") or goal.judged)
-            if goal.judged
+            if goal.judged or combined(goal)
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
+            both=combined(goal),
+            compares=claims[goal.name].get("compares", "") or goal.compares,
         )
         if goal.name in claims
         else goal

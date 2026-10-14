@@ -532,3 +532,19 @@ def test_the_judge_is_shown_the_reference_solution_as_one_correct_way():
     assert "not a script" in said
     assert "corrected before it took effect is still right" in said
     assert "One correct way" not in judge_module.describe_call("Book rides.", SimpleNamespace(), [], None)
+
+
+def test_a_verdict_reads_as_held_with_not_applicable_said_and_inconclusive_undecided():
+    from fi.alk.harness.judge import verdict_of
+
+    assert verdict_of({"verdict": "pass", "explanation": "ok"}) == (True, "ok")
+    assert verdict_of({"verdict": "fail", "explanation": "no"}) == (False, "no")
+    assert verdict_of({"verdict": "not_applicable", "explanation": "never came up"}) == (
+        True,
+        "Not applicable: never came up",
+    )
+    assert verdict_of({"verdict": "inconclusive", "explanation": "inaudible"}) == (
+        None,
+        "Inconclusive: inaudible",
+    )
+    assert verdict_of({"passed": False, "explanation": "legacy"}) == (False, "legacy")

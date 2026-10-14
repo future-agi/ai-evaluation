@@ -542,6 +542,19 @@ Name a check for what it checks.
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
 situations must not fail an agent that skipped it there.
 
+Before writing a sub-goal, say in `compares` what it compares with what: where the right answer
+comes from (the reference solution, a record set up before the call, what the caller said), what of
+the run is read (the records afterwards, the calls and their results, what the agent said), how the
+two are compared (exactly, ignoring format, by meaning) and over which span (the final records, or
+every call including ones later undone). A sub-goal whose right answer has no source cannot be
+graded; do not write it. Code settles structured facts and effects; the judge settles meaning and
+behaviour. When one outcome needs both, such as a record that must be saved on the right account and
+also say what the caller actually reported, give the check and the criteria and set `both`: it passes
+only when each does, and a failed check is never rescued by the judge. Correcting a mistake does not
+undo it: when a wrong change the agent made and later replaced is itself harmful for this agent (a
+second live record, a charge, a message sent), write a sub-goal for that effect, read over every
+call, not only the final records.
+
 Use `judged` only where nothing observable settles it, or where what is right depends on what this
 caller asked: whether a refusal was explained, whether a price was invented, whether the values
 the agent said back were the ones this caller gave. (An agent reached only by conversation has no world
@@ -556,7 +569,8 @@ instructions demand that exact text.
 ### A judged sub-goal is an eval: write its criteria
 
 A judged sub-goal is decided the way any eval is: a judge reads its criteria and the evidence and
-returns pass or fail (`output` is pass_fail, the only kind judged today). The judge is given
+returns pass, fail, not applicable (the situation did not arise and the criteria say that passes) or
+inconclusive (the deciding evidence is missing or unusable); `output` is pass_fail. The judge is given
 the criteria, the agent's own instructions, the conversation and its recording, the actions the
 agent took with their arguments, the records it left and the scenario's reference solution, plus the
 customer's side of the scenario as context. It judges the agent only,

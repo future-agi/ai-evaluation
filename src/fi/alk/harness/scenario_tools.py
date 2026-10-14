@@ -863,7 +863,12 @@ def accept_scenario(
             finally:
                 world.close()
         return _err(said)
-    scenario = scenario.model_copy(update={"expected_changes": proof.expected_changes})
+    scenario = scenario.model_copy(
+        update={
+            "expected_changes": proof.expected_changes,
+            "reference_changes_nothing": proof.reference_changes_nothing,
+        }
+    )
 
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:
@@ -1243,7 +1248,7 @@ def scenario_tools(
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
         "is what makes one available. Leave it empty for an ordinary task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str},
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, "compares": str, "both": bool},
             ["name", "what"],
         ),
     )
@@ -1255,6 +1260,8 @@ def scenario_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            compares=str(args.get("compares") or ""),
+            both=args.get("both") is True,
         )
         problems = validate_sub_goal(sub_goal)
         if problems:
@@ -1500,6 +1507,20 @@ def scenario_tools(
                         },
                         "required": ["tool", "arguments"],
                     },
+                },
+                "comparisons": {
+                    "type": "object",
+                    "description": "How a recorded value is compared with the one your solution "
+                    "supplied, only where the default is wrong for it. The default ignores case, "
+                    "spacing and punctuation, reads phone numbers as digits and numbers by value, "
+                    "and matches a time to the minute. Keyed `table.field` or `field`: "
+                    "{\"match\": \"exact\"} where case or format matters, {\"aliases\": [...]} "
+                    "for other forms of the same value that are equally right, "
+                    "{\"tolerance_minutes\": n} where an approximate time is right, "
+                    "{\"match\": \"skip\"} where the right value depends on something your "
+                    "solution cannot fix in advance, such as the day the call happens; a judged "
+                    "sub-goal then says what makes it right.",
+                    "additionalProperties": {"type": "object"},
                 },
                 "sub_goals": {
                     "type": "array",

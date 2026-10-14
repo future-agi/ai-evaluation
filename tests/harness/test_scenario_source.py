@@ -2824,3 +2824,28 @@ def test_the_planner_briefs_one_reviewer_and_rewrites_what_it_flags(tmp_path, mo
     assert "flag_conflicts" not in offered(planner.spec.workers[stage.WRITER])
     assert f"brief {stage.REVIEWER} with every scenario name, one per batch of up to 50" in planner.spec.system_prompt
     assert "rewrite those under the same names" in planner.spec.system_prompt
+
+
+def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stays_code_only():
+    from fi.alk.harness.scenario_source import _CompiledScenario, _CompiledSubGoal, _with_claims
+
+    def check(world, calls):
+        return None
+
+    scenario = _CompiledScenario(
+        scenario_key="k",
+        scenario_id="",
+        sub_goals=(
+            _CompiledSubGoal(name="saved", judged="", check=check),
+            _CompiledSubGoal(name="legacy", judged="", check=check),
+        ),
+        setup=lambda world: None,
+        ready=lambda world: None,
+    )
+    claims = {
+        "saved": {"what": "w", "judged": "Pass when: it says what was reported", "both": "yes"},
+        "legacy": {"what": "w", "judged": "Pass when: x", "both": ""},
+    }
+    saved, legacy = _with_claims(scenario, claims).sub_goals
+    assert saved.both and saved.judged == "Pass when: it says what was reported"
+    assert not legacy.both and legacy.judged == ""
