@@ -387,7 +387,9 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
         if "tmpfs" in service:
             raise ComposeRuntimeError("compose_tmpfs_options_unsupported")
     if declared - consumed:
-        raise ComposeRuntimeError("compose_resource_unused")
+        raise ComposeRuntimeError(
+            "compose_resource_unused: " + ", ".join(sorted(declared - consumed))
+        )
     for capability in capabilities.values():
         if capability.service not in services or capability.container_port is None:
             raise ComposeRuntimeError("compose_capability_unresolved")
