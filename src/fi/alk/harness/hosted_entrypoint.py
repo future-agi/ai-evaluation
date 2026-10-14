@@ -2374,6 +2374,7 @@ async def run_job(
             from .certification import (
                 CertificationGateError,
                 verify_runtime_certification,
+                requires_chat_ingress,
             )
 
             try:
@@ -2382,6 +2383,7 @@ async def run_job(
                     work_directory / "runtime-validation.json",
                     bundle_digest=manifest.digest,
                     source_digest=manifest.provenance.source_digest,
+                    chat_ingress_required=requires_chat_ingress(job, bundle_dir),
                 )
             except CertificationGateError as exc:
                 return await _fail(

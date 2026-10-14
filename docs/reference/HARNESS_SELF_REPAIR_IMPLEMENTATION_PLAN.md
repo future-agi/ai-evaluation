@@ -717,6 +717,7 @@ Replace the minimal `runtime-validation.json` payload with a versioned certifica
     "static": "passed",
     "schema_and_seed": "passed",
     "processes": "passed",
+    "chat_ingress": "passed",
     "source_invariants": "passed",
     "scenario_setup_ready": "10/10",
     "tool_contract": "9/9",
@@ -962,3 +963,17 @@ environment repair.
 New engines and execution surfaces remain adapter work. They must implement discovery,
 compilation/provisioning, probing, and execution at the boundary without adding provider,
 framework, modality, repository, or agent-name conditions to the generic core.
+
+
+Source-owned HTTP and callable chat certification requires one representative turn after
+scenario setup and readiness, before source-invariant authoring. It uses the execution
+transport and the persona initial message, or `Hello` when absent. It does not replay
+tools or judge task success. The disposable runtime resets before further checks.
+
+`chat_ingress` defaults to `not_run` and blocks execution until `passed`. Voice and
+external connect-only runtimes record `not_applicable` with a limitation. Sanitized
+attempt receipts remain under `generic-harness/chat-readiness/`, including failures.
+HTTP 400/404/405/415/422 can enter bounded source-evidenced runtime-plan repair.
+Authentication, application, extraction, empty-response, and unknown server failures
+cannot trigger world-data or scenario repair. Transient transport failures use the
+existing infrastructure retry budget.

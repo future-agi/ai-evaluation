@@ -153,6 +153,15 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.AUTHORING,
             repair_strategy="inspect_repository_and_declare_storage",
         ),
+        "chat_ingress_configuration_invalid": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="inspect_repository_and_revise_runtime_plan",
+        ),
+        "chat_ingress_failed": DiagnosticPolicy(
+            domain=FailureDomain.AGENT,
+            owner=RepairOwner.SOURCE,
+        ),
         "generated_runtime_plan_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,

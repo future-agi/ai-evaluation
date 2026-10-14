@@ -317,29 +317,12 @@ class RepositoryChatTarget:
                 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 
                 wrapper = HTTPAgentWrapper
-            self._wrapper = wrapper(
-                endpoint=urljoin(
-                    base.rstrip("/") + "/", self.interface.path.lstrip("/")
-                ),
-                protocol=self.interface.protocol,
-                model=self.interface.model,
-                include_tools=self.interface.include_tools,
-                request_template=self.interface.request_template,
-                response_path=self.interface.response_path,
-                **(
-                    {
-                        "failure_rule": self.interface.failure_rule.model_dump()
-                        if self.interface.failure_rule
-                        else None
-                    }
-                    if self.interface.kind == "http"
-                    else {}
-                ),
-                setup_requests=[
-                    item.model_dump(mode="python")
-                    for item in self.interface.setup_requests
-                ],
-                timeout=30.0,
+            from ..chat_transport import create_chat_wrapper
+
+            self._wrapper = create_chat_wrapper(
+                self.interface,
+                base,
+                wrapper_type=wrapper,
                 metadata={
                     "target": "submitted_repository_runtime",
                     "scenario": self.scenario_name,

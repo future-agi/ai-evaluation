@@ -73,6 +73,7 @@ def _write_runtime_evidence(
     action_report,
     reset_equivalence,
     world_isolation,
+    chat_ingress,
 ) -> None:
     """Seal facts which would otherwise disappear with the validation sandbox."""
 
@@ -86,7 +87,12 @@ def _write_runtime_evidence(
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     limitations = [
         "runtime-only agent tool effects are verified during calls, not setup certification",
+        "chat readiness proves one representative ingress turn, not task success or every conversation path",
     ]
+    if chat_ingress is CheckStatus.NOT_APPLICABLE:
+        limitations.append(
+            "chat ingress is not applicable to voice or external connect-only runtimes"
+        )
     if external_provider:
         source_schema_hash = manifest.provenance.source_digest
         world_ir_hash = _artifact_digest(Path("__external_provider_world__"))
@@ -142,6 +148,7 @@ def _write_runtime_evidence(
             static=CheckStatus.PASSED,
             schema_and_seed=schema_and_seed,
             processes=CheckStatus.PASSED,
+            chat_ingress=chat_ingress,
             source_invariants=source_invariants,
             scenario_setup_ready=f"{count}/{count}",
             tool_contract=(
@@ -407,6 +414,7 @@ def _needs_runtime_plan_repair(diagnostics) -> bool:
 
     runtime_codes = {
         "generated_runtime_plan_invalid",
+        "chat_ingress_configuration_invalid",
         "process_dependency_timeout",
         "tool_endpoint_unreachable",
     }
@@ -558,6 +566,12 @@ async def validate_once(
         secrets = work / "secrets.json"
         secrets.write_bytes(secrets_path.read_bytes())
         secrets.chmod(0o600)
+        redaction_values = json.loads(secrets.read_text())
+        from .hosted_entrypoint import peek_target_provider_secret_values
+
+        target_secret_values = peek_target_provider_secret_values(
+            secrets, job_secret_purposes(job)
+        )
         secret_values = tuple(
             str(value) for value in json.loads(secrets.read_text()).values()
         )
@@ -816,9 +830,58 @@ async def validate_once(
                         action_report=action_report,
                         reset_equivalence=CheckStatus.NOT_APPLICABLE,
                         world_isolation=CheckStatus.NOT_APPLICABLE,
+                        chat_ingress=CheckStatus.NOT_APPLICABLE,
                     )
                     _freeze_certified_bundle(bundle, authoring)
                 return len(scenarios)
+            if generic:
+                from .chat_call_runner import (
+                    _scenario_document,
+                    _with_scenario_edits,
+                    _tools,
+                    _chat_target_timeout_seconds,
+                )
+                from .chat_readiness import probe_chat_ingress
+
+                chat_ingress = CheckStatus.NOT_APPLICABLE
+                interface = contract.runtime.interface if contract.runtime else None
+                if contract.modality != "voice":
+                    if interface is None or interface.kind not in {"http", "callable"}:
+                        raise RuntimeValidationError(
+                            "runtime",
+                            "generated_runtime_plan_invalid: unsupported chat ingress",
+                        )
+                    if not scenarios:
+                        raise RuntimeValidationError(
+                            "environment",
+                            "Chat readiness requires a representative scenario",
+                        )
+                    await check_setup(scenarios[0], [])
+                    endpoint = runtime.endpoints.get("target_http")
+                    if endpoint is None:
+                        raise RuntimeValidationError(
+                            "runtime",
+                            "generated_runtime_plan_invalid: target_http is absent",
+                        )
+                    source_key = getattr(scenarios[0], "source_scenario_key", None) or scenarios[0].scenario_key
+                    document = _with_scenario_edits(
+                        _scenario_document(bundle, source_key), job.metadata, source_key
+                    )
+                    await probe_chat_ingress(
+                        interface=interface,
+                        endpoint=endpoint.address,
+                        document=document,
+                        scenario_key=scenarios[0].scenario_key,
+                        authoring=authoring,
+                        candidate_hash=_generic_candidate_hash(source, authoring),
+                        bundle_digest=manifest.digest,
+                        secret_values=target_secret_values,
+                        redaction_values=redaction_values,
+                        tools=_tools(contract) if interface.include_tools else (),
+                        scenario_id=scenarios[0].scenario_id,
+                        timeout=_chat_target_timeout_seconds(),
+                    )
+                    chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
@@ -905,6 +968,7 @@ async def validate_once(
                     action_report=action_report,
                     reset_equivalence=CheckStatus.PASSED,
                     world_isolation=world_isolation,
+                    chat_ingress=chat_ingress,
                 )
                 # Freeze the exact bytes that passed the real runtime checks.  Recompiling from
                 # the authoring archive in the execution sandbox can otherwise drift on inputs
@@ -1018,7 +1082,10 @@ async def validate_and_repair(
                         candidate = AgentContract.model_validate_json(
                             candidate_path.read_text(encoding="utf-8")
                         )
-                        if candidate.data_store is None or not candidate.data_store.kind.strip():
+                        if (
+                            candidate.data_store is None
+                            or not candidate.data_store.kind.strip()
+                        ):
                             return 1
                         payload = contract.model_dump()
                         payload["data_store"] = candidate.data_store.model_dump()
