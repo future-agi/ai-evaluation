@@ -526,7 +526,9 @@ def _needs_livekit_model_download(path: Path) -> bool:
     )
 
 
-def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelection:
+def select_python_extras(
+    root: Path, requested: list[str], *, required_owner: Path | None = None
+) -> PythonExtraSelection:
     """Resolve explicit extras in the selected project or unambiguous uv workspace members."""
     if not requested:
         return PythonExtraSelection()
@@ -543,7 +545,7 @@ def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelecti
         }
 
     root_names = declared(document)
-    if set(names) <= root_names:
+    if required_owner is None and set(names) <= root_names:
         return PythonExtraSelection(names)
     workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
     members: set[Path] = set()
@@ -576,7 +578,99 @@ def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelecti
         raise GeneratedRuntimeError(
             "generated_runtime_extra_ambiguous: " + ", ".join(ambiguous)
         )
-    return PythonExtraSelection(names, all_packages=True)
+    if required_owner is not None and any(
+        projects[0].resolve() != required_owner.resolve()
+        for projects in owners.values()
+    ):
+        raise GeneratedRuntimeError("generated_runtime_extra_owner_mismatch")
+    return PythonExtraSelection(
+        names,
+        all_packages=any(
+            projects[0].resolve() != root.resolve() for projects in owners.values()
+        ),
+    )
+
+
+def local_editable_install_operands(install: str) -> tuple[tuple[str, list[str]], ...]:
+    """Read only complete local editable pip declarations; never execute install text."""
+    try:
+        tokens = shlex.split(install)
+    except ValueError:
+        return ()
+    if tokens[:2] != ["pip", "install"] or not tokens[2:] or len(tokens[2:]) % 2:
+        return ()
+    operands = []
+    for flag, token in zip(tokens[2::2], tokens[3::2]):
+        if flag not in {"-e", "--editable"} or not re.fullmatch(
+            r"[A-Za-z0-9_./-]+(?:\[[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*\])?", token
+        ):
+            return ()
+        relative, _, groups = token.partition("[")
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            return ()
+        operands.append((relative, groups.rstrip("]").split(",") if groups else []))
+    return tuple(operands)
+
+
+def local_install_extra_claims(
+    root: Path, install: str, *, reject_unselectable: bool = False
+) -> tuple[tuple[Path, str], ...]:
+    operands = []
+    for relative, groups in local_editable_install_operands(install):
+        owner = (root / relative).resolve()
+        manifest = owner / "pyproject.toml"
+        if (
+            not owner.is_relative_to(root.resolve())
+            or not manifest.resolve().is_relative_to(root.resolve())
+            or not manifest.is_file()
+        ):
+            return ()
+        operands.append((owner, groups))
+    claims = []
+    for owner, groups in operands:
+        declared = (
+            _pyproject_document(owner / "pyproject.toml")
+            .get("project", {})
+            .get("optional-dependencies", {})
+        )
+        for group in groups:
+            if canonicalize_name(group) not in {
+                canonicalize_name(name) for name in declared
+            }:
+                continue
+            try:
+                selection = select_python_extras(root, [group], required_owner=owner)
+            except GeneratedRuntimeError as exc:
+                if reject_unselectable and str(exc).startswith(
+                    (
+                        "generated_runtime_extra_unknown",
+                        "generated_runtime_extra_ambiguous",
+                        "generated_runtime_extra_owner_mismatch",
+                    )
+                ):
+                    raise
+                continue
+            claims.append((owner, selection.names[0]))
+    return tuple(claims)
+
+
+def validate_local_install_extras(
+    root: Path,
+    install: str,
+    extras: list[str],
+    *,
+    original_claims: tuple[tuple[Path, str], ...] = (),
+) -> None:
+    selected = {canonicalize_name(name) for name in extras}
+    for owner, name in (
+        *original_claims,
+        *local_install_extra_claims(root, install, reject_unselectable=True),
+    ):
+        select_python_extras(root, [name], required_owner=owner)
+        if name not in selected:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_extra_omitted: {owner.relative_to(root.resolve()) / 'pyproject.toml'} requires {name} in runtime.extras"
+            )
 
 
 def _python_extras(

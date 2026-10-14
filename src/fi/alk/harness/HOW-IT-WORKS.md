@@ -354,7 +354,13 @@ without a project manifest. Locked uv installs and their stale-lock retry preser
 the same selection. Source manifests and lockfiles are not rewritten by selection.
 `runtime.install` remains descriptive metadata; arbitrary installation instructions
 are not executed by the process compiler. Declare supported optional groups through
-`runtime.extras` rather than relying on that string.
+`runtime.extras` rather than relying on that string. A complete local editable declaration
+such as `pip install -e sdk[cloud] -e tools` is checked against the selected
+project and its uv workspace. If the exact source owner declares an installable
+group omitted from `extras`, compilation returns `generated_runtime_extra_omitted`
+through the runtime-plan repair path. A repair must preserve the proven source
+owner and select the group; deleting the install text does not resolve the error.
+Unsupported install syntax remains documentary and never executes.
 
 HTTP endpoint paths can reference canonical inputs and earlier setup captures, such
 as `/threads/{{session_id}}/turns`. Setup runs first; the main path then renders for

@@ -1196,6 +1196,7 @@ def test_provider_lifecycle_transient_failure_is_retryable_infrastructure(detail
     "detail",
     (
         "GeneratedRuntimeError: generated_runtime_component_ambiguous",
+        "BundleAuthorError: generated_runtime_extra_omitted: sdk/pyproject.toml requires cloud",
         "ProcessRuntimeError: no runnable shipped entrypoint was identified",
         "docker build failed while installing dependencies",
         "agent process exited before readiness probe passed",
