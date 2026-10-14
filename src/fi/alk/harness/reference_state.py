@@ -25,12 +25,21 @@ _TIME_TOLERANCE = timedelta(hours=float(os.environ.get("ALK_REFERENCE_TIME_TOLER
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y", "%d %B %Y")
 
 
+def _rows(value: Any) -> list[dict[str, Any]]:
+    """One collection of a world's state as records, whatever it is kept as: a table's rows, a
+    mapping (files by path, an agent's own memory by key) or a single value."""
+    if isinstance(value, list):
+        return [row if isinstance(row, dict) else {"value": row} for row in value]
+    if isinstance(value, dict):
+        return [
+            {"_key": key, **item} if isinstance(item, dict) else {"_key": key, "value": item}
+            for key, item in value.items()
+        ]
+    return [] if value is None else [{"value": value}]
+
+
 def _tables(state: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
-    return {
-        name: [row for row in rows if isinstance(row, dict)]
-        for name, rows in (state or {}).items()
-        if isinstance(rows, list)
-    }
+    return {str(name): _rows(value) for name, value in (state or {}).items()}
 
 
 def _key(row: dict[str, Any]) -> str:

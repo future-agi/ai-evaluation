@@ -218,3 +218,14 @@ def test_the_last_successful_call_counts_and_a_failed_one_is_not_done():
     assert "duplicate" in compare_calls(solution, twice)
     skip = {"file_claim.policy": {"match": "skip"}}
     assert compare_calls(solution, [_Call("file_claim", policy="anything")], rules=skip) is None
+
+
+def test_a_world_kept_as_a_mapping_or_a_value_is_compared_like_a_table():
+    solution = [{"tool": "write_file", "arguments": {"path": "notes/todo.md", "text": "ship it"}}]
+    before = {"files": {"README.md": "hi"}, "mode": "draft"}
+    after = {"files": {"README.md": "hi", "notes/todo.md": "ship it"}, "mode": "draft"}
+    expected = expected_changes(before, after, solution)
+    assert expected == {"files": [{"_key": "notes/todo.md", "value": "ship it"}]}
+    assert compare(expected, before, after) is None
+    wrong = {"files": {"README.md": "hi", "notes/todo.md": "ship it later"}, "mode": "draft"}
+    assert compare(expected, before, wrong).startswith("done wrong:")
