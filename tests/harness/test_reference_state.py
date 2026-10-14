@@ -48,6 +48,7 @@ def test_normalising_case_spacing_punctuation_phones_and_numbers():
     assert normalise("  Interstate  280, Palo Alto. ") == normalise("interstate 280 palo alto")
     assert normalise("+1 (555) 010-2233") == normalise("15550102233")
     assert normalise("120") == normalise(120.0) == normalise("120.00")
+    assert normalise("0123") != normalise("123")
 
 
 def test_times_compare_within_the_tolerance():

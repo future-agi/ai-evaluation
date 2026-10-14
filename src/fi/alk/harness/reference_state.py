@@ -75,6 +75,8 @@ def normalise(value: Any) -> str:
     text = str(value).strip()
     if re.fullmatch(r"[+\d][\d\s().-]{6,}", text):
         return re.sub(r"\D", "", text)
+    if re.fullmatch(r"0\d+", text):
+        return text
     try:
         return f"{float(text.replace(',', '')):g}"
     except ValueError:
