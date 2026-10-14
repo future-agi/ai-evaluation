@@ -432,6 +432,10 @@ def _repair_guidance(diagnostics) -> str:
 def _needs_runtime_plan_repair(diagnostics) -> bool:
     """Route execution construction failures away from world-data authoring."""
 
+    from .repair_controller import is_chat_dependency_investigation
+
+    if is_chat_dependency_investigation(diagnostics):
+        return True
     runtime_codes = {
         "generated_runtime_plan_invalid",
         "chat_ingress_configuration_invalid",
@@ -447,6 +451,7 @@ class RuntimeValidationError(RuntimeError):
     def __init__(self, phase: str, detail: str, *, diagnostics=()):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
+        self.process_evidence = ""
         super().__init__(detail)
 
 
@@ -588,6 +593,9 @@ async def validate_once(
         secrets.write_bytes(secrets_path.read_bytes())
         secrets.chmod(0o600)
         redaction_values = json.loads(secrets.read_text())
+        process_logs = authoring / "generic-harness" / "process-logs"
+        logs_before = set(process_logs.glob("*.log"))
+        validation_error = None
         from .hosted_entrypoint import peek_target_provider_secret_values
 
         target_secret_values = peek_target_provider_secret_values(
@@ -1055,13 +1063,14 @@ async def validate_once(
                 _freeze_certified_bundle(bundle, authoring)
             return len(scenarios)
         except RuntimeValidationError as exc:
-            raise RuntimeValidationError(
+            validation_error = RuntimeValidationError(
                 exc.phase,
                 outbound.redact_outbound_text(
                     str(exc), extra_secret_values=secret_values
                 ),
                 diagnostics=exc.diagnostics,
-            ) from None
+            )
+            raise validation_error from None
         except Exception as exc:
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
                 # Generated data cannot repair the infrastructure trust store.
@@ -1076,6 +1085,15 @@ async def validate_once(
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
+            if validation_error is not None:
+                from .process_diagnostics import retained_process_evidence
+
+                try:
+                    validation_error.process_evidence = retained_process_evidence(
+                        process_logs, logs_before, redaction_values
+                    )
+                except OSError:
+                    pass
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
@@ -1320,6 +1338,8 @@ async def validate_and_repair(
                     + "\n\n"
                     + base_guidance
                 )
+                if exc.process_evidence:
+                    guidance += "\n<untrusted_current_attempt_process_logs>\n" + exc.process_evidence + "\n</untrusted_current_attempt_process_logs>"
                 _active_repair_diagnostics = diagnostics
                 scenarios_before = None
                 if repair_phase == "scenarios":
@@ -1337,7 +1357,11 @@ async def validate_and_repair(
                         apply_runtime_plan_patch,
                     )
 
-                    if isinstance(repair_result, WorldIRRepairPatch):
+                    from .repair_controller import is_chat_dependency_investigation
+
+                    if is_chat_dependency_investigation(diagnostics) and not isinstance(repair_result, RuntimePlanPatch):
+                        status = 1
+                    elif isinstance(repair_result, WorldIRRepairPatch):
                         source_model = artifacts.read_source_model()
                         world_ir = artifacts.read_world_ir()
                         artifacts.write_repair_patch(

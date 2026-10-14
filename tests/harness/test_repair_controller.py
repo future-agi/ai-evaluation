@@ -179,3 +179,75 @@ def test_repair_result_records_before_after_and_no_op() -> None:
             after_candidate_hash="candidate-b",
             outcome=RepairOutcome.APPLIED,
         )
+
+
+@pytest.mark.parametrize("changed", [True, False])
+def test_chat_dependency_hypothesis_is_once_per_run_and_keeps_source_ownership(changed):
+    from fi.alk.harness.diagnostics import RepairOwner
+
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="Application error",
+    )
+    controller = RepairController()
+    for index, expected in enumerate(
+        (RepairAction.PATCH_ENVIRONMENT, RepairAction.REJECT)
+    ):
+        assert (
+            controller.decide(
+                CandidateObservation(
+                    candidate_hash=f"candidate-{index if changed else 0}",
+                    phase=RepairPhase.ENVIRONMENT,
+                    diagnostics=(diagnostic,),
+                )
+            ).action
+            is expected
+        )
+    assert diagnostic.owner is RepairOwner.SOURCE
+    assert controller.history.environment_patches_used == 1
+
+
+@pytest.mark.parametrize(
+    "budget,phase,extra,component",
+    [
+        (0, RepairPhase.ENVIRONMENT, (), "chat_ingress"),
+        (4, RepairPhase.SCENARIOS, (), "chat_ingress"),
+        (4, RepairPhase.ENVIRONMENT, ("credential_missing",), "chat_ingress"),
+        (
+            4,
+            RepairPhase.ENVIRONMENT,
+            ("generated_runtime_plan_invalid",),
+            "chat_ingress",
+        ),
+        (4, RepairPhase.ENVIRONMENT, (), "other"),
+    ],
+)
+def test_chat_dependency_hypothesis_cannot_expand_repair_permission(
+    budget, phase, extra, component
+):
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component=component,
+        code="chat_ingress_failed",
+        message="Application error",
+    )
+    controller = RepairController(RepairBudgets(environment_patches=budget))
+    assert (
+        controller.decide(
+            CandidateObservation(
+                candidate_hash="candidate",
+                phase=phase,
+                diagnostics=(diagnostic,) + tuple(_diagnostic(code) for code in extra),
+            )
+        ).action
+        is RepairAction.REJECT
+    )
+
+
+def test_chat_investigation_cannot_exceed_already_consumed_environment_budget():
+    controller = RepairController(RepairBudgets(environment_patches=1))
+    assert controller.decide(_observation("first", "generated_runtime_plan_invalid")).action is RepairAction.PATCH_ENVIRONMENT
+    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application error")
+    assert controller.decide(CandidateObservation(candidate_hash="second", phase=RepairPhase.ENVIRONMENT, diagnostics=(diagnostic,))).action is RepairAction.REJECT

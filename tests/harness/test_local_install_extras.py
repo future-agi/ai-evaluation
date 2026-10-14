@@ -318,3 +318,18 @@ def test_excluded_only_extra_is_not_an_executable_claim(tmp_path):
     assert local_install_extra_claims(tmp_path, INSTALL) == ()
     with pytest.raises(GeneratedRuntimeError, match="generated_runtime_extra_unknown"):
         validate_local_install_extras(tmp_path, INSTALL, [])
+
+
+@pytest.mark.parametrize("excluded", ["sdk", "sdk/pyproject.toml"])
+@pytest.mark.parametrize("compiler", ["generated", "bundle"])
+def test_compilers_reject_extra_owner_removed_from_context(tmp_path, excluded, compiler):
+    from fi.alk.harness.bundle_author_v2 import BundleAuthorError, _plan_python
+    from fi.alk.harness.generated_runtime import detect_generated_runtime
+
+    workspace(tmp_path)
+    runtime = Runtime(language="python", execution="native", command=["python", "server.py"], extras=["cloud-sdk"], install=INSTALL, context_excludes=[excluded])
+    with pytest.raises((GeneratedRuntimeError, BundleAuthorError), match="extra_unknown"):
+        if compiler == "generated":
+            detect_generated_runtime(tmp_path, runtime)
+        else:
+            _plan_python(tmp_path, name="agent", root=tmp_path, entry="server.py", control=True, needs_secrets=False, extras=runtime.extras, install=runtime.install, context_excludes=tuple(runtime.context_excludes))
