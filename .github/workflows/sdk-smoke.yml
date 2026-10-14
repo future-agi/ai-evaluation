@@ -59,3 +59,6 @@ jobs:
           tests/test_retell_transport_validation.py
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
+          tests/test_bump_deployment_values.py
+          tests/test_release_workflow.py
+          tests/test_release_pr_step.py

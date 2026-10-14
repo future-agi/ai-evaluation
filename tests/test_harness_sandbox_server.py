@@ -111,6 +111,20 @@ def test_local_connect_only_provider_requires_no_source_upload(tmp_path) -> None
         LocalSandboxRequest(provider_only=True, connector="auto")
 
 
+def test_provider_only_accepts_a_connect_only_livekit_agent():
+    request = LocalSandboxRequest(
+        provider_only=True,
+        connector="livekit",
+        connector_mode="connect_only",
+        connector_config={
+            "agent_name": "returns-agent",
+            "target_system_prompt": "You handle returns.",
+        },
+    )
+
+    assert request.connector == "livekit"
+
+
 def test_second_sandbox_instance_does_not_orphan_live_controller(tmp_path):
     root = tmp_path / "state"
     first = LocalSandbox(root)
