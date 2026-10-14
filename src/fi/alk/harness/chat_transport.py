@@ -34,6 +34,8 @@ def create_chat_wrapper(
     if interface.kind != "websocket":
         options.update(
             headers_template=interface.headers_template,
+            setup_secrets=interface.setup_secrets,
+            completed_tools=interface.completed_tools.model_dump() if interface.completed_tools else None,
             failure_rule=interface.failure_rule.model_dump()
             if interface.failure_rule
             else None,

@@ -12,7 +12,7 @@ import urllib.request
 from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit, urlencode
 
-from .http_events import CompletedToolEvents
+from .http_events import CompletedToolEvents, CompletedToolRows
 
 from fi._diagnostics import safe_endpoint, sanitize_diagnostic
 
@@ -120,6 +120,8 @@ class HTTPAgentWrapper(AgentWrapper):
         failure_rule: Optional[Mapping[str, Any]] = None,
         secret_values: Optional[Mapping[str, str]] = None,
         completed_tool_events: Optional[Mapping[str, Any]] = None,
+        completed_tools: Optional[Mapping[str, Any]] = None,
+        setup_secrets: Optional[Mapping[str, str]] = None,
     ) -> None:
         if not endpoint:
             raise ValueError("endpoint is required")
@@ -146,6 +148,48 @@ class HTTPAgentWrapper(AgentWrapper):
             if completed_tool_events is not None
             else None
         )
+        self.completed_tools = (
+            CompletedToolRows.model_validate(completed_tools)
+            if completed_tools is not None
+            else None
+        )
+        if self.completed_tools and (
+            self.completed_tool_events or self.protocol != "json_template"
+        ):
+            raise ValueError(
+                "completed tool rows require an exclusive JSON template interface"
+            )
+        if (
+            self.completed_tools
+            and not self.completed_tools.error_path
+            and not (
+                self.failure_rule
+                and self.failure_rule.get("success_values") is not None
+            )
+        ):
+            raise ValueError(
+                "completed tool rows without an error flag require a success predicate"
+            )
+        if (
+            self.completed_tool_events
+            and self.completed_tool_events.source == "response"
+            and self.protocol != "json_template"
+        ):
+            raise ValueError("response tool events require a JSON template interface")
+        self._setup_secret_values = {}
+        if len(setup_secrets or {}) > 16:
+            raise ValueError("HTTP setup secrets exceed limit")
+        for name, alias in (setup_secrets or {}).items():
+            if any(
+                not isinstance(item, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item)
+                for item in (name, alias)
+            ):
+                raise ValueError("HTTP setup secret binding invalid")
+            value = (self.secret_values or {}).get(alias)
+            if not isinstance(value, str) or not value or len(value.encode()) > 65536:
+                raise ValueError("HTTP setup target secret missing or oversized")
+            self._setup_secret_values[name] = value
         self._correlation_id: str | None = None
         self._observed_event_ids: set[tuple[str, str]] = set()
         self._response_text = ""
@@ -210,10 +254,18 @@ class HTTPAgentWrapper(AgentWrapper):
                 status = _select_response_value(
                     response_payload, self.failure_rule["status_path"]
                 )
-                if any(
+                success_values = self.failure_rule.get("success_values")
+                failure_values = self.failure_rule.get("failure_values")
+                if (success_values is None) == (failure_values is None):
+                    raise ValueError("HTTP failure rule requires one predicate")
+                matched = any(
                     type(status) is type(value) and status == value
-                    for value in self.failure_rule["failure_values"]
-                ):
+                    for value in (
+                        success_values if success_values is not None else failure_values
+                    )
+                )
+                failed = not matched if success_values is not None else matched
+                if failed:
                     message_path = self.failure_rule.get("message_path", "")
                     message = (
                         _content_text(
@@ -225,13 +277,21 @@ class HTTPAgentWrapper(AgentWrapper):
                     raise _ResponseFailure("application", status_code, message)
             stage = "extract"
             response = self._agent_response_from_payload(response_payload)
-            if self.completed_tool_events:
+            if self.completed_tool_events or self.completed_tools:
                 stage = "tool_events"
                 if response.tool_calls:
                     raise ValueError(
                         "completed event collection cannot accompany tool requests"
                     )
-                observed = await self._run_request(self._completed_tools, headers)
+                observed = (
+                    self._completed_rows(response_payload)
+                    if self.completed_tools
+                    else self._completed_response_events(
+                        response_payload, thread_id=input.thread_id
+                    )
+                    if self.completed_tool_events.source == "response"
+                    else await self._run_request(self._completed_tools, headers)
+                )
                 response.metadata = {
                     **(response.metadata or {}),
                     "native_completed_tools": observed,
@@ -420,13 +480,14 @@ class HTTPAgentWrapper(AgentWrapper):
                 origin + str(item.get("path") or "").lstrip("/"), context
             )
             method = str(item.get("method") or "POST").upper()
-            body = _render_template(item.get("body_template", {}), context)
+            confidential_context = {**context, **self._setup_secret_values}
+            body = _render_template(item.get("body_template", {}), confidential_context)
             accepted = {
                 int(value)
                 for value in item.get("accepted_statuses", [200, 201, 204, 409])
             }
             request_headers = _template_headers(
-                headers, item.get("headers_template", {}), context
+                headers, item.get("headers_template", {}), confidential_context
             )
             encoding = item.get("encoding", "json")
             options = {"encoding": encoding} if encoding != "json" else {}
@@ -552,7 +613,11 @@ class HTTPAgentWrapper(AgentWrapper):
                 self._response_headers = {
                     name.lower(): value for name, value in response.headers.items()
                 }
-                if self.completed_tool_events and not event_request:
+                if (
+                    self.completed_tool_events
+                    and self.completed_tool_events.source == "endpoint"
+                    and not event_request
+                ):
                     self._correlation_id = response.headers.get(
                         self.completed_tool_events.correlation_header
                     )
@@ -594,6 +659,79 @@ class HTTPAgentWrapper(AgentWrapper):
             if status >= 400:
                 return status, text
             raise _ResponseFailure("decode", status, str(exc)) from exc
+
+    def _completed_rows(self, payload):
+        spec = self.completed_tools
+        items = _select_response_value(payload, spec.items_path)
+        if not isinstance(items, list) or len(items) > spec.max_items:
+            raise ValueError("completed tool rows must be a bounded array")
+        completed = []
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise ValueError("completed tool row must be an object")
+            name = _select_response_value(item, spec.name_path)
+            arguments = _select_response_value(item, spec.arguments_path)
+            result = _select_response_value(item, spec.result_path)
+            error = (
+                _select_response_value(item, spec.error_path)
+                if spec.error_path
+                else False
+            )
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or len(name) > 256
+                or not isinstance(arguments, dict)
+                or type(error) is not bool
+            ):
+                raise ValueError("invalid completed tool row")
+            json.dumps([arguments, result], allow_nan=False)
+            completed.append(
+                {
+                    "name": name,
+                    "arguments": arguments,
+                    "result": result,
+                    "ok": not error,
+                }
+            )
+        return completed
+
+    def _accumulate_tool_events(self, items, actions, observations):
+        spec = self.completed_tool_events
+        for event in items:
+            if not isinstance(event, Mapping):
+                raise ValueError("completed tool event must be an object")
+            kind = _select_response_value(event, spec.kind_path)
+            if kind == spec.action_kind:
+                key = _select_response_value(event, spec.action_id_path)
+                target = actions
+            elif kind == spec.observation_kind:
+                key = _select_response_value(event, spec.observation_action_id_path)
+                target = observations
+            else:
+                continue
+            if not isinstance(key, str) or not key or len(key) > 1024 or key in target:
+                raise ValueError("invalid or duplicate tool event identity")
+            if (
+                spec.status_path
+                and _select_response_value(event, spec.status_path)
+                != spec.completed_status
+            ):
+                raise ValueError("tool event is not completed")
+            target[key] = event
+
+    def _completed_response_events(self, payload, *, thread_id):
+        spec = self.completed_tool_events
+        items = _select_response_value(payload, spec.items_path)
+        if not isinstance(items, list) or len(items) > 2000:
+            raise ValueError("response tool events must be a bounded array")
+        actions, observations = {}, {}
+        self._accumulate_tool_events(items, actions, observations)
+        return self._paired_completed_tools(
+            actions, observations, correlation="response:" + str(thread_id)
+        )
 
     def _completed_tools(self, headers: Mapping[str, str]) -> list[dict[str, Any]]:
         spec = self.completed_tool_events
@@ -654,23 +792,7 @@ class HTTPAgentWrapper(AgentWrapper):
                     self._response_status,
                     "event collection exceeds limit",
                 )
-            for event in items:
-                kind = _select_response_value(event, spec.kind_path)
-                if kind == spec.action_kind:
-                    key = _select_response_value(event, spec.action_id_path)
-                    target = actions
-                elif kind == spec.observation_kind:
-                    key = _select_response_value(event, spec.observation_action_id_path)
-                    target = observations
-                else:
-                    continue
-                if not isinstance(key, str) or not key or key in target:
-                    raise _ResponseFailure(
-                        "tool_events",
-                        self._response_status,
-                        "invalid or duplicate tool event identity",
-                    )
-                target[key] = event
+            self._accumulate_tool_events(items, actions, observations)
             cursor = _select_response_value(payload, spec.next_page_path)
             if cursor is None or cursor == "":
                 break
@@ -683,6 +805,12 @@ class HTTPAgentWrapper(AgentWrapper):
             raise _ResponseFailure(
                 "tool_events", self._response_status, "event pagination exceeds limit"
             )
+        return self._paired_completed_tools(
+            actions, observations, correlation=correlation
+        )
+
+    def _paired_completed_tools(self, actions, observations, *, correlation=None):
+        spec = self.completed_tool_events
         if actions.keys() != observations.keys():
             raise _ResponseFailure(
                 "tool_events",
@@ -693,23 +821,29 @@ class HTTPAgentWrapper(AgentWrapper):
         identities = set()
         for key, action in actions.items():
             identity = (correlation, key)
-            if identity in self._observed_event_ids:
+            if correlation is not None and identity in self._observed_event_ids:
                 continue
             name = _select_response_value(action, spec.name_path)
             arguments = _select_response_value(action, spec.arguments_path)
             if isinstance(arguments, str):
                 arguments = json.loads(arguments)
             result = _select_response_value(observations[key], spec.result_path)
-            error = _select_response_value(observations[key], spec.error_path)
+            error = (
+                _select_response_value(observations[key], spec.error_path)
+                if spec.error_path
+                else False
+            )
             if (
                 not isinstance(name, str)
-                or not name
+                or not name.strip()
+                or len(name) > 256
                 or not isinstance(arguments, dict)
                 or type(error) is not bool
             ):
                 raise _ResponseFailure(
                     "tool_events", self._response_status, "invalid completed tool data"
                 )
+            json.dumps([arguments, result], allow_nan=False)
             completed.append(
                 {
                     "name": name,
@@ -718,7 +852,8 @@ class HTTPAgentWrapper(AgentWrapper):
                     "ok": not error,
                 }
             )
-            identities.add(identity)
+            if correlation is not None:
+                identities.add(identity)
         if len(self._observed_event_ids) + len(identities) > 10000:
             raise _ResponseFailure(
                 "tool_events",
@@ -757,7 +892,22 @@ class HTTPAgentWrapper(AgentWrapper):
                 raise ValueError(
                     "response_path must select chat content, not a JSON object"
                 )
-            tool_calls, tool_responses = _nested_tool_evidence(payload)
+            if self.completed_tools or (
+                self.completed_tool_events
+                and self.completed_tool_events.source == "response"
+            ):
+                spec = self.completed_tools or self.completed_tool_events
+                observed_items = _select_response_value(payload, spec.items_path)
+                outside_calls, _ = _nested_tool_evidence(
+                    _without_payload_node(payload, observed_items)
+                )
+                if outside_calls:
+                    raise ValueError(
+                        "completed tools cannot accompany separate tool requests"
+                    )
+                tool_calls, tool_responses = [], []
+            else:
+                tool_calls, tool_responses = _nested_tool_evidence(payload)
             return AgentResponse(
                 content=_content_text(selected),
                 tool_calls=tool_calls,
@@ -995,6 +1145,18 @@ def _mapping_items(values: Sequence[Any]) -> list[dict[str, Any]]:
         elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
             items.extend(dict(item) for item in value if isinstance(item, Mapping))
     return items
+
+
+def _without_payload_node(value, excluded):
+    if value is excluded:
+        return None
+    if isinstance(value, Mapping):
+        return {
+            key: _without_payload_node(item, excluded) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_without_payload_node(item, excluded) for item in value]
+    return value
 
 
 def _nested_tool_evidence(
