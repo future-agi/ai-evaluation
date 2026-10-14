@@ -264,6 +264,11 @@ differs, a duplicate when the same call succeeded more often than your solution 
 solution cannot know in advance, such as an identifier or token the system issues during the call, is
 set to `skip` in `comparisons`.
 
+Compare a value only when there is one right way to write it: an identifier, a code, a number, an
+amount, a date or time, a choice from a fixed set, a name the caller spells. A value the agent may
+fairly put in its own words, such as a place described in words, a summary or a reason, is `skip`
+there, and a judged sub-goal decides whether it says what the caller said.
+
 The comparison ignores case, spacing and punctuation, reads phone numbers as digits and numbers by
 value, and matches a time to the minute. Where that is wrong for a value this caller gives, say so in
 `comparisons`, decided from this agent and this caller, never from habit: `exact` where case or format

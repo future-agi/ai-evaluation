@@ -229,3 +229,17 @@ def test_a_world_kept_as_a_mapping_or_a_value_is_compared_like_a_table():
     assert compare(expected, before, after) is None
     wrong = {"files": {"README.md": "hi", "notes/todo.md": "ship it later"}, "mode": "draft"}
     assert compare(expected, before, wrong).startswith("done wrong:")
+
+
+def test_one_effect_reported_twice_is_one_call_with_its_arguments_merged():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [{"tool": "file_claim", "arguments": {"loss_date": "2026-10-13", "confirmed": True}, "outcome": True}]
+    full = _Call("file_claim", loss_date="2026-10-13", confirmed=True)
+    full.result = {"claim_ref": "CLM-1"}
+    partial = _Call("file_claim", confirmed=True)
+    partial.result = "{'claim_ref': 'CLM-1'}"
+    assert compare_calls(solution, [full, partial]) is None
+    second = _Call("file_claim", loss_date="2026-10-13", confirmed=True)
+    second.result = {"claim_ref": "CLM-2"}
+    assert "duplicate" in compare_calls(solution, [full, partial, second])

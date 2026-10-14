@@ -9,6 +9,7 @@ timestamps, the order of calls and a mistake corrected before the end do not mat
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -194,6 +195,31 @@ def _flat(arguments: Any, prefix: str = "") -> dict[str, Any]:
     return found
 
 
+def _effect(call: Any) -> str:
+    """What a call did, as one key: the same effect reported twice (a trace that records a call
+    from two sources) has the same result, a second effect has its own."""
+    result = getattr(call, "result", None)
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            try:
+                result = ast.literal_eval(result)
+            except (ValueError, SyntaxError):
+                pass
+    if result in (None, "", {}, []):
+        return f"call:{id(call)}"
+    return json.dumps(result, sort_keys=True, default=str)
+
+
+def _effects(calls: list[Any]) -> list[dict[str, Any]]:
+    """Each distinct effect once, in order, with the arguments of every report of it merged."""
+    merged: dict[str, dict[str, Any]] = {}
+    for call in calls:
+        merged.setdefault(_effect(call), {}).update(_flat(getattr(call, "arguments", {})))
+    return list(merged.values())
+
+
 def compare_calls(
     solution: list[Any], calls: list[Any], *, rules: dict[str, Any] | None = None
 ) -> str | None:
@@ -216,15 +242,16 @@ def compare_calls(
             stated = ", ".join(f"{field} {value}" for field, value in sorted(want.items()))
             said.append(f"not done: no successful {tool} call" + (f"; expected one with {stated}" if stated else ""))
             continue
-        got = _flat(getattr(done[-1], "arguments", {}))
+        effects = _effects(done)
+        got = effects[-1]
         said.extend(
             f"done wrong: {tool}.{field} expected {value}, got {got.get(field)}"
             for field, value in sorted(want.items())
             if not _same(value, got.get(field), _rule(rules, tool, field))
         )
         same = sum(
-            all(_same(v, _flat(getattr(c, "arguments", {})).get(f), _rule(rules, tool, f)) for f, v in want.items())
-            for c in done
+            all(_same(v, effect.get(f), _rule(rules, tool, f)) for f, v in want.items())
+            for effect in effects
         )
         wanted = sum(
             1 for one in steps
