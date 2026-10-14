@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fi.simulate.agent.wrappers.http_events import CompletedToolEvents
+from fi.simulate.agent.wrappers.http_events import (
+    CompletedToolEvents,
+    CompletedToolRows,
+)
 
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
@@ -761,10 +764,21 @@ def contract_tools(
                                     "to assistant text in the JSON response, including numeric "
                                     "list indexes such as '-1.content.parts.0.text'.",
                                 },
+                                "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": CompletedToolEvents.model_json_schema(),
+                                "setup_secrets": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 16,
+                                    "description": "Map private setup placeholder names to declared target-provider secret aliases. Values resolve privately into setup bodies/headers only. Never put credential values in this declaration.",
+                                },
                                 "failure_rule": {
                                     "type": "object",
-                                    "required": ["status_path", "failure_values"],
+                                    "required": ["status_path"],
+                                    "oneOf": [
+                                        {"required": ["failure_values"]},
+                                        {"required": ["success_values"]},
+                                    ],
                                     "description": "Optional source-declared application failure envelope. Never infer failures from an arbitrary error field.",
                                     "properties": {
                                         "status_path": {
@@ -784,6 +798,20 @@ def contract_tools(
                                                     "null",
                                                 ]
                                             },
+                                        },
+                                        "success_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                            "description": "Alternative to failure_values. Any status outside this explicit successful set fails, including missing status fields.",
                                         },
                                         "message_path": {
                                             "type": "string",

@@ -209,6 +209,30 @@ def preflight_bundle(
     walked_files = _verify_path_safety(bundle_dir, files)  # 2
     _scan_bundle_files_for_secrets(bundle_dir, walked_files)  # 3
     _verify_unknown_fields(bundle_dir, manifest)  # 4
+    contract_path = bundle_dir / "contract.json"
+    if contract_path.is_file():
+        contract = json.loads(contract_path.read_text())
+        runtime = contract.get("runtime") if isinstance(contract, dict) else None
+        interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        interface = interface if isinstance(interface, dict) else {}
+        bindings = interface.get("setup_secrets", {})
+        if bindings:
+            from .contract import RuntimeInterface
+
+            try:
+                RuntimeInterface._setup_secret_aliases(bindings)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise PreflightError(
+                    "secret_purpose_forbidden", "invalid HTTP setup secret declarations"
+                ) from exc
+            if any(
+                secret_refs.get(alias) != "target_provider"
+                for alias in bindings.values()
+            ):
+                raise PreflightError(
+                    "secret_purpose_forbidden",
+                    "HTTP setup secrets require declared target-provider aliases",
+                )
 
     if manifest.runtime.kind is RuntimeKindV2.PROCESS:
         _verify_placeholder_vocabulary(manifest)  # 5

@@ -198,10 +198,17 @@ def test_authoring_rule_schema_matches_model_and_preserves_null(tmp_path):
     model = RuntimeHttpFailureRule.model_json_schema()
     assert set(declared["properties"]) == set(model["properties"])
     assert set(declared["required"]) == set(model["required"])
-    assert (
-        declared["properties"]["failure_values"]["maxItems"]
-        == model["properties"]["failure_values"]["maxItems"]
-    )
+    for field in ("failure_values", "success_values"):
+        array_schema = next(
+            branch
+            for branch in model["properties"][field]["anyOf"]
+            if branch["type"] == "array"
+        )
+        assert declared["properties"][field]["maxItems"] == array_schema["maxItems"]
+    assert declared["oneOf"] == [
+        {"required": ["failure_values"]},
+        {"required": ["success_values"]},
+    ]
     parsed = RuntimeHttpFailureRule.model_validate(
         _without_nulls(
             {"status_path": "status", "failure_values": [None, False, 0, "failed"]}
