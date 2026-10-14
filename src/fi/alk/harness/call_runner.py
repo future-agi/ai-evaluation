@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from fi import simulate
+from fi import agentcc, simulate
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -358,7 +358,9 @@ def _check_config(
 
     missing_aliases = [alias for alias in required if not credential(alias)]
 
-    if llm_provider == "google":
+    # Through the gateway the model is reached on the gateway's credentials, not the caller's.
+    direct = agentcc.gateway() is None
+    if direct and llm_provider == "google":
         has_api_key = bool(
             simulator_value(GEMINI_API_KEY_ALIAS)
             or simulator_value(GOOGLE_API_KEY_ALIAS)
@@ -374,7 +376,11 @@ def _check_config(
             missing_aliases.append(
                 f"{GEMINI_API_KEY_ALIAS}_or_{GOOGLE_API_KEY_ALIAS}_or_VERTEX_ADC"
             )
-    elif llm_provider == "openai" and not simulator_value(OPENAI_API_KEY_ALIAS):
+    elif (
+        direct
+        and llm_provider == "openai"
+        and not simulator_value(OPENAI_API_KEY_ALIAS)
+    ):
         missing_aliases.append(OPENAI_API_KEY_ALIAS)
 
     has_livekit_url = bool(
