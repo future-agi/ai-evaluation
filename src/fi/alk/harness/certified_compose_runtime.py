@@ -143,6 +143,15 @@ def _within(root: Path, value: str, *, exists: bool = True) -> Path:
     return candidate
 
 
+def _mount_destination(value) -> PurePosixPath:
+    if not isinstance(value, str):
+        raise ComposeRuntimeError("compose_mount_target_invalid")
+    target = PurePosixPath(value)
+    if not target.is_absolute() or ".." in target.parts:
+        raise ComposeRuntimeError("compose_mount_target_invalid")
+    return target
+
+
 def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> dict:
     """Close the host-control surface before Docker sees any repository configuration."""
     if not isinstance(document, dict) or set(document) - {
@@ -303,9 +312,7 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                 "read_only",
             }:
                 raise ComposeRuntimeError("compose_mount_fields_forbidden")
-            target = PurePosixPath(mount.get("target", ""))
-            if not target.is_absolute() or ".." in target.parts:
-                raise ComposeRuntimeError("compose_mount_target_invalid")
+            target = _mount_destination(mount.get("target", ""))
             if mount.get("type") == "bind":
                 origin = mount.get("source", "")
                 if Path(origin).is_absolute() or origin.startswith("~"):
@@ -334,6 +341,45 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
         if not isinstance(bindings, list) or len(bindings) > 32:
             raise ComposeRuntimeError("compose_secret_files_invalid")
         destinations = [PurePosixPath(item["target"]) for item in mounts]
+        if "tmpfs" in service:
+            entries = service["tmpfs"]
+            entries = [entries] if isinstance(entries, str) else entries
+            if not isinstance(entries, list) or len(entries) > 32:
+                raise ComposeRuntimeError("compose_tmpfs_invalid")
+            for entry in entries:
+                if not isinstance(entry, str) or len(entry) > 4096:
+                    raise ComposeRuntimeError("compose_tmpfs_invalid")
+                path, separator, options = entry.partition(":")
+                target = _mount_destination(path)
+                if (
+                    str(target) != path
+                    or str(target) == "/"
+                    or any(char in path for char in ("$", "\\"))
+                    or any(ord(char) < 32 or ord(char) == 127 for char in path)
+                ):
+                    raise ComposeRuntimeError("compose_tmpfs_path_invalid")
+                if separator:
+                    seen = set()
+                    for option in options.split(","):
+                        key, equals, value = option.partition("=")
+                        valid = (
+                            key == "mode"
+                            and re.fullmatch(r"[0-7]{3,4}", value)
+                            or key == "size"
+                            and re.fullmatch(r"[1-9][0-9]{0,9}[kKmMgG]?", value)
+                        )
+                        if not equals or key in seen or not valid:
+                            raise ComposeRuntimeError(
+                                "compose_tmpfs_options_unsupported"
+                            )
+                        seen.add(key)
+                if any(
+                    target.is_relative_to(old) or old.is_relative_to(target)
+                    for old in destinations
+                ):
+                    raise ComposeRuntimeError("compose_tmpfs_mount_overlap")
+                destinations.append(target)
+            service["tmpfs"] = entries
         environment_names = set(environment)
         for raw in bindings:
             binding = RuntimeSecretFile.model_validate(raw)
@@ -384,8 +430,6 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
         service["ports"] = []
         service["security_opt"] = ["no-new-privileges:true"]
         service["restart"] = "no"
-        if "tmpfs" in service:
-            raise ComposeRuntimeError("compose_tmpfs_options_unsupported")
     if declared - consumed:
         raise ComposeRuntimeError(
             "compose_resource_unused: " + ", ".join(sorted(declared - consumed))
