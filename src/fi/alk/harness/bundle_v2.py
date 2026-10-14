@@ -179,6 +179,7 @@ class SourceProcess(BaseModel):
     source_origin: Literal["repository", "bundle"] = "repository"
     build_commands: list[list[str]] = Field(default_factory=list)
     run_command: list[str] = Field(min_length=1)
+    workspaces: dict[str, str] = Field(default_factory=dict)
     environment: dict[str, str] = Field(default_factory=dict)
     build_environment: dict[str, str] | None = None
     fixed_port: int | None = Field(default=None, ge=1, le=65535)
@@ -201,6 +202,9 @@ class SourceProcess(BaseModel):
 
     @model_validator(mode="after")
     def _shape(self) -> "SourceProcess":
+        from .world.files import validate_bindings
+
+        validate_bindings(self.workspaces)
         _safe_relative(self.working_directory)
         for step in self.build_commands:
             if not step:
@@ -219,6 +223,8 @@ class SourceProcess(BaseModel):
         # reproduces its bytes and digest unchanged. A pydantic v2 `@field_serializer` cannot drop a
         # key (it only rewrites a value), so the omission is done here at the model level.
         data = handler(self)
+        if not self.workspaces:
+            data.pop("workspaces", None)
         if not self.fixed_port_consumable:
             data.pop("fixed_port_consumable", None)
         return data
@@ -458,6 +464,14 @@ class EnvironmentBundleV2(BaseModel):
         )
         if duplicated_names:
             raise ValueError("process_name_duplicate: " + ", ".join(duplicated_names))
+        workspace_names = [
+            name
+            for process in self.processes
+            if isinstance(process, SourceProcess)
+            for name in process.workspaces
+        ]
+        if len(workspace_names) != len(set(workspace_names)):
+            raise ValueError("workspace_name_duplicate")
         known_names = set(process_names)
         processes_by_name = {process.name: process for process in self.processes}
 

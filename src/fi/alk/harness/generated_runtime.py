@@ -188,6 +188,32 @@ def detect_generated_runtime(
         dependency, strategy, install, extras = _python_install(
             component, runtime, command
         )
+        requirements = select_python_requirements(
+            component,
+            list(getattr(runtime, "requirements_files", None) or []),
+            context_excludes=_context_excludes(component, runtime, dependency, command),
+        )
+        if requirements:
+            interpreter = (
+                "/app/.venv/bin/python" if strategy.startswith("uv-") else "python"
+            )
+            install.append("RUN pip install --no-cache-dir uv==0.8.13")
+            install.append(
+                "RUN "
+                + shlex.join(supplemental_requirements_command(interpreter, requirements))
+            )
+            install.append(
+                "RUN "
+                + shlex.join(
+                    [
+                        "uv",
+                        "pip",
+                        "check",
+                        "--python",
+                        interpreter,
+                    ]
+                )
+            )
         dockerfile = _python_dockerfile(version, dependency, strategy, install, command)
     else:
         version = _language_version(str(getattr(runtime, "version", "") or ""), "22")
@@ -260,6 +286,7 @@ def _runtime_override(runtime: Any | None, **values: str) -> Any:
         "workdir": str(getattr(runtime, "workdir", "") or ""),
         "command": list(getattr(runtime, "command", None) or []),
         "extras": list(getattr(runtime, "extras", None) or []),
+        "requirements_files": list(getattr(runtime, "requirements_files", None) or []),
         "context_excludes": list(getattr(runtime, "context_excludes", None) or []),
     }
     payload.update(values)
@@ -597,6 +624,92 @@ def select_python_extras(
             projects[0].resolve() != root.resolve() for projects in owners.values()
         ),
     )
+
+
+def supplemental_requirements_command(
+    interpreter: str, requirements: tuple[str, ...]
+) -> list[str]:
+    """Add dependencies without changing the source-selected project resolution."""
+    script = (
+        "import importlib.metadata as m, subprocess, sys, tempfile; "
+        "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt'); "
+        "f.write(''.join(d.metadata['Name'] + '==' + d.version + '\\n' "
+        "for d in m.distributions())); f.flush(); "
+        "result = subprocess.run(['uv', 'pip', 'install', '--python', sys.executable, "
+        "'--constraint', f.name, *[a for p in sys.argv[1:] for a in ('--requirement', p)]]); "
+        "f.close(); sys.exit(result.returncode)"
+    )
+    return [interpreter, "-c", script, *requirements]
+
+
+def select_python_requirements(
+    root: Path, requested: list[str], *, context_excludes: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """Validate selected manifests and their local include graph before packaging."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    root = root.resolve()
+    visited: set[Path] = set()
+    active: set[Path] = set()
+
+    def visit(relative: Path) -> None:
+        target = root / relative
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or not target.resolve().is_relative_to(root)
+            or not target.is_file()
+            or any(
+                path.is_symlink()
+                for path in (target, *target.parents)
+                if path != root and path.is_relative_to(root)
+            )
+            or any(part in _IGNORED_DIRECTORIES for part in relative.parts)
+            or _context_path_excluded(relative, context_excludes)
+            or _sensitive_file(relative, target)
+        ):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_requirements_path_invalid: {relative}"
+            )
+        relative = target.resolve().relative_to(root)
+        if _context_path_excluded(relative, context_excludes):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_requirements_path_invalid: {relative}"
+            )
+        if relative in active:
+            raise GeneratedRuntimeError("generated_runtime_requirements_cycle")
+        if relative in visited:
+            return
+        if len(visited) >= 100 or target.stat().st_size > 1024 * 1024:
+            raise GeneratedRuntimeError("generated_runtime_requirements_limit")
+        visited.add(relative)
+        active.add(relative)
+        for line in target.read_text(encoding="utf-8").splitlines():
+            line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+            if not line or line.startswith("#"):
+                continue
+            include = re.fullmatch(
+                r"(?:-r\s*|--requirement[ =]|-c\s*|--constraint[ =])([^\s]+)", line
+            )
+            if include:
+                visit(relative.parent / include.group(1))
+                continue
+            try:
+                requirement = Requirement(line)
+            except InvalidRequirement as exc:
+                raise GeneratedRuntimeError(
+                    f"generated_runtime_requirements_entry_unsupported: {relative}"
+                ) from exc
+            if requirement.url:
+                raise GeneratedRuntimeError(
+                    f"generated_runtime_requirements_url_unsupported: {relative}"
+                )
+        active.remove(relative)
+
+    names = tuple(dict.fromkeys(requested))
+    for name in names:
+        visit(Path(name))
+    return names
 
 
 def local_editable_install_operands(install: str) -> tuple[tuple[str, list[str]], ...]:

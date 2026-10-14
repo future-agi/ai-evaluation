@@ -1376,6 +1376,11 @@ def build_process_tree(
         stage="build",
         domain=FailureDomain.AGENT,
     )
+    from .world.files import prepare_root
+
+    for relative in process.workspaces.values():
+        prepare_root(build_dir / relative)
+
     from .runtime_files import prepare_runtime_environment
 
     try:
@@ -2255,7 +2260,7 @@ def spawn_source_process(
                 process.name,
             )
     runtime_dir = build_dir
-    if port_plan.effective_instances > 1:
+    if port_plan.effective_instances > 1 or process.workspaces:
         runtime_dir = world_dir / "runtime"
         try:
             # Stop/reap precedes every spawn/reset. Never reuse another world's
@@ -2327,7 +2332,7 @@ def spawn_source_process(
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
-    if port_plan.effective_instances > 1:
+    if port_plan.effective_instances > 1 or process.workspaces:
         for name, directory in (
             ("TMPDIR", "tmp"),
             ("PYTHONPYCACHEPREFIX", "pycache"),
@@ -5019,7 +5024,14 @@ def _clone_or_reset_world(
     # world's own postgres while its `tools-api`/`agent` may still hold connections, guaranteeing
     # the full escalation wait every reset. A dict preserves insertion order, so `reversed()` here
     # IS reverse-topological order without recomputing it.
-    in_place = keep_processes and bool(existing_handles) and _stores_reset_in_place(manifest)
+    in_place = (
+        keep_processes
+        and bool(existing_handles)
+        and _stores_reset_in_place(manifest)
+        and not any(
+            isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
+        )
+    )
     for name, handle in reversed(list(existing_handles.items())):
         if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
@@ -6016,7 +6028,8 @@ class ProcessRuntimeProvider:
         if reason == "port_not_consumable":
             logger.warning(
                 "world %d could not bind its own port (%s); continuing on one world",
-                world_index, process_name,
+                world_index,
+                process_name,
             )
             reason = "world_start_failed"
         self._append_degrade(reason, from_ceiling, 1)
@@ -6762,15 +6775,33 @@ class ProcessRuntimeProvider:
                 metadata=metadata,
             )
 
-    def _control_metadata(self, world_index: int) -> dict[str, str]:
+    def _control_metadata(self, world_index: int) -> dict[str, Any]:
         """Per-world facts the CallRunner needs, surfaced on `EnvironmentRuntime.metadata`:
         `livekit_agent_name` (the agent's LiveKit dispatch name) and `tool_trace_path` (where the
         agent writes its function-call trace). Both are rendered from the control service's declared
         environment (`LIVEKIT_AGENT_NAME` / `HARNESS_TOOL_TRACE`); a bundle that does not set them
         simply omits the key, and the CallRunner then fails typed-and-loud rather than guessing."""
+        workspace_roots = {}
+        for item in self._manifest.processes:
+            if isinstance(item, SourceProcess):
+                for name, relative in item.workspaces.items():
+                    if name in workspace_roots:
+                        raise ProcessRuntimeError(
+                            "spawn", "workspace_name_collision", name
+                        )
+                    workspace_roots[name] = str(
+                        world_scratch_dir(
+                            self._context.work_directory, world_index, item.name
+                        )
+                        / "runtime"
+                        / relative
+                    )
+        metadata: dict[str, Any] = (
+            {"workspace_roots": workspace_roots} if workspace_roots else {}
+        )
         control = self._manifest.runtime.control_service
         if control is None:
-            return {}
+            return metadata
         process = next((p for p in self._manifest.processes if p.name == control), None)
         env = dict(getattr(process, "environment", {}) or {})
         world_dir = world_scratch_dir(
@@ -6784,7 +6815,6 @@ class ProcessRuntimeProvider:
                 .replace("{{WORLD_DIR}}", str(world_dir))
             )
 
-        metadata: dict[str, str] = {}
         agent_name = env.get("LIVEKIT_AGENT_NAME")
         if not agent_name:
             # A freshly authored bundle may not render LIVEKIT_AGENT_NAME onto the control

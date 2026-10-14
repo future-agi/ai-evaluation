@@ -479,6 +479,11 @@ class Runtime(BaseModel):
         default_factory=list,
         description="Executable selection of source-declared optional dependency groups required by this runtime. Include groups required by install evidence; never invent undeclared groups.",
     )
+    requirements_files: list[str] = Field(
+        default_factory=list,
+        description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+    )
+    workspaces: dict[str, str] = Field(default_factory=dict, description="Named native workspace roots relative to the agent process working directory; requires source evidence.")
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
     execution: Literal["auto", "native", "compose"] = "auto"
@@ -505,6 +510,9 @@ class Runtime(BaseModel):
 
     @model_validator(mode="after")
     def _validate_selection(self) -> "Runtime":
+        from .world.files import validate_bindings
+
+        validate_bindings(self.workspaces)
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:

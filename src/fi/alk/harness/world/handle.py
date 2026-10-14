@@ -11,6 +11,8 @@ message naming what it did wrong rather than a `KeyError` or a driver traceback 
 from __future__ import annotations
 
 import random
+from pathlib import Path
+from . import files
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -62,6 +64,7 @@ class HostedWorld:
         baseline_row_counts: Mapping[str, int],
         *,
         _validate_baseline: bool = True,
+        workspace_roots: Mapping[str, Path | str] | None = None,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
 
@@ -72,6 +75,9 @@ class HostedWorld:
         access to discover a provisioning gap through its own retry.
         """
         self._store = store
+        self._workspace_roots = {
+            name: Path(root) for name, root in (workspace_roots or {}).items()
+        }
         self.world_index = world_index
         self.rng = rng
         # Row counts as they stood when the baseline was frozen, keyed by table. Never
@@ -90,7 +96,43 @@ class HostedWorld:
             "rng": self.rng.getstate(),
             "baseline": self._baseline_row_counts,
             "read_only": False,
+            "workspace_roots": {
+                name: str(root) for name, root in self._workspace_roots.items()
+            },
         }
+
+    def _workspace(self, name: str) -> Path:
+        try:
+            return self._workspace_roots[name]
+        except KeyError:
+            raise WorldUsageError(f"unknown declared workspace: {name!r}") from None
+
+    def write_file(self, workspace: str, path: str, content: str) -> None:
+        if not isinstance(content, str):
+            raise WorldUsageError("write_file content must be text")
+        files.write(self._workspace(workspace), path, content.encode("utf-8"))
+
+    def read_file(self, workspace: str, path: str) -> str:
+        try:
+            return files.read(self._workspace(workspace), path).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorldUsageError("read_file requires UTF-8 text") from exc
+
+    def _workspace_snapshot(self):
+        snapshots = {}
+        count = size = 0
+        for name, root in self._workspace_roots.items():
+            entries = files.snapshot(root)
+            count += len(entries)
+            size += sum(
+                len(entry.data) for entry in entries.values() if entry.data is not None
+            )
+            if count > files.SNAPSHOT_ENTRIES or size > files.SNAPSHOT_BYTES:
+                raise WorldStateTooLarge(
+                    "combined workspace snapshot exceeds its entry or byte cap"
+                )
+            snapshots[name] = entries
+        return snapshots
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         """A snapshot of the public schema, or of one table in it.
@@ -266,12 +308,21 @@ class HostedWorld:
         instead of special-casing hosted agents in the validator.
         """
 
-        return self._store.freeze()
+        if not self._workspace_roots:
+            return self._store.freeze()
+        workspaces = self._workspace_snapshot()
+        return (self._store.freeze(), workspaces)
 
     def revert(self, checkpoint: Any) -> None:
         """Restore a checkpoint captured before a probe or smoke action."""
 
-        self._store.restore(checkpoint)
+        if not self._workspace_roots:
+            self._store.restore(checkpoint)
+            return
+        database, workspaces = checkpoint
+        for name, saved in workspaces.items():
+            files.restore(self._workspace(name), saved)
+        self._store.restore(database)
 
     # -- internal -----------------------------------------------------------------------------
 
@@ -384,6 +435,12 @@ class ReadOnlyWorld:
         self.__world = world
         self.world_index = world.world_index
         self.rng = world.rng
+
+    def read_file(self, workspace: str, path: str) -> str:
+        return self.__world.read_file(workspace, path)
+
+    def write_file(self, workspace: str, path: str, content: str) -> None:
+        raise WorldReadOnly("write_file reached a read-only handle")
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]:
         return self.__world.state(table)

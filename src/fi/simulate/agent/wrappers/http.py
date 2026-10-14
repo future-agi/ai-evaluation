@@ -431,6 +431,8 @@ class HTTPAgentWrapper(AgentWrapper):
     def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
         if self.protocol == "json_template":
             selected = _select_response_value(payload, self.response_path)
+            if isinstance(selected, Mapping):
+                raise ValueError("response_path must select chat content, not a JSON object")
             tool_calls, tool_responses = _nested_tool_evidence(payload)
             return AgentResponse(
                 content=_content_text(selected),

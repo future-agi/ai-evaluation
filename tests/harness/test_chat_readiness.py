@@ -451,6 +451,18 @@ def test_declared_application_error_and_extraction_fail_terminal(tmp_path, profi
     assert "secret123" not in json.dumps(receipts(tmp_path))
 
 
+def test_response_path_must_select_chat_content_not_message_envelope(tmp_path, profile_app):
+    url, state = profile_app
+    state.update(profile=True, body={"response": {"role": "assistant", "content": "Hello"}})
+    target = interface(protocol="json_template", request_template={}, response_path="response")
+    with pytest.raises(RuntimeValidationError) as error:
+        asyncio.run(probe(tmp_path, url, interface=target))
+    assert error.value.diagnostics[0].code == "chat_ingress_failed"
+    target = target.model_copy(update={"response_path": "response.content"})
+    asyncio.run(probe(tmp_path, url, interface=target))
+    assert len(state["calls"]) == 2
+
+
 def test_receipt_redaction_preserves_controller_identity(tmp_path, profile_app):
     url, state = profile_app
     with pytest.raises(RuntimeValidationError):

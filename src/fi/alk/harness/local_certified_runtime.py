@@ -248,6 +248,17 @@ async def run_local_certified(
                     result.aborted.message,
                     completed_scenarios=len(sink.receipts),
                 )
+            for receipt in sink.receipts:
+                if receipt.status == "errored":
+                    failure = receipt.failure
+                    raise LocalCertifiedRunError(
+                        failure.domain if failure else "infrastructure",
+                        failure.code if failure else "scenario_errored",
+                        failure.message
+                        if failure
+                        else f"Scenario {receipt.scenario_key} errored without failure details",
+                        completed_scenarios=len(sink.receipts),
+                    )
             failed = any(item.status != "passed" for item in sink.receipts)
             return (2 if failed else 0), len(sink.receipts)
         finally:

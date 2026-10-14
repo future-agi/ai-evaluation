@@ -90,6 +90,10 @@ class ReadOnlyWorld(Protocol):
     world_index: int
     rng: random.Random
 
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
+
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
     def put(
@@ -110,6 +114,10 @@ class ReadOnlyWorld(Protocol):
 class World(Protocol):
     world_index: int
     rng: random.Random
+
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
