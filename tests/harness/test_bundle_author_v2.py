@@ -562,9 +562,16 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
 
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract.setdefault("runtime", {})["required_environment"] = {
+        "agent": ["GOOGLE_CLOUD_PROJECT"]
+    }
+    contract_path.write_text(json.dumps(contract))
+
     with pytest.raises(
         BundleAuthorError,
-        match="target_runtime_configuration_missing: environment:GOOGLE_CLOUD_PROJECT",
+        match="target_runtime_configuration_missing: agent:GOOGLE_CLOUD_PROJECT",
     ):
         author_bundle_v2(
             source=source,
@@ -3243,3 +3250,26 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
     assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
     assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
     assert reseal_scenarios(authoring) == digest
+
+
+def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('source')")
+    (source / "optional.py").write_text(
+        "import os\ndef unused(): return os.environ['UNUSED_TOKEN']\n"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=output
+    )
+    inventory = json.loads((output / "credentials.json").read_text())
+    unused = next(
+        item
+        for item in inventory["requirements"]
+        if item["environment_name"] == "UNUSED_TOKEN"
+    )
+    assert unused["status"] == "missing"
+    assert unused["required"] is True

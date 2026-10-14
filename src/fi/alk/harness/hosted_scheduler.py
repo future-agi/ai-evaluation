@@ -1584,12 +1584,14 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         judge: JudgeFn | None = None,
+        require_tool_workflow: bool = False,
     ) -> None:
         self._pool = pool
         self._world_factory = world_factory
         self._call_runner = call_runner
         self._outbound = outbound
         self._job_seed = job_seed
+        self._require_tool_workflow = require_tool_workflow
         self._cancel_requested = cancel_requested or (lambda: False)
         # Injected like every other collaborator, so a test decides a judged sub-goal without a
         # model call. Resolved here rather than as a default argument, which would bind at import
@@ -2137,7 +2139,10 @@ class HostedScheduler:
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
-        if not calls and getattr(scenario, "requires_tool_evidence", True):
+        if not calls and (
+            self._require_tool_workflow
+            or getattr(scenario, "requires_tool_evidence", True)
+        ):
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
             # guarantee": "An empty list is never handed to checks").

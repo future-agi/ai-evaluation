@@ -270,12 +270,28 @@ class HarnessJob(BaseModel):
     agent: AgentConnection
     scenario_count: int = Field(default=10, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)
     seed: int | None = None
+    guidance: list[str] = Field(default_factory=list)
+    require_tool_workflow: bool = Field(
+        default=False,
+        description="Require a declared executable tool seam and observed tool calls in every scenario.",
+    )
     runtime: RuntimeRequirements = Field(default_factory=RuntimeRequirements)
     security: SandboxSecurityPolicy = Field(default_factory=SandboxSecurityPolicy)
     retry: HarnessRetryPolicy = Field(default_factory=HarnessRetryPolicy)
     artifacts: HarnessArtifactPolicy = Field(default_factory=HarnessArtifactPolicy)
     platform_run_id: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    def authoring_guidance(self) -> list[str]:
+        instructions = list(self.guidance)
+        if self.require_tool_workflow:
+            instructions.append(
+                "require_tool_workflow is enabled. Preserve an executable tool seam from "
+                "the submitted agent and test actual tool execution in every scenario. "
+                "A tool declaration alone is not execution evidence. Do not invent tools, "
+                "agent identifiers, or edit submitted source to satisfy this requirement."
+            )
+        return instructions
 
     @model_validator(mode="after")
     def _validate_job(self) -> HarnessJob:

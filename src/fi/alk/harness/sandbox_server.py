@@ -153,6 +153,8 @@ class SandboxPreflightResponse(BaseModel):
     source_kind: SourceKind
     source_label: str
     ready_to_submit: bool
+    can_submit_for_authoring: bool = False
+    configuration_status: str = "selection_pending"
     checkout_required: bool = False
     credentials: CredentialManifest
     packaging: PackagingManifest | None = None
@@ -854,12 +856,15 @@ class LocalSandbox:
                         for name, value in request.environment_values.items()
                     },
                 },
-                scan_paths=_credential_scan_paths(packaging),
                 template_secrets_required=(
                     request.metadata.get("generic_harness_v1") is not True
                 ),
             )
+            from .credentials import assess_configuration
+
+            admission = assess_configuration()
             return SandboxPreflightResponse(
+                configuration_status=admission.status,
                 source_kind=(
                     SourceKind.ARCHIVE
                     if request.source_id
@@ -873,6 +878,10 @@ class LocalSandbox:
                     and packaging.ready
                     and (packaging.agent_runtime_packaged or not packaging.candidates)
                 ),
+                can_submit_for_authoring=True,
+                notes=[
+                    "Runtime selection and configuration validation continue after authoring. Packaging and credential findings are inventory."
+                ],
                 credentials=manifest,
                 packaging=packaging,
             )
@@ -904,6 +913,7 @@ class LocalSandbox:
             source_kind=SourceKind.GITHUB,
             source_label=repository,
             ready_to_submit=manifest.ready,
+            can_submit_for_authoring=manifest.ready,
             checkout_required=True,
             credentials=manifest,
             notes=[
@@ -965,7 +975,6 @@ class LocalSandbox:
                     source,
                     secret_refs=job.agent.secret_refs,
                     provided_environment=job.agent.config,
-                    scan_paths=_credential_scan_paths(packaging_manifest),
                     template_secrets_required=(
                         job.metadata.get("generic_harness_v1") is not True
                     ),
@@ -974,54 +983,17 @@ class LocalSandbox:
                     directory / "packaging.json",
                     packaging_manifest.model_dump(mode="json"),
                 )
-                if not packaging_manifest.ready:
-                    detail = (
-                        "; ".join(packaging_manifest.notes)
-                        or "packaging is not runnable"
-                    )
-                    state.update(
-                        stage=HarnessStage.FAILED.value,
-                        detail=f"repository packaging preflight failed: {detail}",
-                        failure={
-                            "domain": "environment",
-                            "stage": HarnessStage.ACQUIRING_SOURCE.value,
-                            "code": "packaging_preflight_failed",
-                            "message": detail,
-                            "retryable": False,
-                        },
-                        updated_at=_now(),
-                    )
-                    _write_json(state_path, state)
-                    return
                 _write_json(
                     directory / "credentials.json",
                     credential_manifest.model_dump(mode="json"),
                 )
-                if not credential_manifest.ready:
-                    missing = [
-                        item.environment_name
-                        for item in credential_manifest.missing_required
-                    ]
-                    missing.extend(
-                        f"one of {choice.options}"
-                        for choice in credential_manifest.credential_choices
-                        if not choice.satisfied
-                    )
-                    names = ", ".join(missing)
-                    state.update(
-                        stage=HarnessStage.FAILED.value,
-                        detail=f"missing required credentials: {names}",
-                        failure={
-                            "domain": "connectivity",
-                            "stage": HarnessStage.ACQUIRING_SOURCE.value,
-                            "code": "credentials_missing",
-                            "message": f"Configure secret references for: {names}",
-                            "retryable": False,
-                        },
-                        updated_at=_now(),
-                    )
-                    _write_json(state_path, state)
-                    return
+                from .credentials import assess_configuration
+
+                admission = assess_configuration()
+                _write_json(
+                    directory / "configuration-admission.json",
+                    admission.model_dump(mode="json"),
+                )
                 resolved_secrets = resolve_worker_secrets(
                     job.agent.secret_refs,
                     environment={
@@ -1440,23 +1412,6 @@ def _validate_environment_values(
         total += len(name.encode()) + len(value.encode())
     if total > 262_144:
         raise ValueError("environment_values_size_exceeded")
-
-
-def _credential_scan_paths(packaging: PackagingManifest) -> list[str] | None:
-    """Scope preflight credentials to the Compose runtime that will actually run."""
-    if packaging.selected_kind is None or packaging.selected_kind.value != "compose":
-        return None
-    selected = next(
-        (
-            candidate
-            for candidate in packaging.candidates
-            if candidate.path == packaging.selected_path
-        ),
-        None,
-    )
-    if selected is None or packaging.selected_path is None:
-        return None
-    return [packaging.selected_path, *selected.runtime_source_roots]
 
 
 def _worker_failure_retryable(

@@ -278,6 +278,14 @@ async def converse(
             transcript.simulator_output_tokens,
         ) = getattr(customer, "simulator_tokens", (0, 0))
         setattr(exc, "partial_transcript", transcript)
+        trace_path = getattr(target, "trace_path", None)
+        trace = getattr(exc, "trace", None)
+        if trace_path is not None and trace is not None:
+            from pathlib import Path
+
+            path = Path(trace_path).with_name("http-failure.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(trace, sort_keys=True) + "\n", encoding="utf-8")
         raise
     finally:
         await customer.__aexit__(None, None, None)

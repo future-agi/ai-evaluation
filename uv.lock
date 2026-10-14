@@ -55,6 +55,7 @@ version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
+    { name = "cryptography" },
     { name = "fi-instrumentation-otel" },
     { name = "gepa" },
     { name = "google-adk" },
@@ -170,6 +171,7 @@ requires-dist = [
     { name = "chromadb", marker = "extra == 'all'", specifier = ">=0.4.0" },
     { name = "chromadb", marker = "extra == 'feedback'", specifier = ">=0.4.0" },
     { name = "claude-agent-sdk", specifier = ">=0.2.140,<0.3" },
+    { name = "cryptography", specifier = ">=43" },
     { name = "fastapi", marker = "extra == 'harness-ui'", specifier = ">=0.115,<1" },
     { name = "fi-instrumentation-otel", specifier = ">=0.1.16" },
     { name = "gepa", specifier = ">=0.0.17" },

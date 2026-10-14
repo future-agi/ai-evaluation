@@ -439,6 +439,18 @@ def run_tools(
                 f"no scenario called {name!r}. There is: "
                 + ", ".join(one.name for one in written)
             )
+        from ..job import HarnessJob
+
+        job_path = Path(world_root) / "job.json"
+        if job_path.is_file() and HarnessJob.model_validate_json(
+            job_path.read_text()
+        ).require_tool_workflow:
+            from .simulation import simulate
+
+            summary = await simulate([scenario], contract, world_root, destination=destination)
+            results[:] = load_results(destination)
+            answer = json.dumps(summary, indent=2)
+            return _ok(answer) if summary["passed"] == 1 else _err(answer)
         if not live:
             return await _run_here(scenario)
         problems = missing_prerequisites(world_root, contract)

@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import urljoin
 
+from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
-from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 
 from .call_runner import (
     ArtifactUploader,
@@ -331,9 +332,7 @@ class _HostedChatTarget:
             )
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
-                raise RuntimeError(
-                    str(trace.get("error") or "submitted endpoint request failed")
-                )
+                raise HTTPCallFailure(trace)
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
             )
@@ -507,6 +506,10 @@ class HostedChatCallRunner:
             include_tools=interface.include_tools,
             request_template=interface.request_template,
             response_path=interface.response_path,
+            failure_rule=interface.failure_rule.model_dump()
+            if interface.failure_rule
+            else None,
+            secret_values=self._context.target_provider_secret_values,
             setup_requests=[
                 item.model_dump(mode="python") for item in interface.setup_requests
             ],
@@ -547,17 +550,27 @@ class HostedChatCallRunner:
             )
         except CallAborted as exc:
             failure = exc
-            raise
+            transcript = getattr(exc, "partial_transcript", None) or Transcript()
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
             wrapped = CallAborted(
-                f"chat_target_failed: {type(exc).__name__}: {exc}",
+                f"chat_target_failed: {type(exc).__name__}: "
+                + sanitize_diagnostic(
+                    str(exc), self._context.target_provider_secret_values
+                ),
                 code="target_agent_failed",
             )
             partial = getattr(exc, "partial_transcript", None)
             if partial is not None:
                 setattr(wrapped, "partial_transcript", partial)
             failure = wrapped
-            raise wrapped from exc
+            transcript = partial or Transcript()
+            trace = getattr(exc, "trace", None)
+            if trace is not None:
+                await self._adapter.upload_artifact(
+                    json.dumps(trace, sort_keys=True).encode("utf-8"),
+                    kind=ArtifactKind.TRACE,
+                    scenario_key=scenario.scenario_key,
+                )
         finally:
             await _record_text_usage(
                 self._context.usage_reporter,
@@ -604,7 +617,7 @@ class HostedChatCallRunner:
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario.scenario_key,
             )
-        return CallOutcome(
+        outcome = CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
@@ -613,3 +626,7 @@ class HostedChatCallRunner:
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
         )
+        if failure is not None:
+            failure.partial = outcome
+            raise failure
+        return outcome

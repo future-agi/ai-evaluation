@@ -19,6 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
+from .public_material import is_public_pem
+
 BUNDLE_SCHEMA_VERSION = "futureagi.environment-bundle.v1"
 BUNDLE_MANIFEST = "manifest.json"
 
@@ -189,12 +191,10 @@ def _iter_files(root: Path) -> list[Path]:
 def _inspect_file(root: Path, path: Path) -> BundleFile:
     relative = path.relative_to(root).as_posix()
     _safe_relative(relative)
-    if path.name in _SECRET_FILES or path.suffix.lower() in {
-        ".pem",
-        ".key",
-        ".p12",
-        ".pfx",
-    }:
+    if path.name in _SECRET_FILES or (
+        path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
+        and not is_public_pem(path)
+    ):
         raise BundleError(f"bundle_secret_file_forbidden: {relative}")
     digest = hashlib.sha256()
     size = 0

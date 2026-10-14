@@ -126,3 +126,30 @@ def test_runtime_patch_rejects_model_authored_shell_commands(tmp_path) -> None:
             patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
         )
+
+
+def test_compose_repair_path_is_relative_to_repository_not_workdir(tmp_path):
+    (tmp_path / "service").mkdir()
+    (tmp_path / "deployment").mkdir()
+    (tmp_path / "service/app.py").write_text("print('source')")
+    (tmp_path / "service/pyproject.toml").write_text(
+        '[project]\nname="fixture"\nversion="1"\n'
+    )
+    (tmp_path / "deployment/custom.yaml").write_text(
+        "services:\n  dialogue:\n    build: ../service\n"
+    )
+    contract = AgentContract(agent="fixture")
+    patch = _patch(
+        contract,
+        execution="compose",
+        compose_file="deployment/custom.yaml",
+        service="dialogue",
+    )
+    repaired = validate_runtime_plan_patch(
+        tmp_path,
+        contract,
+        patch,
+        allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+    )
+    assert repaired.runtime.compose_file == "deployment/custom.yaml"
+    assert repaired.runtime.service == "dialogue"

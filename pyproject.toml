@@ -35,6 +35,7 @@ classifiers = [
 ]
 dependencies = [
   "claude-agent-sdk>=0.2.140,<0.3",
+  "cryptography>=43",
   "fi-instrumentation-otel>=0.1.16",
   "gepa>=0.0.17",
   # 2.8 imports newer otel semconv than the livekit-agents pin allows

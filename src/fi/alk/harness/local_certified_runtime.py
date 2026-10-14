@@ -8,6 +8,7 @@ cannot silently fall back to the legacy prompt-reconstruction path.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -118,7 +119,7 @@ class LocalCertifiedSink:
         label = str(getattr(kind, "value", kind))
         directory = self.root / (scenario_key or "run")
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{label}.bin"
+        path = directory / f"{label}-{hashlib.sha256(data).hexdigest()}.bin"
         path.write_bytes(data)
         return str(path)
 
@@ -172,6 +173,16 @@ async def run_local_certified(
         _make_local_seed_files_readable(bundle_dir)
         manifest = load_bundle_v2(bundle_dir)
 
+        runs = authoring / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        run_root = Path(
+            tempfile.mkdtemp(
+                prefix=datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S-"),
+                dir=runs,
+            )
+        )
+        run_id = run_root.name
+        sink = LocalCertifiedSink(run_root)
         # Validation reads a private copy, so the original handoff still exists here.  The
         # execution provider consumes and unlinks it on first provision, exactly like hosted.
         provider = ProcessRuntimeProvider(
@@ -183,10 +194,8 @@ async def run_local_certified(
                 else default_user_resolver
             ),
             require_declared_user=False,
-            generic_artifact_root=authoring / "generic-harness",
+            generic_artifact_root=run_root / "generic-harness",
         )
-        run_id = datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S")
-        sink = LocalCertifiedSink(authoring / "runs" / run_id)
         pool = WorldPool(
             provider,
             bundle=manifest,
@@ -219,6 +228,7 @@ async def run_local_certified(
                 call_runner=call_runner,
                 outbound=sink,
                 job_seed=job.seed or 0,
+                require_tool_workflow=job.require_tool_workflow,
             )
             result = await scheduler.run(scenarios)
             summary = {
@@ -245,6 +255,16 @@ async def run_local_certified(
             if callable(close):
                 await close()
             await pool.close()
+            from .process_diagnostics import upload_process_logs
+
+            try:
+                await upload_process_logs(run_root / "generic-harness", sink)
+            except OSError:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "process diagnostic collection failed"
+                )
 
 
 __all__ = ["LocalCertifiedRunError", "LocalCertifiedSink", "run_local_certified"]

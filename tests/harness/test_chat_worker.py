@@ -203,7 +203,10 @@ def test_isolated_chat_runner_preserves_structured_worker_failure(
     assert error.value.marker == "target_unavailable"
 
 
-def test_chat_worker_returns_call_aborted_details_only(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_partial", [False, True])
+def test_chat_worker_returns_call_aborted_details_only(
+    tmp_path, monkeypatch, with_partial
+):
     context = _context(tmp_path)
     runtime = EnvironmentRuntime(
         runtime_id="runtime-1",
@@ -225,11 +228,28 @@ def test_chat_worker_returns_call_aborted_details_only(tmp_path, monkeypatch):
     }
     result_path = tmp_path / "worker-error.json"
 
-    async def fail(*_args, **_kwargs):
+    async def fail(runner, *_args, **_kwargs):
+        from fi.alk.harness.hosted_scheduler import CallOutcome
+        from fi.alk.harness.outbound import ArtifactKind
+
+        partial = None
+        if with_partial:
+            identifier = await runner._adapter.upload_artifact(
+                b"partial transcript", kind=ArtifactKind.TRANSCRIPT
+            )
+            partial = CallOutcome(
+                calls=(),
+                turns=1,
+                started_at="start",
+                ended_at="end",
+                duration_ms=1,
+                transcript_artifact=identifier,
+            )
         raise CallAborted(
             "chat target did not start",
             code="target_agent_failed",
             marker="target_unavailable",
+            partial=partial,
         )
 
     monkeypatch.setattr(chat_call_runner.HostedChatCallRunner, "run", fail)
@@ -238,8 +258,64 @@ def test_chat_worker_returns_call_aborted_details_only(tmp_path, monkeypatch):
 
     asyncio.run(chat_worker.main())
 
-    assert json.loads(result_path.read_text()) == {
+    result = json.loads(result_path.read_text())
+    if with_partial:
+        assert result.pop("partial")["transcript_artifact"] == "0"
+        artifact = result.pop("artifacts")[0]
+        assert artifact["id"] == "0"
+        assert base64.b64decode(artifact["data"]) == b"partial transcript"
+    assert result == {
         "error": "chat target did not start",
         "error_code": "target_agent_failed",
         "error_marker": "target_unavailable",
     }
+
+
+def test_failed_worker_uploads_partial_evidence_before_raising(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+    adapter = _Adapter()
+
+    async def worker(*_args, **_kwargs):
+        return {
+            "error": "upstream refused",
+            "error_code": "target_agent_failed",
+            "partial": {
+                "calls": [],
+                "turns": 2,
+                "started_at": "start",
+                "ended_at": "end",
+                "duration_ms": 10,
+                "transcript_artifact": "0",
+                "recording_artifacts": [],
+                "messages": [{"role": "assistant", "content": "first answer"}],
+            },
+            "artifacts": [
+                {
+                    "id": "0",
+                    "kind": "transcript",
+                    "data": base64.b64encode(b"partial transcript").decode(),
+                },
+                {
+                    "id": "1",
+                    "kind": "trace",
+                    "data": base64.b64encode(b"http failure trace").decode(),
+                },
+            ],
+        }
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    with pytest.raises(CallAborted) as failure:
+        asyncio.run(
+            chat_worker.IsolatedChatCallRunner(adapter, context).run(
+                SimpleNamespace(scenario_key="trial", scenario_id="id"),
+                EnvironmentRuntime(
+                    runtime_id="r",
+                    world_index=0,
+                    bundle_digest="sha256:" + "a" * 64,
+                    state=RuntimeState.READY,
+                ),
+            )
+        )
+    assert adapter.uploads == [b"partial transcript", b"http failure trace"]
+    assert failure.value.partial.transcript_artifact == "transcript-1"
+    assert failure.value.partial.turns == 2
