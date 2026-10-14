@@ -297,3 +297,76 @@ def test_a_language_outside_the_multilingual_transcriber_is_transcribed_in_its_o
 
     assert persona_stt_language({"languages": ["French"]}) == "multi"
     assert persona_stt_language({"languages": ["ko"]}) == "ko"
+
+
+def test_native_judge_inspects_public_capabilities_and_actual_evidence(monkeypatch):
+    import json
+    import random
+    from types import SimpleNamespace
+    from fi.alk.harness.world.observation import ObservationWorld
+
+    world = ObservationWorld(
+        0,
+        random.Random(1),
+        {
+            "chat": "http://private-internal-host:8080",
+            "history": "http://another-private-host:9090",
+        },
+    )
+    world.set_headers("chat", {"Authorization": "Bearer private-session-credential"})
+    inspected = []
+
+    class NativeStage:
+        def __init__(self, spec, **kwargs):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def say(self, prompt):
+            tools = {t.name: t for t in self.spec.servers["world"].tools}
+            assert set(tools) == {"inspect_world", "read_transcript", "decide"}
+            result = await tools["inspect_world"].handler({})
+            text = result["content"][0]["text"]
+            inspected.append(json.loads(text))
+            assert "private-internal-host" not in text
+            assert "another-private-host" not in text
+            assert "private-session-credential" not in text
+            assert "Authorization" not in text
+            assert "Capability names are not state evidence" in text
+            transcript = await tools["read_transcript"].handler({})
+            assert (
+                "Agent: The requested record was not found."
+                in transcript["content"][0]["text"]
+            )
+            assert "lookup_record" in prompt and "not_found" in prompt
+            await tools["decide"].handler(
+                {
+                    "passed": False,
+                    "explanation": "The requested record was not found.",
+                }
+            )
+
+    monkeypatch.setattr(judge_module, "Stage", NativeStage)
+    result = asyncio.run(
+        judge_module.judge(
+            _Goal(),
+            world.read_only(),
+            [
+                SimpleNamespace(
+                    name="lookup_record", result={"status": "not_found"}, ok=True
+                )
+            ],
+            messages=[
+                {"role": "assistant", "content": "The requested record was not found."}
+            ],
+        )
+    )
+    assert result == (False, "The requested record was not found.")
+    assert len(inspected) == 1
+    assert inspected[0]["kind"] == "native_observation"
+    assert inspected[0]["capabilities"] == ["chat", "history"]
+    assert "No local database or SQL query" in inspected[0]["state_access"]
