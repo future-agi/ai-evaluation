@@ -254,7 +254,8 @@ changes it makes on the values it supplied, and every call is then graded
 `records_match_reference_solution` against them on the final records: first whether each record
 exists (*not done*), then whether its fields match (*done wrong*). Only the final state counts, so a
 retry, a correction mid-call or another route to the same records passes. A wrong solution fails a
-correct agent.
+correct agent. When the proof says a step was recorded without running, no record changes are kept for that
+scenario, so name a judged sub-goal for whether the record carries this caller's values instead.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model

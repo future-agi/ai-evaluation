@@ -74,8 +74,8 @@ These bind every plan, every brief and every suite you save.
    agent is not in.
 
 Before saving, read a sample of the suite with the reviewer's questions in the writing instructions
-("Before you submit") and brief another round for whatever fails them. Then brief the suite reviewer
-once; it flags each scenario whose reference solution or sub-goals go against the agent's rules, and
+("Before you submit") and brief another round for whatever fails them. Then brief the suite reviewer,
+one per batch of up to 50 scenarios; it flags each scenario whose reference solution or sub-goals go against the agent's rules, and
 `suite_progress` lists them for a round of writers to rewrite under the same names.
 
 Keep the code sub-goals few and grouped: one per outcome the caller comes for (a record of the kind

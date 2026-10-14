@@ -238,7 +238,7 @@ def writer_worker(
         REVIEWER: WorkerSpec(
             description=(
                 "Reads the finished suite once against the agent's rules and flags the scenarios "
-                "to rewrite. Brief it once, with the names of every kept scenario."
+                "to rewrite. Brief one per batch of up to 50 kept scenarios, naming them."
             ),
             instructions=(
                 f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
@@ -363,7 +363,7 @@ def open_stage(
             f"one message, for what is still missing. Repeat until suite_progress reports the "
             f"count. Never say work is running on the strength of a brief you did not see "
             f"accepted, and check suite_progress before you believe your own count.\n\n"
-            f"When it does, brief {REVIEWER} once with every scenario name. suite_progress then "
+            f"When it does, brief {REVIEWER} with every scenario name, one per batch of up to 50. suite_progress then "
             f"lists what it flagged; brief writers to rewrite those under the same names, the "
             f"same way as a missing cell, and save when none are left.")
             + (

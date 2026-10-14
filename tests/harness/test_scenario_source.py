@@ -2822,5 +2822,5 @@ def test_the_planner_briefs_one_reviewer_and_rewrites_what_it_flags(tmp_path, mo
     assert offered(planner.spec.workers[stage.REVIEWER]) == set(stage.REVIEWER_TOOLS)
     assert "flag_conflicts" not in offered(planner.spec)
     assert "flag_conflicts" not in offered(planner.spec.workers[stage.WRITER])
-    assert f"brief {stage.REVIEWER} once" in planner.spec.system_prompt
+    assert f"brief {stage.REVIEWER} with every scenario name, one per batch of up to 50" in planner.spec.system_prompt
     assert "rewrite those under the same names" in planner.spec.system_prompt
