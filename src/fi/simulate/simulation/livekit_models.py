@@ -10,6 +10,7 @@ from types import ModuleType
 import aiohttp
 
 try:
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
     from livekit.agents import llm as livekit_llm
     from livekit.agents import stt as livekit_stt
     from livekit.agents import tts as livekit_tts
@@ -446,7 +447,27 @@ _HTTP_PROVIDERS = {"cartesia", "deepgram", "elevenlabs"}
 def build_livekit_llm(config: LLMConfig) -> livekit_llm.LLM:
     provider = config.provider.lower()
     factory = _factory(_LLM_FACTORIES, provider, "LLM")
-    return factory(config)
+    primary = factory(config)
+    fallback_models = [
+        model.strip()
+        for model in os.environ.get("SIMULATOR_LLM_FALLBACK_MODELS", "").split(",")
+        if model.strip() and model.strip() != config.model
+    ]
+    if not fallback_models:
+        return primary
+    # Each fallback runs on the same provider. LiveKit moves to the next model when an attempt
+    # fails or times out before anything was said, so the caller is not left silent; each attempt
+    # gets the time one LLM gets without fallbacks.
+    return livekit_llm.FallbackAdapter(
+        [
+            primary,
+            *(
+                factory(config.model_copy(update={"model": model}))
+                for model in fallback_models
+            ),
+        ],
+        attempt_timeout=DEFAULT_API_CONNECT_OPTIONS.timeout,
+    )
 
 
 async def build_livekit_models(
