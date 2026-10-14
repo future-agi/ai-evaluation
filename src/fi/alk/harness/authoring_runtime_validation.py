@@ -297,7 +297,7 @@ def _generic_candidate_hash(source: Path, authoring: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _fallback_diagnostic(error):
+def _fallback_diagnostic(error, *, authoring: Path | None = None):
     from .diagnostics import HarnessDiagnostic
     from .job import HarnessStage
 
@@ -339,6 +339,17 @@ def _fallback_diagnostic(error):
         stage = HarnessStage.VALIDATING_SCENARIOS
     elif error.phase == "infrastructure":
         code = "process_dependency_timeout"
+        stage = HarnessStage.BUILDING_ENVIRONMENT
+    elif (
+        detail.removeprefix("BundleAuthorError: ")
+        == "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
+        and authoring is not None
+        and (authoring / "world.sqlite").is_file()
+        and json.loads(
+            (authoring / "contract.json").read_text(encoding="utf-8")
+        ).get("data_store") is None
+    ):
+        code = "generated_storage_declaration_missing"
         stage = HarnessStage.BUILDING_ENVIRONMENT
     elif error.phase == "runtime" or _looks_like_runtime_plan_failure(normalized):
         code = "generated_runtime_plan_invalid"
@@ -1045,6 +1056,54 @@ async def validate_and_repair(
 
             if phase == "environment":
                 artifact_root = authoring / "generic-harness"
+                if generic and {item.code for item in _active_repair_diagnostics} == {
+                    "generated_storage_declaration_missing"
+                }:
+                    from .cli import _understand
+                    from .contract import AgentContract
+
+                    contract_path = authoring / "contract.json"
+                    contract = AgentContract.model_validate_json(
+                        contract_path.read_text(encoding="utf-8")
+                    )
+                    if contract.data_store is not None:
+                        return 1
+                    with tempfile.TemporaryDirectory(prefix="alk-storage-repair-") as candidate_dir:
+                        status = await _understand(
+                            argparse.Namespace(
+                                kind="repo",
+                                name=source.name,
+                                path=str(source),
+                                out=candidate_dir,
+                                interactive=False,
+                                job=job,
+                                guidance=[
+                                    guidance,
+                                    (
+                                        "Inspect source to recover the missing data_store declaration. "
+                                        "Record explicit filesystem, in_memory, none, or database storage "
+                                        "only when source supports it. Do not invent a schema or change "
+                                        "source behavior. Only data_store will be promoted. Current contract:\n"
+                                        + contract.model_dump_json(indent=2)
+                                    ),
+                                ],
+                            )
+                        )
+                        candidate_path = Path(candidate_dir) / "contract.json"
+                        if status != 0 or not candidate_path.is_file():
+                            return 1
+                        candidate = AgentContract.model_validate_json(
+                            candidate_path.read_text(encoding="utf-8")
+                        )
+                        if candidate.data_store is None or not candidate.data_store.kind.strip():
+                            return 1
+                        payload = contract.model_dump()
+                        payload["data_store"] = candidate.data_store.model_dump()
+                        repaired = AgentContract.model_validate(payload)
+                        contract_path.write_text(
+                            repaired.model_dump_json(indent=2) + "\n", encoding="utf-8"
+                        )
+                    return 0
                 if generic and _needs_runtime_plan_repair(_active_repair_diagnostics):
                     from .contract import AgentContract
                     from .runtime_repair import request_runtime_plan_patch
@@ -1136,7 +1195,9 @@ async def validate_and_repair(
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
-                diagnostics = exc.diagnostics or (_fallback_diagnostic(exc),)
+                diagnostics = exc.diagnostics or (
+                    _fallback_diagnostic(exc, authoring=authoring),
+                )
                 # The repair history deliberately fingerprints diagnostics without persisting
                 # their potentially high-cardinality text. Keep the redacted evidence visible in
                 # the guest log as well, otherwise a bounded repair can appear to hang while the

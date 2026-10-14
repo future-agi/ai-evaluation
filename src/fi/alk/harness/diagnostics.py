@@ -148,6 +148,11 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.AUTHORING,
             repair_strategy="regenerate_setup_artifact",
         ),
+        "generated_storage_declaration_missing": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+            repair_strategy="inspect_repository_and_declare_storage",
+        ),
         "generated_runtime_plan_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,
