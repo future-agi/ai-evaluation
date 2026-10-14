@@ -25,6 +25,7 @@ from fi.alk.harness.certification import (
     RuntimeValidationEvidence,
 )
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
 from fi.alk.harness.diagnostics import HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
 from fi.alk.harness.repair_controller import (
@@ -708,7 +709,12 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
     provider_type = process_runtime.ProcessRuntimeProvider
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
-    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", lambda **kwargs: object())
+    monkeypatch.setattr(
+        bundle_author_v2, "author_bundle_v2",
+        lambda **kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        )),
+    )
     monkeypatch.setattr(
         process_preflight, "preflight_bundle", lambda *args, **kwargs: None
     )
@@ -827,7 +833,9 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        ))
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -957,7 +965,9 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        ))
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -1067,7 +1077,9 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
     monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(hosted_entrypoint, "ProcessWorldFactory", Factory)
     monkeypatch.setattr(
-        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: object()
+        bundle_author_v2, "author_bundle_v2", lambda **_kwargs: SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+        ))
     )
     monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *_a, **_k: None)
     monkeypatch.setattr(

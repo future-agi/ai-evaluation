@@ -7,6 +7,7 @@ import pytest
 
 from fi.alk.harness import local_certified_runtime as local
 from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.bundle_v2 import RuntimeKindV2
 from fi.alk.harness.hosted_scheduler import ReceiptFailure, ResultReceipt
 from fi.alk.harness.process_runtime import (
     ProcessRuntimeProvider,
@@ -37,7 +38,7 @@ def test_local_execution_uses_selected_process_identity(tmp_path, monkeypatch, f
         return None
 
     monkeypatch.setattr(local, "validate_and_repair", validated)
-    monkeypatch.setattr(local, "load_bundle_v2", lambda _: object())
+    monkeypatch.setattr(local, "load_bundle_v2", lambda _: SimpleNamespace(runtime=SimpleNamespace(kind=RuntimeKindV2.PROCESS)))
     monkeypatch.setattr(local, "_make_local_seed_files_readable", lambda _: None)
 
     class ObservedIdentity(Exception):
@@ -70,7 +71,7 @@ def test_execution_hands_declared_resources_to_admission_and_closes_failed_start
         return None
 
     monkeypatch.setattr(local, "validate_and_repair", validated)
-    monkeypatch.setattr(local, "load_bundle_v2", lambda _: object())
+    monkeypatch.setattr(local, "load_bundle_v2", lambda _: SimpleNamespace(runtime=SimpleNamespace(kind=RuntimeKindV2.PROCESS)))
     monkeypatch.setattr(local, "_make_local_seed_files_readable", lambda _: None)
     events = []
 
@@ -145,7 +146,7 @@ def test_local_run_preserves_scenario_errors_and_evidence(
 
     monkeypatch.setattr(local, "validate_and_repair", validated)
     monkeypatch.setattr(local, "load_bundle_v2", lambda _: SimpleNamespace(
-        runtime=SimpleNamespace(evidence_seam=None)
+        runtime=SimpleNamespace(evidence_seam=None, kind=RuntimeKindV2.PROCESS)
     ))
     monkeypatch.setattr(local, "_make_local_seed_files_readable", lambda _: None)
     monkeypatch.setattr(local, "WorldPool", Pool)
@@ -173,3 +174,40 @@ def test_local_run_preserves_scenario_errors_and_evidence(
     assert json.loads((run_root / "run.json").read_text())["receipts"] == [expected]
     assert json.loads((run_root / "scenario-1" / "result.json").read_text()) == expected
     assert events == ["started", "closed"]
+
+
+def test_compose_execution_receives_only_target_credentials(tmp_path, monkeypatch, job):
+    from fi.alk.harness import compose_integration
+    monkeypatch.delenv("ALK_SANDBOX_UPLOAD_ROOT", raising=False)
+    raw = job.model_dump()
+    raw["agent"]["secret_refs"] = {
+        alias: {"manager": "env", "key": alias, "purpose": purpose}
+        for alias, purpose in {
+            "TARGET": "target_provider", "SIMULATOR": "simulator_provider",
+            "CHECKOUT": "source_checkout",
+        }.items()
+    }
+    job = HarnessJob.model_validate(raw)
+    monkeypatch.setattr(local, "runtime_configuration_value", lambda alias: alias + "-value")
+    authoring = tmp_path / "authoring"
+    (authoring / "generic-harness" / "certified-bundle").mkdir(parents=True)
+
+    async def validated(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(local, "validate_and_repair", validated)
+    monkeypatch.setattr(local, "_make_local_seed_files_readable", lambda _: None)
+    monkeypatch.setattr(local, "load_bundle_v2", lambda _: SimpleNamespace(
+        runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE)
+    ))
+
+    class ObservedConfiguration(Exception):
+        pass
+
+    def provider(values, artifact_root):
+        assert values == {"TARGET": "TARGET-value"}
+        raise ObservedConfiguration
+
+    monkeypatch.setattr(compose_integration, "provider", provider)
+    with pytest.raises(ObservedConfiguration):
+        asyncio.run(local.run_local_certified(job, source=tmp_path, authoring=authoring))

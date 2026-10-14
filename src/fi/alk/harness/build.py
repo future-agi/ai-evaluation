@@ -26,11 +26,32 @@ from .world.tools import WORLD_SERVER, world_tools
 SKILL = "build-environment"
 
 
+def uses_native_runtime(contract: AgentContract, source_root: str) -> bool:
+    from .compose_integration import enabled
+    from .runtime_selection import ComposeSelection, select_runtime
+
+    from .contract import runtime_public_environment
+
+    if not source_root or not contract.runtime or not enabled():
+        return False
+    runtime = contract.runtime.model_dump()
+    return isinstance(
+        select_runtime(
+            Path(source_root),
+            runtime,
+            public_environment=runtime_public_environment(runtime),
+            validate_environment_dependencies=False,
+        ),
+        ComposeSelection,
+    )
+
+
 def blockers(
     contract: AgentContract,
     source_root: str = "",
     *,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> list[str]:
     """Reasons the real agent implementation cannot be put in a test environment.
 
@@ -44,6 +65,8 @@ def blockers(
     # This exemption is intentionally explicit and is never inferred for repository-backed jobs.
     if external_runtime:
         return []
+    if native_runtime:
+        return [] if source_root else ["native runtime requires the submitted source path"]
 
     problems: list[str] = []
     if contract.tools and not source_root:
@@ -97,11 +120,13 @@ def require_buildable(
     source_root: str = "",
     *,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> None:
     problems = blockers(
         contract,
         source_root,
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     if problems:
         raise RuntimeError(
@@ -159,8 +184,10 @@ def open_stage(
     max_turns: int = 0,
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
+    native_runtime = native_runtime or uses_native_runtime(contract, source_root)
     destination = out or artifact_dir(contract.agent)
     from .provision import ProvisionedEnvironment
 
@@ -232,6 +259,18 @@ def open_stage(
                 else "one truthful service-backed sequence, check_world, and save_world."
             )
         )
+    elif native_runtime:
+        environment_note = (
+            "\nNative Compose runtime. Author declarations only. Do not create schema, seed a "
+            "shadow database, import tools, or execute reference calls locally. Preserve "
+            "deterministic checks against actual native tool results or world.request responses. "
+            "Scenario setup/ready must use the real API through world.request(capability, "
+            "method, relative_path, json=payload), using capability target_http for the chat service. GET/HEAD are available to checks; mutation "
+            "is allowed only in setup. No secret access or redirects. Local proof is DEFERRED; "
+            "live setup, ready and chat ingress must pass before execution. Fixture values "
+            "must be declared ahead of time; setup cannot update simulator fixture slots. "
+            "Save the simulator prompt and sub-goals without manufacturing state."
+        )
     elif external_runtime:
         environment_note = (
             "\n\n## Existing external provider runtime\n\n"
@@ -266,6 +305,7 @@ def open_stage(
         source_root=source_root,
         deferred_runtime=deferred_runtime,
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     spec = SessionSpec(
         system_prompt=(
@@ -295,7 +335,12 @@ def opening(
     provisioned: bool = False,
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> str:
+    if native_runtime:
+        return (f"Declare native runtime tests for {contract.agent!r}. Do not seed or replay "
+                "a local world. Add deterministic native response checks and a simulator prompt, "
+                "then check_world and save_world. Live fixture and chat validation is mandatory.")
     if provisioning():
         return (
             f"Provision the environment for {contract.agent!r}.\n\n"
@@ -362,11 +407,12 @@ async def build(
     max_turns: int = 0,
 ) -> Path | None:
     """Run the stage start to finish. Returns where the world was written, or None."""
-    require_buildable(contract, source_root)
+    native_runtime = uses_native_runtime(contract, source_root)
+    require_buildable(contract, source_root, native_runtime=native_runtime)
     destination = out or artifact_dir(contract.agent)
     from .provision import provision_if_present
 
-    provisioned = await asyncio.to_thread(
+    provisioned = None if native_runtime else await asyncio.to_thread(
         provision_if_present, source_root, destination, contract
     )
     stage, destination = open_stage(
@@ -375,10 +421,11 @@ async def build(
         ask=ask,
         source_root=source_root,
         max_turns=max_turns,
+        native_runtime=native_runtime,
     )
     async with stage:
         await stage.say(
-            opening(contract, provisioned=provisioned is not None), on_event=on_event
+            opening(contract, provisioned=provisioned is not None, native_runtime=native_runtime), on_event=on_event
         )
         for follow_up in follow_ups or []:
             await stage.say(follow_up, on_event=on_event)

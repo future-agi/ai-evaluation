@@ -77,18 +77,35 @@ class _RuntimeSubmission(BaseModel):
     summary: str = Field(min_length=1, max_length=1000)
 
 
+def _select_repair_runtime(root: Path, runtime: Runtime):
+    from .bundle_author_v2 import _declared_runtime_environment
+    from .compose_integration import enabled
+    from .contract import runtime_public_environment
+    from .runtime_selection import select_runtime
+
+    native_compose = enabled() and runtime.execution != "native"
+    environment = (
+        runtime_public_environment(runtime.model_dump())
+        if native_compose
+        else _declared_runtime_environment(root)
+    )
+    return select_runtime(
+        root,
+        runtime,
+        public_environment=environment,
+        validate_environment_dependencies=not native_compose,
+    )
+
+
 def _dependency_root(root: Path, runtime: Runtime) -> Path:
     from .bundle_author_v2 import (
-        _declared_runtime_environment,
         _discover_callback_entrypoint,
         _discovered_python_component,
         _runtime_component,
     )
-    from .runtime_selection import ComposeSelection, select_runtime
+    from .runtime_selection import ComposeSelection
 
-    selected = select_runtime(
-        root, runtime, public_environment=_declared_runtime_environment(root)
-    )
+    selected = _select_repair_runtime(root, runtime)
     if isinstance(selected, ComposeSelection):
         source_services = [
             name for name, service in selected.services.items() if service.get("build")
@@ -272,12 +289,7 @@ def validate_runtime_plan_patch(
         ):
             raise ValueError(f"runtime_repair_{label}_missing")
 
-    from .bundle_author_v2 import _declared_runtime_environment
-    from .runtime_selection import select_runtime
-
-    select_runtime(
-        root, runtime, public_environment=_declared_runtime_environment(root)
-    )
+    _select_repair_runtime(root, runtime)
     from .generated_runtime import (
         _context_excludes,
         local_editable_install_operands,

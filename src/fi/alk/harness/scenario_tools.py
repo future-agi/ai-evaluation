@@ -49,7 +49,7 @@ from .folder import (
     write_folder,
     write_index,
 )
-from .prove import play_reference_step, prepared, prove
+from .prove import native_runtime, native_source_problem, play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -79,6 +79,7 @@ from .tools import brief, schema
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
+
 
 SCENARIO_SERVER = "scenarios"
 
@@ -157,7 +158,7 @@ def _no_longer_hold(
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             failed.append((scenario.name, type(exc).__name__))
             continue
-        if not proof.holds:
+        if not proof.holds and not (proof.deferred and not proof.broken):
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
                 if not proof.solvable
@@ -801,25 +802,35 @@ def accept_scenario(
             place_for(scenario.name, scenario.fixture, scenario.instruction) or True
         )
 
-    # Read against the world this scenario actually runs in, so a setup that creates the table
-    # a check reads is not reported as referring to something that does not exist.
-    trial, _applied, _ready = prepared(scenario, world_root)
-    try:
+    native = native_runtime(world_root)
+    if native:
         problems = validate_scenario(
-            scenario,
-            catalogue,
-            trial.state(),
-            simulator_prompt,
-            allow_empty_solution=allow_empty_solution,
-            spoken=spoken,
+            scenario, catalogue, {}, simulator_prompt,
+            allow_empty_solution=True, spoken=spoken,
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-        problems.extend(_credentials_the_world_lacks(scenario, trial))
-        problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-    finally:
-        trial.close()
+    else:
+        # Read against the world this scenario actually runs in, so a setup that creates the table
+        # a check reads is not reported as referring to something that does not exist.
+        trial, _applied, _ready = prepared(scenario, world_root)
+        try:
+            problems = validate_scenario(
+                scenario,
+                catalogue,
+                trial.state(),
+                simulator_prompt,
+                allow_empty_solution=allow_empty_solution,
+                spoken=spoken,
+            )
+            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+            problems.extend(_credentials_the_world_lacks(scenario, trial))
+            problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+            problems.extend(_overlay_asserts_nothing(scenario, catalogue))
+            problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+        finally:
+            trial.close()
 
     if problems:
         return _err(
@@ -832,7 +843,7 @@ def accept_scenario(
         world_root,
         allow_judged_only_with_state=allow_empty_solution,
     )
-    if not proof.holds:
+    if not proof.holds and not (proof.deferred and not proof.broken):
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
         # check fail here, and the exception alone does not say which collections are mappings and
@@ -893,6 +904,7 @@ def accept_scenario(
         else ""
     )
     proof_summary = (
+        proof.why() if proof.deferred else
         "The fixture is ready and its behavioral sub-goals will be judged from the transcript; "
         "this target has no environment tool trajectory to replay."
         if proof.judged_only
@@ -1054,7 +1066,7 @@ def scenario_tools(
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
     refused: dict[tuple[str, int], int] = {}
     external_runtime_target = _is_external_runtime(world_root)
-    tool_free_target = not bool(contract.tools) or external_runtime_target
+    tool_free_target = not bool(contract.tools) or external_runtime_target or native_runtime(world_root)
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -1077,6 +1089,8 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime(world_root):
+            return _ok(world_summary(world_root))
         world = restore(world_root)
         try:
             state = world.state()
@@ -1143,6 +1157,8 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime(world_root):
+            return _err("DEFERRED: native tools and fixtures run only in the live runtime; no local replay exists.")
         # A suite that already holds what was asked for has nothing left to explore.
         if cap() and len(kept) >= cap():
             return _err(
@@ -1225,6 +1241,9 @@ def scenario_tools(
             overlay=str(args.get("overlay") or ""),
         )
         problems = validate_sub_goal(sub_goal)
+        if native_runtime(world_root) and sub_goal.deterministic():
+            if problem := native_source_problem(sub_goal.check, "check"):
+                problems.append(problem)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1534,7 +1553,7 @@ def scenario_tools(
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
-        if args.get("persona") and args.get("fixture"):
+        if not native_runtime(world_root) and args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(
                     [Scenario.model_validate(args)], world_root
@@ -2140,6 +2159,16 @@ def _fields_of(world: Any, collection: str) -> list[str]:
 
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
+    if native_runtime(world_root):
+        return (
+            "NATIVE RUNTIME: no local database or tool replay exists. Write setup(world) using "
+            "world.request(capability, method, relative_path, json=payload) against the real API. "
+            "ready(world) must read and verify the exact fixture. Checks may read GET/HEAD "
+            "responses and actual calls. Local proof is DEFERRED until live validation. "
+            "Do not invent login credentials or fixture IDs; declare fixed values the native "
+            "API accepts and verify them. Setup cannot change simulator fixture slots. "
+            "Existing sub-goals: " + ", ".join(sorted(load_catalogue(world_root).names()))
+        )
     world = restore(world_root)
     try:
         state = world.state()
@@ -2194,6 +2223,8 @@ def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
 def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Scenarios that hand the caller a credential the world does not hold once setup has run."""
     problems: list[str] = []
+    if native_runtime(world_root):
+        return problems
     for scenario in scenarios:
         claimed = _handed_to_the_caller(scenario.fixture)
         if not claimed:
@@ -2247,6 +2278,8 @@ def _words(text: str) -> set[str]:
 def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Callers whose own name is nowhere on the record the agent's lookup will return."""
     problems: list[str] = []
+    if native_runtime(world_root):
+        return problems
     base = None
     for scenario in scenarios:
         pinned = [
