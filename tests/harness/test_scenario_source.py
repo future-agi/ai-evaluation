@@ -2769,3 +2769,58 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     assert writer.index(policy) < writer.index("a scenario coherent in itself")
     assert said.index(policy) < said.index("Before you brief anyone")
 
+
+
+def test_the_suite_review_flags_a_scenario_until_a_writer_rewrites_it(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness import scenario_tools as module
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario import Scenario
+
+    (tmp_path / "manifest.json").write_text("{}")
+    server, kept = module.scenario_tools(AgentContract(agent="a"), tmp_path, tmp_path, wanted=5)
+    kept[:] = [Scenario(name=n, instruction="i", sub_goals=["x"]) for n in ("lost_card", "new_claim")]
+    tools = {spec.name: spec for spec in server.tools}
+    progress = lambda: asyncio.run(tools["suite_progress"].handler({}))["content"][0]["text"]
+
+    said = asyncio.run(
+        tools["flag_conflicts"].handler(
+            {
+                "conflicts": [
+                    {"scenario": "lost_card", "rule": "never ask for the PIN", "why": "step 2 asks for it"},
+                    {"scenario": "made_up", "rule": "r", "why": "w"},
+                ]
+            }
+        )
+    )["content"][0]["text"]
+    assert "1 scenario(s) flagged" in said and "made_up" in said
+    assert "lost_card (never ask for the PIN: step 2 asks for it)" in progress()
+    assert "new_claim (" not in progress()
+
+    monkeypatch.setattr(module, "accept_scenario", lambda *a, **k: {"content": [{"type": "text", "text": "kept"}]})
+    asyncio.run(tools["submit_scenario"].handler({"name": "lost_card", "instruction": "rewritten"}))
+    assert "flagged" not in progress()
+
+
+def test_the_planner_briefs_one_reviewer_and_rewrites_what_it_flags(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness import scenarios as stage
+    from fi.alk.harness.backends import ToolServer, ToolSpec
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.scenario_tools import TOOL_NAMES
+
+    async def handler(args):
+        return {"content": "ok"}
+
+    monkeypatch.setattr(stage, "world_summary", lambda _: "a world")
+    monkeypatch.setattr(stage, "load_skill", lambda *a, **k: "a skill")
+    monkeypatch.setattr(stage, "discovered_skills", lambda **k: "")
+    tools = [ToolSpec(name=n, description=n, input_schema={}, handler=handler) for n in TOOL_NAMES]
+    monkeypatch.setattr(stage, "scenario_tools", lambda *a, **k: (ToolServer(name="s", version="1", tools=tools), []))
+
+    planner, _ = stage.open_stage(AgentContract(agent="a"), out=tmp_path / "s", wanted=20)
+    offered = lambda worker: {t.name for t in worker.servers[stage.SCENARIO_SERVER].tools}
+
+    assert offered(planner.spec.workers[stage.REVIEWER]) == set(stage.REVIEWER_TOOLS)
+    assert "flag_conflicts" not in offered(planner.spec)
+    assert "flag_conflicts" not in offered(planner.spec.workers[stage.WRITER])
+    assert f"brief {stage.REVIEWER} once" in planner.spec.system_prompt
+    assert "rewrite those under the same names" in planner.spec.system_prompt

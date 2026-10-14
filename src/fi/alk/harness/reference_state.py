@@ -139,23 +139,24 @@ def expected_changes(
 def compare(
     expected: dict[str, list[dict[str, Any]]], before: dict[str, Any], after: dict[str, Any]
 ) -> str | None:
-    """None when the call left every expected row; otherwise where it differs, deterministically."""
+    """None when the final records hold every expected row; otherwise, per row, whether it was
+    not done at all or done wrong."""
     actual = changed_rows(before, after)
+    said = []
     for name in sorted(expected):
         candidates = actual.get(name, [])
         for want in expected[name]:
-            stated = ", ".join(f"{field} {value}" for field, value in sorted(want.items()))
             if not candidates:
-                return f"no {name} row added or changed; expected one with {stated}"
+                stated = ", ".join(f"{field} {value}" for field, value in sorted(want.items()))
+                said.append(f"not done: no {name} row added or changed; expected one with {stated}")
+                continue
             best = max(
                 candidates,
                 key=lambda row: sum(_same(value, row.get(field)) for field, value in want.items()),
             )
-            wrong = [
-                f"{field} expected {value}, got {best.get(field)}"
+            said.extend(
+                f"done wrong: {name}.{field} expected {value}, got {best.get(field)}"
                 for field, value in sorted(want.items())
                 if not _same(value, best.get(field))
-            ]
-            if wrong:
-                return f"{name} row: " + "; ".join(wrong)
-    return None
+            )
+    return "; ".join(said) or None

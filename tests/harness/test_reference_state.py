@@ -28,13 +28,13 @@ def test_a_call_leaving_the_same_records_passes_whatever_ids_or_extra_rows():
 def test_a_wrong_value_says_where():
     expected = {"claims": [{"policy": "MM-5590318", "loss_date": "2026-10-11"}]}
     said = compare(expected, BEFORE, _after(policy="MM-5590318", loss_date="2026-10-12"))
-    assert said == "claims row: loss_date expected 2026-10-11, got 2026-10-12"
+    assert said == "done wrong: claims.loss_date expected 2026-10-11, got 2026-10-12"
 
 
 def test_a_missing_row_says_what_was_expected():
     expected = {"claims": [{"policy": "MM-5590318"}]}
     said = compare(expected, BEFORE, {"claims": BEFORE["claims"]})
-    assert said == "no claims row added or changed; expected one with policy MM-5590318"
+    assert said == "not done: no claims row added or changed; expected one with policy MM-5590318"
 
 
 def test_the_final_state_wins_over_a_corrected_mistake():

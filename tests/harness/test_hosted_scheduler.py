@@ -4317,4 +4317,4 @@ def test_a_call_is_graded_on_leaving_the_records_the_reference_solution_leaves()
     assert [g.name for g in right.sub_goals] == ["g", "records_match_reference_solution"]
     wrong = asyncio.run(scenario({"policy": "MM-7", "loss_date": "2026-10-12"}))
     assert wrong.status == "failed"
-    assert wrong.sub_goals[-1].reason == "claims row: loss_date expected 2026-10-11, got 2026-10-12"
+    assert wrong.sub_goals[-1].reason == "done wrong: claims.loss_date expected 2026-10-11, got 2026-10-12"

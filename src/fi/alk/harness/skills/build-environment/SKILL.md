@@ -485,9 +485,10 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
-**Give every outcome a caller comes for its own judged sub-goal**, settled with the values (a record
-changed, a record looked up and told back, a document sent), so a scenario never has to borrow an
-unrelated one to name two.
+**Give every outcome a caller comes for one sub-goal of its own**, never one per tool, field or
+step, so the catalogue stays small and a scenario never has to borrow an unrelated one to name two.
+An outcome that leaves a record (a record created or changed, a document sent) is a code sub-goal;
+one only the caller hears (a record looked up and told back) is judged.
 
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
@@ -500,7 +501,10 @@ behaviour each, named once, so the suite can report how often the agent got that
 **Write the check as code for what holds in every scenario.** A sub-goal is shared by every
 scenario that names it, so its check never knows what this caller asked for. Code settles what is
 true whatever they asked: a forbidden change did not happen, an order went on an account that
-exists, a cancelled record is really cancelled.
+exists, a cancelled record is really cancelled. Read the final records in two layers, in order: did
+it happen (the record exists; return "not done: ..." when not), then was it right in what holds for
+every caller (return "done wrong: ..."). Only the final state counts, so a retry, a correction
+mid-call or another route to the same records passes.
 
 **Code only for what the records settle on their own.** Anything the agent says, a read-back, a
 disclosure, a refusal, an escalation, an explanation, is judged: a check sees that a tool was called,
@@ -528,21 +532,19 @@ happened it holds, because nothing was disclosed or changed, and it accepts ever
 for that step. Demanding the step on its own fails a correct agent whose instructions skip it in
 that situation.
 
-Whether a step was right for this caller, the right time, address, item or amount, depends on what
-they asked, which only the scenario knows. Make that a judged sub-goal: the judge reads what the
-caller came for, the conversation and every action with its arguments, so criteria such as "Pass
-when: the booking the agent made is for the time and place the caller asked for" settle it.
-
-The judge also reads the records left and the scenario's reference solution. A check reads what the
-records show; whether a step was taken, and whether it was right, is a judged sub-goal. Name a check
-for what it checks.
+Whether a record is right for this caller, the right time, address, item or amount, depends on what
+they asked, which only the scenario knows. It is compared through the scenario's reference solution:
+every call is graded `records_match_reference_solution` on whether its final records carry the
+values the solution left, as the caller last corrected them. Never hard-code those values in a check
+or hand them to a judge; the judge keeps what the records cannot show, what was said or read back.
+Name a check for what it checks.
 
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
 situations must not fail an agent that skipped it there.
 
 Use `judged` only where nothing observable settles it, or where what is right depends on what this
 caller asked: whether a refusal was explained, whether a price was invented, whether the values
-the agent used were the ones this caller gave. (An agent reached only by conversation has no world
+the agent said back were the ones this caller gave. (An agent reached only by conversation has no world
 and no calls to read: then every sub-goal is judged, and the rules below matter all the more.)
 
 A quality of every call, such as turn length, tone or varied phrasing, is not a sub-goal: the suite

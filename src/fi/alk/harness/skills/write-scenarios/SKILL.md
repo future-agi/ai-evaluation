@@ -248,6 +248,14 @@ step is not named here. Never add a step the rules skip just so a sub-goal's che
 is wrong for this situation, so leave it off the scenario. `try_calls` shows what the world accepts, not what
 the agent was told to do.
 
+**The solution is also the answer key.** Write it complete to the final records, with the caller's
+values as last corrected and nothing the rules skip. The proof replays it once and keeps the record
+changes it makes on the values it supplied, and every call is then graded
+`records_match_reference_solution` against them on the final records: first whether each record
+exists (*not done*), then whether its fields match (*done wrong*). Only the final state counts, so a
+retry, a correction mid-call or another route to the same records passes. A wrong solution fails a
+correct agent.
+
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
 supposedly chose. Put them in `environment_arguments` on the same step, which the proof passes to the
@@ -291,8 +299,9 @@ so the call log and the world both hold the evidence, and the judge reads both a
 conversation: name the values in its criteria, and add a check only for what the records settle on
 their own. One suite of sixty left its closing status lookup to
 a judge and nothing else asserted it, which is the same hole as naming no sub-goal for it at all.
-A check reads what the records show; whether the step was right for this caller (their record,
-their values, as last corrected) is a judged sub-goal named alongside it.
+A check reads generic facts about the records; whether they carry this caller's values (as last
+corrected) is compared through your reference solution, never hard-coded into a check or left to a
+judge.
 
 The two failures look opposite and are both real. One suite defined thirty-nine sub-goals and used
 twenty-six of them exactly once: a bespoke check wherever a shared one would have done, so nothing
@@ -379,10 +388,14 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
 - **Deterministic.** The sub-goal carries a `check`: Python receiving the world as the run left it and
   every call the agent made with its arguments, returning nothing if it held or a sentence saying
   what was wrong. It is shared by every scenario naming it, so it settles what holds whatever the
-  caller asked.
+  caller asked. Keep them few: one per outcome the caller came for (a record of the kind the task
+  creates or changes), never one per tool, field or step. Check the final records in two layers, in
+  order: did it happen (the record exists), then was it right in what holds for every caller (its
+  status, what it links to). Per-scenario values come only from the reference solution.
 - **Judged.** The sub-goal carries no check, so a model hears the call and decides. Use it for what
   nothing observable can settle, whether a refusal was explained kindly, whether a number was
-  invented, and for whether a step matched what this caller asked: the right time, place or amount.
+  invented, and for what the records cannot show: what was said or read back, a refusal, an
+  escalation. Never name a judged sub-goal for a record outcome; the records settle it.
 
 Use a check only for a change the call must leave in the records, made as it should be. Whether a
 forbidden thing happened is judged from the records: a check that holds on an untouched world grades
@@ -603,6 +616,8 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 21. Does the instruction say when the person gives in, cooperates, acknowledges or hangs up?
 22. On a spoken call, is a noise place that fits where the person is named, unless the brief dealt a
     quiet line?
+23. Does every step of the solution, and every sub-goal named, follow the agent's rules for this
+    situation (no step they skip, no sub-goal they forbid)?
 
 ## The three gates
 

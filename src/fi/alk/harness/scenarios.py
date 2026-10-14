@@ -63,6 +63,7 @@ WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
 WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 # Withheld from a loop that hands the suite out.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
+REVIEWER_TOOLS = ("inspect_world", "inspect_scenario", "flag_conflicts")
 # Above this, the loop hands the suite out instead of writing it. Zero: always.
 HANDS_OUT_ABOVE = int(os.environ.get("ALK_HARNESS_HANDS_OUT_ABOVE", "0") or 0)
 
@@ -92,6 +93,7 @@ def turns_for(wanted: int) -> int:
 
 # Underscores: one backend sanitises worker names into identifiers, the other does not.
 WRITER = "scenario_writer"
+REVIEWER = "suite_reviewer"
 
 
 def writer_worker(
@@ -101,7 +103,7 @@ def writer_worker(
     budget: int,
     authoring_guidance: str = "",
 ) -> dict[str, WorkerSpec]:
-    """The worker this stage may run to write part of the suite."""
+    """The workers this stage may run: writers for parts of the suite, and one reviewer of it."""
     return {
         WRITER: WorkerSpec(
             description=(
@@ -232,7 +234,34 @@ def writer_worker(
             max_turns=min(WRITER_TURNS, budget),
             # Empty inherits the parent's model.
             model=writer_model(),
-        )
+        ),
+        REVIEWER: WorkerSpec(
+            description=(
+                "Reads the finished suite once against the agent's rules and flags the scenarios "
+                "to rewrite. Brief it once, with the names of every kept scenario."
+            ),
+            instructions=(
+                f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
+                "\n\n## Your job\n\nRead every scenario your brief names with inspect_scenario, "
+                "and the sub-goal catalogue with inspect_world. For each, read its reference "
+                "solution and its sub-goals against what the agent's instructions and hard "
+                "constraints say for that situation. Flag it when a solution step is one the "
+                "rules skip or forbid here, when a sub-goal demands such a step or forbids one "
+                "they require, or when it names a code sub-goal checking one tool, field or step "
+                "where the catalogue has one for the outcome the caller came for. Quote the rule. "
+                "Flag nothing on taste: a scenario the rules allow stays. Then call "
+                "flag_conflicts once with every entry, empty if none, and report the count."
+            ),
+            servers={
+                SCENARIO_SERVER: ToolServer(
+                    name=server.name,
+                    version=server.version,
+                    tools=[spec for spec in server.tools if spec.name in REVIEWER_TOOLS],
+                )
+            },
+            max_turns=min(WRITER_TURNS, budget),
+            model=writer_model(),
+        ),
     }
 
 
@@ -269,7 +298,7 @@ def open_stage(
         tools=[
             one
             for one in server.tools
-            if not hands_out or one.name not in WRITES_A_SCENARIO
+            if one.name != "flag_conflicts" and (not hands_out or one.name not in WRITES_A_SCENARIO)
         ],
     )
     spec = SessionSpec(
@@ -333,7 +362,10 @@ def open_stage(
             f"empty without returning a scenario body. The next round goes out the same way, in "
             f"one message, for what is still missing. Repeat until suite_progress reports the "
             f"count. Never say work is running on the strength of a brief you did not see "
-            f"accepted, and check suite_progress before you believe your own count.")
+            f"accepted, and check suite_progress before you believe your own count.\n\n"
+            f"When it does, brief {REVIEWER} once with every scenario name. suite_progress then "
+            f"lists what it flagged; brief writers to rewrite those under the same names, the "
+            f"same way as a missing cell, and save when none are left.")
             + (
                 f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
                 f"including the calls your writers make: a writer reads the world in its own "
