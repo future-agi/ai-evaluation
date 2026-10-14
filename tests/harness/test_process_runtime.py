@@ -29,13 +29,16 @@ style elsewhere in the harness suite.
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
 import types
+import venv
 from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Callable
@@ -52,13 +55,22 @@ from fi.alk.harness.bundle_v2 import (
     SourceProcess,
 )
 from fi.alk.harness import process_runtime as pr
-from fi.alk.harness.job import FailureDomain
+from fi.alk.harness.job import (
+    AgentConnection,
+    ExecutionMode,
+    FailureDomain,
+    HarnessJob,
+    RepositorySource,
+    SourceKind,
+    SourceVisibility,
+)
 from fi.alk.harness.provider_lifecycle import (
     ProviderCleanupReceipt,
     ProviderProvisionReceipt,
     ProviderResource,
     ProviderTarget,
 )
+from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
 # --- shared manifest builder -----------------------------------------------------------------
 #
@@ -8818,3 +8830,747 @@ def test_every_world_can_run_the_environment_its_build_created(tmp_path: Path) -
     for cwd in cwds:
         assert (cwd / ".venv" / "bin" / "serve").is_file()
         assert (cwd / "main.py").is_file()
+
+
+# =================================================================================================
+# The platform's per-run environment for customer code (`job.json` `metadata`).
+#
+# The platform decides at launch whether a run exports its traces and writes the answer into
+# job.json; the guest only applies it. No database anywhere below: every spawn is a fake runner,
+# and the few real interpreters only run a handful of lines of Python.
+# =================================================================================================
+
+_MARK = (
+    "project_name=Our%20Agent,fi.simulation.origin=simulation,"
+    "fi.simulation.job_id=job-1,fi.simulation.run_id=run-1"
+)
+_EXPORT = {"OTEL_RESOURCE_ATTRIBUTES": _MARK, "FI_SIMULATION_EXPORT": "our_keys"}
+_LIVEKIT_HOOK = Path(pr.__file__).with_name("livekit_tool_trace_bootstrap.py")
+_MARK_HOOK = Path(pr.__file__).with_name("simulation_mark_bootstrap.py")
+
+
+def _spawn(
+    root: Path,
+    process: SourceProcess,
+    customer_code_environment: dict[str, str] | None = None,
+    *,
+    secret_values: dict[str, str] | None = None,
+    secret_purposes: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Spawn `process` once under `root` with a fake runner; returns what the runner was handed
+    (`argv`, `cwd`, `env`) and the process's `world_dir`."""
+    build_dir = root / "build" / process.name
+    build_dir.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, Any] = {}
+
+    def fake_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        captured.update(argv=argv, cwd=Path(cwd), env=env)
+        return FakeHandle()
+
+    world_dir = root / "worlds" / "w0" / process.name
+    pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=world_dir,
+        world_index=0,
+        port_plan=_solo_port_plan(process.name),
+        configuration_addresses={},
+        secret_values=secret_values or {},
+        secret_purposes=secret_purposes or {},
+        runner=fake_runner,
+        customer_code_environment=customer_code_environment,
+    )
+    captured["world_dir"] = world_dir
+    return captured
+
+
+def _sdk_reads(variable: str) -> dict[str, Any]:
+    """The attributes OpenTelemetry's own environment detector makes of `variable`."""
+    from opentelemetry.sdk.resources import OTELResourceDetector
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("OTEL_RESOURCE_ATTRIBUTES", variable)
+        patch.delenv("OTEL_SERVICE_NAME", raising=False)
+        return dict(OTELResourceDetector().detect().attributes)
+
+
+def _hosted_job(secret_refs: dict[str, SecretRef]) -> HarnessJob:
+    return HarnessJob(
+        job_id="job-1",
+        run_id="run-1",
+        execution=ExecutionMode.HOSTED,
+        source=RepositorySource(
+            kind=SourceKind.GITHUB,
+            repository="org/repo",
+            visibility=SourceVisibility.PUBLIC,
+            commit_sha="a" * 40,
+        ),
+        agent=AgentConnection(connector="vapi", secret_refs=secret_refs),
+        scenario_count=2,
+        seed=1234,
+        runtime=RuntimeRequirements(isolation=RuntimeIsolation.DEDICATED_VM, cpu_units=1),
+    )
+
+
+def test_mark_appends_to_the_customers_resource_attributes_and_skips_build(
+    tmp_path: Path,
+) -> None:
+    theirs = "service.name=cust,deployment.environment=prod"
+    process = _source_process(
+        name="agent", environment={"OTEL_RESOURCE_ATTRIBUTES": theirs}
+    )
+
+    # Their value first, then ours whole: OpenTelemetry reads left to right, so ours wins a
+    # shared key and the variable is never parsed or re-ordered here.
+    captured = _spawn(tmp_path / "with-theirs", process, _EXPORT)
+    assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == f"{theirs},{_MARK}"
+
+    # No value of their own (or only blanks): ours alone, with no stray comma.
+    for index, environment in enumerate(
+        ({}, {"OTEL_RESOURCE_ATTRIBUTES": "   "})
+    ):
+        bare = _source_process(name="agent", environment=environment)
+        captured = _spawn(tmp_path / f"bare-{index}", bare, _EXPORT)
+        assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == _MARK
+
+    # A dict without the name leaves their value exactly as rendered.
+    captured = _spawn(
+        tmp_path / "no-name", process, {"FI_SIMULATION_EXPORT": "customer_keys"}
+    )
+    assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == theirs
+
+
+def test_export_environment_order_our_project_name_wins_and_mark_wins(
+    tmp_path: Path,
+) -> None:
+    theirs = (
+        "project_name=Their%20Project,service.name=cust,fi.simulation.origin=forged"
+    )
+    process = _source_process(
+        name="agent",
+        environment={
+            "OTEL_RESOURCE_ATTRIBUTES": theirs,
+            # A sample the authoring model copied from an `.env.example`.
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:4318/v1/traces",
+            "FI_BASE_URL": "https://their.example",
+        },
+    )
+    export = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+        "FI_BASE_URL": "https://collector.example",
+    }
+
+    env = _spawn(tmp_path / "our-keys", process, export)["env"]
+
+    # Their pairs, then our project name, then the mark: read the way OpenTelemetry reads it.
+    assert env["OTEL_RESOURCE_ATTRIBUTES"] == f"{theirs},{_MARK}"
+    seen = _sdk_reads(env["OTEL_RESOURCE_ATTRIBUTES"])
+    assert seen["project_name"] == "Our Agent"
+    assert seen["fi.simulation.origin"] == "simulation"
+    assert seen["fi.simulation.job_id"] == "job-1"
+    assert seen["fi.simulation.run_id"] == "run-1"
+    assert seen["service.name"] == "cust"
+
+    # Every other name replaces the rendered value; the generic endpoint was not named, so it
+    # stays and loses to the traces-only name by OpenTelemetry's own precedence.
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://localhost:4318"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+    assert env["FI_BASE_URL"] == "https://collector.example"
+    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+
+    # Customer keys: the dict sets no base URL and no endpoint, so theirs survive.
+    env = _spawn(
+        tmp_path / "customer-keys",
+        process,
+        {**_EXPORT, "FI_SIMULATION_EXPORT": "customer_keys"},
+    )["env"]
+    assert env["FI_BASE_URL"] == "https://their.example"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://localhost:4318/v1/traces"
+    )
+    assert env["FI_SIMULATION_EXPORT"] == "customer_keys"
+
+    # A name they never rendered is simply added.
+    env = _spawn(tmp_path / "unrendered", _source_process(name="agent"), export)["env"]
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+
+
+def test_observability_export_secrets_reach_every_customer_process_and_no_build_step(
+    tmp_path: Path,
+) -> None:
+    headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+    secret_values = {
+        headers: "X-Api-Key=export-key,X-Secret-Key=export-secret",
+        "FI_API_KEY": "export-key",
+        "LIVEKIT_API_KEY": "customer-livekit",
+        "SIMULATOR_DEEPGRAM_API_KEY": "simulator-only",
+        "CHECKOUT_TOKEN": "gateway-only",
+    }
+    secret_purposes = {
+        headers: "observability_export",
+        "FI_API_KEY": "observability_export",
+        "LIVEKIT_API_KEY": "target_provider",
+        "SIMULATOR_DEEPGRAM_API_KEY": "simulator_provider",
+        "CHECKOUT_TOKEN": "source_checkout",
+    }
+    claiming = _source_process(
+        name="agent", secret_purposes=[SecretPurpose.TARGET_PROVIDER]
+    )
+    claiming_nothing = _source_process(name="tools-api")
+
+    for process in (claiming, claiming_nothing):
+        injected = pr.select_process_secrets(
+            process, secret_values=secret_values, secret_purposes=secret_purposes
+        )
+        # Claimed or not, the export pair is in; the other gateway-only purposes stay out.
+        assert injected[headers] == secret_values[headers]
+        assert injected["FI_API_KEY"] == "export-key"
+        assert "SIMULATOR_DEEPGRAM_API_KEY" not in injected
+        assert "CHECKOUT_TOKEN" not in injected
+    assert "LIVEKIT_API_KEY" in pr.select_process_secrets(
+        claiming, secret_values=secret_values, secret_purposes=secret_purposes
+    )
+    assert "LIVEKIT_API_KEY" not in pr.select_process_secrets(
+        claiming_nothing, secret_values=secret_values, secret_purposes=secret_purposes
+    )
+
+    for process in (claiming, claiming_nothing):
+        env = _spawn(
+            tmp_path / process.name,
+            process,
+            secret_values=secret_values,
+            secret_purposes=secret_purposes,
+        )["env"]
+        assert env[headers] == secret_values[headers]
+        assert env["FI_API_KEY"] == "export-key"
+        assert "SIMULATOR_DEEPGRAM_API_KEY" not in env
+        assert "CHECKOUT_TOKEN" not in env
+        assert ("LIVEKIT_API_KEY" in env) is (process is claiming)
+
+    # The job model accepts the purpose, with the platform's own manager only (as for the
+    # simulator's keys), and refuses the customer's vault.
+    alias = headers
+    job = _hosted_job(
+        {
+            alias: SecretRef(
+                manager="platform-config", key=alias, purpose="observability_export"
+            )
+        }
+    )
+    assert job.agent.secret_refs[alias].purpose == "observability_export"
+    with pytest.raises(ValueError, match="hosted_secret_manager_unsupported"):
+        _hosted_job(
+            {
+                alias: SecretRef(
+                    manager="platform-vault", key=alias, purpose="observability_export"
+                )
+            }
+        )
+
+
+def _is_the_small_mark_hook(source: str) -> bool:
+    """Comments aside, the file is exactly the guarded import and install of the mark module."""
+    expected = (
+        "try:\n"
+        "    import simulation_mark_bootstrap\n"
+        "    simulation_mark_bootstrap.install()\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+    return ast.dump(ast.parse(source)) == ast.dump(ast.parse(expected))
+
+
+def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporting_process_and_no_build_step(
+    tmp_path: Path,
+) -> None:
+    # Either mode of the platform's decision places the hook, for every customer process.
+    for mode in ("our_keys", "customer_keys"):
+        for name in ("agent", "tools-api"):
+            process = _source_process(
+                name=name, environment={"PYTHONPATH": "/customer/lib"}
+            )
+            captured = _spawn(
+                tmp_path / mode / name, process, {**_EXPORT, "FI_SIMULATION_EXPORT": mode}
+            )
+            world = captured["world_dir"]
+            assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+                str(world),
+                "/customer/lib",
+            ]
+            assert sorted(path.name for path in world.iterdir()) == [
+                "simulation_mark_bootstrap.py",
+                "sitecustomize.py",
+            ]
+            assert (
+                world / "simulation_mark_bootstrap.py"
+            ).read_bytes() == _MARK_HOOK.read_bytes()
+            assert _is_the_small_mark_hook((world / "sitecustomize.py").read_text())
+            for written in world.iterdir():
+                assert stat.S_IMODE(written.stat().st_mode) == 0o444
+
+    # No mode, no hook and no path change: not for an empty dict, not for the customer's own
+    # configuration (the platform set the mark alone), not for any name but the mode's.
+    process = _source_process(name="agent")
+    baseline = _spawn(tmp_path / "no-mode", process)["env"]
+    for environment in (
+        {},
+        None,
+        {"OTEL_RESOURCE_ATTRIBUTES": "fi.simulation.origin=simulation"},
+        {"FI_BASE_URL": "https://collector.example"},
+    ):
+        captured = _spawn(tmp_path / "no-mode", process, environment)
+        assert list(captured["world_dir"].iterdir()) == []
+        assert "PYTHONPATH" not in captured["env"]
+    # An empty dict leaves the environment exactly as it is without one, and "no decision"
+    # adds no name of the feature however it is spelled.
+    assert _spawn(tmp_path / "no-mode", process, {})["env"] == baseline
+    for environment in ({}, None):
+        captured = _spawn(tmp_path / "no-mode", process, environment)
+        assert not [
+            name
+            for name in captured["env"]
+            if name.startswith(("OTEL_", "FI_SIMULATION_"))
+        ]
+        assert "FI_BASE_URL" not in captured["env"]
+        assert list(captured["world_dir"].iterdir()) == []
+
+    # Both hooks due: one file, the LiveKit one unchanged (it carries the import itself), and
+    # the world directory is prepended once.
+    both = _source_process(
+        name="agent",
+        environment={
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+            "PYTHONPATH": "/customer/lib",
+        },
+    )
+    captured = _spawn(tmp_path / "both", both, _EXPORT)
+    world = captured["world_dir"]
+    assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    assert (world / "simulation_mark_bootstrap.py").read_bytes() == (
+        _MARK_HOOK.read_bytes()
+    )
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+        str(world),
+        "/customer/lib",
+    ]
+
+    # LiveKit alone is what it is today: its file, no mark module.
+    captured = _spawn(tmp_path / "livekit-only", both)
+    world = captured["world_dir"]
+    assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    assert not (world / "simulation_mark_bootstrap.py").exists()
+
+    # A reset spawns again in the same directory, whose files the process's own user now owns
+    # read-only: they are reused, never rewritten.
+    exporting = _source_process(name="agent")
+    captured = _spawn(tmp_path / "reset", exporting, _EXPORT)
+    world = captured["world_dir"]
+    world.chmod(0o555)
+    try:
+        again = _spawn(tmp_path / "reset", exporting, _EXPORT)
+    finally:
+        world.chmod(0o755)
+    assert again["env"]["PYTHONPATH"] == str(world)
+
+
+_OTEL_CLOSURE = """
+import importlib.metadata, json, re, sys
+from pathlib import Path
+before = set(sys.modules)
+import opentelemetry.sdk.resources
+distributions = importlib.metadata.packages_distributions()
+modules, metadata = {}, set()
+for name in sorted(set(sys.modules) - before):
+    top = name.partition(".")[0]
+    if top in modules or top == "fi" or top in sys.stdlib_module_names:
+        continue
+    module = sys.modules[top]
+    where = getattr(module, "__file__", None)
+    if where:
+        modules[top] = ["link", where.removesuffix("/__init__.py")]
+    elif getattr(module, "__path__", None):
+        modules[top] = ["merge", list(module.__path__)]
+    else:
+        continue
+    # The SDK asks for its own version at import, so each distribution's metadata comes too.
+    for distribution in distributions.get(top, []):
+        wanted = re.sub(r"[-_.]+", "_", distribution).lower()
+        site = Path(importlib.metadata.distribution(distribution).locate_file(""))
+        for info in site.glob("*.dist-info"):
+            if re.sub(r"[-_.]+", "_", info.name.removesuffix(".dist-info").rsplit("-", 1)[0]).lower() == wanted:
+                metadata.add(str(info))
+print(json.dumps({"modules": modules, "metadata": sorted(metadata)}))
+"""
+
+
+def _library_path_env() -> dict[str, str]:
+    """A CPython built as a shared library (CI's setup-python on Linux) cannot start without the
+    loader path its runner exports, and the environments below are deliberately bare."""
+    value = os.environ.get("LD_LIBRARY_PATH")
+    return {"LD_LIBRARY_PATH": value} if value is not None else {}
+
+
+def _interpreter_without_fi(directory: Path) -> Path:
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(directory)
+    python = directory / "bin" / "python"
+    probe = subprocess.run(
+        [str(python), "-c", "import fi"],
+        cwd=directory.parent,
+        env={"PATH": os.environ.get("PATH", ""), **_library_path_env()},
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0 and "No module named 'fi'" in probe.stderr
+    return python
+
+
+def _opentelemetry_only_site(target: Path) -> Path:
+    """A directory with OpenTelemetry's SDK and what it imports, and nothing of ours, so the
+    interpreter above can import the SDK without being able to import `fi`."""
+    target.mkdir(parents=True)
+    probe = subprocess.run(
+        [sys.executable, "-c", _OTEL_CLOSURE],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    closure = json.loads(probe.stdout)
+    for info in closure["metadata"]:
+        (target / Path(info).name).symlink_to(info)
+    for name, (kind, where) in closure["modules"].items():
+        if kind == "link":
+            (target / Path(where).name).symlink_to(where)
+            continue
+        merged = target / name
+        merged.mkdir()
+        for directory in where:
+            for child in Path(directory).iterdir():
+                if child.name != "__pycache__" and not (merged / child.name).exists():
+                    (merged / child.name).symlink_to(child)
+    return target
+
+
+_CUSTOMER_SCRIPT = """
+import json
+try:
+    import fi
+    fi_importable = True
+except ImportError:
+    fi_importable = False
+from opentelemetry.sdk.resources import Resource
+import agent_tools
+attributes = dict(
+    Resource(attributes={"project_name": "theirs", "service.name": "svc"}).attributes
+)
+print(json.dumps({
+    "fi_importable": fi_importable,
+    "attributes": attributes,
+    "tool": agent_tools.get_weather("Paris"),
+}))
+"""
+
+
+def test_livekit_hook_and_mark_hook_share_one_file(tmp_path: Path) -> None:
+    python = _interpreter_without_fi(tmp_path / "venv")
+    site = _opentelemetry_only_site(tmp_path / "otel-site")
+    # The repository's own `sitecustomize.py`, which our file shadows and so must hand on to.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sitecustomize.py").write_text(
+        "import os\n"
+        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+        "    log.write(__name__ + '\\n')\n"
+    )
+    repo_log = tmp_path / "repo-hook.log"
+    environment = {
+        "PYTHONPATH": os.pathsep.join([str(site), str(repo)]),
+        "REPO_HOOK_LOG": str(repo_log),
+        "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+        "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+            [{"name": "get_weather", "module": "agent_tools", "callable": "get_weather"}]
+        ),
+    }
+
+    def run(captured: dict[str, Any]) -> subprocess.CompletedProcess:
+        (captured["cwd"] / "agent_tools.py").write_text(
+            "def get_weather(location):\n    return f'sunny in {location}'\n"
+        )
+        return subprocess.run(
+            captured["argv"],
+            cwd=captured["cwd"],
+            env={**captured["env"], **_library_path_env()},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def trace_of(captured: dict[str, Any]) -> list[dict[str, Any]]:
+        path = captured["world_dir"] / "calls.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    process = _source_process(
+        name="agent",
+        run_command=[str(python), "-c", _CUSTOMER_SCRIPT],
+        environment=environment,
+    )
+
+    # Both hooks due: one `sitecustomize.py`, the LiveKit file, and both apply in an
+    # interpreter that cannot import `fi`.
+    captured = _spawn(tmp_path / "both", process, _EXPORT)
+    assert (
+        captured["world_dir"] / "sitecustomize.py"
+    ).read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    result = run(captured)
+    assert result.returncode == 0, result.stderr
+    assert repo_log.read_text().splitlines() == ["_alk_chained_sitecustomize"]
+    reported = json.loads(result.stdout)
+    assert reported["fi_importable"] is False
+    assert reported["attributes"] == {
+        "project_name": "Our Agent",
+        "service.name": "svc",
+        "fi.simulation.origin": "simulation",
+        "fi.simulation.job_id": "job-1",
+        "fi.simulation.run_id": "run-1",
+    }
+    assert result.stderr.splitlines() == ["simulation mark hook: applied"]
+    assert any(
+        record["name"] == "get_weather" and record["output"] == "sunny in Paris"
+        for record in trace_of(captured)
+    )
+
+    # The mark module missing: the LiveKit hook still applies and the mark is simply not made.
+    (captured["world_dir"] / "simulation_mark_bootstrap.py").unlink()
+    (captured["world_dir"] / "calls.jsonl").unlink()
+    result = run(captured)
+    assert result.returncode == 0, result.stderr
+    reported = json.loads(result.stdout)
+    assert reported["attributes"] == {"project_name": "theirs", "service.name": "svc"}
+    assert result.stderr == ""
+    assert any(
+        record["name"] == "get_weather" and record["output"] == "sunny in Paris"
+        for record in trace_of(captured)
+    )
+
+    # Without LiveKit's markers the small file does the same job in the same interpreter.
+    small = _source_process(
+        name="agent",
+        run_command=[str(python), "-c", _CUSTOMER_SCRIPT],
+        environment={
+            "PYTHONPATH": environment["PYTHONPATH"],
+            "REPO_HOOK_LOG": str(repo_log),
+        },
+    )
+    captured = _spawn(tmp_path / "small", small, _EXPORT)
+    assert _is_the_small_mark_hook(
+        (captured["world_dir"] / "sitecustomize.py").read_text()
+    )
+    repo_log.unlink()
+    result = run(captured)
+    assert result.returncode == 0, result.stderr
+    assert repo_log.read_text().splitlines() == ["_alk_chained_sitecustomize"]
+    assert json.loads(result.stdout)["attributes"]["project_name"] == "Our Agent"
+    assert result.stderr.splitlines() == ["simulation mark hook: applied"]
+
+
+def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) -> None:
+    """The whole chain a hosted run takes: `job.json` -> `provision` -> `SpawnContext` ->
+    `spawn_world` -> `spawn_source_process`, for every world and every customer process."""
+    headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+    customer_code_environment = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    (tmp_path / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job-1",
+                "agent": {
+                    "secret_refs": {
+                        "LIVEKIT_API_KEY": {
+                            "manager": "platform-vault",
+                            "key": "LIVEKIT_API_KEY",
+                            "purpose": "target_provider",
+                        },
+                        headers: {
+                            "manager": "platform-config",
+                            "key": headers,
+                            "purpose": "observability_export",
+                        },
+                    }
+                },
+                "metadata": {"customer_code_environment": customer_code_environment},
+            }
+        )
+    )
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(
+        json.dumps(
+            {"LIVEKIT_API_KEY": "customer-livekit", headers: "X-Api-Key=a,X-Secret-Key=b"}
+        )
+    )
+    spawned: list[tuple[list[str], dict[str, str]]] = []
+    built: list[tuple[list[str], dict[str, str]]] = []
+
+    def runner(argv, *, cwd, env, log_path, user=None, group=None):
+        spawned.append((list(argv), dict(env)))
+        return FakeHandle()
+
+    def sync_run(argv, **kwargs):
+        built.append((list(argv), dict(kwargs.get("env") or {})))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    source, bundle_dir = _provision_dirs(tmp_path)
+    provider = _sql_spy_provider(
+        secrets_path=secrets_path, runner=runner, sync_run=sync_run
+    )
+    asyncio.run(
+        provider.provision(
+            _manifest(),
+            source=source,
+            bundle_dir=bundle_dir,
+            work_directory=tmp_path,
+            instances=2,
+            require_declared_user=False,
+        )
+    )
+
+    customer = {
+        "tools-api": ["node", "server.js"],
+        "agent": ["python3", "agent.py"],
+    }
+    seen = [(argv, env) for argv, env in spawned if argv in customer.values()]
+    # Two worlds, two customer processes each (a world may be spawned more than once).
+    assert {argv[0] for argv, _ in seen} == {"node", "python3"}
+    assert len({env["PYTHONPATH"] for _, env in seen}) == 4
+    for argv, env in seen:
+        assert env["OTEL_RESOURCE_ATTRIBUTES"] == _MARK
+        assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+        assert (
+            env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+            == "https://collector.example/v1/traces"
+        )
+        # The export key reaches the process that claims nothing as well as the one that
+        # claims the target provider's.
+        assert env[headers] == "X-Api-Key=a,X-Secret-Key=b"
+        assert ("LIVEKIT_API_KEY" in env) is (argv == customer["agent"])
+        world = Path(env["PYTHONPATH"].split(os.pathsep)[0])
+        assert (world / "sitecustomize.py").is_file()
+        assert (world / "simulation_mark_bootstrap.py").is_file()
+
+    # Build steps ran, and none of them saw any of it: not a name of the platform's dict, not
+    # an export alias, not the hook's path change.
+    build_steps = (["npm", "ci"], ["pip", "install", "-r", "requirements.txt"])
+    steps = [env for argv, env in built if argv in build_steps]
+    assert len(steps) == 2
+    for env in steps:
+        # A captured environment that is a real one, so the absences below mean something.
+        assert "PATH" in env
+        for name in (*customer_code_environment, headers, "LIVEKIT_API_KEY", "PYTHONPATH"):
+            assert name not in env
+
+
+@pytest.mark.parametrize(
+    "document, expected",
+    [
+        (None, {}),
+        (b"not json", {}),
+        (b"\xff\xfe\x00", {}),
+        (b"[]", {}),
+        (b"{}", {}),
+        (b'{"metadata": []}', {}),
+        (b'{"metadata": {}}', {}),
+        (b'{"metadata": {"customer_code_environment": []}}', {}),
+        (b'{"metadata": {"customer_code_environment": null}}', {}),
+        (b'{"metadata": {"customer_code_environment": {}}}', {}),
+        (b'{"metadata": {"customer_code_environment": {"FI_SIMULATION_EXPORT": 1}}}', {}),
+        (
+            b'{"metadata": {"customer_code_environment": {"A": "x", "B": null}}}',
+            {},
+        ),
+        (
+            b'{"metadata": {"customer_code_environment": {"A_B": "x", "FI_SIMULATION_EXPORT": "our_keys"}}}',
+            {"A_B": "x", "FI_SIMULATION_EXPORT": "our_keys"},
+        ),
+    ],
+)
+def test_customer_code_environment_is_empty_unless_job_json_holds_a_dict_of_strings(
+    tmp_path: Path, document: bytes | None, expected: dict[str, str]
+) -> None:
+    if document is not None:
+        (tmp_path / "job.json").write_bytes(document)
+    assert pr._read_customer_code_environment(tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],
+        None,
+        "text",
+        {"TEST_KEY_NAME": 7, "TEST_OTHER": "test-value-text"},
+        {"TEST_KEY_NAME": "test-value-text", "TEST_OTHER": None},
+    ],
+)
+def test_a_malformed_customer_code_environment_is_ignored_with_one_warning_that_names_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, value: object
+) -> None:
+    (tmp_path / "job.json").write_text(
+        json.dumps({"metadata": {"customer_code_environment": value}})
+    )
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == {}
+    warnings = [record for record in caplog.records if record.name == pr.logger.name]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    # Neither the key of the setting nor anything the customer's environment held is logged.
+    for forbidden in ("customer_code_environment", "TEST_KEY_NAME", "TEST_OTHER", "test-value-text"):
+        assert forbidden not in message
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        None,
+        b"not json",
+        b"[]",
+        b"{}",
+        b'{"metadata": []}',
+        b'{"metadata": {}}',
+        b'{"metadata": {"other": 1}}',
+        b'{"metadata": {"customer_code_environment": {}}}',
+    ],
+)
+def test_a_missing_file_metadata_or_key_is_not_worth_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, document: bytes | None
+) -> None:
+    if document is not None:
+        (tmp_path / "job.json").write_bytes(document)
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == {}
+    assert [record for record in caplog.records if record.name == pr.logger.name] == []
+
+
+def test_spawn_context_carries_no_customer_code_environment_by_default(
+    tmp_path: Path,
+) -> None:
+    def context() -> pr.SpawnContext:
+        return pr.SpawnContext(
+            work_directory=tmp_path,
+            port_plan=_solo_port_plan("svc"),
+            credentials={},
+            secret_values={},
+            secret_purposes={},
+        )
+
+    assert context().customer_code_environment == {}
+    assert context().customer_code_environment is not context().customer_code_environment

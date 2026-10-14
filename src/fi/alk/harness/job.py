@@ -309,7 +309,8 @@ class HarnessJob(BaseModel):
             for alias, reference in self.agent.secret_refs.items():
                 expected_manager = (
                     "platform-config"
-                    if reference.purpose == "simulator_provider"
+                    if reference.purpose
+                    in {"simulator_provider", "observability_export"}
                     else "platform-vault"
                 )
                 if reference.manager != expected_manager:
@@ -317,6 +318,7 @@ class HarnessJob(BaseModel):
                 if reference.purpose not in {
                     "target_provider",
                     "simulator_provider",
+                    "observability_export",
                 }:
                     raise ValueError(f"hosted_secret_purpose_invalid: {alias}")
             if self.security.allow_privileged:

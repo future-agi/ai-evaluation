@@ -21,6 +21,15 @@ operator reading worker logs should know that report is suppressed by design, no
 
 from __future__ import annotations
 
+# The mark hook sits beside this file only for a run that exports; a failure here must never
+# cost tool tracing or worker isolation.
+try:
+    import simulation_mark_bootstrap
+
+    simulation_mark_bootstrap.install()
+except Exception:
+    pass
+
 import functools
 import json
 import logging
