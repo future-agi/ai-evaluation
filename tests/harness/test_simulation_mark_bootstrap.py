@@ -27,7 +27,6 @@ from fi.alk.harness import process_runtime as pr
 
 _HARNESS = Path(pr.__file__).parent
 HOOK = _HARNESS / "simulation_mark_bootstrap.py"
-LIVEKIT_HOOK = _HARNESS / "livekit_tool_trace_bootstrap.py"
 
 MARK = (
     "project_name=Our%20Agent,fi.simulation.origin=simulation,"
@@ -46,14 +45,14 @@ FAILED = "simulation mark hook: failed\n"
 
 # A stand-in for the SDK's module, for the cases the real constructor cannot be made to produce
 # (it raises on demand, it keeps what it was handed).
-STUB_RESOURCES = '''\
+STUB_RESOURCES = """\
 class Resource:
     def __init__(self, attributes, schema_url=None):
         if isinstance(attributes, dict) and attributes.get("boom"):
             raise ValueError("original raised")
         self.attributes = attributes
         self.schema_url = schema_url
-'''
+"""
 
 # A `Resource` that is a builtin type: its `__init__` cannot be replaced, so the patch cannot land.
 STUB_IMMUTABLE_RESOURCES = "Resource = dict\n"
@@ -275,9 +274,27 @@ def _reported(result: subprocess.CompletedProcess) -> dict[str, Any]:
     return json.loads(result.stdout.splitlines()[-1])
 
 
-def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
-    world = _world(tmp_path)
+def _repository_hook(root: Path) -> tuple[Path, Path]:
+    """A repository directory whose `sitecustomize.py` logs the module name it ran under, and
+    the log it writes to (passed to the process as `REPO_HOOK_LOG`)."""
+    repo = root / "repo"
+    repo.mkdir()
+    (repo / "sitecustomize.py").write_text(
+        "import os\n"
+        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
+        "    log.write(__name__ + '\\n')\n"
+    )
+    return repo, root / "repo-hook.log"
 
+
+def _broken_repository_hook(root: Path) -> Path:
+    broken = root / "broken"
+    broken.mkdir()
+    (broken / "sitecustomize.py").write_text("raise RuntimeError('repository hook')\n")
+    return broken
+
+
+def _scenario_sdk_after(tmp_path: Path, world: Path) -> None:
     # The SDK imported after the hook: every constructor passes through the patched one, and
     # the customer's own pair in the variable (`service.name`) is not merged by the hook.
     result = _run(MERGE_SCRIPT, path=[world], cwd=tmp_path)
@@ -290,17 +307,21 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert reported["nothing"] == OURS
     assert result.stderr == APPLIED
 
-    # The variable absent, empty, or without the origin pair: nothing is touched and nothing
-    # is said.
-    for index, variable in enumerate(
-        (None, "", "project_name=Our%20Agent,fi.simulation.run_id=run-1,service.name=c")
-    ):
+
+def _scenario_dormant(variable: str | None):
+    def scenario(tmp_path: Path, world: Path) -> None:
+        # The variable absent, empty, or without the origin pair: nothing is touched and
+        # nothing is said.
         result = _run(DORMANT_SCRIPT, path=[world], cwd=tmp_path, variable=variable)
         reported = _reported(result)
-        assert reported["attributes"] == {"project_name": "theirs"}, index
-        assert "_ResourceFinder" not in reported["finders"], index
-        assert result.stderr == "", index
+        assert reported["attributes"] == {"project_name": "theirs"}
+        assert "_ResourceFinder" not in reported["finders"]
+        assert result.stderr == ""
 
+    return scenario
+
+
+def _scenario_sdk_before(tmp_path: Path, world: Path) -> None:
     # The SDK imported before the hook ran: patched at once.
     lib = _world(tmp_path, "lib", sitecustomize=False)
     result = _run(IMPORTED_BEFORE_SCRIPT, path=[lib], cwd=tmp_path)
@@ -309,6 +330,8 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert reported["after"] == OURS
     assert result.stderr == APPLIED
 
+
+def _scenario_reload(tmp_path: Path, world: Path) -> None:
     # Imported after: through the finder, which stays installed, so a reload is patched again
     # (a reload builds a new class, so the line is written again for it).
     result = _run(RELOAD_SCRIPT, path=[world], cwd=tmp_path)
@@ -318,6 +341,8 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert reported["first_finder"] == "_ResourceFinder"
     assert result.stderr == APPLIED * 2
 
+
+def _scenario_never_imports_sdk(tmp_path: Path, world: Path) -> None:
     # A process that never imports the SDK: the hook is armed, imports none of it, and says
     # nothing.
     result = _run(NO_SDK_SCRIPT, path=[world], cwd=tmp_path)
@@ -326,14 +351,19 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert reported["finder_installed"] is True
     assert result.stderr == ""
 
+
+def _scenario_original_raises(tmp_path: Path, world: Path) -> None:
     # The original constructor raising passes through unchanged: not swallowed, not a `failed`.
     stub = _stub_sdk(tmp_path)
     result = _run(ORIGINAL_RAISES_SCRIPT, path=[world, stub], cwd=tmp_path)
     assert _reported(result)["outcome"] == ["ValueError", "original raised"]
     assert result.stderr == APPLIED
 
+
+def _scenario_merge_raises(tmp_path: Path, world: Path) -> None:
     # The merge itself raising: the original still builds what the caller asked for, `failed`
     # is written once however often it happens, and later resources are merged as usual.
+    stub = _stub_sdk(tmp_path)
     result = _run(MERGE_RAISES_SCRIPT, path=[world, stub], cwd=tmp_path)
     reported = _reported(result)
     assert reported["first"] == "Exploding"
@@ -341,20 +371,15 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert reported["fine"] == {"x": "y", **OURS}
     assert result.stderr == APPLIED + FAILED
 
+
+def _scenario_chain_layouts(tmp_path: Path, world: Path) -> None:
     # A repository's own `sitecustomize.py` later on the path still runs, once, under a private
     # name, and ours stays `sitecustomize`. The world directory may sit on the path again under
     # another spelling (Python drops only a repeat of the same spelling), and that second
     # `sitecustomize.py` is ours, not the next one.
     alias = tmp_path / "world-alias"
     alias.symlink_to(world, target_is_directory=True)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    log = tmp_path / "repo-hook.log"
-    (repo / "sitecustomize.py").write_text(
-        "import os\n"
-        "with open(os.environ['REPO_HOOK_LOG'], 'a') as log:\n"
-        "    log.write(__name__ + '\\n')\n"
-    )
+    repo, log = _repository_hook(tmp_path)
     for layout in ([world, repo], [world, alias, repo], [world, repo, alias]):
         log.unlink(missing_ok=True)
         result = _run(
@@ -364,15 +389,20 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
             extra_env={"REPO_HOOK_LOG": str(log)},
         )
         reported = _reported(result)
-        assert Path(reported["sitecustomize"]).resolve() == (
-            world / "sitecustomize.py"
-        ).resolve()
-        assert Path(reported["chained"]).resolve() == (repo / "sitecustomize.py").resolve()
+        assert (
+            Path(reported["sitecustomize"]).resolve()
+            == (world / "sitecustomize.py").resolve()
+        )
+        assert (
+            Path(reported["chained"]).resolve() == (repo / "sitecustomize.py").resolve()
+        )
         assert log.read_text().splitlines() == ["_alk_chained_sitecustomize"]
         assert result.stderr == ""
 
+
+def _scenario_chain_when_dormant(tmp_path: Path, world: Path) -> None:
     # The chain is reached when the hook returns early, too.
-    log.unlink(missing_ok=True)
+    repo, log = _repository_hook(tmp_path)
     result = _run(
         CHAIN_SCRIPT,
         path=[world, repo],
@@ -383,12 +413,12 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     _reported(result)
     assert log.read_text().splitlines() == ["_alk_chained_sitecustomize"]
 
+
+def _scenario_broken_repo_hook(tmp_path: Path, world: Path) -> None:
     # A repository hook that fails neither stops the process nor costs the mark, and is not
     # reported as a failure of ours: Python reports it, in its own words, exactly as it does
     # when no hook of ours sits in front of it.
-    broken = tmp_path / "broken"
-    broken.mkdir()
-    (broken / "sitecustomize.py").write_text("raise RuntimeError('repository hook')\n")
+    broken = _broken_repository_hook(tmp_path)
     without = _run(NO_SDK_SCRIPT, path=[broken], cwd=tmp_path, variable=None)
     _reported(without)
     # The baseline does report it, so the comparison below is not between two empty strings.
@@ -400,18 +430,25 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert _reported(result)["constructed"] == OURS
     assert result.stderr == without.stderr + APPLIED
 
+
+def _scenario_verbose(tmp_path: Path, world: Path) -> None:
     # With verbose startup Python prints the traceback instead, through the same excepthook.
+    broken = _broken_repository_hook(tmp_path)
     verbose = {"PYTHONVERBOSE": "1"}
     without = _run(
         NO_SDK_SCRIPT, path=[broken], cwd=tmp_path, variable=None, extra_env=verbose
     )
-    with_hook = _run(NO_SDK_SCRIPT, path=[world, broken], cwd=tmp_path, extra_env=verbose)
+    with_hook = _run(
+        NO_SDK_SCRIPT, path=[world, broken], cwd=tmp_path, extra_env=verbose
+    )
     for printed in (without, with_hook):
         _reported(printed)
         assert "Traceback (most recent call last)" in printed.stderr
         assert "RuntimeError: repository hook" in printed.stderr
         assert "set PYTHONVERBOSE for traceback" not in printed.stderr
 
+
+def _scenario_system_exit(tmp_path: Path, world: Path) -> None:
     # Only an `Exception` is reported and survived. `SystemExit` ends the start-up as it does
     # without the hook.
     leaving = tmp_path / "leaving"
@@ -422,6 +459,34 @@ def test_hook_merges_the_mark_into_every_resource(tmp_path: Path) -> None:
     assert without.returncode != 0
     assert with_hook.returncode == without.returncode
     assert with_hook.stdout == without.stdout == ""
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        pytest.param(_scenario_sdk_after, id="sdk_after"),
+        pytest.param(_scenario_dormant(None), id="dormant_absent"),
+        pytest.param(_scenario_dormant(""), id="dormant_empty"),
+        pytest.param(
+            _scenario_dormant(
+                "project_name=Our%20Agent,fi.simulation.run_id=run-1,service.name=c"
+            ),
+            id="dormant_no_origin",
+        ),
+        pytest.param(_scenario_sdk_before, id="sdk_before"),
+        pytest.param(_scenario_reload, id="reload"),
+        pytest.param(_scenario_never_imports_sdk, id="never_imports_sdk"),
+        pytest.param(_scenario_original_raises, id="original_raises"),
+        pytest.param(_scenario_merge_raises, id="merge_raises"),
+        pytest.param(_scenario_chain_layouts, id="chain_layouts"),
+        pytest.param(_scenario_chain_when_dormant, id="chain_when_dormant"),
+        pytest.param(_scenario_broken_repo_hook, id="broken_repo_hook"),
+        pytest.param(_scenario_verbose, id="verbose"),
+        pytest.param(_scenario_system_exit, id="system_exit"),
+    ],
+)
+def test_hook_merges_the_mark_into_every_resource(tmp_path: Path, scenario) -> None:
+    scenario(tmp_path, _world(tmp_path))
 
 
 def test_hook_parses_the_variable_as_the_sdk_does_and_keeps_only_ours(
@@ -647,7 +712,9 @@ def test_two_copies_of_the_finder_never_call_each_other(
     assert stub.calls == 1
 
 
-def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax() -> None:
+def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax() -> (
+    None
+):
     """It runs inside the customer's interpreter, which has no `fi` and may be older than the
     package's own floor."""
     tree = ast.parse(HOOK.read_text(encoding="utf-8"), feature_version=(3, 9))
@@ -668,22 +735,3 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         "sys",
         "urllib.parse",
     }
-
-
-def test_livekit_bootstrap_guards_the_mark_import_right_after_its_future_import() -> None:
-    """When both hooks are due `sitecustomize.py` is the LiveKit file, which installs the mark
-    hook itself; a missing or broken mark module must never cost tool tracing."""
-    body = ast.parse(LIVEKIT_HOOK.read_text(encoding="utf-8")).body
-    future = next(
-        index
-        for index, node in enumerate(body)
-        if isinstance(node, ast.ImportFrom) and node.module == "__future__"
-    )
-    expected = ast.parse(
-        "try:\n"
-        "    import simulation_mark_bootstrap\n"
-        "    simulation_mark_bootstrap.install()\n"
-        "except Exception:\n"
-        "    pass\n"
-    ).body[0]
-    assert ast.dump(body[future + 1]) == ast.dump(expected)

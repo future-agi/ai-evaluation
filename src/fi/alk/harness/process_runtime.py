@@ -557,7 +557,9 @@ _SIMULATION_MARK_SITECUSTOMIZE = (
     "    import simulation_mark_bootstrap\n"
     "    simulation_mark_bootstrap.install()\n"
     "except Exception:\n"
-    "    pass\n"
+    "    import sys\n"
+    "\n"
+    "    sys.stderr.write('simulation mark hook: failed\\n')\n"
 )
 
 
@@ -878,6 +880,7 @@ def select_process_secrets(
     *,
     secret_values: dict[str, str],
     secret_purposes: dict[str, str],
+    include_observability_export: bool = False,
 ) -> dict[str, str]:
     """§2b: "the provisioner injects every alias whose ref's `purpose` is listed [in
     `secret_purposes`], under the **alias** as the env-var name." `secret_purposes` maps each
@@ -889,8 +892,10 @@ def select_process_secrets(
     unconditionally. Checkout credentials are gateway-only. Simulator credentials belong to the
     harness control/caller and must never enter a customer-authored process environment, even if
     an untrusted or generated bundle attempts to claim that purpose. `SecretPurpose.
-    OBSERVABILITY_EXPORT` is the opposite: the platform owns it and every customer process gets
-    it whether or not the bundle claims it (preflight refuses a claim, so a bundle cannot ask).
+    OBSERVABILITY_EXPORT` is the opposite: the platform owns it and, when
+    `include_observability_export` is true (the process's platform-decided environment holds
+    `FI_SIMULATION_EXPORT`), the process gets it whether or not the bundle claims it
+    (preflight refuses a claim, so a bundle cannot ask). Without a mode it gets none.
     """
     claimed = {
         purpose.value
@@ -901,7 +906,8 @@ def select_process_secrets(
             SecretPurpose.SIMULATOR_PROVIDER,
         }
     }
-    claimed.add(SecretPurpose.OBSERVABILITY_EXPORT.value)
+    if include_observability_export:
+        claimed.add(SecretPurpose.OBSERVABILITY_EXPORT.value)
     return {
         alias: value
         for alias, value in secret_values.items()
@@ -2202,7 +2208,10 @@ def spawn_source_process(
         configuration_addresses=configuration_addresses,
     )
     injected = select_process_secrets(
-        process, secret_values=secret_values, secret_purposes=secret_purposes
+        process,
+        secret_values=secret_values,
+        secret_purposes=secret_purposes,
+        include_observability_export=mark_hook_due,
     )
     injected = _materialize_process_secret_files(
         process,

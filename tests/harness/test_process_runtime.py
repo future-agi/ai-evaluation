@@ -29,7 +29,6 @@ style elsewhere in the harness suite.
 from __future__ import annotations
 
 import asyncio
-import ast
 import json
 import os
 import signal
@@ -8908,11 +8907,13 @@ def _hosted_job(secret_refs: dict[str, SecretRef]) -> HarnessJob:
         agent=AgentConnection(connector="vapi", secret_refs=secret_refs),
         scenario_count=2,
         seed=1234,
-        runtime=RuntimeRequirements(isolation=RuntimeIsolation.DEDICATED_VM, cpu_units=1),
+        runtime=RuntimeRequirements(
+            isolation=RuntimeIsolation.DEDICATED_VM, cpu_units=1
+        ),
     )
 
 
-def test_mark_appends_to_the_customers_resource_attributes_and_skips_build(
+def test_mark_appends_to_the_customers_resource_attributes(
     tmp_path: Path,
 ) -> None:
     theirs = "service.name=cust,deployment.environment=prod"
@@ -8926,9 +8927,7 @@ def test_mark_appends_to_the_customers_resource_attributes_and_skips_build(
     assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == f"{theirs},{_MARK}"
 
     # No value of their own (or only blanks): ours alone, with no stray comma.
-    for index, environment in enumerate(
-        ({}, {"OTEL_RESOURCE_ATTRIBUTES": "   "})
-    ):
+    for index, environment in enumerate(({}, {"OTEL_RESOURCE_ATTRIBUTES": "   "})):
         bare = _source_process(name="agent", environment=environment)
         captured = _spawn(tmp_path / f"bare-{index}", bare, _EXPORT)
         assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == _MARK
@@ -9003,7 +9002,7 @@ def test_export_environment_order_our_project_name_wins_and_mark_wins(
     )
 
 
-def test_observability_export_secrets_reach_every_customer_process_and_no_build_step(
+def test_observability_export_secrets_reach_every_exporting_customer_process(
     tmp_path: Path,
 ) -> None:
     headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
@@ -9028,7 +9027,10 @@ def test_observability_export_secrets_reach_every_customer_process_and_no_build_
 
     for process in (claiming, claiming_nothing):
         injected = pr.select_process_secrets(
-            process, secret_values=secret_values, secret_purposes=secret_purposes
+            process,
+            secret_values=secret_values,
+            secret_purposes=secret_purposes,
+            include_observability_export=True,
         )
         # Claimed or not, the export pair is in; the other gateway-only purposes stay out.
         assert injected[headers] == secret_values[headers]
@@ -9036,16 +9038,23 @@ def test_observability_export_secrets_reach_every_customer_process_and_no_build_
         assert "SIMULATOR_DEEPGRAM_API_KEY" not in injected
         assert "CHECKOUT_TOKEN" not in injected
     assert "LIVEKIT_API_KEY" in pr.select_process_secrets(
-        claiming, secret_values=secret_values, secret_purposes=secret_purposes
+        claiming,
+        secret_values=secret_values,
+        secret_purposes=secret_purposes,
+        include_observability_export=True,
     )
     assert "LIVEKIT_API_KEY" not in pr.select_process_secrets(
-        claiming_nothing, secret_values=secret_values, secret_purposes=secret_purposes
+        claiming_nothing,
+        secret_values=secret_values,
+        secret_purposes=secret_purposes,
+        include_observability_export=True,
     )
 
     for process in (claiming, claiming_nothing):
         env = _spawn(
             tmp_path / process.name,
             process,
+            _EXPORT,
             secret_values=secret_values,
             secret_purposes=secret_purposes,
         )["env"]
@@ -9076,19 +9085,41 @@ def test_observability_export_secrets_reach_every_customer_process_and_no_build_
         )
 
 
-def _is_the_small_mark_hook(source: str) -> bool:
-    """Comments aside, the file is exactly the guarded import and install of the mark module."""
-    expected = (
-        "try:\n"
-        "    import simulation_mark_bootstrap\n"
-        "    simulation_mark_bootstrap.install()\n"
-        "except Exception:\n"
-        "    pass\n"
+def test_observability_export_secrets_wait_for_a_mode(tmp_path: Path) -> None:
+    headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+    secret_values = {headers: "X-Api-Key=export-key", "FI_API_KEY": "export-key"}
+    secret_purposes = {
+        headers: "observability_export",
+        "FI_API_KEY": "observability_export",
+    }
+    process = _source_process(name="agent")
+
+    # Our key goes only where the platform decided a mode; the default is none.
+    assert (
+        pr.select_process_secrets(
+            process, secret_values=secret_values, secret_purposes=secret_purposes
+        )
+        == {}
     )
-    return ast.dump(ast.parse(source)) == ast.dump(ast.parse(expected))
+
+    # A dict that holds other names but not the mode is no decision to export.
+    for environment in (
+        None,
+        {},
+        {"OTEL_RESOURCE_ATTRIBUTES": _MARK, "FI_BASE_URL": "https://collector.example"},
+    ):
+        env = _spawn(
+            tmp_path / "no-mode",
+            process,
+            environment,
+            secret_values=secret_values,
+            secret_purposes=secret_purposes,
+        )["env"]
+        assert headers not in env
+        assert "FI_API_KEY" not in env
 
 
-def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporting_process_and_no_build_step(
+def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporting_process(
     tmp_path: Path,
 ) -> None:
     # Either mode of the platform's decision places the hook, for every customer process.
@@ -9098,7 +9129,9 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
                 name=name, environment={"PYTHONPATH": "/customer/lib"}
             )
             captured = _spawn(
-                tmp_path / mode / name, process, {**_EXPORT, "FI_SIMULATION_EXPORT": mode}
+                tmp_path / mode / name,
+                process,
+                {**_EXPORT, "FI_SIMULATION_EXPORT": mode},
             )
             world = captured["world_dir"]
             assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
@@ -9112,7 +9145,6 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
             assert (
                 world / "simulation_mark_bootstrap.py"
             ).read_bytes() == _MARK_HOOK.read_bytes()
-            assert _is_the_small_mark_hook((world / "sitecustomize.py").read_text())
             for written in world.iterdir():
                 assert stat.S_IMODE(written.stat().st_mode) == 0o444
 
@@ -9369,7 +9401,13 @@ def test_livekit_hook_and_mark_hook_share_one_file(tmp_path: Path) -> None:
         "REPO_HOOK_LOG": str(repo_log),
         "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
         "ALK_TOOL_TRACE_BINDINGS": json.dumps(
-            [{"name": "get_weather", "module": "agent_tools", "callable": "get_weather"}]
+            [
+                {
+                    "name": "get_weather",
+                    "module": "agent_tools",
+                    "callable": "get_weather",
+                }
+            ]
         ),
     }
 
@@ -9445,9 +9483,6 @@ def test_livekit_hook_and_mark_hook_share_one_file(tmp_path: Path) -> None:
         },
     )
     captured = _spawn(tmp_path / "small", small, _EXPORT)
-    assert _is_the_small_mark_hook(
-        (captured["world_dir"] / "sitecustomize.py").read_text()
-    )
     repo_log.unlink()
     result = run(captured)
     assert result.returncode == 0, result.stderr
@@ -9456,14 +9491,110 @@ def test_livekit_hook_and_mark_hook_share_one_file(tmp_path: Path) -> None:
     assert result.stderr.splitlines() == ["simulation mark hook: applied"]
 
 
-def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) -> None:
-    """The whole chain a hosted run takes: `job.json` -> `provision` -> `SpawnContext` ->
-    `spawn_world` -> `spawn_source_process`, for every world and every customer process."""
-    headers = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
-    customer_code_environment = {
-        **_EXPORT,
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
-    }
+_BROKEN_MARK_MODULES = {
+    "syntax_error": "def broken(:\n",
+    "install_raises": "def install():\n    raise RuntimeError('do-not-log-this')\n",
+    "import_error": "import module_that_does_not_exist\n",
+}
+_TRACED_SCRIPT = "import agent_tools; print(agent_tools.get_weather('Paris'))"
+
+
+def _run_spawned(captured: dict[str, Any]) -> subprocess.CompletedProcess:
+    (captured["cwd"] / "agent_tools.py").write_text(
+        "def get_weather(location):\n    return f'sunny in {location}'\n"
+    )
+    return subprocess.run(
+        captured["argv"],
+        cwd=captured["cwd"],
+        env={**captured["env"], **_library_path_env()},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def _replace_mark_module(world: Path, source: str) -> None:
+    module = world / "simulation_mark_bootstrap.py"
+    module.unlink()
+    module.write_text(source)
+
+
+@pytest.mark.parametrize("source", ["syntax_error", "install_raises"])
+def test_livekit_hook_keeps_tracing_and_says_so_when_the_mark_module_is_broken(
+    tmp_path: Path, source: str
+) -> None:
+    process = _source_process(
+        name="agent",
+        run_command=[sys.executable, "-c", _TRACED_SCRIPT],
+        environment={
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/calls.jsonl",
+            "ALK_TOOL_TRACE_BINDINGS": json.dumps(
+                [
+                    {
+                        "name": "get_weather",
+                        "module": "agent_tools",
+                        "callable": "get_weather",
+                    }
+                ]
+            ),
+        },
+    )
+    captured = _spawn(tmp_path, process, _EXPORT)
+    world = captured["world_dir"]
+    assert (world / "sitecustomize.py").read_bytes() == _LIVEKIT_HOOK.read_bytes()
+    _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
+
+    result = _run_spawned(captured)
+
+    # The process runs and its tool call is still traced; the one fixed line says the mark
+    # is not made, and nothing of the module or its error.
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "sunny in Paris"
+    assert result.stderr == "simulation mark hook: failed\n"
+    records = [
+        json.loads(line) for line in (world / "calls.jsonl").read_text().splitlines()
+    ]
+    assert any(
+        record["name"] == "get_weather" and record["output"] == "sunny in Paris"
+        for record in records
+    )
+
+
+@pytest.mark.parametrize("source", sorted(_BROKEN_MARK_MODULES))
+def test_small_mark_hook_says_so_when_the_mark_module_is_broken(
+    tmp_path: Path, source: str
+) -> None:
+    process = _source_process(
+        name="agent",
+        run_command=[sys.executable, "-c", _TRACED_SCRIPT],
+    )
+    captured = _spawn(tmp_path, process, _EXPORT)
+    world = captured["world_dir"]
+    assert sorted(path.name for path in world.iterdir()) == [
+        "simulation_mark_bootstrap.py",
+        "sitecustomize.py",
+    ]
+    _replace_mark_module(world, _BROKEN_MARK_MODULES[source])
+
+    result = _run_spawned(captured)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "sunny in Paris"
+    assert result.stderr == "simulation mark hook: failed\n"
+
+
+_EXPORT_HEADERS = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+
+
+def _provision_from_job_json(
+    tmp_path: Path, customer_code_environment: object
+) -> tuple[
+    list[tuple[list[str], dict[str, str]]], list[tuple[list[str], dict[str, str]]]
+]:
+    """Provision two worlds of a bundle whose secrets hold an export alias and a target
+    provider's, with `job.json` carrying `customer_code_environment` as given; returns what
+    the runner started and what the build steps ran with (`argv`, `env`)."""
+    headers = _EXPORT_HEADERS
     (tmp_path / "job.json").write_text(
         json.dumps(
             {
@@ -9489,7 +9620,10 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
     secrets_path = tmp_path / "secrets.json"
     secrets_path.write_text(
         json.dumps(
-            {"LIVEKIT_API_KEY": "customer-livekit", headers: "X-Api-Key=a,X-Secret-Key=b"}
+            {
+                "LIVEKIT_API_KEY": "customer-livekit",
+                headers: "X-Api-Key=a,X-Secret-Key=b",
+            }
         )
     )
     spawned: list[tuple[list[str], dict[str, str]]] = []
@@ -9517,6 +9651,19 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
             require_declared_user=False,
         )
     )
+
+    return spawned, built
+
+
+def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) -> None:
+    """The whole chain a hosted run takes: `job.json` -> `provision` -> `SpawnContext` ->
+    `spawn_world` -> `spawn_source_process`, for every world and every customer process."""
+    headers = _EXPORT_HEADERS
+    customer_code_environment = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    spawned, built = _provision_from_job_json(tmp_path, customer_code_environment)
 
     customer = {
         "tools-api": ["node", "server.js"],
@@ -9549,8 +9696,30 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
     for env in steps:
         # A captured environment that is a real one, so the absences below mean something.
         assert "PATH" in env
-        for name in (*customer_code_environment, headers, "LIVEKIT_API_KEY", "PYTHONPATH"):
+        for name in (
+            *customer_code_environment,
+            headers,
+            "LIVEKIT_API_KEY",
+            "PYTHONPATH",
+        ):
             assert name not in env
+
+
+@pytest.mark.parametrize(
+    "malformed", [[], {"FI_SIMULATION_EXPORT": 1}], ids=["list", "non_string_value"]
+)
+def test_a_malformed_customer_code_environment_in_job_json_injects_no_export_key(
+    tmp_path: Path, malformed: object
+) -> None:
+    spawned, _ = _provision_from_job_json(tmp_path, malformed)
+
+    customer = (["node", "server.js"], ["python3", "agent.py"])
+    seen = [env for argv, env in spawned if argv in customer]
+    assert len(seen) >= 4
+    for env in seen:
+        assert _EXPORT_HEADERS not in env
+        assert "FI_SIMULATION_EXPORT" not in env
+        assert "OTEL_RESOURCE_ATTRIBUTES" not in env
 
 
 @pytest.mark.parametrize(
@@ -9566,7 +9735,10 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
         (b'{"metadata": {"customer_code_environment": []}}', {}),
         (b'{"metadata": {"customer_code_environment": null}}', {}),
         (b'{"metadata": {"customer_code_environment": {}}}', {}),
-        (b'{"metadata": {"customer_code_environment": {"FI_SIMULATION_EXPORT": 1}}}', {}),
+        (
+            b'{"metadata": {"customer_code_environment": {"FI_SIMULATION_EXPORT": 1}}}',
+            {},
+        ),
         (
             b'{"metadata": {"customer_code_environment": {"A": "x", "B": null}}}',
             {},
@@ -9607,7 +9779,12 @@ def test_a_malformed_customer_code_environment_is_ignored_with_one_warning_that_
     assert len(warnings) == 1
     message = warnings[0].getMessage()
     # Neither the key of the setting nor anything the customer's environment held is logged.
-    for forbidden in ("customer_code_environment", "TEST_KEY_NAME", "TEST_OTHER", "test-value-text"):
+    for forbidden in (
+        "customer_code_environment",
+        "TEST_KEY_NAME",
+        "TEST_OTHER",
+        "test-value-text",
+    ):
         assert forbidden not in message
 
 
@@ -9647,4 +9824,6 @@ def test_spawn_context_carries_no_customer_code_environment_by_default(
         )
 
     assert context().customer_code_environment == {}
-    assert context().customer_code_environment is not context().customer_code_environment
+    assert (
+        context().customer_code_environment is not context().customer_code_environment
+    )

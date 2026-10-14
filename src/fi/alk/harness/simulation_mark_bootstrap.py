@@ -113,8 +113,9 @@ def _wrap_loader(loader, pairs: dict[str, str]) -> None:
         return
     exec_module = getattr(loader, "exec_module", None)
     if exec_module is None:
-        # No loader, or one from before ``exec_module``: the patch cannot land, and the log
-        # must say the SDK is going to load unmarked.
+        # A third-party import hook written before ``exec_module`` existed still loads modules
+        # with ``load_module``; the patch cannot land there, and the log must say the SDK is
+        # going to load unmarked.
         _write("failed")
         return
 
@@ -140,12 +141,16 @@ class _ResourceFinder:
         setattr(self, _FINDER, True)
 
     def find_spec(self, fullname, path=None, target=None):
+        # Not removed after the first import: live-reload dev servers and test runners call
+        # ``importlib.reload``, which builds a new constructor that must be patched again.
         if fullname != _TARGET:
             return None
         spec = None
         try:
             for finder in list(sys.meta_path):
-                # A second copy of this finder would call this one back without end.
+                # The module can run twice under two names (the world directory copy and a copy
+                # on the customer's own path); two finders would otherwise call each other until
+                # ``RecursionError``.
                 if finder is self or getattr(finder, _FINDER, False):
                     continue
                 find_spec = getattr(finder, "find_spec", None)
@@ -206,9 +211,7 @@ def _chain() -> None:
                 # The world directory may sit on the path twice; our own file is not "next".
                 if not origin or os.path.realpath(origin) == own_hook:
                     continue
-                chained = importlib.util.spec_from_file_location(
-                    _CHAINED_NAME, origin
-                )
+                chained = importlib.util.spec_from_file_location(_CHAINED_NAME, origin)
                 module = importlib.util.module_from_spec(chained)
             except Exception:
                 continue

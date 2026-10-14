@@ -1522,7 +1522,9 @@ def test_observability_export_purpose_is_accepted_and_never_claimable(
 
     manifest = _build_bundle(tmp_path / "accepted")
     assert (
-        preflight_bundle(tmp_path / "accepted", manifest, parallelism=1, secret_refs=refs)
+        preflight_bundle(
+            tmp_path / "accepted", manifest, parallelism=1, secret_refs=refs
+        )
         is None
     )
 
@@ -1532,7 +1534,9 @@ def test_observability_export_purpose_is_accepted_and_never_claimable(
 
     claiming = _build_bundle(tmp_path / "claiming", body_overrides=claim)
     with pytest.raises(PreflightError) as refused:
-        preflight_bundle(tmp_path / "claiming", claiming, parallelism=1, secret_refs=refs)
+        preflight_bundle(
+            tmp_path / "claiming", claiming, parallelism=1, secret_refs=refs
+        )
     assert refused.value.code == "secret_purpose_forbidden"
     assert refused.value.message == (
         "customer processes cannot claim observability_export credentials: agent"
