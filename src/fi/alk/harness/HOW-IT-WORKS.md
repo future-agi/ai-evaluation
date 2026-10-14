@@ -343,6 +343,19 @@ record a source-evidenced identifier when the endpoint requires one. For a custo
 JSON envelope, `json_template` can instead supply a literal `model` and
 `"messages": "{{messages}}"` in `request_template`; `openai_chat` does not use templates.
 
+`runtime.extras` selects optional dependency groups declared in the selected Python
+project. For a uv workspace root, a group absent from the root must have exactly
+one owner among included members. The installer then includes workspace packages
+and only the named extras. Root-owned groups use the root project alone; ambiguous,
+unknown, invalid, and unsupported selections fail before installation. Compose
+applies these selections only to the control process. Existing pip project paths
+install the selected `.[extras]`; requirements-only sources cannot declare extras
+without a project manifest. Locked uv installs and their stale-lock retry preserve
+the same selection. Source manifests and lockfiles are not rewritten by selection.
+`runtime.install` remains descriptive metadata; arbitrary installation instructions
+are not executed by the process compiler. Declare supported optional groups through
+`runtime.extras` rather than relying on that string.
+
 ## Failure evidence
 
 HTTP status failures take precedence over success-response extraction. For an API

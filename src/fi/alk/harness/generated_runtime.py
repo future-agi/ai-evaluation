@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from packaging.utils import canonicalize_name
+
 from .public_material import is_public_pem
 
 GENERATED_DOCKERFILE = ".alk-generated.Dockerfile"
@@ -65,6 +67,18 @@ _NODE_ENTRYPOINTS = ("agent.js", "index.js", "main.js", "server.js")
 
 class GeneratedRuntimeError(ValueError):
     """The repository cannot be packaged without unsafe or ambiguous guessing."""
+
+
+@dataclass(frozen=True)
+class PythonExtraSelection:
+    names: tuple[str, ...] = ()
+    all_packages: bool = False
+
+    @property
+    def uv_arguments(self) -> list[str]:
+        return (["--all-packages"] if self.all_packages else []) + [
+            value for name in self.names for value in ("--extra", name)
+        ]
 
 
 @dataclass(frozen=True)
@@ -246,9 +260,7 @@ def _runtime_override(runtime: Any | None, **values: str) -> Any:
         "workdir": str(getattr(runtime, "workdir", "") or ""),
         "command": list(getattr(runtime, "command", None) or []),
         "extras": list(getattr(runtime, "extras", None) or []),
-        "context_excludes": list(
-            getattr(runtime, "context_excludes", None) or []
-        ),
+        "context_excludes": list(getattr(runtime, "context_excludes", None) or []),
     }
     payload.update(values)
     return type("RuntimeHints", (), payload)()
@@ -390,8 +402,9 @@ def _python_language_version(root: Path, configured: str) -> str:
 def _python_install(
     root: Path, runtime: Any | None, command: list[str]
 ) -> tuple[str, str, list[str], list[str]]:
-    extras = _python_extras(root, runtime, command)
-    uv_extras = [value for extra in extras for value in ("--extra", extra)]
+    selection = _python_extras(root, runtime, command)
+    extras = list(selection.names)
+    uv_extras = selection.uv_arguments
     uv_script_project = _uv_script_project(root / "pyproject.toml")
     if root.joinpath("uv.lock").is_file() and root.joinpath("pyproject.toml").is_file():
         return (
@@ -405,13 +418,32 @@ def _python_install(
             extras,
         )
     if root.joinpath("requirements.txt").is_file():
+        if selection.all_packages:
+            raise GeneratedRuntimeError("generated_runtime_workspace_extras_require_uv")
+        if extras and uv_script_project:
+            raise GeneratedRuntimeError(
+                "generated_runtime_pip_extras_require_installable_project"
+            )
+        target = ".[" + ",".join(extras) + "]" if extras else None
         return (
             "requirements.txt",
             "pip-requirements",
-            ["RUN pip install --no-cache-dir -r requirements.txt"],
-            [],
+            [
+                "RUN "
+                + shlex.join(
+                    [
+                        "pip",
+                        "install",
+                        "--no-cache-dir",
+                        "-r",
+                        "requirements.txt",
+                        *([target] if target else []),
+                    ]
+                )
+            ],
+            extras,
         )
-    if uv_script_project:
+    if uv_script_project or selection.all_packages:
         install = [
             "RUN pip install --no-cache-dir uv==0.8.13",
             "RUN " + shlex.join(["uv", "sync", "--no-cache", *uv_extras]),
@@ -494,35 +526,80 @@ def _needs_livekit_model_download(path: Path) -> bool:
     )
 
 
-def _python_extras(root: Path, runtime: Any | None, command: list[str]) -> list[str]:
-    path = root / "pyproject.toml"
-    if not path.is_file():
-        return []
-    try:
-        import tomllib
+def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelection:
+    """Resolve explicit extras in the selected project or unambiguous uv workspace members."""
+    if not requested:
+        return PythonExtraSelection()
+    for name in requested:
+        if not re.fullmatch(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*", name):
+            raise GeneratedRuntimeError(f"generated_runtime_extra_invalid: {name}")
+    names = tuple(sorted({canonicalize_name(name) for name in requested}))
+    document = _pyproject_document(root / "pyproject.toml")
 
-        document = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
+    def declared(body: dict[str, Any]) -> set[str]:
+        return {
+            canonicalize_name(name)
+            for name in body.get("project", {}).get("optional-dependencies", {})
+        }
+
+    root_names = declared(document)
+    if set(names) <= root_names:
+        return PythonExtraSelection(names)
+    workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
+    members: set[Path] = set()
+    excluded: set[Path] = set()
+    for key, paths in (("members", members), ("exclude", excluded)):
+        for pattern in workspace.get(key, []):
+            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+                raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+            for path in root.glob(pattern):
+                resolved = path.resolve()
+                if not resolved.is_relative_to(root.resolve()):
+                    raise GeneratedRuntimeError(
+                        "generated_runtime_workspace_path_invalid"
+                    )
+                if resolved != root.resolve():
+                    paths.add(resolved)
+    owners = {name: [root] if name in root_names else [] for name in names}
+    for member in sorted(members - excluded):
+        available = declared(_pyproject_document(member / "pyproject.toml"))
+        for name in names:
+            if name in available:
+                owners[name].append(member)
+    unknown = [name for name, projects in owners.items() if not projects]
+    if unknown:
+        raise GeneratedRuntimeError(
+            "generated_runtime_extra_unknown: " + ", ".join(unknown)
+        )
+    ambiguous = [name for name, projects in owners.items() if len(projects) > 1]
+    if ambiguous:
+        raise GeneratedRuntimeError(
+            "generated_runtime_extra_ambiguous: " + ", ".join(ambiguous)
+        )
+    return PythonExtraSelection(names, all_packages=True)
+
+
+def _python_extras(
+    root: Path, runtime: Any | None, command: list[str]
+) -> PythonExtraSelection:
+    requested = [str(item) for item in (getattr(runtime, "extras", None) or [])]
+    if requested:
+        return select_python_extras(root, requested)
+    document = _pyproject_document(root / "pyproject.toml")
     declared = document.get("project", {}).get("optional-dependencies", {})
     available = (
         sorted(str(name) for name in declared) if isinstance(declared, dict) else []
     )
-    requested = [str(item) for item in (getattr(runtime, "extras", None) or [])]
-    if requested:
-        unknown = sorted(set(requested) - set(available))
-        if unknown:
-            raise GeneratedRuntimeError(
-                "generated_runtime_extra_unknown: " + ", ".join(unknown)
-            )
-        return sorted(set(requested))
     tokens = re.split(r"[^a-z0-9]+", " ".join(command).lower())
-    return [
-        extra
-        for extra in available
-        if extra.lower() not in {"all", "dev", "test", "tests"}
-        and extra.lower() in tokens
-    ]
+    return select_python_extras(
+        root,
+        [
+            extra
+            for extra in available
+            if extra.lower() not in {"all", "dev", "test", "tests"}
+            and extra.lower() in tokens
+        ],
+    )
 
 
 def _python_command(root: Path) -> list[str]:

@@ -1546,7 +1546,9 @@ def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> 
     uv.chmod(0o755)
 
     completed = subprocess.run(
-        _uv_sync_build_command(tmp_path, "python3.12"),
+        _uv_sync_build_command(
+            tmp_path, "python3.12", extra_arguments=["--all-packages", "--extra", "cloud"]
+        ),
         cwd=tmp_path,
         env={
             **os.environ,
@@ -1563,6 +1565,7 @@ def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> 
     assert "--locked" not in attempts[1]
     assert "--no-dev" in attempts[0]
     assert "--no-dev" in attempts[1]
+    assert all("--all-packages --extra cloud" in attempt for attempt in attempts)
 
 
 def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
