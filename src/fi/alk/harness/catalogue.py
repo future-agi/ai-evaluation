@@ -255,10 +255,13 @@ SUB_GOAL_RULES = (
     "meaning) and over which span (the final records, or every call including ones later "
     "undone). If you cannot say where the right answer comes from, the sub-goal cannot be "
     "graded. Code settles structured facts and effects; the judge settles meaning and behaviour. "
-    "When an outcome needs both, such as a record that must be saved and also say what the "
-    "caller actually reported, give the check and the criteria and set `both`: it passes only "
-    "when each does. An agent that skipped a required step fails; the sub-goal is not "
-    "inapplicable because the agent avoided it.\n\n"
+    "Most sub-goals are one or the other. Set `both` only when one outcome has a part code reads "
+    "and a part only meaning settles, such as a record that must be saved and must also say what "
+    "the caller actually reported: the check reads the record, the criteria judge only what the "
+    "check cannot read, and it passes only when each does. Criteria that restate what the check "
+    "already reads (a call was made, a record exists) add a judge and nothing else; drop `both` "
+    "then. An agent that skipped a required step fails; the sub-goal is not inapplicable because "
+    "the agent avoided it.\n\n"
 )
 
 

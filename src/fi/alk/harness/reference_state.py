@@ -173,6 +173,59 @@ def expected_changes(
     return expected
 
 
+def _flat(arguments: Any, prefix: str = "") -> dict[str, Any]:
+    """Arguments as `field` or `field.sub` to a comparable value; long free text is the judge's."""
+    found: dict[str, Any] = {}
+    for key, value in (arguments or {}).items() if isinstance(arguments, dict) else ():
+        name = f"{prefix}{key}"
+        if isinstance(value, dict):
+            found.update(_flat(value, f"{name}."))
+        elif value not in (None, "") and not isinstance(value, list) and len(str(value)) <= _LONGEST_COMPARED:
+            found[name] = value
+    return found
+
+
+def compare_calls(
+    solution: list[Any], calls: list[Any], *, rules: dict[str, Any] | None = None
+) -> str | None:
+    """None when, for every solution step marked as the outcome, the call's last successful call
+    to that tool carries the step's arguments; otherwise whether it was not done, done wrong or
+    done twice. None too when no step is marked, so older scenarios are not graded this way."""
+    said = []
+    steps = [
+        step for step in solution or ()
+        if (step.get("outcome") if isinstance(step, dict) else getattr(step, "outcome", False)) is True
+    ]
+    for step in steps:
+        tool = str(step.get("tool") if isinstance(step, dict) else getattr(step, "tool", ""))
+        want = _flat(step.get("arguments") if isinstance(step, dict) else getattr(step, "arguments", {}))
+        done = [
+            call for call in calls
+            if getattr(call, "name", "") == tool and getattr(call, "ok", False) and not getattr(call, "refused", False)
+        ]
+        if not done:
+            stated = ", ".join(f"{field} {value}" for field, value in sorted(want.items()))
+            said.append(f"not done: no successful {tool} call" + (f"; expected one with {stated}" if stated else ""))
+            continue
+        got = _flat(getattr(done[-1], "arguments", {}))
+        said.extend(
+            f"done wrong: {tool}.{field} expected {value}, got {got.get(field)}"
+            for field, value in sorted(want.items())
+            if not _same(value, got.get(field), _rule(rules, tool, field))
+        )
+        same = sum(
+            all(_same(v, _flat(getattr(c, "arguments", {})).get(f), _rule(rules, tool, f)) for f, v in want.items())
+            for c in done
+        )
+        wanted = sum(
+            1 for one in steps
+            if str(one.get("tool") if isinstance(one, dict) else getattr(one, "tool", "")) == tool
+        )
+        if want and same > wanted:
+            said.append(f"done wrong: {same} successful {tool} calls with these values where the reference makes {wanted} (a duplicate)")
+    return "; ".join(dict.fromkeys(said)) or None
+
+
 def compare(
     expected: dict[str, list[dict[str, Any]]],
     before: dict[str, Any],

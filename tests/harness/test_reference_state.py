@@ -187,3 +187,34 @@ def test_a_short_value_counts_only_under_its_own_argument_name():
     solution = [{"tool": "book", "arguments": {"party_size": 2, "city": "Pune"}}]
 
     assert expected_changes(before, after, solution) == {"bookings": [{"party_size": 2, "city": "Pune"}]}
+
+
+class _Call:
+    def __init__(self, name, ok=True, refused=False, **arguments):
+        self.name, self.ok, self.refused, self.arguments = name, ok, refused, arguments
+
+
+def test_calls_are_compared_only_on_steps_marked_as_the_outcome():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [
+        {"tool": "lookup", "arguments": {"phone": "555"}},
+        {"tool": "file_claim", "arguments": {"policy": "MM-1", "loss": {"date": "2026-10-11"}}, "outcome": True},
+    ]
+    right = [_Call("lookup", phone="999"), _Call("file_claim", policy="mm-1", loss={"date": "2026-10-11"})]
+    assert compare_calls(solution, right) is None
+    assert compare_calls([{**solution[1], "outcome": False}], []) is None
+
+
+def test_the_last_successful_call_counts_and_a_failed_one_is_not_done():
+    from fi.alk.harness.reference_state import compare_calls
+
+    solution = [{"tool": "file_claim", "arguments": {"policy": "MM-1"}, "outcome": True}]
+    corrected = [_Call("file_claim", ok=False, policy="MM-1"), _Call("file_claim", policy="MM-2"), _Call("file_claim", policy="MM-1")]
+    assert compare_calls(solution, corrected) is None
+    assert compare_calls(solution, [_Call("file_claim", ok=False, policy="MM-1")]).startswith("not done:")
+    assert compare_calls(solution, [_Call("file_claim", policy="MM-9")]) == "done wrong: file_claim.policy expected MM-1, got MM-9"
+    twice = [_Call("file_claim", policy="MM-1"), _Call("file_claim", policy="MM-1")]
+    assert "duplicate" in compare_calls(solution, twice)
+    skip = {"file_claim.policy": {"match": "skip"}}
+    assert compare_calls(solution, [_Call("file_claim", policy="anything")], rules=skip) is None

@@ -1494,6 +1494,14 @@ def scenario_tools(
                                 "description": "Exactly the model-facing arguments defined by "
                                 "the agent's tool schema. Never include hidden session state.",
                             },
+                            "outcome": {
+                                "type": "boolean",
+                                "description": "True on each step that is the outcome this "
+                                "caller came for (what the call must leave done), never on a "
+                                "lookup. A call is graded on its last successful call to that "
+                                "tool carrying these arguments, so they must be this caller's "
+                                "values as last corrected.",
+                            },
                             "environment_arguments": {
                                 "type": "object",
                                 "description": "Only for a source-provisioned tool whose raw "

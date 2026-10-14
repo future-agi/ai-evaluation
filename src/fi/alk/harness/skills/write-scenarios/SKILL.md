@@ -254,8 +254,15 @@ changes it makes on the values it supplied, and every call is then graded
 `records_match_reference_solution` against them on the final records: first whether each record
 exists (*not done*), then whether its fields match (*done wrong*). Only the final state counts, so a
 retry, a correction mid-call or another route to the same records passes. A wrong solution fails a
-correct agent. When the proof says a step was recorded without running, no record changes are kept for that
-scenario, so name a judged sub-goal for whether the record carries this caller's values instead.
+correct agent.
+
+Mark with `outcome` each step that is what this caller came for: the change the call must leave done,
+never a lookup or a step the agent may take another way. When the proof says steps were recorded
+without running, no records can be kept, and the call is graded instead on its last successful call to
+each outcome tool carrying that step's arguments: not done when there is none, done wrong when a value
+differs, a duplicate when the same call succeeded more often than your solution makes it. A value your
+solution cannot know in advance, such as an identifier or token the system issues during the call, is
+set to `skip` in `comparisons`.
 
 The comparison ignores case, spacing and punctuation, reads phone numbers as digits and numbers by
 value, and matches a time to the minute. Where that is wrong for a value this caller gives, say so in

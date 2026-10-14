@@ -548,9 +548,12 @@ the run is read (the records afterwards, the calls and their results, what the a
 two are compared (exactly, ignoring format, by meaning) and over which span (the final records, or
 every call including ones later undone). A sub-goal whose right answer has no source cannot be
 graded; do not write it. Code settles structured facts and effects; the judge settles meaning and
-behaviour. When one outcome needs both, such as a record that must be saved on the right account and
-also say what the caller actually reported, give the check and the criteria and set `both`: it passes
-only when each does, and a failed check is never rescued by the judge. Correcting a mistake does not
+behaviour. Most sub-goals are one or the other. Set `both` only when one outcome has a part code reads
+and a part only meaning settles, such as a record that must be saved on the right account and also
+say what the caller actually reported: the check reads the record, the criteria judge only what the
+check cannot read, it passes only when each does, and a failed check is never rescued by the judge.
+Criteria that restate what the check reads (a call was made, a record exists) are not a second part;
+leave `both` off. Correcting a mistake does not
 undo it: when a wrong change the agent made and later replaced is itself harmful for this agent (a
 second live record, a charge, a message sent), write a sub-goal for that effect, read over every
 call, not only the final records.

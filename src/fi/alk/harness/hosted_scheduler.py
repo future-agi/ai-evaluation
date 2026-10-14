@@ -54,6 +54,7 @@ from .outbound import (
 from .joint_judge import OFF_SCRIPT
 from .reference_state import NAME as REFERENCE_SUB_GOAL
 from .reference_state import compare as compare_records
+from .reference_state import compare_calls
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
@@ -2311,6 +2312,22 @@ class HostedScheduler:
                     filter(None, [_sub_goal_reason(goal, verdict), judged.reason or None])
                 )
                 sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
+
+        solution = list(getattr(scenario, "solution", None) or ())
+        if not (expected or expect_nothing) and broken_failure is None and any(
+            isinstance(step, dict) and step.get("outcome") is True for step in solution
+        ):
+            # The reference could not be replayed to records (the agent's tools run in its own
+            # process), so its outcome steps are compared with the calls the agent made.
+            said = compare_calls(solution, list(calls), rules=getattr(scenario, "comparisons", None) or {})
+            sub_goal_results.append(
+                SubGoalResult(
+                    name=REFERENCE_SUB_GOAL,
+                    held=said is None,
+                    reason=said or "the agent's calls carry the reference solution's values for the outcome",
+                    judged=False,
+                )
+            )
 
         if (expected or expect_nothing) and before is not None and broken_failure is None:
             after = await self._records_now(check_handle)
