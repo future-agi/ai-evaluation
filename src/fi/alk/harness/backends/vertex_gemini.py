@@ -132,7 +132,10 @@ def _gemini_schema(schema: Any) -> dict[str, Any]:
             continue
         if key == "type" and isinstance(value, list):
             bare = [entry for entry in value if entry != "null"]
-            cleaned["type"] = bare[0] if bare else "string"
+            if len(bare) > 1:
+                cleaned["anyOf"] = [_gemini_schema({"type": kind}) for kind in bare]
+            else:
+                cleaned["type"] = bare[0] if bare else "string"
             if "null" in value:
                 cleaned["nullable"] = True
         elif key == "properties" and isinstance(value, dict):
