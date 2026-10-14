@@ -426,31 +426,36 @@ class RuntimeInterface(BaseModel):
                 )
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
+            available = set(_RUNTIME_TEMPLATE_INPUTS)
+            for setup in self.setup_requests:
+                unknown = _runtime_template_names(setup.path) - available
+                if self.protocol == "json_template":
+                    unknown |= _runtime_template_names(setup.body_template) - available
+                if unknown:
+                    raise ValueError(
+                        "runtime_http_setup_unknown_placeholders: "
+                        + ", ".join(sorted(unknown))
+                    )
+                duplicate = set(setup.capture) & available
+                if duplicate:
+                    raise ValueError(
+                        "runtime_http_setup_capture_shadows_input: "
+                        + ", ".join(sorted(duplicate))
+                    )
+                available.update(setup.capture)
             if self.protocol == "json_template":
-                available = set(_RUNTIME_TEMPLATE_INPUTS)
-                for setup in self.setup_requests:
-                    unknown = (
-                        _runtime_template_names(setup.path)
-                        | _runtime_template_names(setup.body_template)
-                    ) - available
-                    if unknown:
-                        raise ValueError(
-                            "runtime_http_setup_unknown_placeholders: "
-                            + ", ".join(sorted(unknown))
-                        )
-                    duplicate = set(setup.capture) & available
-                    if duplicate:
-                        raise ValueError(
-                            "runtime_http_setup_capture_shadows_input: "
-                            + ", ".join(sorted(duplicate))
-                        )
-                    available.update(setup.capture)
                 unknown = _runtime_template_names(self.request_template) - available
                 if unknown:
                     raise ValueError(
                         "runtime_http_request_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
+            unknown = _runtime_template_names(self.path) - available
+            if unknown:
+                raise ValueError(
+                    "runtime_http_request_unknown_placeholders: "
+                    + ", ".join(sorted(unknown))
+                )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
         return self

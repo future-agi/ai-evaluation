@@ -815,7 +815,7 @@ def test_contract_endpoint_model_reaches_openai_wire_payload(
     path.write_text(json.dumps(document))
     payloads = []
 
-    def post(self, payload, headers):
+    def post(self, payload, headers, *, endpoint=None):
         payloads.append(payload)
         return 200, {
             "choices": [{"message": {"role": "assistant", "content": "Found."}}]
