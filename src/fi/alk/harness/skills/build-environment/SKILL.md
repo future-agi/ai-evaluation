@@ -540,7 +540,10 @@ or hand them to a judge; the judge keeps what the records cannot show, what was 
 Name a check for what it checks.
 
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
-situations must not fail an agent that skipped it there.
+situations must not fail an agent that skipped it there. A sub-goal is shared, so test it against
+every situation the prompt describes: an agent that follows its rules must pass it in each scenario
+that names it. Keep it only if its verdict tells the agent's builder something to act on, which rule
+was kept or broken and which value was right or wrong; one nobody could act on is noise.
 
 Before writing a sub-goal, say in `compares` what it compares with what: where the right answer
 comes from (the reference solution, a record set up before the call, what the caller said), what of
