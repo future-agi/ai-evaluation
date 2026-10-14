@@ -59,6 +59,7 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .contract import Runtime, ToolEntry
+from .generated_runtime import GeneratedRuntimeError, select_python_extras
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
 from .runtime_selection import ComposeSelection, select_runtime
@@ -1129,6 +1130,7 @@ def _plan_python(
     depends_on: list[str] | None = None,
     livekit_download: bool = False,
     run_override: list[str] | None = None,
+    extras: list[str] | None = None,
 ) -> SourceProcess:
     if (
         run_override
@@ -1156,8 +1158,14 @@ def _plan_python(
         depends_on=depends_on,
     )
     python = _docker_python(root)
+    try:
+        selection = select_python_extras(root, extras or [])
+    except GeneratedRuntimeError as exc:
+        raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
-        commands = [_uv_sync_build_command(root, python)]
+        commands = [
+            _uv_sync_build_command(root, python, extra_arguments=selection.uv_arguments)
+        ]
         if livekit_download:
             commands.append(
                 [
@@ -1198,7 +1206,9 @@ def _plan_python(
     )
 
 
-def _uv_sync_build_command(root: Path, python: str) -> list[str]:
+def _uv_sync_build_command(
+    root: Path, python: str, *, extra_arguments: list[str] | None = None
+) -> list[str]:
     """Install runtime dependencies while preserving valid source lockfiles.
 
     Submitted source is copied into a writable build tree before this runs. A valid lock remains
@@ -1208,7 +1218,9 @@ def _uv_sync_build_command(root: Path, python: str) -> list[str]:
     a stale lock.
     """
 
-    base = ["uv", "sync", "--no-cache", "--python", python, "--no-dev"]
+    base = [
+        "uv", "sync", "--no-cache", "--python", python, "--no-dev", *(extra_arguments or [])
+    ]
     if not (root / "uv.lock").is_file():
         return base
     locked = shlex.join([*base, "--locked"])
@@ -2087,6 +2099,7 @@ def resolve_environment_plan(
                 environment=environment,
                 depends_on=[item for item in depends if item != "postgres"],
                 livekit_download=is_livekit and service_name == control_name,
+                extras=runtime_model.extras if service_name == control_name else [],
                 run_override=(
                     runtime_command
                     or _compose_command(service.get("command"))
@@ -2353,6 +2366,7 @@ def resolve_environment_plan(
             port=port,
             environment=environment,
             livekit_download=is_livekit,
+            extras=runtime_model.extras,
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph
