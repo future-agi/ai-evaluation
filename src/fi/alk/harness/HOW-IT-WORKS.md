@@ -335,6 +335,14 @@ response preserves `ready_to_submit` as its legacy inventory result and separate
 reports `can_submit_for_authoring` and `configuration_status`. Submission permission
 is not proof that the selected runtime will start or complete a conversation.
 
+For an OpenAI-compatible ingress, `runtime.interface.model` records the exact model
+or profile identifier accepted by that endpoint. It is passed unchanged in the
+`openai_chat` request's `model` field; it may differ from the backing provider model.
+Omitting it preserves the legacy `agent-learning-target` default. Authoring should
+record a source-evidenced identifier when the endpoint requires one. For a custom
+JSON envelope, `json_template` can instead supply a literal `model` and
+`"messages": "{{messages}}"` in `request_template`; `openai_chat` does not use templates.
+
 ## Failure evidence
 
 HTTP status failures take precedence over success-response extraction. For an API
