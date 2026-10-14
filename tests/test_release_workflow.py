@@ -36,7 +36,12 @@ def _steps(job: str) -> list[dict]:
 def test_one_release_workflow():
     assert not (WORKFLOWS / "e2b-template.yml").exists()
     assert WORKFLOW["name"] == "Release"
-    assert set(JOBS) == SDK_JOBS | {"validate", "template-publish", "deployment-bump"}
+    assert set(JOBS) == SDK_JOBS | {
+        "validate",
+        "release-pr",
+        "template-publish",
+        "deployment-bump",
+    }
 
 
 def test_triggers():
@@ -70,20 +75,38 @@ def test_uploads_and_template_builds_wait_for_approval():
     assert gated == {"sdk-publish": "pypi", "template-publish": "e2b-template"}
 
 
-def test_template_and_sdk_do_not_wait_for_each_other():
-    assert _needs("template-publish") == {"validate"}
+def test_template_does_not_wait_for_the_sdk_upload():
+    assert _needs("template-publish") == {"validate", "sdk-check"}
     assert _needs("deployment-bump").isdisjoint(SDK_JOBS)
     for job in SDK_JOBS:
         assert _needs(job).isdisjoint(
-            {"validate", "template-publish", "deployment-bump"}
+            {"validate", "template-publish", "deployment-bump", "release-pr"}
         )
 
 
-def test_template_publishes_from_main_only():
-    condition = JOBS["template-publish"]["if"]
-    assert "github.ref == 'refs/heads/main'" in condition
-    assert "github.event_name != 'pull_request'" in condition
-    assert "||" not in condition
+def test_template_builds_only_for_a_release_or_a_manual_run():
+    assert JOBS["template-publish"]["if"] == (
+        "${{ !cancelled() && needs.validate.result == 'success'"
+        " && github.ref == 'refs/heads/main'"
+        " && (github.event_name == 'workflow_dispatch'"
+        " || needs.sdk-check.outputs.publish == 'true') }}"
+    )
+
+
+def test_bump_pull_request_only_when_the_version_is_published():
+    assert _needs("release-pr") == {"sdk-check"}
+    assert JOBS["release-pr"]["if"] == "needs.sdk-check.outputs.publish == 'false'"
+    assert "environment" not in JOBS["release-pr"]
+    unpublished = "needs.sdk-check.outputs.publish == 'true'"
+    assert JOBS["sdk-build"]["if"] == JOBS["sdk-publish"]["if"] == unpublished
+
+
+def test_bump_targets_main_with_uv():
+    script = "\n".join(step.get("run", "") for step in _steps("release-pr"))
+    assert "uv version --bump patch --frozen" in script
+    assert "git add pyproject.toml uv.lock" in script
+    assert script.count("--base ") == script.count("--base main") == 2
+    assert "--force" not in script
 
 
 def test_no_merge_can_cancel_another_merges_template():
@@ -95,7 +118,9 @@ def test_no_merge_can_cancel_another_merges_template():
 
 def test_deployment_pr_only_after_certification():
     assert _needs("deployment-bump") == {"template-publish"}
-    assert "if" not in JOBS["deployment-bump"]
+    assert JOBS["deployment-bump"]["if"] == (
+        "${{ !cancelled() && needs.template-publish.result == 'success' }}"
+    )
     assert "needs.template-publish.outputs.release" in _dump("deployment-bump")
     assert JOBS["template-publish"]["outputs"] == {
         "release": "${{ steps.release.outputs.json }}"
@@ -149,12 +174,35 @@ def test_secrets_stay_in_their_job():
     assert WORKFLOW["permissions"] == {"contents": "read"}
     for job in JOBS:
         dumped = _dump(job)
-        assert ("RELEASE_BOT_" in dumped) == (job == "deployment-bump"), job
+        assert ("RELEASE_BOT_" in dumped) == (
+            job in {"deployment-bump", "release-pr"}
+        ), job
         assert ("E2B_API_KEY" in dumped) == (job == "template-publish"), job
         assert ("id-token" in dumped) == (job == "sdk-publish"), job
         assert ("packages" in JOBS[job].get("permissions", {})) == (
             job == "template-publish"
         ), job
+
+
+def test_each_bot_token_reaches_one_repository():
+    for job, repository in (
+        ("release-pr", "agent-learning-kit"),
+        ("deployment-bump", "deployment"),
+    ):
+        minted = [
+            step["with"]
+            for step in _steps(job)
+            if step.get("uses", "").startswith("actions/create-github-app-token@")
+        ]
+        assert len(minted) == 1, job
+        token = minted[0]
+        assert token["owner"] == "future-agi", job
+        assert token["repositories"] == repository, job
+        permissions = {k: v for k, v in token.items() if k.startswith("permission-")}
+        assert permissions == {
+            "permission-contents": "write",
+            "permission-pull-requests": "write",
+        }, job
 
 
 def test_actions_are_pinned():
@@ -168,3 +216,32 @@ def test_actions_are_pinned():
 
 def test_no_empty_expression():
     assert not re.search(r"\$\{\{\s*\}\}", TEXT)
+
+
+def test_bump_job_is_wired():
+    job = JOBS["release-pr"]
+    token = "${{ steps.app-token.outputs.token }}"
+    (checkout,) = [
+        s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
+    ]
+    (setup_uv,) = [
+        s for s in job["steps"] if s.get("uses", "").startswith("astral-sh/setup-uv@")
+    ]
+    (bump,) = [
+        s for s in job["steps"] if s.get("name") == "Open the version-bump pull request"
+    ]
+    assert checkout["with"] == {"token": token}
+    assert setup_uv["with"]["version"] == "${{ env.UV_VERSION }}"
+    assert bump["env"] == {"GH_TOKEN": token}
+    assert bump["run"].startswith("set -euo pipefail\n")
+    assert job["concurrency"] == {"group": "release-pr", "cancel-in-progress": False}
+
+
+def test_ci_runs_the_release_tests():
+    smoke = (WORKFLOWS / "sdk-smoke.yml").read_text(encoding="utf-8")
+    for name in (
+        "test_bump_deployment_values",
+        "test_release_workflow",
+        "test_release_pr_step",
+    ):
+        assert f"tests/{name}.py" in smoke, name

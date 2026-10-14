@@ -54,11 +54,22 @@ When moving an existing surface:
 # Release pipeline
 
 One GitHub Actions workflow, `Release` (`.github/workflows/publish-pypi.yml`), runs
-on every push to `main`, including merges. It publishes the SDK to PyPI, builds and
-certifies the hosted E2B template, and opens a pull request in `future-agi/deployment`
-that pins the new template. The SDK upload and the template build each wait for their
-own approval and run side by side; neither waits for the other. Pull requests that
-change the release inputs run credential-free validation only.
+on every push to `main`, including merges. What a push does depends on whether the
+`version` in `pyproject.toml` is already on PyPI:
+
+- Already there: the push is ordinary code, so the workflow opens the next
+  version-bump pull request to `main` as `futureagi-release-bot`, from the branch
+  `chore/bump-<next version>`, or leaves the one that is already open alone. The bump
+  is a patch bump: `uv version --bump patch --frozen` changes the one line in
+  `pyproject.toml`, and the workflow changes the matching line in `uv.lock`.
+- Not there yet: the push is the release. The workflow publishes the SDK to PyPI,
+  builds and certifies the hosted E2B template, and opens a pull request in
+  `future-agi/deployment` that pins the new template.
+
+To release, merge the open `chore(release): bump ...` pull request, then approve the
+`pypi` and `e2b-template` deployments. The SDK upload and the template build each wait
+for their own approval and run side by side; neither waits for the other. Pull
+requests that change the release inputs run credential-free validation only.
 
 Keep the file name `publish-pypi.yml`. PyPI accepts uploads only from the trusted
 publisher registered for this repository, that workflow file name, and the `pypi`
@@ -69,8 +80,8 @@ One-time setup:
 - `E2B_API_KEY`, a repository Actions secret holding the E2B team's API key.
 - `RELEASE_BOT_APP_ID` and `RELEASE_BOT_PRIVATE_KEY`, the organization Actions
   secrets of the release bot GitHub App, shared with this repository. The app must
-  be installed on `future-agi/deployment` with write access to contents and pull
-  requests.
+  be installed on this repository and on `future-agi/deployment`, with write access to
+  contents and pull requests on both.
 - The PyPI trusted publisher above.
 - Two environments, each with required reviewers and deployments limited to `main`:
   `pypi` for the SDK upload and `e2b-template` for the template build. An
@@ -87,14 +98,21 @@ One-time setup:
 ## SDK
 
 The SDK is uploaded only when the `version` in `pyproject.toml` is not on PyPI yet.
-To release: bump `version`, run `uv lock`, merge, then approve the `pypi` environment
+To release: merge the open bump pull request, then approve the `pypi` environment
 deployment. The upload runs on pushes only, never on a manual run.
+
+For a minor, major or pre-release version, close the bump pull request, delete its
+branch, and open one of your own to `main` that runs `uv version --bump minor` (or
+`--bump major`). Its version is not on PyPI either, so merging it releases the same
+way.
 
 ## E2B template
 
-The template build starts only after a reviewer approves the `e2b-template`
-environment deployment for that run; the one approval also covers the deployment
-pull request that follows. A run nobody approves builds nothing.
+The template is built only for a release push or a manual run on `main`; an ordinary
+push builds nothing and asks for no approval. The build starts only after a reviewer
+approves the `e2b-template` environment deployment for that run; the one approval
+also covers the deployment pull request that follows. A run nobody approves builds
+nothing.
 
 The workflow runs `scripts/e2b-template.py` against the checked-out commit. It builds
 `Dockerfile.hosted` for Linux amd64, pushes a uniquely tagged image, imports its
@@ -134,3 +152,21 @@ different number of times than the others, or is written in a form the script ca
 rewrite safely, the job fails and neither file is changed. No certified template
 means no pull request. A rerun for the same commit updates the same pull request.
 Pull requests opened for older commits are not closed automatically.
+
+## Known behaviours
+
+- An open bump pull request is left as it is on later pushes to `main`. It is never
+  refreshed or force-pushed, and it still merges into the latest `main`. A stale one
+  is not closed automatically.
+- If the version check (`sdk-check`) fails on a release push, the template is not
+  built either. Use "re-run failed jobs" to recover both.
+- A full re-run of a release run after the SDK is on PyPI skips the template and opens
+  the next bump pull request early. Use "re-run failed jobs" or a manual run instead.
+- If the bump branch exists without an open pull request (the pull request was
+  closed, or opening it failed), the job fails and says so. Delete the branch, or
+  reopen the pull request, and re-run the job.
+- A push that lands after the bump is merged but before the SDK upload has finished
+  also counts as a release, because its version is not on PyPI yet: it asks for both
+  approvals again and opens no bump pull request. The next push to `main` opens it.
+- The bump lands on `main` only. A branch that also changes the version conflicts
+  with it on that line; merge `main` into that branch first.

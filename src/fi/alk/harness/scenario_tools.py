@@ -250,6 +250,14 @@ def persona_vocabulary_note() -> str:
     )
 
 
+# A suite is never saved empty, so an emptied list changes nothing on disk until one is submitted.
+_EMPTIED = (
+    "Every scenario is dropped from this session's list, but nothing is saved yet: a suite is never "
+    "saved empty, so the saved scenarios stay until you submit at least one new scenario, which "
+    "then replaces them. Do not tell the person the suite is empty or saved."
+)
+
+
 def write_scenarios(
     scenarios: list[Scenario], destination: Path, catalogue: Catalogue | None = None
 ) -> Path:
@@ -1854,19 +1862,26 @@ def scenario_tools(
 
     @tool(
         "drop_scenario",
-        "Remove a scenario by name, or all of them with name '*'.",
-        schema({"name": str}, ["name"]),
+        "Remove a scenario by name. Removing every scenario takes name '*' with "
+        "everything=true, and only when the person asked to start the suite over.",
+        schema({"name": str, "everything": bool}, ["name"]),
     )
     async def drop_scenario(args: dict[str, Any]) -> dict[str, Any]:
         name = str(args.get("name") or "")
         if name == "*":
+            if args.get("everything") is not True:
+                return _err(
+                    "Dropping every scenario needs everything=true. Do that only when the "
+                    "person asked to start the suite over; otherwise drop scenarios by name."
+                )
             kept.clear()
-            write_scenarios(kept, destination, catalogue)
-            return _ok("all scenarios dropped")
+            return _ok(_EMPTIED)
         before = len(kept)
         kept[:] = [one for one in kept if one.name != name]
         if len(kept) == before:
             return _err(f"no scenario called {name!r}")
+        if not kept:
+            return _ok(_EMPTIED)
         write_scenarios(kept, destination, catalogue)
         return _ok(f"{name} dropped. {len(kept)} left")
 
