@@ -2873,12 +2873,14 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
 
 
-def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pass(
-    tmp_path,
+def test_a_check_that_cannot_fail_without_calls_is_refused_unless_the_reference_grades_the_run(
+    tmp_path, monkeypatch
 ):
-    """A check comparing calls against rows holds when there are no calls at all, so it reports
-    itself as held for an agent that did nothing. Another strong check must not hide that defect:
-    every checkpoint shown to a user needs its own evidence."""
+    """A check comparing calls against rows holds when there are no calls at all. Without a
+    reference outcome that fails a run doing nothing, another strong check must not hide that:
+    every checkpoint shown needs its own evidence. With one, the run that did nothing already
+    fails, so the check may hold there, as a prohibition does."""
+    import fi.alk.harness.prove as prove_module
     from fi.alk.harness.catalogue import SubGoal, save_catalogue
     from fi.alk.harness.prove import prove
     from fi.alk.harness.scenario import Scenario
@@ -2901,13 +2903,15 @@ def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pa
     )
     save_catalogue(catalogue, root)
     delta = _delta(sub_goals=["item-added", "quantity-respected"])
+
+    proof = prove(Scenario(**delta), catalogue, root)
+    assert proof.weak == ["quantity-respected"] and proof.reference_grades and proof.holds
+
+    monkeypatch.setattr(prove_module, "_reference_fails_on_nothing", lambda scenario, proof: False)
     said = accept_scenario(delta, world_root=root, catalogue=catalogue, kept=[])
     text = said["content"][0]["text"]
-
     assert said.get("is_error"), text
     assert "quantity-respected" in text and "without the agent doing anything" in text
-    proof = prove(Scenario(**delta), catalogue, root)
-    assert not proof.holds and proof.weak == ["quantity-respected"]
 
 
 def test_predictable_and_reused_otp_fixtures_are_rejected():
