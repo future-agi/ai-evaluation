@@ -10,6 +10,7 @@ the pure parsing runs in this process. Nothing here touches a database or the ne
 from __future__ import annotations
 
 import ast
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -606,6 +607,44 @@ print(json.dumps({"attributes": dict(resources.Resource({"x": "y"}).attributes)}
     # One line for the first patch and one for the class the reload made; the second install
     # and the second copy patched nothing the first had not.
     assert result.stderr == APPLIED * 2
+
+
+def test_two_copies_of_the_finder_never_call_each_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Loader:
+        def exec_module(self, module: Any) -> None:
+            pass
+
+    class Stub:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+            if fullname != "opentelemetry.sdk.resources":
+                return None
+            self.calls += 1
+            return importlib.machinery.ModuleSpec(fullname, Loader())
+
+    def finder_of_a_fresh_copy(name: str) -> Any:
+        spec = importlib.util.spec_from_file_location(name, HOOK)
+        copy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(copy)
+        return copy._ResourceFinder(OURS)
+
+    first = finder_of_a_fresh_copy("mark_hook_copy_one")
+    second = finder_of_a_fresh_copy("mark_hook_copy_two")
+    stub = Stub()
+    # Each copy sits ahead of the real finders. A copy that delegated to the other would be
+    # delegated back to, level after level, until the interpreter's limit raised and the
+    # handler swallowed it: the import still succeeds, but every level asks the real finders
+    # again, so the count is the only place the loop shows.
+    monkeypatch.setattr(sys, "meta_path", [first, second, stub, *sys.meta_path])
+
+    spec = first.find_spec("opentelemetry.sdk.resources", None)
+
+    assert spec is not None
+    assert stub.calls == 1
 
 
 def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax() -> None:
