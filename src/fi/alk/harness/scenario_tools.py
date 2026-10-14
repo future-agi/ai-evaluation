@@ -1080,6 +1080,8 @@ def scenario_tools(
     refused: dict[tuple[str, int], int] = {}
     # Scenarios the suite review flagged, until a writer resubmits them.
     flagged: dict[str, str] = {}
+    # Scenarios the suite review has read since they were last written.
+    reviewed: set[str] = set()
     external_runtime_target = _is_external_runtime(world_root)
     tool_free_target = not bool(contract.tools) or external_runtime_target
 
@@ -1638,6 +1640,7 @@ def scenario_tools(
             for key in [key for key in refused if key[0] == name]:
                 refused.pop(key, None)
             flagged.pop(name, None)
+            reviewed.discard(name)
             full = _full_levels(target.get("axes"), kept, cap())
             if full:
                 # Said on the way in, so the next scenario avoids a refusal rather than meeting one.
@@ -1960,6 +1963,13 @@ def scenario_tools(
                 "flagged by the suite review, brief writers to rewrite each under the same name: "
                 + "; ".join(f"{name} ({why})" for name, why in flagged.items())
             )
+        unreviewed = [one.name for one in kept if one.name not in reviewed and one.name not in flagged]
+        if unreviewed:
+            lines.append(
+                f"not yet read by the suite review ({len(unreviewed)}), brief it once the count "
+                "is reached: " + ", ".join(unreviewed[:60])
+                + ("" if len(unreviewed) <= 60 else f" and {len(unreviewed) - 60} more")
+            )
         by_worker = Counter(one.use_case.strip() for one in kept if one.use_case.strip())
         if by_worker:
             lines.append(
@@ -1974,9 +1984,11 @@ def scenario_tools(
         "against the agent's rules for that situation (a step they skip or forbid, a sub-goal "
         "that demands one), or a code sub-goal that checks one tool or step where one per "
         "outcome already exists. Each entry names the scenario, the rule quoted from the "
-        "contract, and why. Submit an empty list when none do.",
+        "contract, and why. Submit an empty list when none do. `reviewed` names every scenario "
+        "you read, flagged or not.",
         schema(
             {
+                "reviewed": {"type": "array", "items": {"type": "string"}},
                 "conflicts": {
                     "type": "array",
                     "items": {
@@ -1995,6 +2007,7 @@ def scenario_tools(
     )
     async def flag_conflicts(args: dict[str, Any]) -> dict[str, Any]:
         names = {one.name for one in kept}
+        reviewed.update(str(one) for one in args.get("reviewed") or [] if str(one) in names)
         unknown = []
         for one in args.get("conflicts") or []:
             if not isinstance(one, dict):

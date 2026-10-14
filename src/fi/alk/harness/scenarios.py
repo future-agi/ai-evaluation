@@ -251,7 +251,8 @@ def writer_worker(
                 "where the catalogue has one for the outcome the caller came for, or when a "
                 "sub-goal it names has no source for its right answer in `compares`. Quote the rule. "
                 "Flag nothing on taste: a scenario the rules allow stays. Then call "
-                "flag_conflicts once with every entry, empty if none, and report the count."
+                "flag_conflicts once with every entry, empty if none, and every scenario you read in "
+                "`reviewed`, and report the count."
             ),
             servers={
                 SCENARIO_SERVER: ToolServer(
