@@ -510,6 +510,7 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
         action_report=action_report,
         reset_equivalence=CheckStatus.PASSED,
         world_isolation=CheckStatus.NOT_RUN,
+        chat_ingress=CheckStatus.PASSED,
     )
 
     evidence = captured["evidence"]
@@ -585,6 +586,7 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
         action_report=action_report,
         reset_equivalence=CheckStatus.NOT_APPLICABLE,
         world_isolation=CheckStatus.NOT_APPLICABLE,
+        chat_ingress=CheckStatus.NOT_APPLICABLE,
     )
 
     checks = captured["evidence"].checks

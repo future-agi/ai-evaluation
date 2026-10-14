@@ -46,6 +46,7 @@ class HTTPAgentWrapper(AgentWrapper):
         api_key_env: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         timeout: float = 30.0,
+        total_timeout: Optional[float] = None,
         include_tools: bool = True,
         system_prompt: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
@@ -64,6 +65,8 @@ class HTTPAgentWrapper(AgentWrapper):
         self.api_key_env = api_key_env
         self.headers = {str(k): str(v) for k, v in dict(headers or {}).items()}
         self.timeout = float(timeout)
+        self.total_timeout = total_timeout
+        self._deadline: float | None = None
         self.include_tools = bool(include_tools)
         self.system_prompt = system_prompt
         self.metadata = dict(metadata or {})
@@ -79,18 +82,24 @@ class HTTPAgentWrapper(AgentWrapper):
 
     async def call(self, input: AgentInput) -> AgentResponse:
         started = time.time()
+        self._deadline = (
+            time.monotonic() + self.total_timeout
+            if self.total_timeout is not None
+            else None
+        )
         headers: dict[str, str] = {}
         status_code = 0
         error: Optional[str] = None
         stage = "setup"
         failure_stage = None
+        network_error = False
         response = AgentResponse(content="")
         self._response_text = ""
         self._response_status = 0
         secrets = None
         try:
             headers = self._request_headers()
-            await asyncio.to_thread(self._ensure_setup, input, headers)
+            await self._run_request(self._ensure_setup, input, headers)
             self._response_text = ""
             self._response_status = 0
             stage = "transport"
@@ -98,7 +107,7 @@ class HTTPAgentWrapper(AgentWrapper):
             endpoint = _render_endpoint_path(
                 self.endpoint, _template_context(input, extra=self._setup_values)
             )
-            status_code, response_payload = await asyncio.to_thread(
+            status_code, response_payload = await self._run_request(
                 self._post_json, request_payload, headers, endpoint=endpoint
             )
             if not 200 <= status_code < 300:
@@ -129,6 +138,9 @@ class HTTPAgentWrapper(AgentWrapper):
             stage = "extract"
             response = self._agent_response_from_payload(response_payload)
         except Exception as exc:
+            network_error = isinstance(
+                exc, (urllib.error.URLError, TimeoutError, ConnectionError)
+            )
             if self.secret_values is not None:
                 secrets = {
                     str(index): value
@@ -183,6 +195,7 @@ class HTTPAgentWrapper(AgentWrapper):
             },
             "error": error,
             "failure_stage": failure_stage,
+            "network_error": network_error,
             "response_excerpt": sanitize_diagnostic(self._response_text, secrets)
             if error
             else "",
@@ -211,6 +224,31 @@ class HTTPAgentWrapper(AgentWrapper):
         metadata["external_agent_trace"] = trace
         response.metadata = metadata
         return response
+
+    async def _run_request(self, function, *args, **kwargs):
+        task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A cancelled thread can still mutate the target. Drain before world reset.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
+
+    def _remaining_timeout(self):
+        if self._deadline is None:
+            return self.timeout
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("HTTP call deadline exceeded")
+        return min(self.timeout, remaining)
 
     def _request_payload(self, input: AgentInput) -> dict[str, Any]:
         if self.protocol == "json_template":
@@ -340,15 +378,17 @@ class HTTPAgentWrapper(AgentWrapper):
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(
+                request, timeout=self._remaining_timeout()
+            ) as response:
                 status = int(getattr(response, "status", 200))
                 self._response_status = status
-                raw = response.read(1024 * 1024 + 1)
+                raw = self._read_response(response)
         except urllib.error.HTTPError as exc:
             status = int(exc.code)
             self._response_status = status
             with exc:
-                raw = exc.read(1024 * 1024 + 1)
+                raw = self._read_response(exc)
         self._response_status = status
         # An incomplete response can split a credential, so retain no excerpt on overflow.
         if len(raw) > 1024 * 1024:
@@ -367,6 +407,27 @@ class HTTPAgentWrapper(AgentWrapper):
                 return status, text
             raise _ResponseFailure("decode", status, str(exc)) from exc
 
+    def _read_response(self, response):
+        if self._deadline is None:
+            return response.read(1024 * 1024 + 1)
+        if isinstance(response, urllib.error.HTTPError):
+            response = response.fp
+        chunks = []
+        size = 0
+        while size <= 1024 * 1024:
+            if response.isclosed():
+                break
+            remaining = self._remaining_timeout()
+            # urllib exposes the socket through its buffered HTTP response reader.
+            response.fp.raw._sock.settimeout(remaining)
+            chunk = response.read1(min(65536, 1024 * 1024 + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        self._remaining_timeout()
+        return b"".join(chunks)
+
     def _agent_response_from_payload(self, payload: Any) -> AgentResponse:
         if self.protocol == "json_template":
             selected = _select_response_value(payload, self.response_path)
@@ -381,7 +442,7 @@ class HTTPAgentWrapper(AgentWrapper):
         if self.protocol == "openai_chat":
             message = _openai_message(payload)
             return AgentResponse(
-                content=_content_text(message.get("content")),
+                content=_content_text(message.get("content") or message.get("refusal")),
                 tool_calls=_openai_tool_calls(message.get("tool_calls")),
                 metadata={
                     "finish_reason": _openai_finish_reason(payload),

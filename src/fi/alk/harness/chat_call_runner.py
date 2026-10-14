@@ -479,7 +479,9 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        source_key = (
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        )
         document = _with_scenario_edits(
             _scenario_document(self._context.bundle_dir, source_key),
             getattr(self._context.job, "metadata", None),
@@ -494,26 +496,13 @@ class HostedChatCallRunner:
             runtime,
             self._context.source_directory,
         )
-        adapter_path = "/invoke" if interface.kind == "callable" else interface.path
-        adapter_protocol = (
-            "fi.alk" if interface.kind == "callable" else interface.protocol
-        )
-        wrapper = HTTPAgentWrapper(
-            endpoint=urljoin(
-                endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
-            ),
-            protocol=adapter_protocol,
-            model=interface.model,
-            include_tools=interface.include_tools,
-            request_template=interface.request_template,
-            response_path=interface.response_path,
-            failure_rule=interface.failure_rule.model_dump()
-            if interface.failure_rule
-            else None,
+        from .chat_transport import create_chat_wrapper
+
+        wrapper = create_chat_wrapper(
+            interface,
+            endpoint.address,
+            wrapper_type=HTTPAgentWrapper,
             secret_values=self._context.target_provider_secret_values,
-            setup_requests=[
-                item.model_dump(mode="python") for item in interface.setup_requests
-            ],
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",

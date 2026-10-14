@@ -145,6 +145,7 @@ def _reuse_certified_bundle(
         CheckStatus,
         GenericHarnessArtifactStore,
         verify_runtime_certification,
+        requires_chat_ingress,
     )
 
     manifest = load_bundle_v2(frozen)
@@ -153,6 +154,7 @@ def _reuse_certified_bundle(
         certificate_path,
         bundle_digest=manifest.digest,
         source_digest=source_digest,
+        chat_ingress_required=requires_chat_ingress(job, frozen),
     )
     store = GenericHarnessArtifactStore(artifact_root)
     scenarios = authoring / "scenarios"
@@ -1219,7 +1221,13 @@ def _uv_sync_build_command(
     """
 
     base = [
-        "uv", "sync", "--no-cache", "--python", python, "--no-dev", *(extra_arguments or [])
+        "uv",
+        "sync",
+        "--no-cache",
+        "--python",
+        python,
+        "--no-dev",
+        *(extra_arguments or []),
     ]
     if not (root / "uv.lock").is_file():
         return base

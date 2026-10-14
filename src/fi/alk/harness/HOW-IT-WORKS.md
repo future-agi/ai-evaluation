@@ -385,3 +385,26 @@ redaction, not a guarantee that arbitrary personal data has been removed.
 Public PEM keys and certificate-only chains may pass source and artifact checks when
 the complete bounded content parses as public material. Private, mixed, malformed,
 oversized, and credential-named files remain blocked.
+
+## Chat readiness before certification
+
+For generic source-owned HTTP or callable chat agents, ALK runs one representative
+opening request after scenario setup and ready checks, before source-data invariant
+review. It uses the execution transport, edited persona opening or a greeting, and
+the declared model, setup requests, response mapping, and tools. Valid text,
+clarification, refusal, or structurally usable tool requests establish interface
+readiness. ALK does not replay returned tools or judge task success in this check.
+The target itself may execute tools during the request.
+
+Failed requests prevent certification. Candidate configuration errors use the
+existing source-backed runtime-plan repair budget. Authentication and unexplained
+application failures remain errors; they do not permit rewriting scenario outcomes.
+Each attempt retains a bounded sanitized receipt under `generic-harness/chat-readiness`.
+ALK resets a successful disposable instance before continuing and closes failed
+instances. Certificates require explicit `chat_ingress` evidence. Voice and external
+connect-only providers record that this check is not applicable.
+
+One successful opening does not prove every scenario or a complete workflow. Socket
+operations share a deadline, but urllib DNS resolution and response-header parsing
+are not independently interruptible. The enclosing job and sandbox limits remain
+the final execution bounds; cancellation drains the client worker before cleanup.
