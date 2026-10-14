@@ -626,12 +626,23 @@ def _nested_named_values(value: Any, names: set[str]) -> list[Any]:
 
     found: list[Any] = []
     if isinstance(value, Mapping):
+        if value.get("role") == "tool" or value.get("type") == "tool":
+            return found
         for key, item in value.items():
-            # Metadata describes native execution; it does not request harness tools.
-            if key == "metadata":
+            # Descriptions and tool payloads cannot request harness tools.
+            if key in {"metadata", "args", "arguments"}:
                 continue
             if str(key) in names:
                 found.append(item)
+            if key in {
+                "function_call",
+                "functionCall",
+                "tool_calls",
+                "function_response",
+                "functionResponse",
+                "tool_responses",
+            }:
+                continue
             found.extend(_nested_named_values(item, names))
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for item in value:
@@ -662,6 +673,16 @@ def _nested_tool_evidence(
             payload, {"function_response", "functionResponse", "tool_responses"}
         )
     )
+    message_lists = _nested_named_values(payload, {"messages"})
+    if isinstance(payload, list):
+        message_lists.append(payload)
+    raw_responses.extend(
+        message
+        for message in _mapping_items(message_lists)
+        if (message.get("role") == "tool" or message.get("type") == "tool")
+        and message.get("tool_call_id")
+        and "content" in message
+    )
     responses: list[dict[str, Any]] = []
     for index, response in enumerate(raw_responses, start=1):
         responses.append(
@@ -675,7 +696,12 @@ def _nested_tool_evidence(
                 "result": response.get(
                     "result", response.get("response", response.get("content"))
                 ),
-                "error": response.get("error"),
+                "error": response.get("error")
+                or (
+                    "Tool execution failed"
+                    if response.get("status") == "error"
+                    else None
+                ),
             }
         )
     return _deduplicate_tool_records(calls), _deduplicate_tool_records(responses)
