@@ -1,0 +1,148 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": null,
+        "shape": "external",
+        "tools": [
+          "search_faq"
+        ],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "faq-bot",
+        "agent_languages": [],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {},
+        "data_store": null,
+        "dependencies": [],
+        "hard_constraints": [],
+        "implementation": "",
+        "instrumentation": "none",
+        "modality": "chat",
+        "notes": "",
+        "one_liner": "",
+        "open_questions": [],
+        "real_use_cases": [],
+        "refusal_signature": "",
+        "runtime": null,
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "",
+        "tool_entrypoints": [
+          {
+            "callable": "search_faq",
+            "endpoint": "",
+            "factory": "",
+            "first_arg": "",
+            "method": "POST",
+            "mode": "import",
+            "module": "faq.tools",
+            "notes": "",
+            "service": "",
+            "tool": "search_faq"
+          }
+        ],
+        "tools": [
+          {
+            "arg_types": {},
+            "arg_values": {},
+            "args": [
+              "query"
+            ],
+            "description": "Search the FAQ.",
+            "name": "search_faq",
+            "requires": []
+          }
+        ]
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "none",
+    "kind": "source",
+    "model": null,
+    "name": "faq-bot",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:623c59ec1c95beda440c199e89e00053fd26d61c624185f44f990d5a38d6fb7e",
+    "supports": [],
+    "telephony": [],
+    "tools": [
+      {
+        "description": "Search the FAQ.",
+        "endpoint": null,
+        "kind": "builtin",
+        "name": "search_faq",
+        "parameters": {
+          "properties": {
+            "query": {}
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "type": "chat",
+    "voice": null
+  },
+  "contract": {
+    "agent": "faq-bot",
+    "agent_languages": [],
+    "amendments": [],
+    "base_environment": {},
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {},
+    "data_store": null,
+    "dependencies": [],
+    "hard_constraints": [],
+    "implementation": "",
+    "instrumentation": "none",
+    "modality": "chat",
+    "notes": "",
+    "one_liner": "",
+    "open_questions": [],
+    "real_use_cases": [],
+    "refusal_signature": "",
+    "runtime": null,
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "",
+    "tool_entrypoints": [
+      {
+        "callable": "search_faq",
+        "endpoint": "",
+        "factory": "",
+        "first_arg": "",
+        "method": "POST",
+        "mode": "import",
+        "module": "faq.tools",
+        "notes": "",
+        "service": "",
+        "tool": "search_faq"
+      }
+    ],
+    "tools": [
+      {
+        "arg_types": {},
+        "arg_values": {},
+        "args": [
+          "query"
+        ],
+        "description": "Search the FAQ.",
+        "name": "search_faq",
+        "requires": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": "Answer billing questions.",
+        "shape": "external",
+        "tools": [
+          "get_invoice"
+        ],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "support-langgraph-agent",
+        "agent_languages": [],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {},
+        "data_store": null,
+        "dependencies": [],
+        "hard_constraints": [],
+        "implementation": "",
+        "instrumentation": "traceai",
+        "modality": "chat",
+        "notes": "",
+        "one_liner": "",
+        "open_questions": [],
+        "real_use_cases": [],
+        "refusal_signature": "",
+        "runtime": null,
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "Answer billing questions.",
+        "tool_entrypoints": [
+          {
+            "callable": "get_invoice",
+            "endpoint": "",
+            "factory": "",
+            "first_arg": "",
+            "method": "POST",
+            "mode": "import",
+            "module": "billing.tools",
+            "notes": "",
+            "service": "",
+            "tool": "get_invoice"
+          }
+        ],
+        "tools": [
+          {
+            "arg_types": {},
+            "arg_values": {},
+            "args": [
+              "invoice_id"
+            ],
+            "description": "Fetch one invoice.",
+            "name": "get_invoice",
+            "requires": []
+          }
+        ]
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "traceai",
+    "kind": "source",
+    "model": null,
+    "name": "support-langgraph-agent",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:85bf42eb28af01829be047090dbd63b101d0347029fffac55533f230009d54af",
+    "supports": [],
+    "telephony": [],
+    "tools": [
+      {
+        "description": "Fetch one invoice.",
+        "endpoint": null,
+        "kind": "builtin",
+        "name": "get_invoice",
+        "parameters": {
+          "properties": {
+            "invoice_id": {}
+          },
+          "required": [
+            "invoice_id"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "type": "chat",
+    "voice": null
+  },
+  "contract": {
+    "agent": "support-langgraph-agent",
+    "agent_languages": [],
+    "amendments": [],
+    "base_environment": {},
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {},
+    "data_store": null,
+    "dependencies": [],
+    "hard_constraints": [],
+    "implementation": "",
+    "instrumentation": "traceai",
+    "modality": "chat",
+    "notes": "",
+    "one_liner": "",
+    "open_questions": [],
+    "real_use_cases": [],
+    "refusal_signature": "",
+    "runtime": null,
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "Answer billing questions.",
+    "tool_entrypoints": [
+      {
+        "callable": "get_invoice",
+        "endpoint": "",
+        "factory": "",
+        "first_arg": "",
+        "method": "POST",
+        "mode": "import",
+        "module": "billing.tools",
+        "notes": "",
+        "service": "",
+        "tool": "get_invoice"
+      }
+    ],
+    "tools": [
+      {
+        "arg_types": {},
+        "arg_values": {},
+        "args": [
+          "invoice_id"
+        ],
+        "description": "Fetch one invoice.",
+        "name": "get_invoice",
+        "requires": []
+      }
+    ]
+  }
+}
