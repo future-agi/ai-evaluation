@@ -96,6 +96,26 @@ class _ResponseFailure(RuntimeError):
         self.stage, self.status = stage, status
 
 
+_SAFE_TOOL_EVIDENCE_ERRORS = frozenset(
+    {
+        "missing or invalid event correlation",
+        "event endpoint failed",
+        "event items must be an array",
+        "event collection exceeds limit",
+        "invalid event pagination",
+        "event pagination exceeds limit",
+        "tool events are missing a paired action or completion",
+        "invalid completed tool data",
+        "completed tool evidence exceeds call limit",
+        "invalid completed tool row",
+        "completed tool event must be an object",
+        "invalid or duplicate tool event identity",
+        "tool event is not completed",
+        "response tool events must be a bounded array",
+    }
+)
+
+
 class HTTPAgentWrapper(AgentWrapper):
     """HTTP/OpenAI-compatible target adapter for external agent simulation."""
 
@@ -323,8 +343,11 @@ class HTTPAgentWrapper(AgentWrapper):
             )
             if stage == "tool_events":
                 self._response_text = ""
-                error = (
-                    "Completed tool evidence collection failed: " + type(exc).__name__
+                reason = str(exc)
+                error = "Completed tool evidence collection failed: " + (
+                    reason
+                    if reason in _SAFE_TOOL_EVIDENCE_ERRORS
+                    else type(exc).__name__
                 )
             else:
                 error = sanitize_diagnostic(str(exc), secrets)
