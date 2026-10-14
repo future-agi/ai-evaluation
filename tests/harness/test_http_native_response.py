@@ -353,3 +353,63 @@ def test_response_event_ids_deduplicate_history_per_thread(native_app):
         )
     )
     assert len(other_thread.metadata["native_completed_tools"]) == 1
+
+
+@pytest.mark.parametrize(
+    "defect,reason",
+    [
+        ("missing_pair", "tool events are missing a paired action or completion"),
+        ("invalid_data", "invalid completed tool data"),
+        ("unfinished", "tool event is not completed"),
+    ],
+)
+def test_tool_failure_reports_fixed_reason_without_payload(native_app, defect, reason):
+    base, state = native_app
+    payload = copy.deepcopy(PAIR_PAYLOAD)
+    payload["private_value"] = "unregistered-secret-value"
+    if defect == "missing_pair":
+        del payload["output"][1]
+    elif defect == "invalid_data":
+        payload["output"][0]["name"] = ""
+    else:
+        payload["output"][0]["status"] = "in_progress"
+    state["payload"] = payload
+    wrapper = create_chat_wrapper(
+        interface(completed_tools=None, completed_tool_events=EVENTS),
+        base,
+        secret_values={},
+    )
+    response = invoke(wrapper)
+    trace = response.metadata["external_agent"]
+    assert trace["success"] is False
+    assert trace["failure_stage"] == "tool_events"
+    assert trace["error"] == "Completed tool evidence collection failed: " + reason
+    assert trace["response_excerpt"] == ""
+    assert "unregistered-secret-value" not in json.dumps(response.metadata)
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError])
+def test_unrecognized_tool_error_message_stays_private(
+    native_app, monkeypatch, error_type
+):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    wrapper = create_chat_wrapper(
+        interface(completed_tools=None, completed_tool_events=EVENTS),
+        base,
+        secret_values={},
+    )
+
+    def fail(*args, **kwargs):
+        raise error_type("unregistered-secret-value")
+
+    monkeypatch.setattr(wrapper, "_completed_response_events", fail)
+    response = invoke(wrapper)
+    trace = response.metadata["external_agent"]
+    assert trace["success"] is False
+    assert (
+        trace["error"]
+        == "Completed tool evidence collection failed: " + error_type.__name__
+    )
+    assert trace["response_excerpt"] == ""
+    assert "unregistered-secret-value" not in json.dumps(response.metadata)
