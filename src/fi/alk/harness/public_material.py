@@ -13,6 +13,17 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
+# A complete ellipsis-only example contains no key; malformed key bodies still fail closed.
+SECRET_CONTENT_PATTERNS = (
+    re.compile(
+        rb"-----BEGIN (?P<kind>(?:RSA |EC |OPENSSH )?PRIVATE KEY)-----"
+        rb"(?!(?:[ \t\r\n]|\\n)*\.\.\.(?:[ \t\r\n]|\\n)*-----END (?P=kind)-----)"
+    ),
+    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
+    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
+)
+
 _MAX_PUBLIC_PEM_BYTES = 64 * 1024
 _PUBLIC_PEM = re.compile(
     rb"\s*-----BEGIN (PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE)-----\r?\n"

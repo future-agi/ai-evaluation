@@ -403,7 +403,7 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
     return result
 
 
-def _copy_source(source: Path, destination: Path) -> None:
+def validate_source_tree(source: Path) -> None:
     for path in source.rglob("*"):
         if path.is_symlink() and (
             path.readlink().is_absolute()
@@ -412,6 +412,10 @@ def _copy_source(source: Path, destination: Path) -> None:
             raise ComposeRuntimeError("compose_source_symlink_escape")
         if not path.is_symlink() and not path.is_file() and not path.is_dir():
             raise ComposeRuntimeError("compose_source_special_file")
+
+
+def _copy_source(source: Path, destination: Path) -> None:
+    validate_source_tree(source)
     shutil.copytree(source, destination, symlinks=True)
 
 

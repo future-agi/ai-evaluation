@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field, model_validator
 
-from .public_material import is_public_pem
+from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
 
 ARTIFACT_MANIFEST_VERSION = "futureagi.harness-artifacts.v1"
 ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
@@ -69,12 +69,6 @@ class ArtifactManifest(BaseModel):
         return self
 
 
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
 _SECRET_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa"}
 _TERMINAL_STATUSES = {
     "completed",
