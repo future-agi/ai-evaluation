@@ -620,6 +620,10 @@ class VertexGeminiSession:
         context = self._spec.conversation
         run_config = RunConfig(
             max_llm_calls=max(self._spec.max_turns, 1),
+            http_options=types.HttpOptions(
+                timeout=300_000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
             streaming_mode=(
                 StreamingMode.SSE
                 if context is not None and context.streaming
