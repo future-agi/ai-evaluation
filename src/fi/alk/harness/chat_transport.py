@@ -37,6 +37,9 @@ def create_chat_wrapper(
             if interface.failure_rule
             else None,
             secret_values=secret_values,
+            completed_tool_events=interface.completed_tool_events.model_dump()
+            if interface.completed_tool_events
+            else None,
         )
         if total_timeout is not None:
             options["total_timeout"] = total_timeout

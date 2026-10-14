@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from fi.simulate.agent.wrappers.http_events import CompletedToolEvents
+
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
@@ -379,6 +381,7 @@ class RuntimeInterface(BaseModel):
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
     response_path: str = ""
+    completed_tool_events: CompletedToolEvents | None = None
     failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
         default_factory=list, max_length=8
@@ -418,6 +421,8 @@ class RuntimeInterface(BaseModel):
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
             if not self.path:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_path")
+        if self.completed_tool_events is not None and self.kind != "http":
+            raise ValueError("completed tool events require an HTTP interface")
         if self.kind == "http":
             if self.protocol not in {"fi.alk", "openai_chat", "json_template"}:
                 raise ValueError(
