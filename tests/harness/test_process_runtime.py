@@ -9181,6 +9181,80 @@ def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporti
     assert again["env"]["PYTHONPATH"] == str(world)
 
 
+def test_mark_hook_that_cannot_be_written_fails_the_spawn(tmp_path: Path) -> None:
+    exporting = {
+        "FI_SIMULATION_EXPORT": "our_keys",
+        "OTEL_RESOURCE_ATTRIBUTES": "fi.simulation.origin=simulation",
+    }
+    process = _source_process(name="agent")
+    started: list[Any] = []
+
+    def recording_runner(argv, *, cwd, env, log_path, user=None, group=None):
+        started.append(argv)
+        return FakeHandle()
+
+    def spawn_once(
+        root: Path,
+        customer_code_environment: dict[str, str],
+        *,
+        read_only_world: bool = False,
+    ) -> Path:
+        (root / "build" / process.name).mkdir(parents=True)
+        world_dir = root / "worlds" / "w0" / process.name
+        world_dir.mkdir(parents=True)
+        if read_only_world:
+            world_dir.chmod(0o555)
+        try:
+            pr.spawn_source_process(
+                process,
+                build_dir=root / "build" / process.name,
+                world_dir=world_dir,
+                world_index=0,
+                port_plan=_solo_port_plan(process.name),
+                configuration_addresses={},
+                secret_values={},
+                secret_purposes={},
+                runner=recording_runner,
+                customer_code_environment=customer_code_environment,
+            )
+        finally:
+            # Left at 0555, the test's own temporary-directory cleanup could not remove it.
+            world_dir.chmod(0o755)
+        return world_dir
+
+    # An exporting process whose mark cannot be placed would send traces under our keys with
+    # nothing to tell them apart, so the run must stop before the process exists.
+    # The SDK's own copy of the module being gone is one way the placement fails.
+    real_read_bytes = Path.read_bytes
+
+    def read_bytes_without_the_mark_module(self: Path) -> bytes:
+        if self.name == "simulation_mark_bootstrap.py":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_read_bytes(self)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "read_bytes", read_bytes_without_the_mark_module)
+        with pytest.raises(pr.ProcessRuntimeError) as missing:
+            spawn_once(tmp_path / "sdk-copy-missing", exporting)
+    assert missing.value.code == "spawn_failed"
+    assert "simulation_mark_bootstrap.py" in str(missing.value)
+    assert started == []
+
+    # Mode bits do not refuse a write to root, so the unwritable directory proves nothing
+    # there; the missing-module case above still ran.
+    if os.geteuid() != 0:
+        with pytest.raises(pr.ProcessRuntimeError) as unwritable:
+            spawn_once(tmp_path / "unwritable", exporting, read_only_world=True)
+        assert unwritable.value.code == "spawn_failed"
+        assert started == []
+
+        # The same directory costs nothing when no hook is due, so the failure above comes from
+        # placing the hook and not from the directory itself.
+        world_dir = spawn_once(tmp_path / "control", {}, read_only_world=True)
+        assert len(started) == 1
+        assert list(world_dir.iterdir()) == []
+
+
 _OTEL_CLOSURE = """
 import importlib.metadata, json, re, sys
 from pathlib import Path
