@@ -44,9 +44,18 @@ class Outcome:
 
 
 def takes_reference(checker: Any) -> bool:
-    """Whether a check is written `check(world, calls, reference)`."""
+    """Whether a check is written `check(world, calls, reference)`, read from its source when it
+    was compiled to run elsewhere."""
+    import ast
     import inspect
 
+    source = getattr(checker, "_alk_source", None)
+    if source:
+        entry = getattr(checker, "_alk_entry", "check")
+        for node in ast.parse(source).body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry:
+                return len(node.args.args) >= 3
+        return False
     try:
         return len(inspect.signature(checker).parameters) >= 3
     except (TypeError, ValueError):

@@ -135,3 +135,14 @@ def test_a_check_that_raises_is_an_execution_error_not_an_agent_failure():
     broken = "def check(world, calls, reference):\n    return reference[5]['tool']\n"
     said = run_check(broken, _World([]), [], reference=[])
     assert said.broken and not said.held
+
+
+def test_a_check_compiled_to_run_in_the_hosted_worker_is_still_given_the_reference():
+    from fi.alk.harness.scenario_source import _compile_entry
+
+    deferred = _compile_entry(CHECK, label="t", entry="check", defer_execution=True)
+    assert takes_reference(deferred)
+    two = _compile_entry("def check(world, calls):\n    return None\n", label="t", entry="check", defer_execution=True)
+    assert not takes_reference(two)
+    world, calls = _filed(policy="MM-7", loss_date="2026-10-12")
+    assert deferred(world, calls, REFERENCE) == "done wrong: loss_date expected '2026-10-11', got '2026-10-12'"

@@ -685,6 +685,8 @@ async def _invoke(
             }
             if len(args) > 1:
                 payload["calls"] = [asdict(call) for call in args[1]]
+            if len(args) > 2:
+                payload["reference"] = args[2]
             result = await run_json_worker(
                 "fi.alk.harness.phase_worker",
                 payload,
