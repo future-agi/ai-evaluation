@@ -40,7 +40,10 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   LLM and the `vertex-gemini` harness backend reach Gemini through Agent
   Command Center in the Gemini API's own format, as the claude backend already
   did, so no Vertex credential is needed. `fi.agentcc` is the one place that
-  reads the gateway settings.
+  reads the gateway settings. A caller on `SIMULATOR_LLM_PROVIDER=vertex`, and
+  the `vertex-gemini` backend, stay on Vertex: a bare model name such as
+  `gemini-3.7-flash` is sent as `vertex_ai/gemini-3.7-flash`, which the gateway
+  routes to Vertex rather than to the Gemini API.
 - Simulator model fallbacks: `SIMULATOR_LLM_FALLBACK_MODELS` (ordered,
   comma-separated) gives the simulated caller models to switch to when an
   attempt fails or times out before it speaks.
