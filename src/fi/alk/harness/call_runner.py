@@ -805,11 +805,18 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
         )
 
 
+# Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
+# agent's interpreter as a standalone sitecustomize, so it cannot import this constant.
+_LIVEKIT_HOOK_SOURCE = "livekit"
+
+
 def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     path = _tool_trace_file(runtime)
     if path is None or not path.is_file():
         return ()
     calls: list[Call] = []
+    # Agent-written calls not yet timed by the hook line for the same call.
+    untimed: list[Call] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -835,16 +842,29 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         is_error = bool(record.get("is_error", False))
         output = record.get("output")
         raw_at = record.get("at")
-        calls.append(
-            Call(
-                name=name,
-                arguments=arguments,
-                result=None if is_error else output,
-                ok=not is_error,
-                error=str(output) if is_error and output is not None else None,
-                at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
-            )
+        call = Call(
+            name=name,
+            arguments=arguments,
+            result=None if is_error else output,
+            ok=not is_error,
+            error=str(output) if is_error and output is not None else None,
+            at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
         )
+        if record.get("source") != _LIVEKIT_HOOK_SOURCE:
+            calls.append(call)
+            if not call.at:
+                untimed.append(call)
+            continue
+        # An agent implementing HARNESS_AGENT_TOOL_TRACE writes its own line while the tool
+        # runs: the arguments it executed with and the structured result, but no time. The hook
+        # writes the same call after the step, with the model's arguments, a stringified output
+        # and when the model issued it. Keep the agent's evidence and take the hook's time.
+        written = next((pending for pending in untimed if pending.name == name), None)
+        if written is None:
+            calls.append(call)
+            continue
+        untimed.remove(written)
+        written.at = call.at
     return tuple(calls)
 
 

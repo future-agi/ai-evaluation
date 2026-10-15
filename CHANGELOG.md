@@ -47,6 +47,12 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - The `vertex-gemini` backend no longer fails on its first reply with the locked
   ADK (2.7.1), which does not re-export `GetSessionConfig` from
   `google.adk.sessions`.
+- Hosted chat transcripts stamp each turn with when it was delivered (`at`,
+  on the tool trace's clock), so tool calls sort between the customer's turn
+  and the agent's reply instead of after the conversation.
+- Hosted voice calls whose agent writes its own tool trace no longer report
+  each call twice: the agent's line (real arguments, structured result) takes
+  the time from the LiveKit hook's line for the same call.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

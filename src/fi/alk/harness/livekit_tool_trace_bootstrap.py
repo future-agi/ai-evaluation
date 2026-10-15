@@ -54,6 +54,9 @@ def _record(event: Any) -> None:
                 ),
                 # Epoch seconds when the model issued the call; places it in the transcript.
                 "at": getattr(call, "created_at", None),
+                # An agent may also write its own line to this file for the same call; the
+                # collector merges the two by this marker (call_runner._collect_file_tool_calls).
+                "source": "livekit",
             }
         )
     if not records:
