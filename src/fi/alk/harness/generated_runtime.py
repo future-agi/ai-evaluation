@@ -20,7 +20,7 @@ from typing import Any
 
 from packaging.utils import canonicalize_name
 
-from .public_material import is_public_pem, inspect_public_file
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 GENERATED_DOCKERFILE = ".alk-generated.Dockerfile"
 GENERATED_PLAN = "generated-runtime.json"
@@ -1128,7 +1128,7 @@ def _copy_sanitized_context(
 def _sensitive_file(relative: Path, source: Path) -> bool:
     name = relative.name.lower()
     return (
-        name in _SECRET_NAMES
+        (name in _SECRET_NAMES and not is_public_npm_config(source))
         or name.startswith(".env.")
         or (
             relative.suffix.lower() in _SECRET_SUFFIXES

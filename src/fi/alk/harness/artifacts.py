@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field, model_validator
 
-from .public_material import is_public_pem, inspect_public_file
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 ARTIFACT_MANIFEST_VERSION = "futureagi.harness-artifacts.v1"
 ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
@@ -263,7 +263,7 @@ def _scenario_evidence(root: Path) -> list[ScenarioEvidence]:
 
 
 def _hash_file(path: Path, relative: str) -> tuple[str, int]:
-    if path.name in _SECRET_FILES or (
+    if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
         path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
         and not is_public_pem(path)
     ):

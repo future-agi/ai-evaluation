@@ -134,3 +134,44 @@ def inspect_public_file(
             if admissions:
                 raise ValueError("public_material_admission_match_missing")
     return digest, size
+
+
+def is_public_npm_config(path: Path) -> bool:
+    """Recognize a bounded public release-policy subset, never npm authentication."""
+    if path.name.lower() != ".npmrc" or path.is_symlink():
+        return False
+    with path.open("rb") as stream:
+        data = stream.read(64 * 1024 + 1)
+    if len(data) > 64 * 1024:
+        return False
+    try:
+        text = data.decode("utf-8")
+    except UnicodeError:
+        return False
+    if any(ord(char) < 32 and char not in "\t\r\n" for char in text):
+        return False
+    seen_age = False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        key, separator, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not separator:
+            return False
+        if key == "min-release-age":
+            if seen_age or not re.fullmatch(r"[0-9]{1,6}", value):
+                return False
+            seen_age = True
+        elif key == "min-release-age-exclude[]":
+            if len(value) > 214 or not re.fullmatch(
+                r"(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*\*?", value
+            ):
+                return False
+        else:
+            return False
+    try:
+        inspect_public_file(path)
+    except ValueError:
+        return False
+    return True

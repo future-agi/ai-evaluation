@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from .artifacts import _SECRET_FILES
-from .public_material import inspect_public_file
+from .public_material import inspect_public_file, is_public_npm_config
 from .bundle import CapabilityProtocol
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -354,7 +354,7 @@ def _scan_bundle_files_for_secrets(bundle_dir: Path, walked_files: list[Path]) -
         relative = path.relative_to(root).as_posix()
         posix_path = PurePosixPath(relative)
         if (
-            posix_path.name in _SECRET_FILES
+            (posix_path.name in _SECRET_FILES and not is_public_npm_config(path))
             or (posix_path.suffix.lower() in _SECRET_SUFFIXES and not is_public_pem(path))
         ):
             raise PreflightError(
