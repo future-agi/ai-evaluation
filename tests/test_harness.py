@@ -8060,3 +8060,39 @@ def test_prove_refuses_a_check_that_fails_another_way_the_instructions_allow(tmp
     other_way = [{"tool": "add", "arguments": {"item_id": "big_mac"}}]
     proof = prove(plain.model_copy(update={"alternatives": [[*map(type(plain.solution[0]).model_validate, other_way)]]}), catalogue, root)
     assert not proof.holds and any(one.startswith("listed-first") for one in proof.too_strict)
+
+
+def test_prove_refuses_a_fixed_value_no_check_notices_when_wrong(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals = [
+        SubGoal(
+            name="listed-first",
+            what="the menu was read",
+            check="def check(world, calls, reference):\n    return None if any(c.name == 'lst' and c.ok for c in calls) else 'not done: no listing'\n",
+        ),
+        SubGoal(
+            name="added-what-was-asked",
+            what="the item the caller asked for was added",
+            check=(
+                "def check(world, calls, reference):\n"
+                "    wanted = {s['arguments'].get('item_id') for s in reference if s['tool'] == 'add'} - {None}\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    if wanted and not any(c.arguments.get('item_id') in wanted for c in made):\n"
+                "        return 'done wrong: item_id'\n"
+                "    return None if made else 'not done: nothing added'\n"
+            ),
+        ),
+    ]
+    save_catalogue(catalogue, root)
+    base = Scenario(**_delta(sub_goals=["listed-first"]))
+    fixed = base.model_copy(update={"solution": [base.solution[0], base.solution[1].model_copy(update={"fixed": {"item_id": "caller: big_mac"}})]})
+    for step in fixed.solution:
+        if step.fixed is None:
+            step.fixed = {}
+    assert prove(fixed, catalogue, root).unchecked == ["add.item_id"]
+    compared = fixed.model_copy(update={"sub_goals": ["listed-first", "added-what-was-asked"]})
+    assert prove(compared, catalogue, root).unchecked == []

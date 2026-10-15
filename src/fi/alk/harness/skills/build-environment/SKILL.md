@@ -573,7 +573,10 @@ from the field's name.
 
 Every scenario's proof also plays its solution as an agent that gets every fixed value right and
 chooses everything else itself, so a check that reads an argument nothing fixes, or demands one tool
-where another reaches the same outcome, is refused there.
+where another reaches the same outcome, is refused there. It also plays the solution once with each fixed value
+wrong, and refuses the scenario when every check still passes: a check that names a value in its
+contract has to compare it on every path the agent can take, not only when one kind of evidence is
+missing.
 
 Fill the check's `reference` with that answer for every field it compares, such as "item_id: what the
 world holds for this person; quantity: what they asked for". A field you cannot fill in that way is the

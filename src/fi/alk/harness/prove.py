@@ -68,6 +68,8 @@ class Proof:
     # Checks that fail when the agent makes its own choice for an argument the scenario does not
     # mark fixed: they hold the agent to a value nothing fixed. Each names those arguments.
     too_strict: list[str] = field(default_factory=list)
+    # Values the scenario marks fixed that no code check notices when they are wrong.
+    unchecked: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -79,6 +81,7 @@ class Proof:
             and not self.failed_attempts
             and not self.broken
             and not self.too_strict
+            and not self.unchecked
         )
 
     def gates(self) -> dict[str, bool]:
@@ -133,6 +136,14 @@ class Proof:
                 "        if not tried: return 'never attempted it'\n"
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
+            )
+        if self.unchecked:
+            return (
+                "these values are marked fixed, yet every check still passes when the agent gets "
+                "them wrong:\n  - "
+                + "\n  - ".join(self.unchecked)
+                + "\n\nA value is fixed so that something checks it. Fix the check that should "
+                "compare it, or take it out of `fixed` if only what is said settles it."
             )
         if self.too_strict:
             return (
@@ -333,6 +344,26 @@ def _other_choices(scenario: Scenario, calls: Sequence[Call]) -> tuple[list[Call
     return varied, changed
 
 
+def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed value, the solution with only that value changed."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    wrong = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            if isinstance(value, bool):
+                other: Any = not value
+            elif isinstance(value, (int, float)):
+                other = value + 1
+            elif isinstance(value, str) and value and not value.startswith("$"):
+                other = f"{value}-other"
+            else:
+                continue
+            changed = step.model_copy(update={"arguments": {**step.arguments, name: other}})
+            wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+    return wrong
+
+
 def _steps(scenario: Scenario) -> list[dict[str, Any]]:
     """The reference solution as a check is given it."""
     return reference_of(getattr(scenario, "solution", None) or ())
@@ -407,6 +438,14 @@ def prove(
             ]
         finally:
             alt_world.close()
+    held = [(name, source) for name, source in checks if any(one.name == name and one.held for one in proof.with_solution)]
+    for label, steps in _with_one_wrong(scenario) if held else ():
+        wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            if all(run_check(source, wrong_world, wrong_calls, name=name, reference=_steps(scenario)).held for name, source in held):
+                proof.unchecked.append(label)
+        finally:
+            wrong_world.close()
     proof.refused = refused
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
