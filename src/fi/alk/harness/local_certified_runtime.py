@@ -207,7 +207,7 @@ async def run_local_certified(
             provider = compose_provider(target_values, run_root / "compose-logs")
             world_factory = ObservationWorldFactory(bundle_dir)
         else:
-            world_factory = ProcessWorldFactory(work)
+            world_factory = ProcessWorldFactory(work, bundle_dir)
         pool = WorldPool(
             provider,
             bundle=manifest,
