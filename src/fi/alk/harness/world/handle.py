@@ -25,6 +25,7 @@ from .errors import (
     WorldUnavailable,
     WorldUsageError,
 )
+from .observation import HttpObservationHandle, ObservationWorld
 from .runtime import Call
 from .stores.postgres import PostgresStore
 
@@ -47,7 +48,7 @@ _READ_KEYWORDS = {"select", "with", "values"}
 _WRITE_VERBS = frozenset({"put", "change", "drop", "call"})
 
 
-class HostedWorld:
+class HostedWorld(HttpObservationHandle):
     """The `World` surface, backed by this scenario's own logical postgres database.
 
     One handle per scenario, over one short-lived autocommit connection per operation — nothing
@@ -65,6 +66,8 @@ class HostedWorld:
         *,
         _validate_baseline: bool = True,
         workspace_roots: Mapping[str, Path | str] | None = None,
+        endpoints: Mapping[str, str] | None = None,
+        observations=None,
     ) -> None:
         """Wrap `store` as the `World` surface for one scenario.
 
@@ -74,6 +77,9 @@ class HostedWorld:
         check below fails construction outright rather than waiting for a scenario's first
         access to discover a provisioning gap through its own retry.
         """
+        self._http_client = ObservationWorld(
+            world_index, rng, endpoints, observations=observations
+        )
         self._store = store
         self._workspace_roots = {
             name: Path(root) for name, root in (workspace_roots or {}).items()
@@ -91,6 +97,8 @@ class HostedWorld:
 
     def _execution_state(self) -> dict[str, Any]:
         return {
+            **self._http_client._execution_state(),
+            "kind": "hosted",
             "dsn": self._store.dsn(),
             "world_index": self.world_index,
             "rng": self.rng.getstate(),
@@ -426,13 +434,14 @@ class HostedWorld:
         )
 
 
-class ReadOnlyWorld:
+class ReadOnlyWorld(HttpObservationHandle):
     """A `World` whose write verbs are refused before they reach `HostedWorld` at all."""
 
     def __init__(self, world: HostedWorld) -> None:
         # Name-mangled so code outside this class reaching for `._world` cannot casually
         # recover the writable handle a "read-only" view exists to stand in front of.
         self.__world = world
+        self._http_client = world._http_client.read_only()
         self.world_index = world.world_index
         self.rng = world.rng
 

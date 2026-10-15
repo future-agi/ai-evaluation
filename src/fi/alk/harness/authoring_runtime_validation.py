@@ -791,7 +791,7 @@ async def validate_once(
                 # boundary to certify at that supported parallelism; clean lifecycle reuse is
                 # still proved independently by reset_equivalence.
                 world_isolation = _world_isolation_status(build_output)
-            factory = ProcessWorldFactory(work)
+            factory = ProcessWorldFactory(work, bundle)
             runtime = runtimes[0]
             lanes = len(runtimes) or 1
             phase = "scenarios"

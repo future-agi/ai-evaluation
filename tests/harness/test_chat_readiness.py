@@ -331,7 +331,7 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
             return "baseline"
 
     class Factory:
-        def __init__(self, work):
+        def __init__(self, work, bundle):
             pass
 
         async def create(self, *args, **kwargs):

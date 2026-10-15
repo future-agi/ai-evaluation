@@ -669,10 +669,15 @@ class ProcessWorldFactory:
     a container's own lifecycle, matching a hosted world where `ProcessRuntimeProvider` already
     owns the postgres process."""
 
-    def __init__(self, work_directory: Path) -> None:
+    def __init__(self, work_directory: Path, bundle_dir: Path | None = None) -> None:
+        from .world.observation import load_observations
+
         self._work_directory = work_directory
+        self._observations = load_observations(bundle_dir)
 
     async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> World:
+        from .world.observation import http_endpoints
+
         endpoint = _find_postgres_endpoint(runtime)
         build_output = await asyncio.to_thread(load_build_output, self._work_directory)
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
@@ -684,6 +689,8 @@ class ProcessWorldFactory:
             rng,
             row_counts,
             workspace_roots=runtime.metadata.get("workspace_roots", {}),
+            endpoints=http_endpoints(runtime),
+            observations=self._observations,
         )
 
 

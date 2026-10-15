@@ -19,6 +19,25 @@ from .http_session import (
 )
 
 
+class HttpObservationHandle:
+    """Forward declared HTTP operations to the handle's scoped observation client."""
+
+    _http_client: ObservationWorld
+
+    @property
+    def capabilities(self):
+        return self._http_client.capabilities
+
+    def request(self, capability, method, path, **kwargs):
+        return self._http_client.request(capability, method, path, **kwargs)
+
+    def observe(self, name, parameters=None):
+        return self._http_client.observe(name, parameters)
+
+    def set_headers(self, capability, headers):
+        return self._http_client.set_headers(capability, headers)
+
+
 class ObservationWorld:
     def __init__(
         self,
@@ -312,16 +331,20 @@ def http_endpoints(runtime):
     }
 
 
+def load_observations(bundle_dir):
+    from ..contract import AgentContract
+
+    if bundle_dir is None:
+        return {}
+    runtime = AgentContract.model_validate_json(
+        (bundle_dir / "contract.json").read_text()
+    ).runtime
+    return runtime.observations if runtime else {}
+
+
 class ObservationWorldFactory:
     def __init__(self, bundle_dir=None):
-        from ..contract import AgentContract
-
-        self._observations = {}
-        if bundle_dir is not None:
-            runtime = AgentContract.model_validate_json(
-                (bundle_dir / "contract.json").read_text()
-            ).runtime
-            self._observations = runtime.observations if runtime else {}
+        self._observations = load_observations(bundle_dir)
 
     async def create(self, runtime, *, rng):
         return ObservationWorld(
