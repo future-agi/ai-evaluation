@@ -43,6 +43,14 @@ class Gateway:
         """The gateway's OpenAI-compatible root, for clients that append ``/chat/completions``."""
         return f"{self.base_url}/v1"
 
+    def speech_url(self, vendor: str, path: str = "") -> str:
+        """The gateway's copy of a speech vendor's API (``/deepgram``, ``/cartesia``).
+
+        It speaks the vendor's own WebSocket protocol, so the vendor's SDK only needs this as
+        its base URL and the gateway key as its key; the gateway connects on the platform's.
+        """
+        return f"{self.base_url}/{vendor}{path}"
+
 
 def gateway() -> Gateway | None:
     """The configured gateway, or None when model calls go straight to each vendor."""

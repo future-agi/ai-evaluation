@@ -44,6 +44,12 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Simulator model fallbacks: `SIMULATOR_LLM_FALLBACK_MODELS` (ordered,
   comma-separated) gives the simulated caller models to switch to when an
   attempt fails or times out before it speaks.
+- The simulated caller's speech goes through Agent Command Center too: with
+  `AGENTCC_API_KEY` set, Deepgram and Cartesia speech-to-text and
+  text-to-speech connect to the gateway's copy of each vendor's streaming API
+  with the gateway key, so a sandbox needs no `DEEPGRAM_API_KEY` or
+  `CARTESIA_API_KEY`. Without a speech provider named, the caller then speaks
+  through Cartesia, as it does when a Cartesia key is present.
 - The `vertex-gemini` backend no longer fails on its first reply with the locked
   ADK (2.7.1), which does not re-export `GetSessionConfig` from
   `google.adk.sessions`.
