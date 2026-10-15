@@ -711,7 +711,7 @@ def test_bind_create_allows_only_declared_missing_resource(tmp_path):
         normalize_compose(document, tmp_path, capabilities=capabilities())
     document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
     mount = normalize_compose(document, tmp_path, capabilities=capabilities())['services']['chat']['volumes'][0]
-    assert mount['read_only'] is True
+    assert mount.get('read_only', False) is False
     assert mount['source'] == str(tmp_path / 'config.env')
     assert mount['bind'] == {'create_host_path': True}
 

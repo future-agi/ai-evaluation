@@ -350,6 +350,8 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                 "bind",
             }:
                 raise ComposeRuntimeError("compose_mount_fields_forbidden")
+            if "read_only" in mount and type(mount["read_only"]) is not bool:
+                raise ComposeRuntimeError("compose_mount_read_only_invalid")
             if "bind" in mount:
                 options = mount["bind"]
                 if (
@@ -375,8 +377,6 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                 resource = path.relative_to(source.resolve()).as_posix()
                 if resource in declared:
                     consumed.add(resource)
-                    if resource in resources:
-                        mount["read_only"] = True
                 else:
                     path = _within(source, origin)
                 if path.is_socket() or path.is_block_device() or path.is_char_device():
@@ -811,6 +811,7 @@ class CertifiedComposeRuntimeProvider:
                         {
                             "destination": mount["target"],
                             "content": resource_bind_values[relative],
+                            "read_only": mount.get("read_only", False),
                         }
                     )
                 else:
@@ -1033,7 +1034,9 @@ class CertifiedComposeRuntimeProvider:
                         "type": "bind",
                         "source": str(path),
                         "target": item["destination"],
-                        "read_only": True,
+                        "read_only": (
+                            item.get("read_only", True) if "content" in item else True
+                        ),
                     }
                 )
                 if item.get("environment_variable"):
