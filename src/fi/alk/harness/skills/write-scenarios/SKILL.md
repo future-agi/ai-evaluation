@@ -263,8 +263,10 @@ compare whenever this caller gives it. Never bend the solution to suit a check; 
 pass on a correct solution is the check's fault, and add_sub_goal can replace it.
 
 **Mark on every step which arguments are `fixed`.** An argument is fixed when its value comes from
-this caller (what they say or correct), their record in the world, or a rule of the agent that names
-the value for this situation. Only fixed arguments are shown to the checks and the judge. Everything
+this caller (what they say or correct), their record in the world, or a rule in the agent's
+instructions that names the value for this situation. A value the agent's code fills in somewhere
+else does not fix what the agent's model passes to a tool, and a step another tool already does
+inside itself is not one the agent has to repeat. Only fixed arguments are shown to the checks and the judge. Everything
 else (a destination or category the agent picks, a free-text reason or note, a default) still gets a
 value so the step can run, but is not marked, so no check can take a value you made up for the right
 one. Leave out an optional argument nothing fixes; the tool's default applies. If a proof reports that

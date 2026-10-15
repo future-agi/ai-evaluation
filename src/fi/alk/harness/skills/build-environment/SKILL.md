@@ -556,6 +556,7 @@ How each kind of value is compared:
 | A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |
 | A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
 | A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
+| A step more than one tool can do (the instructions name one tool, another does the same thing inside itself) | The record the step leaves, or a successful call to any of those tools; never one tool by name |
 | A value the agent picks that nothing fixes (where a handoff goes, a category or label it writes as free text, a note, a reason) | Absent from the reference, and never compared in code, exactly, by substring or by searching it for words; the check asserts the step happened, for this caller, and a judged part decides whether the choice suited the situation |
 
 **A value is expected only where something fixes it.** You write the check before any scenario
@@ -577,8 +578,8 @@ agent's choice. A check written to take `reference` is refused until it says thi
 **Check the outcome, not the route.** The reference is one correct way through the call. The agent's
 tools may reach the same outcome another way: a different tool for the same step, or a tool that does
 the step itself as part of its own work (one that declines a request and also hands the call over,
-one that books and also sends the confirmation). Read what each tool does in the agent's code before
-you write the check. Where the outcome leaves a record, check the record, which shows it however it
+one that books and also sends the confirmation). Read which tool the agent's instructions say to use for the step, and
+what each tool does in the agent's code, before you write the check. Where the outcome leaves a record, check the record, which shows it however it
 came about; where only the calls show it, accept every call that achieves it. A check that demands
 the reference's tool fails a correct agent that took the other way.
 
