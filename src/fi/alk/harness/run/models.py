@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import os
 
+from fi import agentcc
+
 # What the reconstructed agent and the simulated user run on today. Both roles run constantly, so
 # this is the setting worth revisiting first once the target can be handed to ALK.
 AGENT = "claude-sonnet-4-6"
@@ -50,7 +52,7 @@ def for_roles(override: str | None = None) -> dict[str, str]:
     gateway_model = (
         os.environ.get("ALK_HARNESS_MODEL", "").strip()
         if os.environ.get("ALK_HARNESS", "").strip().lower() in {"claude", "claude-code"}
-        and os.environ.get("AGENTCC_API_KEY", "").strip()
+        and agentcc.gateway() is not None
         else ""
     )
     return {
