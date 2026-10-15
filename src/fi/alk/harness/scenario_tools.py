@@ -767,25 +767,26 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
 def _fixed_values_from_nowhere(
     scenario: Scenario, trial: Any, options: dict[str, dict[str, str]]
 ) -> list[str]:
-    """Text marked fixed that neither the caller, their record nor the tool's own options give."""
+    """Text marked fixed that neither the caller's exact values, their record nor the tool's options give."""
 
     def flat(text: Any) -> str:
         return re.sub(r"[\s_\-./,:]+", "", str(text).lower())
 
     try:
-        held = json.dumps(trial.state(), default=str)
+        held = flat(json.dumps(trial.state(), default=str))
     except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
         held = ""
-    caller = flat(
-        " ".join([scenario.instruction or "", json.dumps(scenario.fixture, default=str), scenario.setup_code or "", held])
-    )
+    # A caller can read out exactly only what carries a digit (a reference, a code, a number);
+    # words they say match by coincidence, so those must be in the world or the tool's options.
+    said = flat(" ".join([scenario.instruction or "", json.dumps(scenario.fixture, default=str)]))
     unfounded = []
     for step in scenario.solution:
         for name in step.fixed or ():
             value = step.arguments.get(name)
             if not isinstance(value, str) or not flat(value) or re.match(r"\d{4}-\d{2}-\d{2}", value.strip()):
                 continue
-            if flat(value) not in caller and flat(value) not in flat(options.get(step.tool, {}).get(name, "")):
+            found = flat(value) in held or flat(value) in flat(options.get(step.tool, {}).get(name, ""))
+            if not found and not (any(c.isdigit() for c in value) and flat(value) in said):
                 unfounded.append(f"{step.tool} {name}={value!r}")
     if not unfounded:
         return []
