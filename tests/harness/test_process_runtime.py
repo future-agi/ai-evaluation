@@ -1014,6 +1014,7 @@ def test_a_nonzero_build_step_is_build_failed(tmp_path: Path) -> None:
             source_root=tmp_path / "source",
             build_root=tmp_path / "build",
             run=fake_run,
+            secret_values={},
         )
     assert excinfo.value.stage == "build"
     assert excinfo.value.code == "build_failed"
@@ -10096,6 +10097,7 @@ def test_build_timeout_retains_partial_output(tmp_path: Path) -> None:
             run=fake_run,
             retain_process_log=lambda path: retained.append(path.read_text()),
             build_step_timeout_seconds=5,
+            secret_values={},
         )
     assert len(retained) == 1
     assert "partial install output" in retained[0]
@@ -10162,8 +10164,22 @@ def test_build_retries_retain_each_attempt_and_success(tmp_path: Path) -> None:
         build_root=tmp_path / "build",
         run=lambda *args, **kwargs: next(results),
         sleep=lambda _: None,
+        secret_values={},
         retain_process_log=lambda path: retained.append(path.read_text()),
     )
     assert len(retained) == 2
     assert "Temporary failure" in retained[0] and "attempt 1" in retained[0]
     assert "built successfully" in retained[1] and "attempt 2" in retained[1]
+
+
+def test_build_evidence_omits_unknown_credential_context(tmp_path: Path) -> None:
+    retained = []
+    evidence = pr._build_step_evidence(
+        "unknown-sensitive-stdout", "unknown-sensitive-stderr",
+        step=["installer", "unknown-sensitive-command"], process="agent", attempt=0,
+        directory=tmp_path, secret_values=None,
+        retain_log=lambda path: retained.append(path.read_text()),
+    )
+    assert "credential context unavailable" in evidence
+    assert "unknown-sensitive" not in evidence
+    assert retained == [evidence]
