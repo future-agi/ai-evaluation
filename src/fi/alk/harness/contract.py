@@ -545,10 +545,10 @@ class RuntimeInterface(BaseModel):
                         "runtime_http_request_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
-            unknown = (
-                _runtime_template_names(self.path)
-                | _runtime_template_names(self.headers_template)
-            ) - available
+            unknown = _runtime_template_names(self.path) - available
+            unknown |= _runtime_template_names(self.headers_template) - (
+                available | set(self.setup_secrets)
+            )
             if unknown:
                 raise ValueError(
                     "runtime_http_request_unknown_placeholders: "

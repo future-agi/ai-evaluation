@@ -289,6 +289,27 @@ def test_private_setup_value_is_sent_only_to_declared_setup_and_redacted(native_
     assert "unrelated label" in result.metadata["external_agent"]["error"]
 
 
+def test_private_bearer_header_authenticates_each_chat_without_leaking(native_app):
+    base, state = native_app
+    private = 'private-gateway-token/with"quotes'
+    config = interface(
+        setup_secrets={"gateway_token": "TARGET_KEY"},
+        headers_template={"Authorization": "Bearer {{gateway_token}}"},
+    )
+    state["payload"]["error_msg"] = "authentication failed: " + private
+    wrapper = create_chat_wrapper(config, base, secret_values={"TARGET_KEY": private})
+    for _ in range(2):
+        result = invoke(wrapper)
+        assert private not in json.dumps(result.metadata)
+        assert json.dumps(private)[1:-1] not in json.dumps(result.metadata)
+    assert len(state["calls"]) == 2
+    for path, body, headers in state["calls"]:
+        assert path == "/chat"
+        assert headers["Authorization"] == "Bearer " + private
+        assert private not in json.dumps(body)
+    assert private not in config.model_dump_json()
+
+
 @pytest.mark.parametrize("secrets", [None, {}, {"TARGET_KEY": ""}])
 def test_missing_setup_alias_fails_before_request(native_app, secrets):
     base, state = native_app
@@ -308,7 +329,6 @@ def test_missing_setup_alias_fails_before_request(native_app, secrets):
     [
         {"path": "/{{provider_key}}"},
         {"request_template": {"key": "{{provider_key}}"}},
-        {"headers_template": {"Authorization": "{{provider_key}}"}},
         {"setup_requests": [{"path": "/{{provider_key}}"}]},
         {"setup_requests": [{"path": "/setup", "capture": {"provider_key": "id"}}]},
     ],
