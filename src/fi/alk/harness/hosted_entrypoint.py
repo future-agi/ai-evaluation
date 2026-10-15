@@ -2002,7 +2002,7 @@ class HostedEntrypointDeps:
             )
         )
     )
-    build_world_factory: Callable[[Path], WorldFactory] = field(
+    build_world_factory: Callable[[Path, Path], WorldFactory] = field(
         default=ProcessWorldFactory
     )
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
@@ -2628,7 +2628,7 @@ async def run_job(
         # pre-allocation CLIENT (ScenariosClient) is.
         adapter.stage_changed(HarnessStage.VALIDATING_SCENARIOS)
         await adapter.aflush_events()
-        world_factory = deps.build_world_factory(work_directory)
+        world_factory = deps.build_world_factory(work_directory, bundle_dir)
         # An injected `ScenarioSource` (every test, every future caller) always wins -- the real
         # bundle-reading adapter (scenario_source.py) only steps in when the default
         # `NotWiredScenarioSource` is still in place AND the bundle actually carries a `scenarios/`
