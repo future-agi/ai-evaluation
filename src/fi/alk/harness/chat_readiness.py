@@ -14,6 +14,8 @@ from .job import HarnessStage
 
 
 def _failure_code(trace):
+    if trace.get("timeout_error") is True:
+        return "chat_ingress_timeout"
     status = trace.get("status_code", 0)
     stage = trace.get("failure_stage")
     if stage in {"setup", "http"} and status in {400, 404, 405, 415, 422}:
@@ -68,6 +70,7 @@ async def probe_chat_ingress(
         "bundle_digest": bundle_digest,
         "scenario_key": key,
         "status": "failed",
+        "timeout_seconds": timeout,
     }
     try:
         wrapper = create_chat_wrapper(
@@ -95,6 +98,7 @@ async def probe_chat_ingress(
             for name in (
                 "status_code",
                 "failure_stage",
+                "timeout_error",
                 "latency_ms",
                 "error",
                 "response_excerpt",
@@ -116,6 +120,8 @@ async def probe_chat_ingress(
                 if not valid_tools
                 else "Chat returned no text or tool calls"
             )
+            if code == "chat_ingress_timeout":
+                detail = f"Chat ingress request timed out with a {timeout:g}s deadline"
             excerpt = trace.get("response_excerpt")
             if excerpt:
                 detail = (

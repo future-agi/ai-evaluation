@@ -229,8 +229,13 @@ def test_setup_and_chat_share_deadline(tmp_path, profile_app):
                 timeout=0.1,
             )
         )
-    assert error.value.diagnostics[0].code == "external_service_unavailable"
-    assert receipts(tmp_path)[0]["status"] == "failed"
+    assert error.value.diagnostics[0].code == "chat_ingress_timeout"
+    assert error.value.diagnostics[0].retryable is True
+    assert "0.1" in str(error.value)
+    receipt = receipts(tmp_path)[0]
+    assert receipt["status"] == "failed"
+    assert receipt["timeout_seconds"] == 0.1
+    assert receipt["trace"]["timeout_error"] is True
 
 
 def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
@@ -576,3 +581,34 @@ def test_dependency_patch_repeats_identical_http_request_once(tmp_path, profile_
     assert (authoring / "generic-harness/runtime-plan-repair-1.json").is_file()
     assert all(path.read_bytes() == body for path, body in snapshots.items())
     assert (authoring / "scenarios.json").read_text() == '{"original": true}'
+
+
+@pytest.mark.parametrize("kind,code", [
+    ("timeout", "chat_ingress_timeout"),
+    ("wrapped_timeout", "chat_ingress_timeout"),
+    ("url_error_text", "external_service_unavailable"),
+    ("connection", "external_service_unavailable"),
+    ("value_error_text", "chat_ingress_failed"),
+])
+def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind, code):
+    import urllib.error
+    import urllib.request
+
+    errors = {
+        "timeout": TimeoutError("deadline reached"),
+        "wrapped_timeout": urllib.error.URLError(TimeoutError("deadline reached")),
+        "url_error_text": urllib.error.URLError("timed out"),
+        "connection": ConnectionError("timed out"),
+        "value_error_text": ValueError("timed out"),
+    }
+
+    def fail(*args, **kwargs):
+        raise errors[kind]
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", fail)
+    with pytest.raises(RuntimeValidationError) as failure:
+        asyncio.run(probe(tmp_path, "http://127.0.0.1:1"))
+    assert failure.value.diagnostics[0].code == code
+    receipt = receipts(tmp_path)[0]
+    assert receipt["timeout_seconds"] == 1
+    assert receipt["trace"]["timeout_error"] is (code == "chat_ingress_timeout")
