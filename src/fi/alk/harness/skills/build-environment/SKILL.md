@@ -535,8 +535,9 @@ Three things decide whether such a check is right. A tool can be called more tha
 repeated, two records changed through the same tool) and one call can be reported twice, once with
 fewer arguments, so match each reference step to any successful call that carries its fields, never
 to the last call. When the reference sets the same thing twice, the later value is the one that
-counts. Compare values with one right form (an identifier, a number, an amount, a date, a choice from
-a fixed set) after evening out case and spacing, and leave wording to a judged sub-goal.
+counts. Compare values with one right form (an identifier, a number, an amount, a date, an option the
+caller or a rule picked from a fixed set) after evening out case and spacing, and leave wording to a
+judged sub-goal.
 
 How each kind of value is compared:
 
@@ -552,10 +553,25 @@ How each kind of value is compared:
 | A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
 | A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
 
-Compare only what the reference fixes for this caller: what they asked for, their identifiers, their
-amounts and dates, the record they meant. A value the agent chooses among several its instructions
-allow (where a handoff goes, how something is worded, which label it is given)
-is not compared; a judged sub-goal decides whether the choice suited the situation.
+**A value in the reference is expected only where something fixes it.** You write the check before
+any scenario exists, and each scenario's writer later fills in every argument of every step, because
+a step cannot be left half written. So a reference holds two kinds of value: ones fixed for this
+caller, and ones the writer had to pick because the agent's instructions leave them open. Compare
+only the first kind. For each field, say where its right value comes from: what the caller said,
+their record in the world, or a rule in the agent's instructions that names the value for this
+situation. When you can point to none (a category or destination the agent picks, a free-text
+reason or note, a default its instructions never mention), the value is the agent's choice: leave it
+out of the check, and when the choice matters, let a judged sub-goal decide whether it suited the
+situation. Read the agent's prompt and its tool definitions to tell which is which; never decide it
+from the field's name.
+
+**Check the outcome, not the route.** The reference is one correct way through the call. The agent's
+tools may reach the same outcome another way: a different tool for the same step, or a tool that does
+the step itself as part of its own work (one that declines a request and also hands the call over,
+one that books and also sends the confirmation). Read what each tool does in the agent's code before
+you write the check. Where the outcome leaves a record, check the record, which shows it however it
+came about; where only the calls show it, accept every call that achieves it. A check that demands
+the reference's tool fails a correct agent that took the other way.
 
 Never use a string-similarity score. When even out case and spacing cannot settle whether two values
 agree, make it a judged sub-goal, which may answer inconclusive.
@@ -665,6 +681,12 @@ behaviour per sub-goal: if the Pass line needs "and", it is usually two sub-goal
 
 Every sub-goal, coded or judged:
 
+- **Catches a real failure.** Before writing one, name the wrong thing an agent could do that it
+  catches: acted on another caller's record, made the change without the consent its rules ask for,
+  gave way on a rule under pressure. Then make sure a correct agent passes it whichever way its
+  instructions allow it to get there. A sub-goal that a correct and a broken agent pass alike, or
+  that fails a correct agent for a choice its instructions leave open, misleads everyone who reads
+  its verdict.
 - **Requires exactly what the agent's instructions require, never more.** If the instructions say
   to decline in one of two supported languages, a sub-goal that demands the refusal in the caller's
   own language fails a correct agent.
@@ -704,16 +726,16 @@ is invisible to every check that only counts calls.
 measuring a real catalogue found five of six doing it:
 
 ```python
-# Weak. An agent that misheard the name passes this: a reason was given, it is a string, and it
-# is not empty.
-reason = xfers[0].arguments.get("reason")
-if not reason or not isinstance(reason, str) or not reason.strip():
-    return f"no reason given: {reason!r}"
+# Weak. An agent that misheard the name passes this: an identifier was given, it is a string, and
+# it is not empty.
+if not any(str(c.arguments.get("record_id") or "").strip() for c in made):
+    return "not done: no record was named"
 
-# Strong. Compare the value against what this scenario expected, or against the world row it
-# should have matched.
-if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
-    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
+# Strong. Compare it with the caller's own record, which the reference names, on every call made.
+wanted = {s["arguments"]["record_id"] for s in reference if "record_id" in s["arguments"]}
+if wanted and not any(c.arguments.get("record_id") in wanted for c in made):
+    got = [c.arguments.get("record_id") for c in made]
+    return f"done wrong: acted on {got!r}, the caller's record is {sorted(wanted)!r}"
 ```
 
 `add_sub_goal` accepts a truthiness check and tells you it is one. Take the note: the agent under

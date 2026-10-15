@@ -317,7 +317,9 @@ def provision_tools(
         "the world holds afterwards, and the arguments the agent actually used.\n\n"
         "Whether a step was right for this caller (the right record, the right values) is "
         "checked in code against the scenario's reference solution: write "
-        "`check(world, calls, reference)`. Use `judged` for what was said and what nothing "
+        "`check(world, calls, reference)`, comparing only what the caller, the world or a rule of "
+        "the agent fixes, and checking the outcome rather than the route. Use `judged` for what "
+        "was said and what nothing "
         "observable settles; it holds the criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "

@@ -457,8 +457,10 @@ def _reference_solution(scenario: Any) -> str:
         "One correct way to handle this customer, worked out beforehand (context, not a script):\n"
         + "\n".join(steps)
         + "\nUse it to tell whether the values the agent used were the right ones for this "
-        "customer. Another order, an extra lookup, a different spelling or format of the same "
-        "value, or a mistake the agent corrected before it took effect is still right.\n\n"
+        "customer. Another order, an extra lookup, another tool that reaches the same outcome, a "
+        "different spelling or format of the same value, a different value for something the "
+        "agent's instructions leave to it, or a mistake the agent corrected before it took effect "
+        "is still right.\n\n"
     )
 
 

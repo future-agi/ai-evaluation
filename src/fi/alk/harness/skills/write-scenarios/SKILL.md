@@ -253,7 +253,10 @@ against it: the arguments, the result, the records left. So write it complete to
 this caller's values as they last corrected them, exactly as the agent's tools take them. A wrong
 value in the solution fails a correct agent, and so does a step in it the agent's rules do not call
 for in this situation: a check that finds the step in the solution expects the agent to take it. When
-a rule says to act at once, nothing comes before that action in the solution.
+a rule says to act at once, nothing comes before that action in the solution. An argument the agent's
+instructions leave to it (a category or destination it picks, a free-text note) still needs a value:
+write the tool's default where it has one, never a value invented to look specific, which the judge
+reading your solution would take for the right answer.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
