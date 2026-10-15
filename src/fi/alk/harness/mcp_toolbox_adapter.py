@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import keyword
 import os
-import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 
 def _signature(parameters: list[dict[str, Any]]) -> str:
     names: list[str] = []
+    reserved = {"_execute", "_spec", "_name", "_database_url", "_trace_path", "locals"}
     python_types = {
         "string": "str",
         "integer": "int",
@@ -19,31 +21,17 @@ def _signature(parameters: list[dict[str, Any]]) -> str:
         "boolean": "bool",
     }
     for parameter in parameters:
-        name = str(parameter.get("name") or "").strip()
-        if not name.isidentifier():
+        name = str(parameter.get("name") or "")
+        if (
+            not name.isidentifier()
+            or keyword.iskeyword(name)
+            or name in reserved
+            or unicodedata.normalize("NFKC", name) != name
+        ):
             raise RuntimeError(f"unsupported Toolbox parameter name: {name!r}")
+        reserved.add(name)
         names.append(f"{name}: {python_types.get(str(parameter.get('type')), 'str')}")
     return ", ".join(names)
-
-
-def _bind_sql(
-    spec: dict[str, Any], arguments: dict[str, Any], *, tool_name: str
-) -> tuple[str, list[Any]]:
-    statement = str(spec["statement"])
-    ordered: list[Any] = []
-
-    def bind(match: re.Match[str]) -> str:
-        index = int(match.group(1)) - 1
-        parameters = spec.get("parameters") or []
-        if index < 0 or index >= len(parameters):
-            raise RuntimeError(f"invalid SQL parameter ${index + 1} in {tool_name}")
-        ordered.append(arguments.get(str(parameters[index]["name"])))
-        return f"__ALK_PARAMETER_{len(ordered) - 1}__"
-
-    sql = re.sub(r"\$(\d+)", bind, statement).replace("%", "%%")
-    for index in range(len(ordered)):
-        sql = sql.replace(f"__ALK_PARAMETER_{index}__", "%s")
-    return sql, ordered
 
 
 def _execute(
@@ -56,14 +44,18 @@ def _execute(
 ) -> str:
     import psycopg
 
-    sql, ordered = _bind_sql(spec, arguments, tool_name=tool_name)
+    ordered = [
+        arguments[str(parameter["name"])] for parameter in spec.get("parameters") or []
+    ]
     started = time.time()
     result: Any = None
     error: str | None = None
     try:
-        with psycopg.connect(database_url, autocommit=True) as connection:
+        with psycopg.connect(
+            database_url, autocommit=True, cursor_factory=psycopg.RawCursor
+        ) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(sql, ordered)
+                cursor.execute(str(spec["statement"]), ordered)
                 if cursor.description:
                     columns = [item.name for item in cursor.description]
                     result = [
