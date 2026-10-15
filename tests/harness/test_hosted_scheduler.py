@@ -212,6 +212,7 @@ class FakeScenario:
     setup_fn: Any = lambda world: None
     ready_fn: Any = lambda world: None
     requires_tool_evidence: bool = True
+    call_execution_id: str | None = None
 
     def setup(self, world: Any) -> object:
         return self.setup_fn(world)
@@ -4139,6 +4140,116 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
         assert receipt.failure.code == "judge_undecided"
         assert receipt.sub_goals[0].held is None
         assert receipt.sub_goals[0].reason == ""
+        await pool.close()
+
+    asyncio.run(scenario())
+
+
+def _call_files(work_directory: Path) -> dict[str, tuple[str, int]]:
+    return {
+        path.parent.name: (
+            path.read_text(encoding="utf-8"),
+            path.stat().st_mode & 0o777,
+        )
+        for path in work_directory.glob("worlds/*/simulation_call_execution_id")
+    }
+
+
+class _FirstCreateFails:
+    def __init__(self) -> None:
+        self.failed = False
+
+    async def create(
+        self, runtime: EnvironmentRuntime, *, rng: random.Random
+    ) -> InMemoryWorld:
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("store connect failed")
+        return InMemoryWorld(runtime.world_index, rng)
+
+
+@pytest.mark.parametrize(
+    "case", ["passed", "errored", "retried", "cancelled", "no_call_id"]
+)
+def test_call_file_written_before_setup_and_removed_after_each_scenario(
+    tmp_path: Path, case: str
+) -> None:
+    async def scenario() -> None:
+        outbound = FakeOutbound()
+        pool = hs.WorldPool(
+            FakeProvisioner(2),
+            bundle=object(),
+            source=tmp_path / "source",
+            bundle_dir=tmp_path / "bundle",
+            work_directory=tmp_path,
+            instances=2,
+            outbound=outbound,
+        )
+        for index in (0, 1):
+            (tmp_path / "worlds" / f"w{index}").mkdir(parents=True)
+        await pool.start()
+        seen_at_setup: list[dict[str, tuple[str, int]]] = []
+        in_call = asyncio.Event()
+
+        def setup(world: Any) -> None:
+            seen_at_setup.append(_call_files(tmp_path))
+            if case == "errored":
+                raise ValueError("scenario code bug")
+
+        class Runner:
+            async def run(
+                self, scenario: FakeScenario, runtime: EnvironmentRuntime
+            ) -> hs.CallOutcome:
+                if case == "cancelled":
+                    in_call.set()
+                    await asyncio.Event().wait()
+                return _call_outcome(calls=(hs.Call(name="x", arguments={}),))
+
+        factory = _FirstCreateFails() if case == "retried" else FakeWorldFactory()
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=factory,
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+        )
+        scenarios = [
+            FakeScenario(
+                "s1",
+                "id-1",
+                setup_fn=setup,
+                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                call_execution_id=None if case == "no_call_id" else "call-1",
+            )
+        ]
+
+        if case == "cancelled":
+            run = asyncio.create_task(scheduler.run(scenarios))
+            await asyncio.wait_for(in_call.wait(), timeout=5.0)
+            assert set(_call_files(tmp_path).values()) == {("call-1", 0o444)}
+            run.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await run
+        else:
+            result = await asyncio.wait_for(scheduler.run(scenarios), timeout=5.0)
+            receipt = result.receipts[0]
+            expected = {
+                "passed": "passed",
+                "errored": "errored",
+                "retried": "passed",
+                "no_call_id": "passed",
+            }[case]
+            assert receipt.status == expected
+            if case == "no_call_id":
+                assert seen_at_setup == [{}]
+            else:
+                world = f"w{receipt.world_index}"
+                assert seen_at_setup == [{world: ("call-1", 0o444)}]
+            if case == "retried":
+                assert receipt.scenario_attempt == 2
+
+        assert _call_files(tmp_path) == {}
+        assert not list(tmp_path.glob("worlds/*/.simulation_call_execution_id.tmp"))
         await pool.close()
 
     asyncio.run(scenario())

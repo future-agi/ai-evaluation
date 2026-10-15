@@ -9819,3 +9819,30 @@ def test_spawn_context_carries_no_customer_code_environment_by_default(
     assert (
         context().customer_code_environment is not context().customer_code_environment
     )
+
+
+def test_call_file_variable_set_for_exporting_processes_only(tmp_path: Path) -> None:
+    process = _source_process(name="agent")
+    captured = _spawn(tmp_path / "export", process, _EXPORT)
+    assert captured["env"]["FI_SIMULATION_CALL_FILE"] == str(
+        pr.simulation_call_file(tmp_path / "export", 0)
+    )
+
+    for index, environment in enumerate(
+        (None, {}, {"OTEL_RESOURCE_ATTRIBUTES": _MARK})
+    ):
+        env = _spawn(tmp_path / f"no-mode-{index}", process, environment)["env"]
+        assert "FI_SIMULATION_CALL_FILE" not in env
+
+    provisioned = tmp_path / "provisioned"
+    provisioned.mkdir()
+    spawned, built = _provision_from_job_json(provisioned, {**_EXPORT})
+    customer = (["node", "server.js"], ["python3", "agent.py"])
+    named = {
+        env["FI_SIMULATION_CALL_FILE"] for argv, env in spawned if argv in customer
+    }
+    assert named == {
+        str(pr.simulation_call_file(provisioned, index)) for index in (0, 1)
+    }
+    steps = [env for argv, env in built if argv[0] in ("npm", "pip")]
+    assert steps and all("FI_SIMULATION_CALL_FILE" not in env for env in steps)

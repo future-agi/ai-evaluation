@@ -1003,3 +1003,80 @@ print(json.dumps({}))
     assert set(result.stderr.splitlines(keepends=True)) == {APPLIED, FAILED}
     for secret in ("ingest-key", "ingest-secret", "customer-key", "customer-secret"):
         assert secret not in result.stderr
+
+
+CALL_SPANS_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+tracer = provider.get_tracer("agent")
+
+def span(name):
+    with tracer.start_as_current_span(name):
+        pass
+
+def write(value):
+    staged = path + ".tmp"
+    with open(staged, "w") as handle:
+        handle.write(value)
+    os.replace(staged, path)
+
+write("call-1")
+span("first")
+write("call-2")
+span("second")
+os.remove(path)
+span("between")
+os.mkdir(path)
+span("unreadable")
+os.rmdir(path)
+print(json.dumps({
+    "calls": {
+        finished.name: finished.attributes.get("fi.simulator.call_execution_id")
+        for finished in exporter.get_finished_spans()
+    },
+    "origin": provider.resource.attributes.get("fi.simulation.origin"),
+}))
+"""
+
+
+def test_processor_stamps_the_call_id_from_the_file(tmp_path: Path) -> None:
+    result = _run(
+        CALL_SPANS_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    reported = _reported(result)
+    assert reported["calls"] == {
+        "first": "call-1",
+        "second": "call-2",
+        "between": None,
+        "unreadable": None,
+    }
+    assert reported["origin"] == "simulation"
+    assert FAILED not in result.stderr
+
+
+def test_no_call_file_variable_adds_no_processor(tmp_path: Path) -> None:
+    script = """
+import json
+from opentelemetry.sdk.trace import TracerProvider
+
+provider = TracerProvider()
+print(json.dumps({
+    "processors": [
+        type(one).__name__ for one in provider._active_span_processor._span_processors
+    ],
+}))
+"""
+    reported = _reported(_run(script, path=[_world(tmp_path)], cwd=tmp_path))
+
+    assert reported["processors"] == []

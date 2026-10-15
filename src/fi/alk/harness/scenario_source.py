@@ -269,6 +269,7 @@ class _CompiledScenario:
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
     source_scenario_key: str | None = None
+    call_execution_id: str | None = None
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -733,6 +734,7 @@ def _scenarios_for_execution_manifest(
                 scenario_key=execution_key,
                 source_scenario_key=source_key,
                 scenario_id=scenario_id,
+                call_execution_id=str(entry.get("call_execution_id") or "") or None,
             )
         )
     if not selected:

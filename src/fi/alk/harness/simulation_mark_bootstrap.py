@@ -17,6 +17,9 @@ instead of the customer's own ``FI_API_KEY``: only the Future AGI authentication
 replaced, only on exports to the collector, and the customer's key stays in the environment for
 the rest of their code.
 
+When the sandbox names a call file, every tracer provider the process builds also stamps each
+span it starts with the id of the call the sandbox is running at that moment.
+
 It never reads or writes the customer's files and never imports their modules on its own. It does
 run the next ``sitecustomize`` on the path, which is theirs, so a repository's own startup hook is
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
@@ -36,6 +39,9 @@ import sys
 import urllib.parse
 
 _RESOURCES = "opentelemetry.sdk.resources"
+_TRACE = "opentelemetry.sdk.trace"
+_CALL_FILE = "FI_SIMULATION_CALL_FILE"
+_CALL_KEY = "fi.simulator.call_execution_id"
 _EXPORTERS = {
     "opentelemetry.exporter.otlp.proto.http.trace_exporter": False,
     "opentelemetry.exporter.otlp.proto.grpc.trace_exporter": True,
@@ -305,6 +311,61 @@ def _merge_traces_headers(ours: list[tuple[str, str]]) -> None:
     )
 
 
+class _CallStamp:
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._seen = None
+        self._call = None
+
+    def _current_call(self):
+        try:
+            stat = os.stat(self._path)
+        except FileNotFoundError:
+            return None
+        seen = (stat.st_ino, stat.st_mtime_ns)
+        if seen != self._seen:
+            with open(self._path, encoding="utf-8") as handle:
+                self._call = handle.read().strip() or None
+            self._seen = seen
+        return self._call
+
+    def on_start(self, span, parent_context=None) -> None:
+        try:
+            call = self._current_call()
+            if call:
+                span.set_attribute(_CALL_KEY, call)
+        except Exception:
+            pass
+
+    def on_end(self, span) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
+def _patch_tracer_provider(module, path: str) -> None:
+    cls = module.TracerProvider
+    original = cls.__init__
+    if getattr(original, _PATCHED, False):
+        return
+
+    @functools.wraps(original)
+    def wrapper(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        try:
+            self.add_span_processor(_CallStamp(path))
+        except Exception:
+            _write("failed")
+
+    setattr(wrapper, _PATCHED, True)
+    cls.__init__ = wrapper
+    _write("applied")
+
+
 def _report_chained_failure(err: Exception) -> None:
     """Say what Python itself says when a ``sitecustomize`` fails, in its words, so the owner of
     that hook still learns of the failure. It is theirs, not a failure of our patch, so it is
@@ -373,6 +434,9 @@ def install() -> None:
         pairs = _read_pairs()
         if pairs is not None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
+        call_file = os.environ.get(_CALL_FILE)
+        if call_file:
+            _PATCHES[_TRACE] = functools.partial(_patch_tracer_provider, path=call_file)
         ingest = _read_ingest()
         if ingest is not None:
             _merge_traces_headers(ingest[0])

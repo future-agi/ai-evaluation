@@ -56,6 +56,7 @@ from .process_runtime import (
     EnvironmentRuntime,
     ProcessRuntimeError,
     RuntimeState,
+    simulation_call_file,
 )
 
 from .world.errors import (
@@ -210,6 +211,7 @@ class Scenario(Protocol):
     # conversation scenarios (for example, refusing an unsafe request) legitimately produce no
     # world calls and must still reach their judged checks.
     requires_tool_evidence: bool
+    call_execution_id: str | None
 
     def setup(self, world: World) -> object: ...
 
@@ -920,6 +922,9 @@ class WorldPool:
         # teardown -- see close()'s own comment for why idempotency lives here now, not on
         # `_closed`.
 
+    def call_file(self, world_index: int) -> Path:
+        return simulation_call_file(self._work_directory, world_index)
+
     @property
     def effective_size(self) -> int:
         """R2: the world count `start()` actually achieved — may be less than the requested
@@ -1469,6 +1474,30 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
     )
 
 
+def _write_call_file(path: Path, call_execution_id: str | None) -> Path | None:
+    if not call_execution_id:
+        return None
+    staged = path.with_name(f".{path.name}.tmp")
+    try:
+        staged.unlink(missing_ok=True)
+        staged.write_text(call_execution_id, encoding="utf-8")
+        staged.chmod(0o444)
+        os.replace(staged, path)
+    except OSError as exc:
+        logger.warning("simulation call file not written: %s", type(exc).__name__)
+        return None
+    return path
+
+
+def _remove_call_file(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("simulation call file not removed: %s", type(exc).__name__)
+
+
 def _unjudged(sub_goals: Sequence[SubGoal]) -> tuple[SubGoalResult, ...]:
     return tuple(
         # R11: outbound-channels.md pins `judged` as `SubGoal.judged != ""`, not `bool(...)` —
@@ -1843,30 +1872,36 @@ class HostedScheduler:
 
             rng = random.Random(self._job_seed + scenario_index)
             outcome: ResultReceipt | _Retry
+            call_file = _write_call_file(
+                self._pool.call_file(world_index), scenario.call_execution_id
+            )
             try:
-                world = await self._world_factory.create(runtime, rng=rng)
-            except Exception as exc:  # noqa: BLE001
-                # B3: `world_factory.create()` failing (e.g. a PostgresStore connect failure) is
-                # the same shape as a mid-scenario `WorldUnavailable` — the world is unusable, not
-                # the scenario code. Deliberately narrow to just this call: `_execute()` has its
-                # own exhaustive internal exception handling (`_run_phase`/`_invoke`), so anything
-                # that still escapes it is a genuine scheduler bug and belongs in `driver_crashed`
-                # (via `worker()`'s `BaseException` catch), not swallowed into `world_unavailable`.
-                outcome = _Retry(
-                    _failure("world_unavailable", f"{type(exc).__name__}: {exc}"),
-                    sub_goals=_unjudged(scenario.sub_goals),
-                    call=None,
-                    mark_unhealthy=True,
-                )
-            else:
-                outcome = await self._execute(
-                    scenario,
-                    world,
-                    runtime,
-                    world_index,
-                    attempt=attempt,
-                    context=context,
-                )
+                try:
+                    world = await self._world_factory.create(runtime, rng=rng)
+                except Exception as exc:  # noqa: BLE001
+                    # B3: `world_factory.create()` failing (e.g. a PostgresStore connect failure) is
+                    # the same shape as a mid-scenario `WorldUnavailable` — the world is unusable, not
+                    # the scenario code. Deliberately narrow to just this call: `_execute()` has its
+                    # own exhaustive internal exception handling (`_run_phase`/`_invoke`), so anything
+                    # that still escapes it is a genuine scheduler bug and belongs in `driver_crashed`
+                    # (via `worker()`'s `BaseException` catch), not swallowed into `world_unavailable`.
+                    outcome = _Retry(
+                        _failure("world_unavailable", f"{type(exc).__name__}: {exc}"),
+                        sub_goals=_unjudged(scenario.sub_goals),
+                        call=None,
+                        mark_unhealthy=True,
+                    )
+                else:
+                    outcome = await self._execute(
+                        scenario,
+                        world,
+                        runtime,
+                        world_index,
+                        attempt=attempt,
+                        context=context,
+                    )
+            finally:
+                _remove_call_file(call_file)
 
             if isinstance(outcome, _Retry):
                 # R6: `mark_unhealthy()` itself emits `world_unhealthy` now (every demotion path
