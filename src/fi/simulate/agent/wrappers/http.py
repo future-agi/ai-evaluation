@@ -261,6 +261,7 @@ class HTTPAgentWrapper(AgentWrapper):
         stage = "setup"
         failure_stage = None
         network_error = False
+        timeout_error = False
         response = AgentResponse(content="")
         self._response_text = ""
         self._response_status = 0
@@ -321,6 +322,10 @@ class HTTPAgentWrapper(AgentWrapper):
         except Exception as exc:
             network_error = isinstance(
                 exc, (urllib.error.URLError, TimeoutError, ConnectionError)
+            )
+            timeout_error = isinstance(exc, TimeoutError) or (
+                isinstance(exc, urllib.error.URLError)
+                and isinstance(exc.reason, TimeoutError)
             )
             if self.secret_values is not None:
                 secrets = {
@@ -394,6 +399,7 @@ class HTTPAgentWrapper(AgentWrapper):
             "error": error,
             "failure_stage": failure_stage,
             "network_error": network_error,
+            "timeout_error": timeout_error,
             "response_excerpt": sanitize_diagnostic(self._response_text, secrets)
             if error and stage != "tool_events"
             else "",

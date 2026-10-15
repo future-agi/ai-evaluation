@@ -445,7 +445,10 @@ def test_generic_validation_retries_infrastructure_without_reauthoring(
 
 
 @pytest.mark.parametrize("changing_evidence", [False, True])
-def test_initial_materialization_does_not_grant_extra_infrastructure_retries(tmp_path, changing_evidence):
+@pytest.mark.parametrize("code", ["external_service_unavailable", "chat_ingress_timeout"])
+def test_initial_materialization_does_not_grant_extra_infrastructure_retries(
+    tmp_path, changing_evidence, code,
+):
     source, authoring = tmp_path / "source", tmp_path / "authoring"
     source.mkdir()
     authoring.mkdir()
@@ -459,7 +462,12 @@ def test_initial_materialization_does_not_grant_extra_infrastructure_retries(tmp
             (generated / name).write_text(json.dumps({
                 "fingerprint": len(calls) if changing_evidence else "stable",
             }))
-        raise RuntimeValidationError("infrastructure", "temporary outage")
+        raise RuntimeValidationError("environment", "temporary outage", diagnostics=[
+            HarnessDiagnostic.create(
+                stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress",
+                code=code, message="temporary outage",
+            ),
+        ])
 
     async def repair(*args):
         pytest.fail("Infrastructure retries must not rewrite the candidate")
