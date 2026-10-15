@@ -83,7 +83,8 @@ never gave the agent the chance the conversation was meant to show although they
 customer_off_script once with what they did. If instead the outcome could not be reached because it
 needed something nobody in the conversation can do (a payment completed on another device, a reply
 that only comes after the call) while the agent did what its instructions say meanwhile, call it with
-`unreachable` true. Either way the call is not counted for or against the agent. Never call it
+`unreachable` true, also when the call then ended another way because of it (a transfer, the caller
+giving up). Either way the call is not counted for or against the agent. Never call it
 because the agent kept something from happening, or for a detail the customer was free to choose.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
