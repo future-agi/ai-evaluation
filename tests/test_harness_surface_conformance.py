@@ -175,3 +175,19 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
 def test_judged_is_a_reason_not_a_flag() -> None:
     """Asserted on the model itself, since both schemas are checked against it."""
     assert SubGoal.model_fields["judged"].annotation is str
+
+
+def test_named_observation_schema_is_resolvable(contract_schema):
+    import jsonschema
+
+    declaration = {
+        "runtime": {"observations": {"history": {
+            "capability": "target_http", "path": "/read",
+            "body": {"operation": "history", "session": "{{session}}"},
+            "parameters": {"session": {"type": "string", "max_length": 32}},
+        }}}
+    }
+    jsonschema.Draft202012Validator(contract_schema).validate(declaration)
+    declaration["runtime"]["observations"]["history"]["parameters"]["session"]["type"] = "object"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft202012Validator(contract_schema).validate(declaration)

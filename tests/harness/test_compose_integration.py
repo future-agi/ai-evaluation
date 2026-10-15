@@ -63,6 +63,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
             {
                 "modality": "chat",
                 "runtime": {
+                    "observations": {"history": {"capability": "target_http", "path": "/history", "body": {"operation": "read"}}},
                     "language": "javascript",
                     "execution": "compose",
                     "compose_file": "deploy/compose.yaml",
@@ -73,6 +74,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
                     "interface": {
                         "kind": "http",
                         "protocol": "json_template",
+                        "request_template": {"message": "{{new_message_content}}"},
                         "port": 3000,
                         "path": "/chat",
                     },
@@ -116,6 +118,21 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     preflight_bundle(
         output, manifest, parallelism=1, secret_refs={}, allow_compose=True
     )
+    from types import SimpleNamespace
+    from fi.alk.harness.world.observation import ObservationWorldFactory
+
+    factory = ObservationWorldFactory(output)
+    (authoring / "contract.json").write_text("{}")
+    world = asyncio.run(factory.create(SimpleNamespace(world_index=0, endpoints={
+        "target_http": SimpleNamespace(address="http://127.0.0.1:12345", protocol="http")
+    }), rng=random.Random(0)))
+    assert world._execution_state()["observations"]["history"]["body"] == {"operation": "read"}
+    sealed_contract = output / "contract.json"
+    original = sealed_contract.read_text()
+    sealed_contract.write_text(original.replace('"read"', '"delete"'))
+    with pytest.raises(PreflightError):
+        preflight_bundle(output, manifest, parallelism=1, secret_refs={}, allow_compose=True)
+    sealed_contract.write_text(original)
     (output / "compose.json").write_text("{}")
     with pytest.raises(PreflightError):
         preflight_bundle(
