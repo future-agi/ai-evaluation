@@ -1232,6 +1232,106 @@ def _plan_python(
         update={"build_commands": commands, "run_command": run_override or run}
     )
 
+def _plan_source_process(
+    source: Path, *, language: str = "", **kwargs: Any
+) -> SourceProcess:
+    root = kwargs["root"]
+    command = kwargs.get("run_override") or []
+    is_bun = language.lower() == "bun" or (
+        not language and command and command[0] == "bun"
+    )
+    if not is_bun:
+        return _plan_python(source, **kwargs)
+    if not command or command[0] != "bun":
+        raise BundleAuthorError("runtime_bun_command_required: expected bun argv")
+    if (
+        kwargs.get("extras")
+        or kwargs.get("requirements_files")
+        or kwargs.get("livekit_download")
+    ):
+        raise BundleAuthorError("runtime_bun_python_options_invalid")
+    source, root = source.resolve(), root.resolve()
+    if not root.is_relative_to(source):
+        raise BundleAuthorError("runtime_bun_workdir_outside_source")
+    package_root = root
+    manifest = {}
+    while True:
+        path = package_root / "package.json"
+        if path.is_file():
+            if path.is_symlink():
+                raise BundleAuthorError("runtime_bun_manifest_unsafe")
+            try:
+                manifest = json.loads(path.read_text())
+            except (ValueError, UnicodeError) as exc:
+                raise BundleAuthorError("runtime_bun_manifest_invalid") from exc
+            if not isinstance(manifest, dict):
+                raise BundleAuthorError("runtime_bun_manifest_invalid")
+            if "packageManager" in manifest:
+                break
+        if package_root == source:
+            raise BundleAuthorError("runtime_bun_package_manager_missing")
+        package_root = package_root.parent
+    manager = manifest.get("packageManager")
+    if not isinstance(manager, str) or not re.fullmatch(
+        r"bun@[0-9]+\.[0-9]+\.[0-9]+", manager
+    ):
+        raise BundleAuthorError("runtime_bun_package_manager_unpinned")
+    version = manager.removeprefix("bun@")
+    if kwargs.get("version") and kwargs["version"] != version:
+        raise BundleAuthorError("runtime_bun_version_mismatch")
+    locks = [
+        package_root / name
+        for name in ("bun.lock", "bun.lockb")
+        if (package_root / name).is_file()
+    ]
+    if len(locks) != 1:
+        raise BundleAuthorError(
+            "runtime_bun_lock_required: expected exactly one source lockfile"
+        )
+    for path in [package_root / "package.json", *locks]:
+        if path.is_symlink() or not path.resolve().is_relative_to(source):
+            raise BundleAuthorError("runtime_bun_manifest_unsafe")
+    child = root.relative_to(package_root).as_posix()
+    run = (
+        command
+        if child == "."
+        else [
+            "sh",
+            "-c",
+            'cd "$1" && shift && exec "$@"',
+            "alk-source-process",
+            child,
+            *command,
+        ]
+    )
+    verify = (
+        "import shutil,subprocess,sys; "
+        "binary=shutil.which('bun'); "
+        "binary or sys.exit('runtime_bun_toolchain_missing: provision pinned Bun in the certified image'); "
+        "actual=subprocess.check_output([binary,'--version'],text=True).strip(); "
+        "print('Bun toolchain '+actual,flush=True); "
+        "actual==sys.argv[1] or sys.exit('runtime_bun_toolchain_version_mismatch: '+actual)"
+    )
+    process = _python_process(
+        name=kwargs["name"],
+        working_directory=package_root.relative_to(source).as_posix(),
+        entry=None,
+        control=kwargs["control"],
+        needs_secrets=kwargs["needs_secrets"],
+        port=kwargs.get("port"),
+        environment=kwargs.get("environment"),
+        depends_on=kwargs.get("depends_on"),
+    )
+    return process.model_copy(
+        update={
+            "build_commands": [
+                ["python3", "-c", verify, version],
+                ["bun", "install", "--frozen-lockfile"],
+            ],
+            "run_command": run,
+        }
+    )
+
 
 def _uv_sync_build_command(
     root: Path, python: str, *, extra_arguments: list[str] | None = None
@@ -1948,9 +2048,9 @@ def resolve_environment_plan(
         raise BundleAuthorError(
             "runtime_dockerfile_unsupported: process lane cannot execute a selected Dockerfile"
         )
-    if runtime_model.language.lower() not in {"", "python", "py"}:
+    if runtime_model.language.lower() not in {"", "python", "py", "bun"}:
         raise BundleAuthorError(
-            "runtime_language_unsupported: process lane supports Python source only"
+            "runtime_language_unsupported: process lane supports Python or pinned Bun source"
         )
     if compose is None and runtime_dependencies:
         for dependency in runtime_dependencies:
@@ -1983,6 +2083,9 @@ def resolve_environment_plan(
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
     contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
     runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
+    is_bun_runtime = runtime_model.language.lower() == "bun" or bool(
+        runtime_command and runtime_command[0] == "bun"
+    )
     runtime_workdir = str(contract_runtime.get("workdir") or "")
     interface = contract_runtime.get("interface")
     interface = interface if isinstance(interface, dict) else {}
@@ -2147,8 +2250,14 @@ def resolve_environment_plan(
             declared_runtime = service_name == declared_control
             if declared_runtime:
                 port = int(interface_port) if interface_port else port
-            process = _plan_python(
+            process = _plan_source_process(
                 root,
+                language=runtime_model.language if declared_runtime else "",
+                version=(
+                    runtime_model.version
+                    if declared_runtime and runtime_model.language.lower() == "bun"
+                    else ""
+                ),
                 name=service_name,
                 root=service_root,
                 entry=entry,
@@ -2390,8 +2499,11 @@ def resolve_environment_plan(
                     "ALK_CALLBACK_ENTRYPOINT": callback_entrypoint,
                 }
             )
-        process = _plan_python(
+        if is_bun_runtime and not is_http_runtime:
+            raise BundleAuthorError("runtime_bun_http_interface_required")
+        process = _plan_source_process(
             root,
+            language=runtime_model.language,
             name=control_name,
             root=root if is_callback else component,
             entry=None if is_callback or is_command_adapter or is_graph else entry,
@@ -2485,7 +2597,9 @@ def resolve_environment_plan(
                 )
             )
         packaging = (
-            "dockerfile" if (root / "Dockerfile").is_file() else "generated_python"
+            "dockerfile"
+            if (root / "Dockerfile").is_file()
+            else "generated_bun" if is_bun_runtime else "generated_python"
         )
 
     toolbox = _mcp_toolbox_definition(root)
@@ -2579,7 +2693,15 @@ def resolve_environment_plan(
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
     processes = [
-        process.model_copy(update={"workspaces": dict(runtime_model.workspaces)})
+        process.model_copy(update={
+            "workspaces": {
+                name: (
+                    Path(runtime_workdir).relative_to(process.working_directory) / path
+                ).as_posix()
+                if is_bun_runtime and runtime_workdir else path
+                for name, path in runtime_model.workspaces.items()
+            }
+        })
         if isinstance(process, SourceProcess) and process.name == control_name
         else process
         for process in normalized_processes

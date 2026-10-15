@@ -672,7 +672,12 @@ class Runtime(BaseModel):
 
     # Empty means detect from the submitted dependency manifest. Defaulting this to Python makes
     # an otherwise unambiguous Node repository fail the generated-runtime admission path.
-    language: str = ""
+    language: str = Field(
+        default="",
+        description="Source language. Native process supports Python or Bun with a "
+        "source-declared exact packageManager version and one root bun.lock or bun.lockb. "
+        "Bun requires a matching image toolchain and HTTP command.",
+    )
     version: str = ""
     install: str = Field(
         default="",

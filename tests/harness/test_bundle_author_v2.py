@@ -3351,3 +3351,185 @@ def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version:
             tmp_path, _job(connector="http"),
             contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
         )
+
+
+@pytest.mark.parametrize("child", [".", "packages/chat"])
+def test_native_bun_plan_installs_locked_root_and_preserves_child_command(
+    tmp_path: Path, child: str
+) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "plain-chat" if child == "." else "workspace-bot",
+                "packageManager": "bun@1.3.14",
+            }
+        )
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion": 1}')
+    component = tmp_path / child
+    component.mkdir(parents=True, exist_ok=True)
+    if child != ".":
+        (component / "package.json").write_text('{"name":"chat"}')
+    (component / "server.ts").write_text("Bun.serve({fetch: () => new Response('ok')})")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "native",
+            "workdir": child,
+            "command": ["bun", "run", "server.ts"],
+            "install": "touch /tmp/must-not-execute",
+            "workspaces": {"project": "files"},
+            "interface": {"kind": "http", "port": 8001},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.workspaces == {
+        "project": "files" if child == "." else child + "/files"
+    }
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+    assert agent.run_command == (
+        ["bun", "run", "server.ts"]
+        if child == "."
+        else [
+            "sh",
+            "-c",
+            'cd "$1" && shift && exec "$@"',
+            "alk-source-process",
+            child,
+            "bun",
+            "run",
+            "server.ts",
+        ]
+    )
+    assert "must-not-execute" not in repr(agent.build_commands)
+
+
+@pytest.mark.parametrize(
+    "manifest,lock,version,command,error",
+    [
+        ({}, True, "", ["bun", "run", "server.ts"], "package_manager_missing"),
+        (
+            {"packageManager": "bun@latest"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "npm@10.0.0"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            False,
+            "",
+            ["bun", "run", "server.ts"],
+            "lock_required",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "1.3.13",
+            ["bun", "run", "server.ts"],
+            "version_mismatch",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "",
+            ["sh", "-c", "bun server.ts"],
+            "command_required",
+        ),
+        ([], True, "", ["bun", "run", "server.ts"], "manifest_invalid"),
+    ],
+)
+def test_native_bun_rejects_invalid_source(
+    tmp_path: Path, manifest, lock, version, command, error: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    if lock:
+        (tmp_path / "bun.lock").write_text("{}")
+    with pytest.raises(BundleAuthorError, match=error):
+        _plan_source_process(
+            tmp_path,
+            language="bun",
+            name="agent",
+            root=tmp_path,
+            entry=None,
+            control=True,
+            needs_secrets=False,
+            version=version,
+            run_override=command,
+        )
+
+
+def test_native_bun_requires_matching_installed_toolchain(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    process = _plan_source_process(
+        tmp_path,
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    command = [sys.executable, *process.build_commands[0][1:]]
+    missing = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert missing.returncode != 0
+    assert "runtime_bun_toolchain_missing" in missing.stderr
+    binary = tmp_path / "bun"
+    binary.write_text("#!/bin/sh\necho 1.3.13\n")
+    binary.chmod(0o755)
+    wrong = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert wrong.returncode != 0
+    assert "runtime_bun_toolchain_version_mismatch" in wrong.stderr
+    binary.write_text("#!/bin/sh\necho 1.3.14\n")
+    matching = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert matching.returncode == 0
+    assert matching.stdout.strip() == "Bun toolchain 1.3.14"
+
+
+def test_native_bun_rejects_ambiguous_and_symlink_lock(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lock").write_text("{}")
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    kwargs = dict(
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    with pytest.raises(BundleAuthorError, match="lock_required"):
+        _plan_source_process(tmp_path, **kwargs)
+    (tmp_path / "bun.lockb").unlink()
+    (tmp_path / "bun.lock").unlink()
+    (tmp_path / "bun.lock").symlink_to(tmp_path / "package.json")
+    with pytest.raises(BundleAuthorError, match="manifest_unsafe"):
+        _plan_source_process(tmp_path, **kwargs)

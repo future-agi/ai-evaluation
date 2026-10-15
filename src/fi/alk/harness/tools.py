@@ -624,7 +624,10 @@ def contract_tools(
                     "type": "object",
                     "description": "What it takes to run the agent's code.",
                     "properties": {
-                        "language": {"type": "string"},
+                        "language": {
+                            "type": "string",
+                            "description": Runtime.model_fields["language"].description,
+                        },
                         "version": {"type": "string"},
                         "install": {
                             "type": "string",
