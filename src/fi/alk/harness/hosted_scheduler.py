@@ -655,6 +655,7 @@ async def _invoke(
     timeout: float,
     phase: str,
     executor: ThreadPoolExecutor,
+    http_events: list[dict[str, Any]] | None = None,
 ) -> object:
     # R1: a `threading.Event` set as the thread body's first statement — the only way to tell
     # "the phase ran past its budget" (genuine overrun, world half-applied) apart from "the
@@ -701,10 +702,13 @@ async def _invoke(
             world.rng.setstate(tuples(result["rng"]))
             from .world.http_session import validate_events
 
-            http_client._restore_private_http_state(result.get("private_http", {}))
-            for event in validate_events(
+            events = validate_events(
                 result.get("http_events", []), http_client._endpoints
-            ):
+            )
+            if http_events is not None:
+                http_events.extend(events)
+            http_client._restore_private_http_state(result.get("private_http", {}))
+            for event in events:
                 logger.info(
                     "native_http phase=%s evidence=%s",
                     phase,
@@ -806,10 +810,14 @@ async def _run_phase(
     timeout: float,
     phase: str,
     executor: ThreadPoolExecutor,
+    audit_log: Callable[..., Awaitable[None]] | None = None,
+    audit_context: dict[str, Any] | None = None,
 ) -> _PhaseResult:
+    http_events: list[dict[str, Any]] = []
     try:
         value = await _invoke(
-            fn, *args, timeout=timeout, phase=phase, executor=executor
+            fn, *args, timeout=timeout, phase=phase, executor=executor,
+            http_events=http_events,
         )
         return _PhaseResult(value, None)
     except _PhaseNeverStarted:
@@ -841,6 +849,22 @@ async def _run_phase(
                 _CRASH_CODE_BY_PHASE[phase], f"{type(exc.cause).__name__}: {exc.cause}"
             ),
         )
+    finally:
+        if audit_log is not None:
+            for event in http_events:
+                try:
+                    await audit_log(
+                        level="info",
+                        message="native_http "
+                        + json.dumps(
+                            {"phase": phase, **(audit_context or {}), "http": event},
+                            sort_keys=True,
+                        ),
+                    )
+                except _FATAL_OUTBOUND:
+                    raise
+                except Exception:
+                    logger.warning("native_http evidence sink failed")
 
 
 # --- the world pool -----------------------------------------------------------------------------
@@ -2026,12 +2050,22 @@ class HostedScheduler:
         attempt: int,
         context: "_ScenarioContext",
     ) -> "ResultReceipt | _Retry":
+        async def audit_log(**value):
+            await self._emit(self._outbound.log(**value), what="native_http")
+
+        audit_context = {
+            "scenario_key": scenario.scenario_key,
+            "world_index": world_index,
+            "scenario_attempt": attempt,
+        }
         setup = await _run_phase(
             scenario.setup,
             world,
             timeout=SETUP_TIMEOUT_SECONDS,
             phase="setup",
             executor=self._executor,
+            audit_log=audit_log,
+            audit_context=audit_context,
         )
         if setup.failure is not None:
             return self._fault(
@@ -2049,6 +2083,8 @@ class HostedScheduler:
             timeout=READY_TIMEOUT_SECONDS,
             phase="ready",
             executor=self._executor,
+            audit_log=audit_log,
+            audit_context=audit_context,
         )
         if ready.failure is not None:
             return self._fault(
@@ -2180,6 +2216,8 @@ class HostedScheduler:
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
                 executor=self._executor,
+                audit_log=audit_log,
+                audit_context={**audit_context, "check": goal.name},
             )
             if outcome.failure is not None:
                 if outcome.failure.code == "world_unavailable":
