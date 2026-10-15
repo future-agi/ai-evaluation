@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 _STEPS = 20
+_TRANSCRIPT_LIMIT = 200_000
 _UNPLAYABLE = "The recording could not be played. Judge from the transcript and the actions."
 _TURN_TIMEOUT_SECONDS = 300
 
@@ -465,13 +466,14 @@ _SPEAKERS = {"user": "Customer", "assistant": "Agent"}
 
 
 def _transcript(messages: Sequence[Any]) -> str:
-    """The turns as spoken, oldest first."""
-    return "\n".join(
+    """The turns as spoken, oldest first. A long call keeps its tail, where a readback would be."""
+    body = "\n".join(
         f"{_SPEAKERS.get(str(m.get('role')), m.get('role') or 'unknown')}: "
         f"{str(m.get('content') or '').strip()}"
         for m in messages
         if isinstance(m, dict)
     )
+    return body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
 
 
 def _complete(
