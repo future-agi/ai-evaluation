@@ -571,6 +571,10 @@ out of the check, and when the choice matters, let a judged sub-goal decide whet
 situation. Read the agent's prompt and its tool definitions to tell which is which; never decide it
 from the field's name.
 
+Every scenario's proof also plays its solution as an agent that gets every fixed value right and
+chooses everything else itself, so a check that reads an argument nothing fixes, or demands one tool
+where another reaches the same outcome, is refused there.
+
 Fill the check's `reference` with that answer for every field it compares, such as "item_id: what the
 world holds for this person; quantity: what they asked for". A field you cannot fill in that way is the
 agent's choice. A check written to take `reference` is refused until it says this.

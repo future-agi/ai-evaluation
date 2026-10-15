@@ -764,6 +764,45 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
+    """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
+
+    def plain(text: Any) -> str:
+        return " ".join(str(text).lower().split())
+
+    try:
+        held = plain(json.dumps(trial.state(), default=str))
+    except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
+        held = ""
+    said = plain(f"{scenario.instruction} {json.dumps(scenario.fixture, default=str)}")
+    known = plain(instructions)
+    wrong = []
+    for step in scenario.solution:
+        for name, source in (step.fixed.items() if isinstance(step.fixed, dict) else ()):
+            value = step.arguments.get(name)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            kind = next((one for one in ("caller", "record", "rule") if plain(source).startswith(one)), "")
+            quoted = re.findall(r'"([^"]+)"', str(source))
+            holds = {
+                "caller": plain(value) in said,
+                "record": plain(value) in held,
+                "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
+            }.get(kind)
+            if not holds:
+                wrong.append(f"{step.tool} {name}={value!r} (source: {source})")
+    if not wrong:
+        return []
+    return [
+        "these fixed values are not where their source says: "
+        + "; ".join(wrong)
+        + '. Write each source as `caller: ...` (the value is in what the caller says), `record: ...` '
+        '(the world holds it) or `rule: "<the rule\'s own words>"` (quoted from the agent\'s '
+        "instructions and containing the value). A value none of these gives is the agent's choice; "
+        "take it out of `fixed`"
+    ]
+
+
 def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     """Values handed to the caller, used by the solution, and absent from the world after setup."""
     claimed = _handed_to_the_caller(scenario.fixture)
@@ -801,6 +840,7 @@ def accept_scenario(
     rename_on_collision: bool = False,
     vocabulary: list[str] | None = None,
     spoken: bool = True,
+    instructions: str = "",
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -837,6 +877,7 @@ def accept_scenario(
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
         problems.extend(_credentials_the_world_lacks(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+        problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
     finally:
@@ -1614,6 +1655,7 @@ def scenario_tools(
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
+            instructions="\n".join([contract.system_prompt_excerpt, *contract.hard_constraints]),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

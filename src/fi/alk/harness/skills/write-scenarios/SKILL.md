@@ -268,8 +268,15 @@ instructions that names the value for this situation. A value the agent's code f
 else does not fix what the agent's model passes to a tool, and a step another tool already does
 inside itself is not one the agent has to repeat. A sub-goal's contract saying where a value comes from does not make
 it so: find that source yourself, in this caller's situation, their record or the agent's
-instructions, and write it against the argument in `fixed`. If you cannot write where a value comes
-from, it is not fixed. Only fixed arguments are shown to the checks and the judge. Everything
+instructions, and write it against the argument in `fixed`: `caller: <what they say>`,
+`record: <where the world holds it>`, or `rule: "<the rule's own words>"`, quoted exactly as the
+instructions write them and containing the value. If you cannot write where a value comes from, it is
+not fixed.
+
+The proof then plays your solution once more as an agent that gets every fixed value right but makes
+its own choice for everything else. Every check must still pass. A check that fails names the
+argument: either something really fixes it and you mark it, or the check holds the agent to its own
+choice and must be rewritten to check the outcome. Only fixed arguments are shown to the checks and the judge. Everything
 else (a destination or category the agent picks, a free-text reason or note, a default) still gets a
 value so the step can run, but is not marked, so no check can take a value you made up for the right
 one. Leave out an optional argument nothing fixes; the tool's default applies. If a proof reports that

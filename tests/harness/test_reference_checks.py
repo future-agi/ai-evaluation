@@ -167,3 +167,52 @@ def test_a_check_is_given_only_the_arguments_a_step_marks_fixed():
         {"tool": "look_up", "arguments": {"account": "A-1"}},
     ]
 
+
+
+def test_a_fixed_value_must_be_where_its_stated_source_says():
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import _fixed_sources_that_do_not_hold
+
+    rules = "7. Anything needing a specialist is NOT yours to do. Explain briefly and hand it over.\n8. Use the priority line for emergencies."
+
+    class Trial:
+        def state(self) -> dict[str, Any]:
+            return {"accounts": [{"id": "A-77"}]}
+
+    def problems(source: str, value: str) -> list[str]:
+        step = Step(tool="hand_over", arguments={"line": value}, fixed={"line": source})
+        return _fixed_sources_that_do_not_hold(Scenario(name="s", instruction="My account is A-12.", solution=[step]), Trial(), rules)
+
+    assert problems("rule 7: specialist line for this", "specialist")
+    assert problems('rule: "hand it over"', "specialist")
+    assert problems("specialist", "specialist")
+    assert problems("caller: they asked for it", "specialist")
+    assert not problems('rule: "Use the priority line for emergencies"', "priority")
+    assert not problems("caller: says A-12", "A-12")
+    assert not problems("record: accounts.id", "A-77")
+
+
+def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values():
+    from fi.alk.harness.prove import _other_choices
+    from fi.alk.harness.scenario import Scenario, Step
+
+    scenario = Scenario(
+        name="s",
+        instruction="i",
+        solution=[
+            Step(tool="open", arguments={"account": "A-1", "note": "picked"}, fixed={"account": "caller: A-1"}),
+            Step(tool="confirm", arguments={"token": "$call.open.token"}, fixed={}),
+        ],
+    )
+    calls = [
+        Call(name="open", arguments={"account": "A-1", "note": "picked"}, result={"token": "t1"}, ok=True),
+        Call(name="confirm", arguments={"token": "t1"}, result={}, ok=True),
+    ]
+    varied, changed = _other_choices(scenario, calls)
+    assert varied[0].arguments == {"account": "A-1", "note": "another note"}
+    assert varied[1].arguments == {"token": "t1"} and changed == {"open.note"}
+    strict = "def check(world, calls, reference):\n    return None if any(c.arguments.get('note') == 'picked' for c in calls) else 'done wrong: note'\n"
+    assert run_check(strict, _World([]), calls, reference=[]).held
+    assert not run_check(strict, _World([]), varied, reference=[]).held
+    unfixed = scenario.model_copy(update={"solution": [Step(tool="open", arguments={"note": "x"})]})
+    assert _other_choices(unfixed, calls[:1]) == (calls[:1], set())

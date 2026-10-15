@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
@@ -65,6 +65,9 @@ class Proof:
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
+    # Checks that fail when the agent makes its own choice for an argument the scenario does not
+    # mark fixed: they hold the agent to a value nothing fixed. Each names those arguments.
+    too_strict: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -75,6 +78,7 @@ class Proof:
             and not self.weak
             and not self.failed_attempts
             and not self.broken
+            and not self.too_strict
         )
 
     def gates(self) -> dict[str, bool]:
@@ -129,6 +133,15 @@ class Proof:
                 "        if not tried: return 'never attempted it'\n"
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
+            )
+        if self.too_strict:
+            return (
+                "these checks fail an agent that does every fixed thing right but makes its own "
+                "choice for an argument this scenario does not mark fixed:\n  - "
+                + "\n  - ".join(self.too_strict)
+                + "\n\nA check may hold the agent only to what the caller, their record or a "
+                "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
+                "if one of those really fixes it."
             )
         if self.failed_attempts:
             return (
@@ -295,6 +308,30 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
+def _other_choices(scenario: Scenario, calls: Sequence[Call]) -> tuple[list[Call], set[str]]:
+    """The same calls with every text argument the scenario does not mark fixed set otherwise."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    if any(step.fixed is None for step in steps):
+        return list(calls), set()
+    varied, changed, at = [], set(), 0
+    for call in calls:
+        step = steps[at] if at < len(steps) else None
+        if step is None or step.tool != call.name:
+            varied.append(call)
+            continue
+        at += 1
+        fixed = step.fixed or ()
+        arguments = dict(call.arguments)
+        for name, value in call.arguments.items():
+            written = step.arguments.get(name)
+            chained = isinstance(written, str) and written.startswith("$")
+            if name not in fixed and not chained and isinstance(value, str) and value:
+                arguments[name] = f"another {name}"
+                changed.add(f"{call.name}.{name}")
+        varied.append(replace(call, arguments=arguments))
+    return varied, changed
+
+
 def _steps(scenario: Scenario) -> list[dict[str, Any]]:
     """The reference solution as a check is given it."""
     return reference_of(getattr(scenario, "solution", None) or ())
@@ -347,6 +384,14 @@ def prove(
             run_check(source, world, calls, name=name, reference=_steps(scenario))
             for name, source in checks
         ]
+        varied, changed = _other_choices(scenario, calls)
+        if changed:
+            proof.too_strict = [
+                f"{name} (the agent chose: {', '.join(sorted(changed))})"
+                for name, source in checks
+                if any(one.name == name and one.held for one in proof.with_solution)
+                and not run_check(source, world, varied, name=name, reference=_steps(scenario)).held
+            ]
     finally:
         world.close()
     proof.refused = refused
