@@ -1731,10 +1731,9 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
 
-    # Build/cache directories do not alter source identity.  They also must not cause a second
-    # compilation to replace the exact environment bytes that passed runtime validation.
-    (source / "build").mkdir()
-    (source / "build" / "generated.py").write_text(
+    # Excluded interpreter caches must not replace the certified environment bytes.
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "generated.pyc").write_text(
         "def agent_callback(message):\n    return message\n", encoding="utf-8"
     )
     execution = tmp_path / "execution"
@@ -1792,6 +1791,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         source=source, job=job, authoring=authoring, output=external_execution
     )
     assert external_reused.digest == manifest.digest
+
+    from fi.alk.harness.certification import CertificationGateError
+
+    (source / "build").mkdir()
+    (source / "build" / "agent.py").write_text("print('new source')\n")
+    with pytest.raises(CertificationGateError, match="source digest"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-source"
+        )
 
 
 def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> None:
