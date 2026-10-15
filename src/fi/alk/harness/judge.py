@@ -40,6 +40,7 @@ _UNPLAYABLE = "The recording could not be played. Judge from the transcript and 
 _TURN_TIMEOUT_SECONDS = 300
 
 VERDICTS = ("pass", "fail", "not_applicable", "inconclusive")
+VERDICT_FIELD = {"type": "string", "enum": list(VERDICTS)}
 VERDICT_RULES = """
 Every verdict is one of pass, fail, not_applicable or inconclusive.
 - not_applicable: the situation did not arise and the criteria's "If it does not arise" line says
@@ -119,9 +120,6 @@ def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
     return verdict == "pass", explanation
 
 
-VERDICT_FIELD = {"type": "string", "enum": list(VERDICTS)}
-
-
 def compared(goal: Any) -> str:
     said = str(getattr(goal, "compares", "") or "").strip()
     return f"Its check contract:\n{said}\n" if said else ""
@@ -152,7 +150,11 @@ def _dump_calls(calls: Sequence[Any]) -> str:
 
 
 class CallEvidence:
-    """A judge's read-only view of one call: world, transcript and recording, heard before deciding."""
+    """A judge's read-only view of one call, and the order it must look in.
+
+    Shared by every judging mode: the world, the transcript and the recording as tools, with the
+    rule that a judge has listened to the recording and read the transcript before it decides.
+    """
 
     def __init__(self, world: Any, messages: Sequence[Any], recording: str | None, label: str) -> None:
         self.world = world
@@ -249,7 +251,11 @@ async def run_judge_conversation(
     nudge: Callable[[], str],
     steps: int = _STEPS,
 ) -> list[dict[str, Any]]:
-    """Run the judge's turns until `done` or the steps run out; never raises."""
+    """Run the judge's turns until `done`, the steps run out, or it stops twice without deciding.
+
+    Never raises: an unplayable recording falls back to the transcript, and a failed turn is
+    retried once before the conversation is handed back undecided.
+    """
     asked_again = False
     failed_turns = 0
     for step in range(steps):

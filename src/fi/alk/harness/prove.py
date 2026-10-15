@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from .catalogue import Catalogue
 from .checks import Outcome, run_check

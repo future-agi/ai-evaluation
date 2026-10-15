@@ -45,9 +45,9 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .judge import judge_sub_goal as _judge
 from .checks import takes_reference
 from .joint_judge import OFF_SCRIPT
+from .judge import judge_sub_goal as _judge
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
@@ -1591,7 +1591,10 @@ class HostedScheduler:
         offered: dict[str, Any],
     ) -> tuple[list[tuple[bool | None, str]] | None, str]:
         """All of a call's judged sub-goals in one conversation (None to judge each alone), and any
-        report that the customer left their side."""
+        report that the customer left their side.
+
+        Any failure, including a single sub-goal left undecided, judges every one of them alone.
+        """
         if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
             return None, ""
         try:
@@ -2205,27 +2208,9 @@ class HostedScheduler:
                     )
                 )
                 continue
-            if goal.judged:
-                # A judged sub-goal has no code to settle it: a model decides, here, while the
-                # world the call left behind is still alive. Collected and run together below.
-                if getattr(goal, "both", False):
-                    verdict = _classify_check(outcome.value)
-                    if verdict.broken:
-                        broken_failure = _failure(
-                            "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
-                        )
-                        sub_goal_results.append(
-                            SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
-                        )
-                        continue
-                    checked[len(sub_goal_results)] = verdict
-                judged_pending.append((len(sub_goal_results), goal))
-                sub_goal_results.append(
-                    SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
-                )
-                continue
             verdict = _classify_check(outcome.value)
-            if verdict.broken:
+            both = bool(goal.judged) and getattr(goal, "both", False)
+            if verdict.broken and (both or not goal.judged):
                 broken_failure = _failure(
                     "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
                 )
@@ -2233,6 +2218,16 @@ class HostedScheduler:
                     SubGoalResult(
                         name=goal.name, held=None, reason=None, judged=goal.judged != ""
                     )
+                )
+                continue
+            if goal.judged:
+                # A judged sub-goal has no code to settle it: a model decides, here, while the
+                # world the call left behind is still alive. Collected and run together below.
+                if both:
+                    checked[len(sub_goal_results)] = verdict
+                judged_pending.append((len(sub_goal_results), goal))
+                sub_goal_results.append(
+                    SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
                 )
                 continue
             sub_goal_results.append(

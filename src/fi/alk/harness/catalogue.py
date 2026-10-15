@@ -223,6 +223,13 @@ def without_delivery_overlay(sub_goal: SubGoal) -> tuple[SubGoal, str]:
     )
 
 
+CONTRACT_FIELDS = ("reference", "observed", "verifier", "comparison", "scope", "applicability")
+CONTRACT_SCHEMA: dict[str, Any] = {
+    **{field: str for field in CONTRACT_FIELDS},
+    "verifier": {"type": "string", "enum": ["code", "llm", "both"]},
+}
+
+
 CRITERIA_RULES = (
     "A sub-goal is judged by a model against its `criteria` when it turns on meaning or behaviour "
     "that nothing observable settles (what was said or read back, whether a refusal was explained), "

@@ -8027,7 +8027,7 @@ def test_prove_hands_a_reference_check_the_solution_and_it_fails_when_nothing_is
                 "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
                 "    if wanted and not made:\n"
                 "        return 'not done: nothing was added'\n"
-                "    if wanted and made[-1].arguments.get('item_id') != wanted['item_id']:\n"
+                "    if wanted and not any(c.arguments.get('item_id') == wanted['item_id'] for c in made):\n"
                 "        return 'done wrong: item_id'\n"
                 "    return None\n"
             ),

@@ -80,8 +80,9 @@ actions or the records.
 The customer is simulated and was given a side to play. Separately from the sub-goals, if the
 customer contradicted a fact their side fixed for them (not a detail they were free to choose), or
 never gave the agent the chance the conversation was meant to show although they could have, call
-customer_off_script once with what they did. The call is then not counted for or against the agent. Never call it
-because the agent kept something from happening, or for a detail the customer was free to choose.
+customer_off_script once with what they did. The call is then not counted for or against the agent.
+Never call it because the agent kept something from happening, or for a detail the customer was free
+to choose.
 
 `explanation` is shown to the agent's owner. Write one or two plain sentences about what the agent
 said or did and what followed from it, in the terms of their business, citing what actually

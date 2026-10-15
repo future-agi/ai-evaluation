@@ -16,7 +16,8 @@ def check(world, calls, reference):
     made = [c for c in calls if c.name == "file_claim" and c.ok]
     if not made:
         return "not done: no claim was filed"
-    rows = [r for r in world.state()["claims"] if r["id"] == made[-1].result.get("claim_id")]
+    filed = {c.result.get("claim_id") for c in made}
+    rows = [r for r in world.state()["claims"] if r["id"] in filed]
     if not rows:
         return "not done: the claim left no record"
     for field in ("policy", "loss_date"):
@@ -57,8 +58,7 @@ def test_a_two_argument_check_runs_as_before_and_is_never_given_the_reference():
     assert not run_check(two, _World([]), []).held
     assert takes_reference(lambda world, calls, reference: None)
     assert not takes_reference(lambda world, calls: None)
-
-
+    assert not takes_reference(type("Deferred", (), {"_alk_source": "def check(:", "_alk_entry": "check"})())
 
 
 def _call(name: str, ok: bool = True, **arguments: Any) -> Call:

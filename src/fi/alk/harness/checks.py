@@ -23,6 +23,8 @@ two would let a typo read as a finding about the agent.
 
 from __future__ import annotations
 
+import ast
+import inspect
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -43,15 +45,16 @@ class Outcome:
         return f"  [{mark}] {self.name}" + (f" — {self.said}" if self.said else "")
 
 
-def takes_reference(checker: Any) -> bool:
+def takes_reference(checker: object) -> bool:
     """Whether a check is written `check(world, calls, reference)`."""
-    import ast
-    import inspect
-
     source = getattr(checker, "_alk_source", None)
     if source:
         entry = getattr(checker, "_alk_entry", "check")
-        for node in ast.parse(source).body:
+        try:
+            body = ast.parse(source).body
+        except SyntaxError:
+            return False
+        for node in body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry:
                 return len(node.args.args) >= 3
         return False

@@ -2770,7 +2770,6 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     assert said.index(policy) < said.index("Before you brief anyone")
 
 
-
 def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stays_code_only():
     from fi.alk.harness.scenario_source import _CompiledScenario, _CompiledSubGoal, _with_claims
 

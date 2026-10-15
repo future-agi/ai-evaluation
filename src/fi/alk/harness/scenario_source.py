@@ -27,6 +27,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
+from pydantic import ValidationError
+
 from . import outbound as ob
 from .catalogue import CATALOGUE, SubGoal
 from .job import FailureDomain
@@ -417,13 +419,16 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             continue
+        try:
+            goal = SubGoal.model_validate(entry)
+        except ValidationError as exc:
+            logger.warning("sub-goal %s has an invalid check contract: %s", entry["name"], exc)
+            goal = SubGoal(name=entry["name"])
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
-            "contract": SubGoal.model_validate({**entry, "name": entry["name"]}).contract()
-            if isinstance(entry, dict)
-            else "",
-            "both": "yes" if str(entry.get("verifier") or "").strip().lower() == "both" else "",
+            "contract": goal.contract(),
+            "both": "yes" if goal.both else "",
         }
     return claims
 

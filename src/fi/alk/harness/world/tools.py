@@ -27,6 +27,8 @@ from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
+    CONTRACT_FIELDS,
+    CONTRACT_SCHEMA,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
@@ -1277,7 +1279,7 @@ def world_tools(
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
         "task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, "reference": str, "observed": str, "verifier": {"type": "string", "enum": ["code", "llm", "both"]}, "comparison": str, "scope": str, "applicability": str},
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
             ["name", "what"],
         ),
     )
@@ -1289,12 +1291,7 @@ def world_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
-            reference=str(args.get("reference") or ""),
-            observed=str(args.get("observed") or ""),
-            verifier=str(args.get("verifier") or ""),
-            comparison=str(args.get("comparison") or ""),
-            scope=str(args.get("scope") or ""),
-            applicability=str(args.get("applicability") or ""),
+            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(sub_goal)
         if problems:

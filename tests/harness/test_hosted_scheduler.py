@@ -4370,3 +4370,12 @@ def test_sub_goals_that_did_not_arise_pass_as_not_applicable(monkeypatch) -> Non
     receipt, _ = _two_judged(monkeypatch, _all)
     assert receipt.status == "passed"
     assert all(g.reason.startswith("Not applicable:") for g in receipt.sub_goals)
+
+
+def test_a_sub_goal_settled_by_both_whose_check_is_broken_is_a_broken_check(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {goal.name: (True, "ok") for goal in goals}
+
+    goals = [FakeSubGoal("saved_feedback", lambda w, c: 42, judged="judge", both=True)]
+    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
+    assert receipt.status == "errored" and receipt.failure.code == "check_broken"
