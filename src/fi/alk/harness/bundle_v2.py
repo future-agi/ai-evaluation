@@ -41,7 +41,7 @@ from pydantic import (
     model_validator,
 )
 
-from .public_material import PublicMaterialAdmission
+from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .bundle import CapabilityProtocol, _reject_secret_values, _safe_relative
 
 BUNDLE_V2_SCHEMA_VERSION = "futureagi.environment-bundle.v2"
@@ -394,6 +394,9 @@ class BundleProvenanceV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     public_material_admissions: list[PublicMaterialAdmission] = Field(
+        default_factory=list, max_length=512
+    )
+    public_test_fixture_admissions: list[PublicTestFixtureAdmission] = Field(
         default_factory=list, max_length=128
     )
     source_kind: str
@@ -409,7 +412,7 @@ class BundleProvenanceV2(BaseModel):
     def _valid_source_digest(self) -> "BundleProvenanceV2":
         if any(
             item.source_digest != self.source_digest
-            for item in self.public_material_admissions
+            for item in [*self.public_material_admissions, *self.public_test_fixture_admissions]
         ):
             raise ValueError("public_material_admission_source_changed")
         # Bare 64-hex, matching what `source_fingerprint` (v1's producer) actually emits — no
@@ -456,7 +459,7 @@ class EnvironmentBundleV2(BaseModel):
             raise ValueError("bundle_digest_invalid")
 
         if (
-            self.provenance.public_material_admissions
+            (self.provenance.public_material_admissions or self.provenance.public_test_fixture_admissions)
             and self.runtime.kind is not RuntimeKindV2.COMPOSE
         ):
             raise ValueError("public_material_admission_requires_native_compose")

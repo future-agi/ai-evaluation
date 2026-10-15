@@ -682,6 +682,7 @@ class CertifiedComposeRuntimeProvider:
 
         validate_source(
             source, bundle.provenance.public_material_admissions,
+            fixtures=bundle.provenance.public_test_fixture_admissions,
             source_digest=bundle.provenance.source_digest,
         )
         self._check_socket()
@@ -729,11 +730,12 @@ class CertifiedComposeRuntimeProvider:
         return [entry[0] for entry in self._worlds.values()]
 
     def _start(self, runtime, directory, bundle):
-        if bundle.provenance.public_material_admissions:
+        if bundle.provenance.public_material_admissions or bundle.provenance.public_test_fixture_admissions:
             from .compose_integration import validate_source
 
             validate_source(
                 self._source, bundle.provenance.public_material_admissions,
+                fixtures=bundle.provenance.public_test_fixture_admissions,
                 source_digest=bundle.provenance.source_digest,
             )
         _copy_source(self._source, directory / "source")

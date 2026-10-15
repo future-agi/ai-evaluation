@@ -48,7 +48,7 @@ def provider(values, artifact_root):
     )
 
 
-def validate_source(source: Path, admissions=(), *, source_digest=None) -> None:
+def validate_source(source: Path, admissions=(), *, fixtures=(), source_digest=None) -> None:
     from .bundle import _inspect_file
     from .certified_compose_runtime import validate_source_tree
 
@@ -56,22 +56,28 @@ def validate_source(source: Path, admissions=(), *, source_digest=None) -> None:
     validate_source_tree(source)
     from .provision import source_fingerprint
 
-    if admissions or source_digest is not None:
+    if admissions or fixtures or source_digest is not None:
         actual_digest = source_fingerprint(source)
         if source_digest is not None and actual_digest != source_digest:
             raise ValueError("public_material_admission_source_changed")
-        if any(item.source_digest != actual_digest for item in admissions):
+        if any(item.source_digest != actual_digest for item in [*admissions, *fixtures]):
             raise ValueError("public_material_admission_source_changed")
     by_path = {}
     for item in admissions:
         by_path.setdefault(item.path, []).append(item)
+    fixture_paths = {item.path: item for item in fixtures}
+    if len(fixture_paths) != len(fixtures):
+        raise ValueError("public_test_fixture_duplicate_path")
     seen = set()
     for path in sorted(source.rglob("*")):
         if not path.is_symlink() and path.is_file():
             relative = path.relative_to(source).as_posix()
-            _inspect_file(source, path, admissions=by_path.get(relative, ()))
+            _inspect_file(
+                source, path, admissions=by_path.get(relative, ()),
+                fixture=fixture_paths.get(relative),
+            )
             seen.add(relative)
-    if set(by_path) - seen:
+    if (set(by_path) | set(fixture_paths)) - seen:
         raise ValueError("public_material_admission_file_missing")
 
 
@@ -112,7 +118,7 @@ def compile_bundle(*, source, job, authoring, output, contract):
     )
     if not isinstance(selection, ComposeSelection):
         return None
-    validate_source(source, job.public_material_admissions)
+    validate_source(source, job.public_material_admissions, fixtures=job.public_test_fixture_admissions)
     interface = runtime.get("interface") or {}
     if contract.get("modality") != "chat" or interface.get("kind") != "http":
         raise ValueError("compose_native_http_chat_required")
@@ -226,6 +232,7 @@ def compile_bundle(*, source, job, authoring, output, contract):
             files=_files(temporary),
             provenance=BundleProvenanceV2(
                 public_material_admissions=job.public_material_admissions,
+                public_test_fixture_admissions=job.public_test_fixture_admissions,
                 source_kind=job.source.kind.value,
                 repository=job.source.repository,
                 commit=job.source.commit_sha,

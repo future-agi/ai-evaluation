@@ -82,7 +82,18 @@ def test_review_does_not_disable_other_findings(tmp_path, change):
 
 
 @pytest.mark.parametrize(
-    "path", ["../outside", "/absolute", "a/../b", "./a", "a\\b", "a//b", "C:/x", ".", "file\x00"]
+    "path",
+    [
+        "../outside",
+        "/absolute",
+        "a/../b",
+        "./a",
+        "a\\b",
+        "a//b",
+        "C:/x",
+        ".",
+        "file\x00",
+    ],
 )
 def test_unsafe_admission_path_rejected(tmp_path, path):
     (tmp_path / "file.txt").write_bytes(TOKEN)
@@ -138,7 +149,10 @@ def test_scanner_checks_match_across_old_chunk_boundary(tmp_path):
     validate_source(tmp_path, [approval(tmp_path, "sample.txt")])
 
 
-def test_compile_seal_load_and_provision_preserve_review(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fixture_only", [False, True])
+def test_compile_seal_load_and_provision_preserve_review(
+    tmp_path, monkeypatch, fixture_only
+):
     from fi.alk.harness.bundle_author_v2 import author_bundle_v2
     from fi.alk.harness.bundle_v2 import load_bundle_v2, seal_bundle_v2
     from fi.alk.harness.certified_compose_runtime import CertifiedComposeRuntimeProvider
@@ -183,6 +197,19 @@ def test_compile_seal_load_and_provision_preserve_review(tmp_path, monkeypatch):
         )
     )
     admission = approval(source, "public.txt")
+    field = "public_material_admissions"
+    if fixture_only:
+        from fi.alk.harness.public_material import PublicTestFixtureAdmission
+
+        (source / "public.txt").write_bytes(b"-----BEGIN PRIVATE KEY----- fixed test")
+        admission = PublicTestFixtureAdmission.model_validate(
+            {
+                key: value
+                for key, value in approval(source, "public.txt").model_dump().items()
+                if key not in {"pattern", "match_sha256"}
+            }
+        )
+        field = "public_test_fixture_admissions"
     job = HarnessJob.model_validate(
         dict(
             job_id="test",
@@ -191,7 +218,7 @@ def test_compile_seal_load_and_provision_preserve_review(tmp_path, monkeypatch):
             source={"kind": "local_repository", "local_path": str(source)},
             agent={"connector": "auto"},
             scenario_count=1,
-            public_material_admissions=[admission],
+            **{field: [admission]},
         )
     )
     monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/test.sock")
@@ -200,7 +227,7 @@ def test_compile_seal_load_and_provision_preserve_review(tmp_path, monkeypatch):
         source=source, job=job, authoring=authoring, output=output
     )
     loaded = load_bundle_v2(output)
-    assert loaded.provenance.public_material_admissions == [admission]
+    assert getattr(loaded.provenance, field) == [admission]
     assert seal_bundle_v2(loaded) == manifest.digest
     preflight_bundle(output, loaded, parallelism=1, secret_refs={}, allow_compose=True)
     provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / "socket")
@@ -215,32 +242,51 @@ def test_compile_seal_load_and_provision_preserve_review(tmp_path, monkeypatch):
                 loaded, source=source, bundle_dir=output, work_directory=tmp_path
             )
         )
-    loaded.provenance.public_material_admissions[0] = admission.model_copy(
+    getattr(loaded.provenance, field)[0] = admission.model_copy(
         update={"reason": "changed review"}
     )
     assert seal_bundle_v2(loaded) != manifest.digest
 
 
-def test_reset_rejects_changed_reviewed_source_before_copy(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fixture_only", [False, True])
+def test_reset_rejects_changed_reviewed_source_before_copy(
+    tmp_path, monkeypatch, fixture_only
+):
     from types import SimpleNamespace
     from fi.alk.harness.certified_compose_runtime import CertifiedComposeRuntimeProvider
 
-    source = tmp_path / 'submitted'
+    source = tmp_path / "submitted"
     source.mkdir()
-    (source / 'public.txt').write_bytes(TOKEN)
-    admission = approval(source, 'public.txt')
-    manifest = SimpleNamespace(provenance=BundleProvenanceV2(
-        source_kind='local', source_digest=admission.source_digest,
-        public_material_admissions=[admission],
-    ))
-    world_dir = tmp_path / 'world'
-    (world_dir / 'source').mkdir(parents=True)
+    (source / "public.txt").write_bytes(TOKEN)
+    admission = approval(source, "public.txt")
+    field = "public_material_admissions"
+    if fixture_only:
+        from fi.alk.harness.public_material import PublicTestFixtureAdmission
+
+        (source / "public.txt").write_bytes(b"-----BEGIN PRIVATE KEY----- fixed test")
+        admission = PublicTestFixtureAdmission.model_validate(
+            {
+                key: value
+                for key, value in approval(source, "public.txt").model_dump().items()
+                if key not in {"pattern", "match_sha256"}
+            }
+        )
+        field = "public_test_fixture_admissions"
+    manifest = SimpleNamespace(
+        provenance=BundleProvenanceV2(
+            source_kind="local",
+            source_digest=admission.source_digest,
+            **{field: [admission]},
+        )
+    )
+    world_dir = tmp_path / "world"
+    (world_dir / "source").mkdir(parents=True)
     runtime = SimpleNamespace(world_index=0)
-    provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / 'socket')
+    provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / "socket")
     provider._source = source
     provider._worlds[0] = runtime, world_dir, manifest
-    monkeypatch.setattr(provider, '_stop', lambda *args: None)
-    (source / 'public.txt').write_bytes(TOKEN + b' changed')
-    with pytest.raises(ValueError, match='source_changed'):
+    monkeypatch.setattr(provider, "_stop", lambda *args: None)
+    (source / "public.txt").write_bytes(TOKEN + b" changed")
+    with pytest.raises(ValueError, match="source_changed"):
         asyncio.run(provider.reset(runtime, work_directory=tmp_path))
-    assert not (world_dir / 'source').exists()
+    assert not (world_dir / "source").exists()
