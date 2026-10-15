@@ -265,14 +265,17 @@ tools take them.
 - When the caller states something a rule says to hand over, stop or refuse on (an injury, a lawyer,
   a dispute, a request outside the agent's scope), the solution is that action with nothing before it
   the rule does not ask for: no identity check and no lookup. An identity check belongs before
-  disclosing or changing something, never before handing over. When the reason to hand over can only
-  be found by looking (an account's state the caller does not mention), the lookups that find it come
-  first, as in the example under "What is not a scenario".
+  disclosing or changing something, never before handing over. A rule that says to act at once comes
+  before the agent's usual opening steps, verifying the caller included. When the reason to hand over
+  can only be found by looking (an account's state the caller does not mention), the lookups that find
+  it come first, as in the example under "What is not a scenario".
 - A step another tool already does inside its own work is not one the agent repeats.
 - The outcome must be one the call itself can reach. The simulated caller can only talk: it cannot
   open a link, use an app, read a screen or pay on a page. When the agent's flow needs one of those
   (a payment link, an emailed code), the outcome is what the agent does around it (sends it, checks
-  it, offers the next step), never a completion only that outside action could bring.
+  it, offers the next step), never a completion only that outside action could bring. Neither the
+  caller's instruction nor setup can stand in for that action: setup holds what was true before the
+  call, and something the caller would do off the line during it never happens.
 
 A wrong value or an extra step in the solution fails a correct agent, because a check that finds it
 there expects the agent to match it.
