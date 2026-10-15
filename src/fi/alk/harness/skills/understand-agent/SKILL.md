@@ -52,7 +52,9 @@ Find, in roughly this order:
    fails at the first call. Record types wherever the source states them.
 
 3. **Argument values.** Where an argument is constrained to a set, an enum, a literal union, or a
-   lookup into fixed data, record the real values.
+   lookup into fixed data, record the real values. Constrained means something rejects any other
+   value; a free-text argument stays free even when the code only ever passes a default and one
+   other value, and recording those two makes every other value look wrong.
 
 4. **What each tool refuses until something else has happened.** Read each tool's body for a
    guard that raises before it does any work, and record the tools that make that guard pass in

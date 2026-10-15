@@ -289,7 +289,8 @@ the checks and the judge, so everything else stays out of their reach:
 
 - the agent's own choices: a destination or category it picks, a label or note it writes in its own
   words, even when the caller asked for that very thing (the caller fixes what they want, not the
-  words the agent records it under);
+  words the agent records it under), and the same for a place or description the caller gave and
+  the agent writes down;
 - a value the agent's code fills in elsewhere, which does not fix what the agent's model passes;
 - an optional argument nothing fixes: leave it out, and the tool's default applies.
 
