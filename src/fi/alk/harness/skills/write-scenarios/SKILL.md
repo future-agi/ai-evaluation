@@ -955,6 +955,11 @@ reference for it, but you will only give it if asked."* Whether the agent asks i
 many scenarios. Put it in the instruction and the agent gets it for free; leave it out entirely and
 the scenario cannot be completed.
 
+**The caller only talks.** Never tell them to do something off the line: tap a link, pay on a page,
+open an app, read a screen. They will say they did it and nothing in the world changes, so an agent
+that checks finds it undone. When the agent's flow waits on such an action, the call ends at what the
+agent does around it, and the sub-goals stop there too.
+
 **Every value the caller is told to give is in their details.** "Give the last four digits of your
 phone number" needs the phone number in the instruction; a caller told to give a value they were never
 given can only invent one or stall.
