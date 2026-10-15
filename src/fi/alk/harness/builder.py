@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -636,6 +637,35 @@ def open_for_adapting(
     return Stage(spec, name=BUILDER)
 
 
+def open_for_composition(
+    composition: Any,
+    *,
+    platform: ToolServer | None = None,
+    ask: Callable[..., Any] | None = None,
+    hosted_prompt: str = "",
+) -> Stage:
+    """The same harness on a composition: a prebuilt environment it does not own, bound to the
+    person's agent. Only the suite changes, so the tools that change the world or the contract
+    are left out; saving seals a child suite and re-proves the binding (`composition_edit`)."""
+    from .composition_edit import FIXED_ENVIRONMENT_TOOLS, trajectory_server
+
+    return open_builder(
+        composition.contract,
+        out=composition.workspace,
+        source_root=None,
+        platform=platform,
+        ask=ask,
+        hosted_prompt=hosted_prompt,
+        brief=composition.brief(),
+        sealed=False,
+        more_servers=(
+            {"composition": trajectory_server(composition)} if composition.routed else None
+        ),
+        files_note=composition.files_note(),
+        without=FIXED_ENVIRONMENT_TOOLS,
+    )
+
+
 def open_builder(
     contract: AgentContract,
     *,
@@ -648,9 +678,12 @@ def open_builder(
     brief: str = "",
     sealed: bool = True,
     more_servers: dict[str, ToolServer] | None = None,
+    files_note: str = "",
+    without: frozenset[str] = frozenset(),
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
-    ``sealed`` is False while the environment is still being built and has no sealed bundle yet."""
+    ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
+    ``without`` names tools this session must not have; ``files_note`` replaces the file listing."""
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -668,6 +701,11 @@ def open_builder(
     if platform is not None:
         servers[platform.name] = platform
     servers.update(more_servers or {})
+    if without:
+        servers = {
+            name: replace(one, tools=[spec for spec in one.tools if spec.name not in without])
+            for name, one in servers.items()
+        }
     health = suite_health(contract, out, kept, sealed=sealed) if kept else []
     health_note = (
         "\n\n## Health when this conversation opened\n\n"
@@ -678,7 +716,7 @@ def open_builder(
             "tell the person what you found and fixed:\n- " + "\n- ".join(health[:40])
         )
     )
-    where = (
+    where = files_note or (
         f"\n\nThe environment's files are in {out}: contract.json, sub_goals.json, coverage.json, "
         "simulator_prompt.md, scenarios/ and the sealed environment-bundle/."
         + (f" The agent's own source is in {source_root}." if source_root else "")

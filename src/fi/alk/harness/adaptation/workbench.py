@@ -37,6 +37,8 @@ RESULT = "result.json"
 PROFILE = "profile.json"
 BINDING = "binding.json"
 BINDING_PROOF = "binding-proof.json"
+# The agent's proved calls per scenario: a composition's suite edits re-prove the binding with them.
+TRAJECTORIES = "trajectories.json"
 SUITE = "suite"
 STATE = "state.json"
 INPUTS = "inputs.json"
@@ -511,6 +513,14 @@ class Workbench:
         mapped, unsupported, candidates, unscorable = self._outcome()
         if self.mode is BindingMode.TOOL_ROUTED:
             write_json(self.output / BINDING_PROOF, self.proof)
+            write_json(
+                self.output / TRAJECTORIES,
+                {
+                    key: calls
+                    for key, calls in self.draft.trajectories.items()
+                    if getattr(self.verdicts.get(key), "status", None) == "proved"
+                },
+            )
         write_json(
             self.output / BINDING, self.binding.model_dump(mode="json", by_alias=True)
         )

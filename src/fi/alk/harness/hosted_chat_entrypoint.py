@@ -84,6 +84,8 @@ _PUBLISHED_PARTS = (
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
+    # A composition's agent trajectories: proof inputs saved with its suite.
+    "trajectories.json",
 )
 # Only these change the workspace, so only these are worth a checkpoint before they run.
 _WRITING_TOOLS = frozenset(
@@ -276,6 +278,8 @@ class HostedChatRuntime:
         self._idle_turns = 0
         # Set when an adaptation job's session opens: the binding work and its gates.
         self.workbench: Any = None
+        # Set when this conversation edits a composition's suite: its verified workspace.
+        self.composition: Any = None
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
@@ -297,6 +301,8 @@ class HostedChatRuntime:
 
         if self._adapting():
             stage = await self._open_for_adapting()
+        elif self._composing():
+            stage = await self._open_for_composition()
         else:
             policy_job = guest_booking_policy_job(self.job)
             contract = load_contract(self.workspace)
@@ -369,6 +375,63 @@ class HostedChatRuntime:
                 "as completed until a tool result proves it."
             ),
         )
+
+    def _composing(self) -> bool:
+        """A composition's chat: the suite of a prebuilt environment bound to the person's agent."""
+        from .composition_edit import is_composition
+
+        return is_composition(self.workspace)
+
+    async def _open_for_composition(self) -> Stage:
+        from .builder import open_for_composition
+        from .composition_edit import open_composition
+
+        self.composition, laid_out = await asyncio.to_thread(open_composition, self.workspace)
+        if laid_out:
+            # The working copy is the composition's suite as published: nothing is unsaved yet.
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+        return open_for_composition(
+            self.composition,
+            platform=self._builder_platform_server(),
+            ask=self._ask,
+            hosted_prompt=self._hosted_prompt(),
+        )
+
+    async def _seal_composition(self) -> dict[str, Any] | None:
+        """Seal the edited suite as a child of the composition's and prove the binding against
+        it. None when the change is ready to publish; otherwise the result to report."""
+        from .adaptation.scratch_postgres import scratch_cluster
+        from .composition_edit import (
+            CompositionEditError,
+            open_composition,
+            plan_change,
+            seal_change,
+        )
+
+        def seal() -> dict[str, Any] | None:
+            if self.composition is None:
+                self.composition, _laid_out = open_composition(self.workspace)
+            plan = plan_change(self.composition)
+            if plan is None:
+                return None
+            with scratch_cluster() as dsn:
+                return seal_change(plan, postgres_dsn=dsn)
+
+        try:
+            sealed = await asyncio.to_thread(seal)
+        except CompositionEditError as exc:
+            return {"applied": False, "code": exc.code, "message": exc.message[:2000]}
+        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+            traceback.print_exc()
+            return {
+                "applied": False,
+                "code": "composition_seal_failed",
+                "message": f"the edited suite could not be sealed: {exc}"[:600],
+            }
+        if sealed is None:
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+            return {"applied": True, "unchanged": True, "message": "the suite is unchanged; nothing to save"}
+        return None
 
     async def _approve(self, question: str, options: list[str]) -> str:
         """The person's answer to a question code asks, not the model."""
@@ -854,17 +917,22 @@ class HostedChatRuntime:
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios
+        if self._composing():
+            refused = await self._seal_composition()
+            if refused is not None:
+                return refused
+        else:
+            from .bundle_author_v2 import reseal_scenarios
 
-        try:
-            await asyncio.to_thread(reseal_scenarios, self.workspace)
-        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
-            traceback.print_exc()
-            return {
-                "applied": False,
-                "code": "reseal_failed",
-                "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
-            }
+            try:
+                await asyncio.to_thread(reseal_scenarios, self.workspace)
+            except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+                traceback.print_exc()
+                return {
+                    "applied": False,
+                    "code": "reseal_failed",
+                    "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
+                }
         result: dict[str, Any] = {}
         for _attempt in range(3):
             try:
@@ -884,6 +952,10 @@ class HostedChatRuntime:
                 "environment after this reply; the change has to be made again on it."
             )
         if result.get("applied"):
+            if self._composing():
+                from .composition_edit import accept_change
+
+                await asyncio.to_thread(accept_change, self.composition)
             await self._record_touched(result)
             if result.get("revision"):
                 self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
