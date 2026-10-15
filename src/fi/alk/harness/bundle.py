@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
+from .public_material import is_public_pem, inspect_public_file
 
 BUNDLE_SCHEMA_VERSION = "futureagi.environment-bundle.v1"
 BUNDLE_MANIFEST = "manifest.json"
@@ -182,7 +182,7 @@ def _iter_files(root: Path) -> list[Path]:
     return files
 
 
-def _inspect_file(root: Path, path: Path) -> BundleFile:
+def _inspect_file(root: Path, path: Path, *, admissions=()) -> BundleFile:
     relative = path.relative_to(root).as_posix()
     _safe_relative(relative)
     if path.name in _SECRET_FILES or (
@@ -190,15 +190,11 @@ def _inspect_file(root: Path, path: Path) -> BundleFile:
         and not is_public_pem(path)
     ):
         raise BundleError(f"bundle_secret_file_forbidden: {relative}")
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            size += len(chunk)
-            digest.update(chunk)
-            if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                raise BundleError(f"bundle_secret_material_detected: {relative}")
-    return BundleFile(path=relative, sha256=digest.hexdigest(), size=size)
+    try:
+        digest, size = inspect_public_file(path, admissions)
+    except ValueError as exc:
+        raise BundleError(f"bundle_secret_material_detected: {relative}: {exc}") from exc
+    return BundleFile(path=relative, sha256=digest, size=size)
 
 
 def _bundle_digest(manifest: dict[str, Any], files: list[BundleFile]) -> str:

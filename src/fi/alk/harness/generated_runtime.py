@@ -20,7 +20,7 @@ from typing import Any
 
 from packaging.utils import canonicalize_name
 
-from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
+from .public_material import is_public_pem, inspect_public_file
 
 GENERATED_DOCKERFILE = ".alk-generated.Dockerfile"
 GENERATED_PLAN = "generated-runtime.json"
@@ -1070,13 +1070,12 @@ def _copy_sanitized_context(
         total += info.st_size
         if count > _MAX_FILES or total > _MAX_CONTEXT_BYTES:
             raise GeneratedRuntimeError("generated_runtime_context_limit_exceeded")
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                    raise GeneratedRuntimeError(
-                        "generated_runtime_secret_material_detected: "
-                        + relative.as_posix()
-                    )
+        try:
+            inspect_public_file(path)
+        except ValueError as exc:
+            raise GeneratedRuntimeError(
+                "generated_runtime_secret_material_detected: " + relative.as_posix()
+            ) from exc
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target, follow_symlinks=True)

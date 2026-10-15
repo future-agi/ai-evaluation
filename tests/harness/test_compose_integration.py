@@ -238,7 +238,11 @@ def test_provider_native_runtime_records_completed_tools_without_sql(
     (bundle_dir / "compose.json").write_text(
         json.dumps({"services": {"chat": {"image": "example/chat:1"}}})
     )
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,

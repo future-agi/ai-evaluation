@@ -168,7 +168,11 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
         path.mkdir()
     (source / "fixture.txt").write_text("baseline")
     (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -337,7 +341,11 @@ http.server.ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         "volumes": {"data": {}},
     }
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "c" * 64,
@@ -437,7 +445,11 @@ def test_mutable_source_env_file_cannot_change_control_or_cleanup(
     document = topology()
     document["services"]["chat"].update(env_file="config.env", volumes=["./:/app"])
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -555,7 +567,11 @@ def test_real_compose_resolved_env_values_are_redacted(
     (source / "config.env").write_text(assignment)
     document = {"services": {"chat": {"image": "busybox", "env_file": "config.env"}}}
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -630,7 +646,11 @@ def test_failed_resolution_never_collects_unredacted_service_logs(
     for path in (source, bundle_dir, work):
         path.mkdir()
     (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
