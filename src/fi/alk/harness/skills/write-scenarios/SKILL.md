@@ -251,7 +251,9 @@ the agent was told to do.
 **The solution is also the answer key.** Every code sub-goal you name is handed it and checks the call
 against it: the arguments, the result, the records left. So write it complete to the outcome, with
 this caller's values as they last corrected them, exactly as the agent's tools take them. A wrong
-value in the solution fails a correct agent.
+value in the solution fails a correct agent, and so does a step in it the agent's rules do not call
+for in this situation: a check that finds the step in the solution expects the agent to take it. When
+a rule says to act at once, nothing comes before that action in the solution.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
