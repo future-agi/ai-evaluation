@@ -544,6 +544,7 @@ Compare each value in the one right form its kind has:
 | Address | The world's place or address id where it has one; otherwise its parts, where `Street` and `St` agree but a different unit does not, and a missing part fails |
 | Date, time zone, currency, unit | One common form; a tolerance only where the scenario states one |
 | Name | Exact spelling, the aliases the scenario lists, or the person's id; never a spelling the agent had no way to learn, such as a name only spoken |
+| A place or description the caller gives and the agent writes down in words | Never compared as text; compare the id where the world resolves it to one, otherwise judge it against what the caller said |
 | Feedback, a reason | Judged by meaning against what the caller said: facts kept, nothing contradicted or invented, wording free |
 | A caller who corrects themselves | The final request; lookups and drafts on the way are fine |
 | A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |

@@ -310,7 +310,8 @@ compares, and when it applies. Name one only when its situation arises here and 
 passes it whichever way its rules allow, and whichever turn this caller may take within their
 situation: if the caller could reasonably ask for a person or change their mind, name sub-goals for
 what the agent must do either way, not for an outcome only one of those turns reaches. Two is the usual number; one is right when the agent had
-nothing to find out before acting, as when a rule tells it to act at once. The first time you name a
+nothing to find out before acting, as when a rule tells it to act at once. Where a rule tells it to hand over at once on what the caller says, name no identity or lookup
+sub-goal: an agent that obeys the rule never reaches them. The first time you name a
 sub-goal in your session, and whenever you add or replace one, run it with `try_check`: your solution,
 another way the instructions allow, and your solution with a fixed value wrong. The first two must
 hold and the third must fail; when they do not, replace the sub-goal with `add_sub_goal` or name
