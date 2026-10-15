@@ -410,3 +410,59 @@ def test_compose_repair_uses_same_native_selection_policy(
                 tmp_path, contract, patch,
                 allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
             )
+
+
+@pytest.mark.parametrize("entry", ["server.ts", "server.tsx"])
+def test_bun_repair_validates_child_workdir_entrypoint(tmp_path, entry):
+    source = tmp_path / "source"
+    child = source / "packages" / "chat"
+    child.mkdir(parents=True)
+    (source / "package.json").write_text('{"name":"chat"}')
+    (child / entry).write_text("export const ready = true")
+    contract = AgentContract(agent="chat", runtime=Runtime(language="bun"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(
+            language="bun", command=["bun", "run", "--cwd", "packages/chat", entry]
+        ),
+        evidence_paths=("package.json",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the native TypeScript source.",
+    )
+    validate_runtime_plan_patch(
+        source,
+        contract,
+        patch,
+        allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+    )
+    (child / entry).unlink()
+    with pytest.raises(ValueError, match="entrypoint_missing"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [["--cwd", "../escape", "app.ts"], ["--cwd=../escape", "app.ts"], ["--cwd"]],
+)
+def test_bun_repair_rejects_unsafe_child_workdir(tmp_path, arguments):
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    contract = AgentContract(agent="chat", runtime=Runtime(language="bun"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="bun", command=["bun", "run", *arguments]),
+        evidence_paths=("package.json",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the native TypeScript source.",
+    )
+    with pytest.raises(ValueError, match="workdir"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
