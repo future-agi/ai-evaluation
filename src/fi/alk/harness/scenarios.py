@@ -23,11 +23,13 @@ from typing import Any
 
 from .backends import (
     DELEGATE_TOOL,
+    FILE_TOOLS,
     MOST_WORKERS_AT_ONCE,
     SessionSpec,
     ToolServer,
     WorkerSpec,
 )
+from .catalogue import CATALOGUE
 from .config import (
     artifact_dir,
     chosen_model,
@@ -212,7 +214,9 @@ def writer_worker(
                 "reports how many the whole suite holds, across every writer; that count is not "
                 "your target and reaching it is not your job. Write what you were asked for and "
                 "stop.\n\n"
-                "Look at the world first, and read the sub-goals already defined. Submit each "
+                f"Look at the world first, and read {destination / CATALOGUE} for every sub-goal "
+                "you may name: its check, what it compares and where each value comes from, and "
+                "its criteria. Submit each "
                 "scenario with submit_scenario as you prove it rather than holding them to the "
                 "end, then stop: do not save, and do not ask what to do next.\n\n"
                 "**Finish with a report, because it is the only thing the loop sees of your "
@@ -229,6 +233,7 @@ def writer_worker(
                     tools=[spec for spec in server.tools if spec.name in WRITER_TOOLS],
                 )
             },
+            builtins=FILE_TOOLS,
             max_turns=min(WRITER_TURNS, budget),
             # Empty inherits the parent's model.
             model=writer_model(),
