@@ -779,7 +779,7 @@ def _build_harness(
         build_transport=lambda: transport,
         build_provider=lambda _capabilities, _transport: provisioner,
         build_call_runner=build_call_runner,
-        build_world_factory=lambda work_directory: FakeWorldFactory(),
+        build_world_factory=lambda work_directory, bundle_dir: FakeWorldFactory(),
         cancel_path=cancel_path,
         secrets_path=tmp / "secrets.json",
         install_sigterm_handler=lambda cancel_state: lambda: None,
@@ -2534,7 +2534,7 @@ def test_finish_emits_the_terminal_before_closing_the_pool() -> None:
             scenario_source=FakeScenarioSource([]),
             build_transport=lambda: transport,
             build_provider=lambda _capabilities, _transport: provisioner,
-            build_world_factory=lambda work_directory: FakeWorldFactory(),
+            build_world_factory=lambda work_directory, bundle_dir: FakeWorldFactory(),
             cancel_path=tmp / "cancel.json",
             secrets_path=tmp / "secrets.json",
             install_sigterm_handler=lambda cancel_state: lambda: None,
@@ -4687,5 +4687,63 @@ def test_process_logs_from_close_are_uploaded_before_final_manifest():
             entry["artifact_id"] == "sha256:" + digest and entry["kind"] == "log"
             for entry in entries
         )
+
+    asyncio.run(scenario())
+
+
+def test_hosted_job_passes_sealed_bundle_to_world_factory() -> None:
+    observed = []
+
+    def bundle_writer(root):
+        _write_bundle(root)
+        contract = json.dumps(
+            {
+                "runtime": {
+                    "observations": {
+                        "history": {
+                            "capability": "app",
+                            "path": "/history",
+                            "body": {"operation": "read"},
+                        }
+                    }
+                }
+            }
+        ).encode()
+        (root / "contract.json").write_bytes(contract)
+        path = root / "manifest.json"
+        body = json.loads(path.read_text())
+        body["files"].append(
+            {
+                "path": "contract.json",
+                "sha256": hashlib.sha256(contract).hexdigest(),
+                "size": len(contract),
+            }
+        )
+        body["digest"] = seal_bundle_v2(EnvironmentBundleV2.model_validate(body))
+        path.write_text(json.dumps(body))
+
+    async def scenario():
+        harness = _build_harness(
+            scenarios=[FakeScenario("s1", "platform-s1", [FakeSubGoal("holds", True)])],
+            bundle_writer=bundle_writer,
+        )
+
+        def build_factory(work_directory, bundle_dir):
+            factory = he.HostedEntrypointDeps().build_world_factory(
+                work_directory, bundle_dir
+            )
+            observed.append(
+                (work_directory, bundle_dir, factory._observations["history"].path)
+            )
+            return FakeWorldFactory()
+
+        harness.deps.build_world_factory = build_factory
+        assert (
+            await he.run_job(
+                harness.job_path, harness.source, harness.output, deps=harness.deps
+            )
+            == he.EXIT_OK
+        )
+        assert observed == [(harness.work, harness.bundle_dir, "/history")]
 
     asyncio.run(scenario())
