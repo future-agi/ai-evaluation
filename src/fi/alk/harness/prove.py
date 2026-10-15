@@ -137,7 +137,8 @@ class Proof:
         if self.too_strict:
             return (
                 "these checks fail an agent that does every fixed thing right but makes its own "
-                "choice for an argument this scenario does not mark fixed:\n  - "
+                "choice, for an argument this scenario does not mark fixed or a way its "
+                "instructions allow:\n  - "
                 + "\n  - ".join(self.too_strict)
                 + "\n\nA check may hold the agent only to what the caller, their record or a "
                 "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
@@ -271,14 +272,14 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 
 def _run(
-    scenario: Scenario, world_root: Path, *, with_solution: bool
+    scenario: Scenario, world_root: Path, *, with_solution: bool, steps: Sequence[Any] | None = None
 ) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
-    """A world set up for this scenario, optionally with the solution played through it."""
+    """A world set up for this scenario, optionally with the solution (or `steps`) played through it."""
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
     if with_solution:
-        for step in scenario.solution:
+        for step in scenario.solution if steps is None else steps:
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
@@ -394,6 +395,18 @@ def prove(
             ]
     finally:
         world.close()
+    for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
+        alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
+        try:
+            proof.too_strict += [
+                f"{name} (another way the instructions allow, alternative {number}: "
+                f"{', '.join(step.tool for step in other)})"
+                for name, source in checks
+                if any(one.name == name and one.held for one in proof.with_solution)
+                and not run_check(source, alt_world, alt_calls, name=name, reference=_steps(scenario)).held
+            ]
+        finally:
+            alt_world.close()
     proof.refused = refused
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken

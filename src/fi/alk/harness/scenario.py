@@ -258,6 +258,8 @@ class Scenario(BaseModel):
 
     # What a correct agent would do. Run by the gates, never by the agent under test.
     solution: list[Step] = Field(default_factory=list)
+    # Other ways the agent's instructions allow to the same outcome; every check must pass on each.
+    alternatives: list[list[Step]] = Field(default_factory=list)
 
     # Level per plan axis, e.g. {"task": "book_ride", "overlay": "interruption"}. Optional.
     coverage: dict[str, str] = Field(default_factory=dict)

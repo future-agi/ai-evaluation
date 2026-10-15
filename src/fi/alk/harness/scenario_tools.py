@@ -1554,6 +1554,14 @@ def scenario_tools(
                         "required": ["tool", "arguments", "fixed"],
                     },
                 },
+                "alternatives": {
+                    "type": "array",
+                    "description": "Other ways the agent's instructions allow to reach the same "
+                    "outcome, each a full list of steps like `solution` (another tool for a step, "
+                    "or a tool that does a step itself). The proof plays each one and every check "
+                    "must still pass. Empty when the instructions allow only one way.",
+                    "items": {"type": "array", "items": {"type": "object"}},
+                },
                 "sub_goals": {
                     "type": "array",
                     "items": {"type": "string"},

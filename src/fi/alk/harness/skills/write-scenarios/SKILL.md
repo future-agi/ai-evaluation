@@ -273,6 +273,12 @@ instructions, and write it against the argument in `fixed`: `caller: <what they 
 instructions write them and containing the value. If you cannot write where a value comes from, it is
 not fixed.
 
+**Write the other ways too.** Where the agent's instructions or tools allow another way to the same
+outcome (a rule names one tool and another tool does the same step, or one tool does a step itself),
+write each as an entry in `alternatives`, a full list of steps like the solution. The proof plays every
+alternative through the world, and each check must pass on all of them, so a check that demands one
+tool where the instructions allow another is caught before any call.
+
 The proof then plays your solution once more as an agent that gets every fixed value right but makes
 its own choice for everything else. Every check must still pass. A check that fails names the
 argument: either something really fixes it and you mark it, or the check holds the agent to its own

@@ -8039,3 +8039,24 @@ def test_prove_hands_a_reference_check_the_solution_and_it_fails_when_nothing_is
     assert held["added-what-was-asked"] is True
     assert {one.name: one.held for one in proof.with_nothing}["added-what-was-asked"] is False
     assert proof.holds
+
+
+def test_prove_refuses_a_check_that_fails_another_way_the_instructions_allow(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="listed-first",
+            what="the menu was read before adding",
+            check="def check(world, calls, reference):\n    return None if any(c.name == 'lst' and c.ok for c in calls) else 'not done: no listing'\n",
+        )
+    )
+    save_catalogue(catalogue, root)
+    plain = Scenario(**_delta(sub_goals=["item-added", "listed-first"]))
+    assert prove(plain, catalogue, root).holds
+    other_way = [{"tool": "add", "arguments": {"item_id": "big_mac"}}]
+    proof = prove(plain.model_copy(update={"alternatives": [[*map(type(plain.solution[0]).model_validate, other_way)]]}), catalogue, root)
+    assert not proof.holds and any(one.startswith("listed-first") for one in proof.too_strict)
