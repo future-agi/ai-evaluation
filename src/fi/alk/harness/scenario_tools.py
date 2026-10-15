@@ -1100,9 +1100,10 @@ def scenario_tools(
             if not table:
                 lines = [f"{n}: {len(r)} rows" for n, r in sorted(state.items())]
                 if catalogue.sub_goals:
-                    lines.append(
-                        "\nsub-goals available: " + ", ".join(sorted(catalogue.names()))
-                    )
+                    lines.append("\nsub-goals available:")
+                    for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
+                        compares = f" Its check compares {goal.reference.strip()}" if goal.reference.strip() else ""
+                        lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
                 return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
                 return _err(

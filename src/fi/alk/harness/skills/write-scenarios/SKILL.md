@@ -255,6 +255,13 @@ value in the solution fails a correct agent, and so does a step in it the agent'
 for in this situation: a check that finds the step in the solution expects the agent to take it. When
 a rule says to act at once, nothing comes before that action in the solution.
 
+**Read what each sub-goal you name compares before you write the solution.** `inspect_world` lists
+every sub-goal with what its check compares and where each of those values comes from. Your
+solution is the answer key it reads: write it as this caller's call should go, and mark as `fixed`
+each argument this caller, their record or a rule really fixes, which covers what those checks
+compare whenever this caller gives it. Never bend the solution to suit a check; a check that cannot
+pass on a correct solution is the check's fault, and add_sub_goal can replace it.
+
 **Mark on every step which arguments are `fixed`.** An argument is fixed when its value comes from
 this caller (what they say or correct), their record in the world, or a rule of the agent that names
 the value for this situation. Only fixed arguments are shown to the checks and the judge. Everything
