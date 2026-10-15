@@ -1300,7 +1300,7 @@ def _plan_source_process(
         else [
             "sh",
             "-c",
-            'cd "$1" && shift && exec "$@"',
+            'cd "./$1" && shift && exec "$@"',
             "alk-source-process",
             child,
             *command,

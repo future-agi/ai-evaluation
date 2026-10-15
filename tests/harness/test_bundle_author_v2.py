@@ -3353,7 +3353,7 @@ def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version:
         )
 
 
-@pytest.mark.parametrize("child", [".", "packages/chat"])
+@pytest.mark.parametrize("child", [".", "packages/chat", "-chat"])
 def test_native_bun_plan_installs_locked_root_and_preserves_child_command(
     tmp_path: Path, child: str
 ) -> None:
@@ -3399,7 +3399,7 @@ def test_native_bun_plan_installs_locked_root_and_preserves_child_command(
         else [
             "sh",
             "-c",
-            'cd "$1" && shift && exec "$@"',
+            'cd "./$1" && shift && exec "$@"',
             "alk-source-process",
             child,
             "bun",
