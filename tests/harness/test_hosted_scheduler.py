@@ -199,7 +199,6 @@ class FakeSubGoal:
     name: str
     fn: Any
     judged: str = ""
-    both: bool = False
 
     def check(self, world: Any, calls: Any) -> object:
         return self.fn(world, calls)
@@ -4181,7 +4180,7 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     asyncio.run(scenario())
 
 
-def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None):
+def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False):
     """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
     alone: list[str] = []
 
@@ -4209,11 +4208,11 @@ def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None):
             job_seed=1,
             joint_judge=joint_judge,
         )
-        named = goals or [
+        goals = [
             FakeSubGoal("confirmed", lambda w, c: None, judged="judge"),
             FakeSubGoal("refused_card", lambda w, c: None, judged="judge"),
         ]
-        scenarios = [FakeScenario("pay", "id-1", sub_goals=named, requires_tool_evidence=False)]
+        scenarios = [FakeScenario("pay", "id-1", sub_goals=goals, requires_tool_evidence=False)]
         result = await scheduler.run(scenarios)
         out["receipt"] = result.receipts[0]
         await pool.close()
@@ -4270,109 +4269,45 @@ def test_joint_judging_is_the_default_and_separate_turns_it_off(monkeypatch) -> 
     assert alone == ["confirmed", "refused_card"] and receipt.status == "passed"
 
 
-class _SharedWorld(InMemoryWorld):
-    """A read-only view over the same rows, as the real handle is."""
+def test_a_check_written_with_reference_gets_its_scenario_s_reference_solution() -> None:
+    seen: list[Any] = []
 
-    def read_only(self) -> "InMemoryWorld":
-        view = InMemoryWorld(self.world_index, self.rng, read_only=True)
-        view.rows = self.rows
-        return view
+    class ClaimRight:
+        name, judged = "claim_right", ""
 
+        def check(self, world: Any, calls: Any, reference: Any) -> object:
+            seen.append(reference)
+            wanted = reference[0]["arguments"]["policy"]
+            got = calls[0].arguments.get("policy")
+            return None if got == wanted else f"done wrong: policy expected {wanted!r}, got {got!r}"
 
-@dataclass
-class _ScenarioWithExpected(FakeScenario):
-    expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    @dataclass
+    class WithSolution(FakeScenario):
+        solution: tuple = ()
 
-
-def test_a_call_is_graded_on_leaving_the_records_the_reference_solution_leaves() -> None:
-    async def scenario(left: dict[str, Any]) -> hs.ResultReceipt:
+    async def scenario(policy: str) -> hs.ResultReceipt:
         outbound = FakeOutbound()
         pool, _ = _pool(1, outbound=outbound)
         await pool.start()
-        made: list[_SharedWorld] = []
-
-        class Factory:
-            async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> InMemoryWorld:
-                made.append(_SharedWorld(runtime.world_index, rng))
-                return made[-1]
-
-        class Runner(FakeCallRunner):
-            async def run(self, scenario: Any, runtime: EnvironmentRuntime) -> hs.CallOutcome:
-                made[-1].rows.setdefault("claims", []).append({"id": "generated", **left})
-                return _call_outcome(calls=(hs.Call(name="file_claim", arguments=left),))
-
-        scheduler = hs.HostedScheduler(
-            pool=pool, world_factory=Factory(), call_runner=Runner({}), outbound=outbound, job_seed=1
+        runner = FakeCallRunner(
+            {"s1": _call_outcome(calls=(hs.Call(name="file_claim", arguments={"policy": policy}),))}
         )
-        one = _ScenarioWithExpected(
+        scheduler = hs.HostedScheduler(
+            pool=pool, world_factory=FakeWorldFactory(), call_runner=runner, outbound=outbound, job_seed=1
+        )
+        one = WithSolution(
             "s1",
             "id-1",
-            sub_goals=[FakeSubGoal("g", lambda w, c: None)],
-            expected_changes={"claims": [{"policy": "MM-7", "loss_date": "2026-10-11"}]},
+            sub_goals=[ClaimRight(), FakeSubGoal("two_args", lambda w, c: None)],
+            solution=({"tool": "file_claim", "arguments": {"policy": "MM-7"}},),
         )
-        result = await asyncio.wait_for(scheduler.run([one]), timeout=5.0)
+        result = await scheduler.run([one])
+        await pool.close()
         return result.receipts[0]
 
-    right = asyncio.run(scenario({"policy": "mm 7", "loss_date": "2026-10-11"}))
-    assert right.status == "passed"
-    assert [g.name for g in right.sub_goals] == ["g", "records_match_reference_solution"]
-    wrong = asyncio.run(scenario({"policy": "MM-7", "loss_date": "2026-10-12"}))
+    right = asyncio.run(scenario("MM-7"))
+    assert right.status == "passed" and [g.name for g in right.sub_goals] == ["claim_right", "two_args"]
+    assert seen[-1] == [{"tool": "file_claim", "arguments": {"policy": "MM-7"}}]
+    wrong = asyncio.run(scenario("MM-9"))
     assert wrong.status == "failed"
-    assert wrong.sub_goals[-1].reason == "done wrong: claims.loss_date expected 2026-10-11, got 2026-10-12"
-
-
-def test_a_sub_goal_settled_by_both_fails_when_either_fails(monkeypatch) -> None:
-    async def _all(goals, world, calls, *, messages=()):
-        return {goal.name: (True, f"{goal.name} said right") for goal in goals}
-
-    goals = [
-        FakeSubGoal("saved_feedback", lambda w, c: "no feedback row", judged="judge", both=True),
-        FakeSubGoal("confirmed", lambda w, c: "ignored for a judged-only sub-goal", judged="judge"),
-    ]
-    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    held = {g.name: (g.held, g.reason) for g in receipt.sub_goals}
-    assert held["saved_feedback"] == (False, "no feedback row saved_feedback said right")
-    assert held["confirmed"] == (True, "confirmed said right")
-    assert receipt.status == "failed"
-
-
-def test_a_sub_goal_settled_by_both_takes_the_judge_when_the_check_holds(monkeypatch) -> None:
-    async def _all(goals, world, calls, *, messages=()):
-        return {"saved_feedback": (False, "the saved text left out the charging fault")}
-
-    goals = [FakeSubGoal("saved_feedback", lambda w, c: None, judged="judge", both=True)]
-    receipt, _ = _two_judged(monkeypatch, _all, goals=goals)
-    assert receipt.sub_goals[0].held is False
-    assert receipt.sub_goals[0].reason == "the saved text left out the charging fault"
-
-
-def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(monkeypatch) -> None:
-    from fi.alk.harness.joint_judge import OFF_SCRIPT
-
-    async def _all(goals, world, calls, *, messages=()):
-        return {
-            "confirmed": (False, "it never confirmed"),
-            "refused_card": (True, "it refused"),
-            OFF_SCRIPT: (False, "the customer gave a different policy number"),
-        }
-
-    receipt, _ = _two_judged(monkeypatch, _all)
-    assert receipt.status == "errored"
-    assert receipt.failure.code == "caller_off_script"
-    assert receipt.failure.domain == "simulator"
-    assert [g.held for g in receipt.sub_goals] == [False, True]
-
-
-def test_an_unreachable_outcome_marks_the_call_invalid(monkeypatch) -> None:
-    from fi.alk.harness.joint_judge import UNREACHABLE
-
-    async def _all(goals, world, calls, *, messages=()):
-        return {
-            "confirmed": (False, "no booking"),
-            "refused_card": (True, "it refused"),
-            UNREACHABLE: (False, "the booking waited on a payment link nobody in the call could pay"),
-        }
-
-    receipt, _ = _two_judged(monkeypatch, _all)
-    assert receipt.status == "errored"
-    assert receipt.failure.code == "outcome_unreachable"
+    assert wrong.sub_goals[0].reason == "done wrong: policy expected 'MM-7', got 'MM-9'"

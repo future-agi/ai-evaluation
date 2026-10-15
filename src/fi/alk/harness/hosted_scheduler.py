@@ -39,23 +39,19 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
 from .judge import judge_sub_goal as _judge
+from .checks import takes_reference
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
     HostedFencedError,
 )
-from .joint_judge import OFF_SCRIPT, UNREACHABLE
-from .reference_state import NAME as REFERENCE_SUB_GOAL
-from .reference_state import compare as compare_records
-from .reference_state import compare_calls
-from .reference_state import given_text
 from .process_runtime import (
     SECTION_2F_DOMAIN,
     EnvironmentRuntime,
@@ -398,8 +394,6 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "ready_broken": FailureDomain.SIMULATOR,
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
-    "caller_off_script": FailureDomain.SIMULATOR,
-    "outcome_unreachable": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
@@ -1591,28 +1585,22 @@ class HostedScheduler:
         calls: Sequence[Any],
         call_outcome: Any,
         offered: dict[str, Any],
-    ) -> tuple[list[tuple[bool | None, str]] | None, str]:
-        """All of a call's judged sub-goals in one conversation, or None to judge each alone, and
-        what the simulated customer did off their side when the judge reported it.
+    ) -> list[tuple[bool, str]] | None:
+        """All of a call's judged sub-goals in one conversation, or None to judge each alone.
 
         Any failure, including a single sub-goal left undecided, judges every one of them alone.
         """
         if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
-            return None, ""
+            return None
         try:
             accepted = inspect.signature(self._joint_judge).parameters
             context = {name: value for name, value in offered.items() if name in accepted}
             decided = await self._joint_judge(goals, world, calls, messages=call_outcome.messages, **context)
-            off_script = ""
-            if isinstance(decided, dict):
-                for key, code in ((OFF_SCRIPT, "caller_off_script"), (UNREACHABLE, "outcome_unreachable")):
-                    if key in decided:
-                        off_script = f"{code}|{decided[key][1]}"
             verdicts = [decided[goal.name] for goal in goals]
         except Exception as exc:  # noqa: BLE001 - a failed shared judge falls back, never errors the call
             logger.warning("judging %d sub-goals together failed, judging each alone: %r", len(goals), exc)
-            return None, ""
-        return verdicts, str(off_script or "")
+            return None
+        return verdicts
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -2102,13 +2090,6 @@ class HostedScheduler:
                 sub_goals=_unjudged(scenario.sub_goals),
             )
 
-        expected = getattr(scenario, "expected_changes", None) or {}
-        expect_nothing = getattr(scenario, "reference_changes_nothing", False) is True
-        marked = any(
-            isinstance(step, dict) and step.get("outcome") is True
-            for step in getattr(scenario, "solution", None) or ()
-        )
-        before = await self._records_now(read_only) if expected or expect_nothing or marked else None
         try:
             call_outcome = await _run_call(self._call_runner, scenario, runtime, world)
         except WorldUnavailable as exc:
@@ -2183,9 +2164,6 @@ class HostedScheduler:
 
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
-        off_script = ""
-        # For a sub-goal settled by its check and its criteria together: the check's verdict.
-        checked: dict[int, _Verdict] = {}
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
@@ -2200,6 +2178,7 @@ class HostedScheduler:
                 goal.check,
                 check_handle,
                 calls,
+                *((list(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
                 executor=self._executor,
@@ -2224,17 +2203,6 @@ class HostedScheduler:
             if goal.judged:
                 # A judged sub-goal has no code to settle it: a model decides, here, while the
                 # world the call left behind is still alive. Collected and run together below.
-                if getattr(goal, "both", False):
-                    verdict = _classify_check(outcome.value)
-                    if verdict.broken:
-                        broken_failure = _failure(
-                            "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
-                        )
-                        sub_goal_results.append(
-                            SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
-                        )
-                        continue
-                    checked[len(sub_goal_results)] = verdict
                 judged_pending.append((len(sub_goal_results), goal))
                 sub_goal_results.append(
                     SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
@@ -2266,7 +2234,7 @@ class HostedScheduler:
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
                 offered = {"scenario": scenario, "recording": call_outcome.recording}
-                joint_verdicts, off_script = await self._judge_jointly(
+                joint_verdicts = await self._judge_jointly(
                     [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered
                 )
                 try:
@@ -2313,57 +2281,6 @@ class HostedScheduler:
                     name=goal.name, held=held, reason=why, judged=True
                 )
 
-        # A sub-goal settled by both fails when either fails, and is decided only when both are.
-        for slot, verdict in checked.items():
-            judged = sub_goal_results[slot]
-            goal = scenario.sub_goals[slot]
-            if not verdict.held:
-                reason = " ".join(
-                    filter(None, [_sub_goal_reason(goal, verdict), judged.reason or None])
-                )
-                sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
-
-        solution = list(getattr(scenario, "solution", None) or ())
-        if not (expected or expect_nothing) and broken_failure is None and any(
-            isinstance(step, dict) and step.get("outcome") is True for step in solution
-        ):
-            # The reference could not be replayed to records (the agent's tools run in its own
-            # process), so its outcome steps are compared with the calls the agent made.
-            said = compare_calls(
-                solution,
-                list(calls),
-                rules=getattr(scenario, "comparisons", None) or {},
-                given=self._given(scenario, before),
-            )
-            sub_goal_results.append(
-                SubGoalResult(
-                    name=REFERENCE_SUB_GOAL,
-                    held=said is None,
-                    reason=said or "the agent's calls carry the reference solution's values for the outcome",
-                    judged=False,
-                )
-            )
-
-        if (expected or expect_nothing) and before is not None and broken_failure is None:
-            after = await self._records_now(check_handle)
-            if after is not None:
-                said = compare_records(
-                    expected,
-                    before,
-                    after,
-                    rules=getattr(scenario, "comparisons", None) or {},
-                    expect_nothing=expect_nothing,
-                    given=self._given(scenario, before),
-                )
-                sub_goal_results.append(
-                    SubGoalResult(
-                        name=REFERENCE_SUB_GOAL,
-                        held=said is None,
-                        reason=said or "the records match the reference solution on the caller's values",
-                        judged=False,
-                    )
-                )
-
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2372,18 +2289,6 @@ class HostedScheduler:
                 broken_failure,
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
-            )
-        if off_script:
-            # The simulated customer left their side, so the call says nothing about the agent;
-            # its verdicts are kept for reading, never counted.
-            return self._fault(
-                scenario,
-                world_index,
-                attempt,
-                _failure(*off_script.split("|", 1)),
-                sub_goals=tuple(sub_goal_results),
-                call=self._call_summary(call_outcome),
-                retry=False,
             )
 
         # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
@@ -2413,22 +2318,6 @@ class HostedScheduler:
             call=self._call_summary(call_outcome),
             failure=failure,
         )
-
-    @staticmethod
-    def _given(scenario: Any, before: dict[str, Any] | None) -> str | None:
-        """What the scenario fixes for the caller and what the world held, or None (compare every
-        value) for a scenario compiled without it."""
-        fixed = getattr(scenario, "given", None)
-        if not fixed:
-            return None
-        return f"{fixed}{given_text(world=before)}" if before else fixed
-
-    async def _records_now(self, handle: Any) -> dict[str, Any] | None:
-        """The world's records, or None when they cannot be read; the comparison is then skipped."""
-        read = await _run_phase(
-            handle.state, timeout=CHECK_TIMEOUT_SECONDS, phase="check", executor=self._executor
-        )
-        return read.value if read.failure is None and isinstance(read.value, dict) else None
 
     @staticmethod
     def _call_summary(outcome: CallOutcome | None) -> CallSummary | None:

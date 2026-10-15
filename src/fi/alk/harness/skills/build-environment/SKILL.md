@@ -485,10 +485,9 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
-**Give every outcome a caller comes for one sub-goal of its own**, never one per tool, field or
-step, so the catalogue stays small and a scenario never has to borrow an unrelated one to name two.
-An outcome that leaves a record (a record created or changed, a document sent) is a code sub-goal;
-one only the caller hears (a record looked up and told back) is judged.
+**Give every outcome a caller comes for its own judged sub-goal**, settled with the values (a record
+changed, a record looked up and told back, a document sent), so a scenario never has to borrow an
+unrelated one to name two.
 
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
@@ -499,14 +498,9 @@ of subject partway through, a request outside what the agent handles, pressure t
 behaviour each, named once, so the suite can report how often the agent got that moment right.
 
 **Write the check as code for what holds in every scenario.** A sub-goal is shared by every
-scenario that names it, so its check never knows what this caller asked for. Whether this caller's
-outcome happened, and with their values, is graded per scenario from the reference solution's
-outcome steps, so a shared check never asks that a tool was called or an argument was given. Code
-settles what is true whatever they asked: a forbidden change did not happen, a required order was
-kept, an order went on an account that exists, a cancelled record is really cancelled. Such a check
-may hold when nothing happened; the scenario's reference outcome already fails a run that did
-nothing. Only the final state counts, so a retry, a correction mid-call or another route to the same
-records passes.
+scenario that names it, so its check never knows what this caller asked for. Code settles what is
+true whatever they asked: a forbidden change did not happen, an order went on an account that
+exists, a cancelled record is really cancelled.
 
 **Code only for what the records settle on their own.** Anything the agent says, a read-back, a
 disclosure, a refusal, an escalation, an explanation, is judged: a check sees that a tool was called,
@@ -525,13 +519,35 @@ def check(world, calls):
 ```
 
 You get the world afterwards and every call that was made, each with `.name`, `.arguments`,
-`.ok` and `.refused`. Return a sentence when something is wrong, `None` when it held. Never write
-one scenario's expected value into a check: it is right for that scenario and wrong for the next.
+`.result`, `.ok` and `.refused`. Return a sentence when something is wrong, `None` when it held.
+Never write one scenario's expected value into a check: it is right for that scenario and wrong for
+the next.
 
-A check never fixes one value among several the instructions allow (which queue a transfer goes to,
-which wording a reason uses): it holds for any of them, and a judged sub-goal decides whether the
-choice suited the situation when the instructions tie it to one. A check reads what a call decided
-from its result or the records, never from `ok`.
+**Whether it was right for this caller is checked against the scenario's reference solution.** Write
+the check `check(world, calls, reference)` and each scenario hands it its own reference solution: a
+list of steps, each a `tool` and its `arguments`, holding this caller's values as last corrected. Take
+from it only what this sub-goal settles, and compare: the arguments of the call that made the outcome,
+its result, the columns of the record it left in `world.state()`. Say which it was: *not done* when
+the call or record is missing, *done wrong* naming the field, the value expected and the value found.
+Compare what has one right form (an identifier, a number, an amount, a date, a choice from a fixed
+set) after evening out case, spacing and punctuation; leave wording to a judged sub-goal.
+
+```python
+def check(world, calls, reference):
+    wanted = next((step["arguments"] for step in reference if step["tool"] == "book_ride"), None)
+    if wanted is None:
+        return None
+    made = [call for call in calls if call.name == "book_ride" and call.ok]
+    if not made:
+        return "not done: no ride was booked"
+    rows = [row for row in world.state()["bookings"] if row["id"] == made[-1].result.get("booking_id")]
+    if not rows:
+        return "not done: the booking left no record"
+    for field in ("pickup_place_id", "dropoff_place_id"):
+        if field in wanted and str(rows[0].get(field)) != str(wanted[field]):
+            return f"done wrong: {field} expected {wanted[field]!r}, got {rows[0].get(field)!r}"
+    return None
+```
 
 A check about a step that must come before something (identify the caller before disclosing,
 confirm before changing) fails only when that something happened without the step. When neither
@@ -539,38 +555,17 @@ happened it holds, because nothing was disclosed or changed, and it accepts ever
 for that step. Demanding the step on its own fails a correct agent whose instructions skip it in
 that situation.
 
-Whether a record is right for this caller, the right time, address, item or amount, depends on what
-they asked, which only the scenario knows. It is compared through the scenario's reference solution:
-every call is graded `records_match_reference_solution` on whether its final records carry the
-values the solution left, as the caller last corrected them. Never hard-code those values in a check
-or hand them to a judge; the judge keeps what the records cannot show, what was said or read back.
-Name a check for what it checks.
+Whether a step was right for this caller, the right time, address, item or amount, depends on what
+they asked, which only the scenario knows, and the reference solution holds it. Settle it in code
+against `reference`, as above, wherever the call or the records carry the value; a judged sub-goal is
+for what they cannot show, what was said or read back. Name a check for what it checks.
 
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
-situations must not fail an agent that skipped it there. A sub-goal is shared, so test it against
-every situation the prompt describes: an agent that follows its rules must pass it in each scenario
-that names it. Keep it only if its verdict tells the agent's builder something to act on, which rule
-was kept or broken and which value was right or wrong; one nobody could act on is noise.
-
-Before writing a sub-goal, say in `compares` what it compares with what: where the right answer
-comes from (the reference solution, a record set up before the call, what the caller said), what of
-the run is read (the records afterwards, the calls and their results, what the agent said), how the
-two are compared (exactly, ignoring format, by meaning) and over which span (the final records, or
-every call including ones later undone). A sub-goal whose right answer has no source cannot be
-graded; do not write it. Code settles structured facts and effects; the judge settles meaning and
-behaviour. Most sub-goals are one or the other. Set `both` only when one outcome has a part code reads
-and a part only meaning settles, such as a record that must be saved on the right account and also
-say what the caller actually reported: the check reads the record, the criteria judge only what the
-check cannot read, it passes only when each does, and a failed check is never rescued by the judge.
-Criteria that restate what the check reads (a call was made, a record exists) are not a second part;
-leave `both` off. Correcting a mistake does not
-undo it: when a wrong change the agent made and later replaced is itself harmful for this agent (a
-second live record, a charge, a message sent), write a sub-goal for that effect, read over every
-call, not only the final records.
+situations must not fail an agent that skipped it there.
 
 Use `judged` only where nothing observable settles it, or where what is right depends on what this
 caller asked: whether a refusal was explained, whether a price was invented, whether the values
-the agent said back were the ones this caller gave. (An agent reached only by conversation has no world
+the agent used were the ones this caller gave. (An agent reached only by conversation has no world
 and no calls to read: then every sub-goal is judged, and the rules below matter all the more.)
 
 A quality of every call, such as turn length, tone or varied phrasing, is not a sub-goal: the suite
@@ -582,8 +577,7 @@ instructions demand that exact text.
 ### A judged sub-goal is an eval: write its criteria
 
 A judged sub-goal is decided the way any eval is: a judge reads its criteria and the evidence and
-returns pass, fail, not applicable (the situation did not arise and the criteria say that passes) or
-inconclusive (the deciding evidence is missing or unusable); `output` is pass_fail. The judge is given
+returns pass or fail (`output` is pass_fail, the only kind judged today). The judge is given
 the criteria, the agent's own instructions, the conversation and its recording, the actions the
 agent took with their arguments, the records it left and the scenario's reference solution, plus the
 customer's side of the scenario as context. It judges the agent only,

@@ -63,7 +63,6 @@ WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
 WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
 # Withheld from a loop that hands the suite out.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
-REVIEWER_TOOLS = ("inspect_world", "inspect_scenario", "flag_conflicts")
 # Above this, the loop hands the suite out instead of writing it. Zero: always.
 HANDS_OUT_ABOVE = int(os.environ.get("ALK_HARNESS_HANDS_OUT_ABOVE", "0") or 0)
 
@@ -93,7 +92,6 @@ def turns_for(wanted: int) -> int:
 
 # Underscores: one backend sanitises worker names into identifiers, the other does not.
 WRITER = "scenario_writer"
-REVIEWER = "suite_reviewer"
 
 
 def writer_worker(
@@ -103,7 +101,7 @@ def writer_worker(
     budget: int,
     authoring_guidance: str = "",
 ) -> dict[str, WorkerSpec]:
-    """The workers this stage may run: writers for parts of the suite, and one reviewer of it."""
+    """The worker this stage may run to write part of the suite."""
     return {
         WRITER: WorkerSpec(
             description=(
@@ -234,48 +232,7 @@ def writer_worker(
             max_turns=min(WRITER_TURNS, budget),
             # Empty inherits the parent's model.
             model=writer_model(),
-        ),
-        REVIEWER: WorkerSpec(
-            description=(
-                "Reads the finished suite once against the agent's rules and flags the scenarios "
-                "to rewrite. Brief one per batch of up to 50 kept scenarios, naming them."
-            ),
-            instructions=(
-                f"## This agent\n\n{contract.brief(with_data=True, sample_rows=3)}"
-                "\n\n## Your job\n\nRead every scenario your brief names with inspect_scenario, "
-                "and the sub-goal catalogue with inspect_world. For each, read its reference "
-                "solution and its sub-goals against what the agent's instructions and hard "
-                "constraints say for that situation. Flag it when a solution step is one the "
-                "rules skip or forbid here, when a sub-goal demands such a step or forbids one "
-                "they require, or when it names a code sub-goal checking one tool, field or step "
-                "where the catalogue has one for the outcome the caller came for, or when a "
-                "sub-goal it names has no source for its right answer in `compares`. Read the check "
-                "of every code sub-goal it names and ask what it returns for a call where the agent "
-                "kept its rules but the situation the check guards never arose (the guarded action "
-                "never happened, the caller withheld what it needs): it must return None, so flag "
-                "one that fails there. Flag too a check that demands a value the instructions do "
-                "not fix (a routing, a wording, one of several acceptable choices), or that takes "
-                "a call's `ok` for its outcome where the call's result says what was decided. Say "
-                "which sub-goal and why; the rewrite fixes that sub-goal with add_sub_goal under "
-                "the same name. Flag a scenario whose outcome needs "
-                "something nobody in the conversation can do (a step on another device, a reply "
-                "outside the call) unless its setup makes it happen, and one whose solution marks "
-                "as `outcome` a step a correct agent may fairly skip or take another way (a status "
-                "check, an optional message, a lookup). Quote the rule. "
-                "Flag nothing on taste: a scenario the rules allow stays. Then call "
-                "flag_conflicts once with every entry, empty if none, and every scenario you read in "
-                "`reviewed`, and report the count."
-            ),
-            servers={
-                SCENARIO_SERVER: ToolServer(
-                    name=server.name,
-                    version=server.version,
-                    tools=[spec for spec in server.tools if spec.name in REVIEWER_TOOLS],
-                )
-            },
-            max_turns=min(WRITER_TURNS, budget),
-            model=writer_model(),
-        ),
+        )
     }
 
 
@@ -312,7 +269,7 @@ def open_stage(
         tools=[
             one
             for one in server.tools
-            if one.name != "flag_conflicts" and (not hands_out or one.name not in WRITES_A_SCENARIO)
+            if not hands_out or one.name not in WRITES_A_SCENARIO
         ],
     )
     spec = SessionSpec(
@@ -376,10 +333,7 @@ def open_stage(
             f"empty without returning a scenario body. The next round goes out the same way, in "
             f"one message, for what is still missing. Repeat until suite_progress reports the "
             f"count. Never say work is running on the strength of a brief you did not see "
-            f"accepted, and check suite_progress before you believe your own count.\n\n"
-            f"When it does, brief {REVIEWER} with every scenario name, one per batch of up to 50. suite_progress then "
-            f"lists what it flagged; brief writers to rewrite those under the same names, the "
-            f"same way as a missing cell, and save when none are left.")
+            f"accepted, and check suite_progress before you believe your own count.")
             + (
                 f"\n\nYou have {budget} turns for this whole stage and every tool call spends one, "
                 f"including the calls your writers make: a writer reads the world in its own "

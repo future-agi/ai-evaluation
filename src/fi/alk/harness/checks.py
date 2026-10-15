@@ -43,10 +43,26 @@ class Outcome:
         return f"  [{mark}] {self.name}" + (f" — {self.said}" if self.said else "")
 
 
+def takes_reference(checker: Any) -> bool:
+    """Whether a check is written `check(world, calls, reference)`."""
+    import inspect
+
+    try:
+        return len(inspect.signature(checker).parameters) >= 3
+    except (TypeError, ValueError):
+        return False
+
+
 def run_check(
-    source: str, world: GeneratedWorld, calls: Sequence[Call], *, name: str = "check"
+    source: str,
+    world: GeneratedWorld,
+    calls: Sequence[Call],
+    *,
+    name: str = "check",
+    reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
-    """Execute one check against what the run left behind."""
+    """Execute one check against what the run left behind. A check written
+    `check(world, calls, reference)` is also given the scenario's reference solution."""
     namespace: dict[str, Any] = {}
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
@@ -62,7 +78,11 @@ def run_check(
         )
 
     try:
-        said = checker(world, list(calls))
+        said = (
+            checker(world, list(calls), list(reference))
+            if takes_reference(checker)
+            else checker(world, list(calls))
+        )
     except Exception as failed:
         # The check is at fault, not the agent. A KeyError in an assertion is our bug, and
         # scoring it against the agent is how a harness invents findings.

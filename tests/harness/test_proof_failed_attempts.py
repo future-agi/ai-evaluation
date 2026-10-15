@@ -37,7 +37,7 @@ def test_proof_requires_outcome_not_just_attempt(
     monkeypatch.setattr(
         module,
         "_run",
-        lambda *a, with_solution: (world, [call] if with_solution else [], [], [], {}),
+        lambda *a, with_solution: (world, [call] if with_solution else [], [], []),
     )
     catalogue = Catalogue(
         sub_goals=[

@@ -29,12 +29,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
 
 from .catalogue import Catalogue
 from .checks import Outcome, run_check
 from .folder import apply_setup, check_ready
-from .reference_state import changed_rows, compare_calls, expected_changes
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
 from .world.snapshot import restore
@@ -63,13 +61,6 @@ class Proof:
     # nowhere, so a scenario whose entire solution was assumed saved as "proved". Carried here so
     # whoever keeps the scenario is told what the proof did not cover.
     assumed: list[str] = field(default_factory=list)
-    # The rows the solution left, kept with the scenario so a call is graded on leaving them too.
-    expected_changes: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    # The solution ran in full and changed no record, so any change a call makes is graded wrong.
-    reference_changes_nothing: bool = False
-    # The reference comparison fails a run where nothing was done, so the scenario grades whether
-    # its outcome happened; a check may then be a prohibition that holds when nothing happens.
-    reference_grades: bool = False
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
@@ -80,7 +71,7 @@ class Proof:
             self.ready
             and self.solvable
             and not self.vacuous
-            and (not self.weak or self.reference_grades)
+            and not self.weak
             and not self.failed_attempts
             and not self.broken
         )
@@ -267,11 +258,9 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 def _run(
     scenario: Scenario, world_root: Path, *, with_solution: bool
-) -> tuple[GeneratedWorld, list[Call], list[str], list[str], dict[str, Any]]:
-    """A world set up for this scenario, optionally with the solution played through it, and the
-    records it held before the solution."""
+) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
+    """A world set up for this scenario, optionally with the solution played through it."""
     world, _applied, _ready = prepared(scenario, world_root)
-    before = world.state() if with_solution else {}
     refused: list[str] = []
     assumed: list[str] = []
     if with_solution:
@@ -302,24 +291,12 @@ def _run(
                 scenario.name,
                 len(scenario.solution),
             )
-    return world, list(world.calls), refused, sorted(set(assumed)), before
+    return world, list(world.calls), refused, sorted(set(assumed))
 
 
-def _expected_changes(
-    proof: Proof,
-    world: GeneratedWorld,
-    before: dict[str, Any],
-    scenario: Scenario,
-    refused: list[str],
-    assumed: list[str],
-) -> None:
-    """Keep what the solution left behind, unless part of it never ran against the world."""
-    solution = getattr(scenario, "solution", None)
-    if refused or assumed or not solution:
-        return
-    after = world.state()
-    proof.expected_changes = expected_changes(before, after, solution)
-    proof.reference_changes_nothing = not changed_rows(before, after)
+def _steps(scenario: Scenario) -> list[dict[str, Any]]:
+    """The reference solution as a check is given it: each step's tool and arguments."""
+    return [step.model_dump() for step in getattr(scenario, "solution", None) or ()]
 
 
 def prove(
@@ -344,12 +321,6 @@ def prove(
         proof.solvable = proof.ready
         proof.vacuous = False
         proof.judged_only = True
-        if proof.ready and getattr(scenario, "solution", None):
-            world, _, refused, assumed, before = _run(scenario, world_root, with_solution=True)
-            try:
-                _expected_changes(proof, world, before, scenario, refused, assumed)
-            finally:
-                world.close()
         return proof
 
     # Gate 1: is the world ready for this scenario at all?
@@ -368,15 +339,15 @@ def prove(
     proof.ready = True
 
     # Gate 2: does the reference solution pass this scenario's own checks?
-    world, calls, refused, assumed, before = _run(scenario, world_root, with_solution=True)
+    world, calls, refused, assumed = _run(scenario, world_root, with_solution=True)
     # What the proof below could not cover. Detected here since forever and logged into a void; a
     # scenario whose whole solution was assumed used to save as proved.
     proof.assumed = assumed
     try:
         proof.with_solution = [
-            run_check(source, world, calls, name=name) for name, source in checks
+            run_check(source, world, calls, name=name, reference=_steps(scenario))
+            for name, source in checks
         ]
-        _expected_changes(proof, world, before, scenario, refused, assumed)
     finally:
         world.close()
     proof.refused = refused
@@ -384,10 +355,11 @@ def prove(
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
 
     # Gate 3: do those same checks fail when nothing is done?
-    untouched, nothing, _, _, _ = _run(scenario, world_root, with_solution=False)
+    untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [
-            run_check(source, untouched, nothing, name=name) for name, source in checks
+            run_check(source, untouched, nothing, name=name, reference=_steps(scenario))
+            for name, source in checks
         ]
         # A call-presence check can pass the no-op gate yet credit failed operations.
         # Keep the arguments, remove all results/effects, and inject an execution failure.
@@ -403,7 +375,7 @@ def prove(
                 name
                 for name, source in checks
                 if not any(one.name == name and one.held for one in proof.with_nothing)
-                and run_check(source, untouched, crashed, name=name).held
+                and run_check(source, untouched, crashed, name=name, reference=_steps(scenario)).held
             ]
     finally:
         untouched.close()
@@ -419,24 +391,9 @@ def prove(
         for name in scenario.sub_goals
         if (found := catalogue.named(name)) is not None and not found.deterministic()
     ]
-    proof.reference_grades = _reference_fails_on_nothing(scenario, proof)
     proof.vacuous = (
         bool(proof.with_nothing)
         and len(proof.weak) == len(proof.with_nothing)
         and not judged
-        and not proof.reference_grades
     )
     return proof
-
-
-def _reference_fails_on_nothing(scenario: Scenario, proof: Proof) -> bool:
-    """Whether the reference comparison fails a run in which the agent did nothing."""
-    solution = [
-        step.model_dump() if hasattr(step, "model_dump") else step
-        for step in getattr(scenario, "solution", None) or ()
-    ]
-    if any(isinstance(step, dict) and step.get("outcome") is True for step in solution):
-        if compare_calls(solution, []) is not None:
-            return True
-    # Expected changes are rows the solution added or changed, which a run doing nothing never has.
-    return bool(proof.expected_changes)

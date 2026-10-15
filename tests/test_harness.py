@@ -2873,14 +2873,12 @@ def test_a_scenario_whose_checks_pass_with_nothing_done_is_refused(tmp_path):
     assert said["is_error"] and "grade nothing" in said["content"][0]["text"]
 
 
-def test_a_check_that_cannot_fail_without_calls_is_refused_unless_the_reference_grades_the_run(
-    tmp_path, monkeypatch
+def test_a_check_that_cannot_fail_without_calls_prevents_a_misleading_partial_pass(
+    tmp_path,
 ):
-    """A check comparing calls against rows holds when there are no calls at all. Without a
-    reference outcome that fails a run doing nothing, another strong check must not hide that:
-    every checkpoint shown needs its own evidence. With one, the run that did nothing already
-    fails, so the check may hold there, as a prohibition does."""
-    import fi.alk.harness.prove as prove_module
+    """A check comparing calls against rows holds when there are no calls at all, so it reports
+    itself as held for an agent that did nothing. Another strong check must not hide that defect:
+    every checkpoint shown to a user needs its own evidence."""
     from fi.alk.harness.catalogue import SubGoal, save_catalogue
     from fi.alk.harness.prove import prove
     from fi.alk.harness.scenario import Scenario
@@ -2903,15 +2901,13 @@ def test_a_check_that_cannot_fail_without_calls_is_refused_unless_the_reference_
     )
     save_catalogue(catalogue, root)
     delta = _delta(sub_goals=["item-added", "quantity-respected"])
-
-    proof = prove(Scenario(**delta), catalogue, root)
-    assert proof.weak == ["quantity-respected"] and proof.reference_grades and proof.holds
-
-    monkeypatch.setattr(prove_module, "_reference_fails_on_nothing", lambda scenario, proof: False)
     said = accept_scenario(delta, world_root=root, catalogue=catalogue, kept=[])
     text = said["content"][0]["text"]
+
     assert said.get("is_error"), text
     assert "quantity-respected" in text and "without the agent doing anything" in text
+    proof = prove(Scenario(**delta), catalogue, root)
+    assert not proof.holds and proof.weak == ["quantity-respected"]
 
 
 def test_predictable_and_reused_otp_fixtures_are_rejected():
@@ -8013,3 +8009,33 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
     assert not by_name[0] and "nothing is saved yet" in by_name[1]
     assert not everything[0] and "nothing is saved yet" in everything[1]
     assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
+
+
+def test_prove_hands_a_reference_check_the_solution_and_it_fails_when_nothing_is_done(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="added-what-was-asked",
+            what="the item the caller asked for was added",
+            check=(
+                "def check(world, calls, reference):\n"
+                "    wanted = next((s['arguments'] for s in reference if s['tool'] == 'add'), None)\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    if wanted and not made:\n"
+                "        return 'not done: nothing was added'\n"
+                "    if wanted and made[-1].arguments.get('item_id') != wanted['item_id']:\n"
+                "        return 'done wrong: item_id'\n"
+                "    return None\n"
+            ),
+        )
+    )
+    save_catalogue(catalogue, root)
+    proof = prove(Scenario(**_delta(sub_goals=["item-added", "added-what-was-asked"])), catalogue, root)
+    held = {one.name: one.held for one in proof.with_solution}
+    assert held["added-what-was-asked"] is True
+    assert {one.name: one.held for one in proof.with_nothing}["added-what-was-asked"] is False
+    assert proof.holds

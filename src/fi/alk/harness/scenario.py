@@ -71,9 +71,6 @@ class Step(BaseModel):
     # has to drive the real dependency so its database effects can be checked, so it may carry
     # that dependency payload separately.  Agent runs never read this field.
     environment_arguments: dict[str, Any] = Field(default_factory=dict)
-    # This step is the outcome the caller came for: a call is graded on its last successful call
-    # to the same tool carrying these arguments.
-    outcome: bool = False
 
 
 # The language every accent in the platform's accent vocabulary is a way of speaking.
@@ -259,15 +256,6 @@ class Scenario(BaseModel):
 
     # What a correct agent would do. Run by the gates, never by the agent under test.
     solution: list[Step] = Field(default_factory=list)
-    # The rows the solution leaves, on the fields whose values it supplied. Set when the scenario is
-    # proved; a call is then graded on leaving the same records.
-    expected_changes: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
-    # The solution ran in full and changed no record: any record a call changes is graded wrong.
-    reference_changes_nothing: bool = False
-    # How a field is compared when plain normalising is wrong for it, set by the scenario's author,
-    # by `table.field` or field: {"match": "exact"}, {"match": "skip"}, {"aliases": [...]} or
-    # {"tolerance_minutes": 15}.
-    comparisons: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Level per plan axis, e.g. {"task": "book_ride", "overlay": "interruption"}. Optional.
     coverage: dict[str, str] = Field(default_factory=dict)
