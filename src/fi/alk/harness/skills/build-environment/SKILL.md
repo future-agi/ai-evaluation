@@ -551,6 +551,11 @@ How each kind of value is compared:
 | A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
 | A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
 
+Compare only what the reference fixes for this caller: what they asked for, their identifiers, their
+amounts and dates, the record they meant. A value the agent chooses among several its instructions
+allow (which queue a transfer goes to, how a reason or a summary is worded, which label names a topic)
+is not compared; a judged sub-goal decides whether the choice suited the situation.
+
 Never use a string-similarity score. When even out case and spacing cannot settle whether two values
 agree, make it a judged sub-goal, which may answer inconclusive.
 

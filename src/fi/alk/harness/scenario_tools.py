@@ -1236,6 +1236,9 @@ def scenario_tools(
         "tool can be called more than once and one call can be reported twice with fewer "
         "arguments, so match each reference step to any successful call carrying its fields, "
         "never to the last call; when the reference sets a thing twice the later value counts. "
+        "Compare only what the reference fixes for this caller (what they asked for, their "
+        "identifiers, amounts, dates), never a choice the instructions leave to the agent (a queue, "
+        "a wording, a topic label). "
         "Use `judged` for what was said and what nothing observable settles; it holds the "
         "criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES
