@@ -51,7 +51,7 @@ wheels = [
 
 [[package]]
 name = "agent-learning-kit"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
