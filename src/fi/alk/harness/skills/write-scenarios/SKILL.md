@@ -248,55 +248,61 @@ step is not named here. Never add a step the rules skip just so a sub-goal's che
 is wrong for this situation, so leave it off the scenario. `try_calls` shows what the world accepts, not what
 the agent was told to do.
 
-**The solution is also the answer key.** Every code sub-goal you name is handed it and checks the call
-against it: the arguments, the result, the records left. So write it complete to the outcome, with
-this caller's values as they last corrected them, exactly as the agent's tools take them. A wrong
-value in the solution fails a correct agent, and so does a step in it the agent's rules do not call
-for in this situation: a check that finds the step in the solution expects the agent to take it. When
-a rule says to act at once, nothing comes before that action in the solution.
+### The solution is the answer key: write it in four steps
 
-**Try a sub-goal once, the first time you name it.** `try_check` runs a sub-goal's check against
-calls you write. The first time you name a sub-goal in your session, and whenever you add or replace
-one, try your solution, another way this agent's instructions allow, and your solution with a fixed
-value wrong. Sub-goals are shared, so after that first try you reuse it without trying it again. The first two must hold and the third must fail. A check that
-gets any of them wrong does not belong in this scenario as it stands: replace it with add_sub_goal, or
-name another. A sub-goal you have not tried is a guess.
+Every code sub-goal you name is handed your solution and checks the agent's calls and records
+against it, so it is written for the checks as much as for the proof.
 
-**Read what each sub-goal you name compares before you write the solution.** `inspect_world` lists
-every sub-goal with what its check compares and where each of those values comes from. Your
-solution is the answer key it reads: write it as this caller's call should go, and mark as `fixed`
-each argument this caller, their record or a rule really fixes, which covers what those checks
-compare whenever this caller gives it. Never bend the solution to suit a check; a check that cannot
-pass on a correct solution is the check's fault, and add_sub_goal can replace it.
+**1. Write the call as this caller's call should go under the agent's rules.** Complete to the
+outcome, with this caller's values as they last corrected them, exactly as the agent's tools take
+them. Only the steps the agent's rules call for in this situation: when a rule says to act at once
+(hand over, stop, refuse), nothing comes before that action, and a step another tool already does
+inside its own work is not one the agent repeats. A wrong value or an extra step in the solution fails
+a correct agent, because a check that finds it there expects the agent to match it.
 
-**Say on every step which arguments are `fixed`, and where each comes from.** An argument is fixed when its value comes from
-this caller (what they say or correct), their record in the world, or a rule in the agent's
-instructions that names the value for this situation. A value the agent's code fills in somewhere
-else does not fix what the agent's model passes to a tool, and a step another tool already does
-inside itself is not one the agent has to repeat. A sub-goal's contract saying where a value comes from does not make
-it so: find that source yourself, in this caller's situation, their record or the agent's
-instructions, and write it against the argument in `fixed`: `caller: <what they say>`,
-`record: <where the world holds it>`, or `rule: "<the rule's own words>"`, quoted exactly as the
-instructions write them and containing the value. If you cannot write where a value comes from, it is
-not fixed. A label or category the agent writes in its own words is never fixed, even when the caller
-asked for that very thing: the caller fixes what they want, not the words the agent records it under.
-Never mark a value fixed because a check compares it.
+**2. Mark on every step which arguments are `fixed`, and where each comes from.** An argument is fixed
+when its right value comes from one of three places, written against it as its source:
+`caller: <what they say>`, `record: <where the world holds it>`, or
+`rule: "<the rule's own words>"`, quoted exactly as the agent's instructions write them and
+containing the value. The build refuses a source that does not hold. Only fixed arguments are shown to
+the checks and the judge, so everything else stays out of their reach:
 
-**Write the other ways too.** Where the agent's instructions or tools allow another way to the same
-outcome (a rule names one tool and another tool does the same step, or one tool does a step itself),
-write each as an entry in `alternatives`, a full list of steps like the solution. The proof plays every
-alternative through the world, and each check must pass on all of them, so a check that demands one
-tool where the instructions allow another is caught before any call.
+- the agent's own choices: a destination or category it picks, a label or note it writes in its own
+  words, even when the caller asked for that very thing (the caller fixes what they want, not the
+  words the agent records it under);
+- a value the agent's code fills in elsewhere, which does not fix what the agent's model passes;
+- an optional argument nothing fixes: leave it out, and the tool's default applies.
 
-The proof then plays your solution once more as an agent that gets every fixed value right but makes
-its own choice for everything else. Every check must still pass. A check that fails names the
-argument: either something really fixes it and you mark it, or the check holds the agent to its own
-choice and must be rewritten to check the outcome. Only fixed arguments are shown to the checks and the judge. Everything
-else (a destination or category the agent picks, a free-text reason or note, a default) still gets a
-value so the step can run, but is not marked, so no check can take a value you made up for the right
-one. Leave out an optional argument nothing fixes; the tool's default applies. If a proof reports that
-a check could not find an argument in the reference, ask whether this caller really fixes it: mark it
-if so, and otherwise the check is wrong.
+Find each source yourself in this caller's situation, their record or the agent's instructions; a
+sub-goal's contract saying where a value comes from does not make it so. Never mark a value fixed
+because a check compares it.
+
+**3. Write the other ways the agent's instructions allow, in `alternatives`.** Where a rule names one
+tool and another tool reaches the same outcome, or one tool does a step inside its own work, write each
+other way as a full list of steps like the solution. The proof plays each one, and every check must
+pass on all of them.
+
+**4. Name the sub-goals this scenario settles, and try each the first time you name it.** Read each in
+the catalogue (`inspect_world` lists them, and the catalogue file holds their checks): what it
+compares, and when it applies. Name one only when its situation arises here and a correct agent
+passes it whichever way its rules allow. Two is the usual number; one is right when the agent had
+nothing to find out before acting, as when a rule tells it to act at once. The first time you name a
+sub-goal in your session, and whenever you add or replace one, run it with `try_check`: your solution,
+another way the instructions allow, and your solution with a fixed value wrong. The first two must
+hold and the third must fail; when they do not, replace the sub-goal with `add_sub_goal` or name
+another. Sub-goals are shared, so after that first try you reuse it without trying again.
+
+**What the proof plays, and how to answer it.** Beyond your solution and your alternatives, it plays an
+agent that gets every fixed value right but makes its own choice for everything else, and an agent that
+gets one fixed value wrong at a time.
+
+- *Too strict* names an argument a check held a correct agent to. Mark it fixed only if the caller,
+  their record or a quoted rule really fixes it; otherwise the check must be rewritten to check the
+  outcome.
+- *Unchecked* names a fixed value no check notices when wrong. Name a sub-goal whose check compares
+  it, or take it out of `fixed` if only what is said settles it.
+- *Could not find an argument in the reference* means a check expected a value you did not mark. Mark
+  it if this caller really fixes it; otherwise the check is wrong.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
