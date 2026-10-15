@@ -507,6 +507,10 @@ wrong thing, and fails one that said the right thing another way.
 
 ### Write a code check in five steps
 
+A verdict that is wrong because of the check, and not because of the agent, is a failure of this
+stage, and the agent's builder will act on it. Write each check so that every verdict it gives is one
+you could defend from the call alone.
+
 A check is Python, `check(world, calls, reference)`. `world.state()` is what the world holds after the
 call; `calls` is every call the agent made, each with `.name`, `.arguments`, `.result`, `.ok` and
 `.refused`; `reference` is the scenario's solution, each step a `tool` and the `arguments` the

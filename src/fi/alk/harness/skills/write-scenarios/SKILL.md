@@ -250,6 +250,10 @@ the agent was told to do.
 
 ### The solution is the answer key: write it in four steps
 
+A verdict that is wrong because of your solution or its `fixed` marks, and not because of the agent,
+is a failure of this stage. Write nothing here you could not defend from the agent's instructions and
+this caller's situation.
+
 Every code sub-goal you name is handed your solution and checks the agent's calls and records
 against it, so it is written for the checks as much as for the proof.
 
