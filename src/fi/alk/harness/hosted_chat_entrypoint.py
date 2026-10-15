@@ -146,8 +146,6 @@ class HostedChatRuntime:
         metadata = self.job.get("metadata") or {}
         name = str(metadata.get("agent_name") or self.job.get("name") or "agent")
         if not self._control_only():
-            from .poc_guest_booking import guest_booking_policy_job
-
             return open_conversation(
                 name=name,
                 path=str(self.source),
@@ -158,7 +156,6 @@ class HostedChatRuntime:
                 ask=self._ask,
                 configure_stage=self._configure_stage,
                 control_only=False,
-                job=guest_booking_policy_job(self.job),
             )
         identity = self.client.capabilities.identity
         spec = SessionSpec(

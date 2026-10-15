@@ -36,8 +36,6 @@ from .config import (
     writer_model,
 )
 from .contract import AgentContract
-from .job import HarnessJob
-from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
 from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
@@ -245,18 +243,11 @@ def open_stage(
     max_turns: int = 0,
     authoring_guidance: str = "",
     can_grow: bool = False,
-    job: HarnessJob | None = None,
 ) -> tuple[Stage, Path]:
     """A live write-the-scenarios stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
-    if job is not None and not authoring_guidance:
-        authoring_guidance = guest_booking_pin_guidance(job, scenario_count=wanted)
-    scenario_problem = (
-        lambda args: guest_booking_pin_scenario_problem(job, args)
-    ) if job is not None else None
     server, kept = scenario_tools(
         contract, destination, destination, wanted=wanted, can_grow=can_grow,
-        scenario_problem=scenario_problem,
     )
     budget = max_turns or turns_for(wanted)
     affordable = max(budget // WRITER_TURNS, 1)

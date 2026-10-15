@@ -496,41 +496,6 @@ async def _scenarios(args: argparse.Namespace) -> int:
     existing = len(load_written(destination))
     wanted = args.count or existing or 10
 
-    # The guest-booking POC policy is supplied only through the platform-owned simulator
-    # secret channel and is gated against the exact submitted phone target. Keep it in the model's
-    # authoring brief: saved scenarios should be authored with natural PIN behavior. The scenario
-    # gate attaches only private fixture facts after selection; it never rewrites scenario intent
-    # or intercepts a live caller turn.
-    from .poc_guest_booking import (
-        TARGET_PHONE_ENV,
-        guest_booking_pin_guidance,
-        guest_booking_policy_job,
-    )
-
-    policy_job = None
-    job_input = getattr(args, "job", None)
-    if job_input is not None and os.environ.get(TARGET_PHONE_ENV, "").strip():
-        if isinstance(job_input, (str, os.PathLike)):
-            try:
-                raw_job = json.loads(Path(job_input).read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                print(
-                    "Private guest PIN policy disabled: job could not be read "
-                    f"({type(exc).__name__}).",
-                    file=sys.stderr,
-                )
-            else:
-                policy_job = guest_booking_policy_job(raw_job)
-        else:
-            # Internal authoring and repair paths already carry the validated HarnessJob.
-            # Do not reinterpret that object as a filesystem path.
-            policy_job = guest_booking_policy_job(job_input)
-
-    poc_guidance = guest_booking_pin_guidance(policy_job, scenario_count=wanted)
-    guidance = [*(getattr(args, "guidance", None) or [])]
-    if poc_guidance:
-        guidance.append(poc_guidance)
-
     print(
         f"agent: {contract.agent}  "
         + (f"({existing} scenarios, loaded)" if existing else f"(writing {wanted})")
@@ -543,13 +508,10 @@ async def _scenarios(args: argparse.Namespace) -> int:
         out=destination,
         wanted=wanted,
         ask=permission_gate(_ask_operator) if args.interactive else None,
-        authoring_guidance=poc_guidance,
-        job=policy_job,
     )
     await _converse(
         stage,
-        scenario_opening(contract, wanted, existing)
-        + _guidance(argparse.Namespace(guidance=guidance)),
+        scenario_opening(contract, wanted, existing) + _guidance(args),
         interactive=args.interactive,
         until=lambda: bool(load_written(destination)),
         nudge=(
