@@ -248,7 +248,6 @@ class _CompiledSubGoal:
     judged: str
     check: Callable[..., object]
     what: str = ""
-    # The check and the judged criteria must both hold (`judged` then carries the criteria).
     both: bool = False
     compares: str = ""
 

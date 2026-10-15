@@ -43,18 +43,12 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
-    # The check contract, stated before the check is written and shown to the judge:
-    # where the right answer comes from (the reference solution, a seeded record, the caller's words),
+    # The check contract; `verifier` is code, llm or both, empty settles by the check if there is one.
     reference: str = ""
-    # what of the run is read (tool arguments and results, records left, what the agent said),
     observed: str = ""
-    # `code`, `llm` or `both` (each must hold); empty means the check settles it if there is one,
     verifier: str = ""
-    # exact, normalised, structured, a stated tolerance or by meaning, and which differences pass,
     comparison: str = ""
-    # final state or every action, which recovery is allowed and which effects are forbidden,
     scope: str = ""
-    # and when the requirement applies and what evidence shows it applies.
     applicability: str = ""
 
     @property
@@ -62,7 +56,6 @@ class SubGoal(BaseModel):
         return self.verifier.strip().lower() == "both"
 
     def contract(self) -> str:
-        """The check contract as one text, for the judge and for a reader."""
         parts = (
             ("Reference", self.reference),
             ("Observed", self.observed),

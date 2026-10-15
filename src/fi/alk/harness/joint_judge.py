@@ -90,7 +90,6 @@ criteria, this review, a test, a scenario, a simulation, the customer's instruct
 Put anything about how you checked into `evidence`, which only the reviewers of this process see.
 """.strip().replace("{VERDICT_RULES}", VERDICT_RULES)
 
-# The key under which a report that the simulated customer left their side comes back.
 OFF_SCRIPT = "__customer_off_script__"
 
 
@@ -104,11 +103,7 @@ async def judge_sub_goals_jointly(
     agent_instructions: str = "",
     recording: str | None = None,
 ) -> dict[str, tuple[bool | None, str]]:
-    """Decide a call's judged sub-goals in one conversation: {name: (held, explanation)}, plus
-    `OFF_SCRIPT` when the simulated customer left their side.
-
-    A sub-goal missing from the result was not decided. Never raises.
-    """
+    """{name: (held, explanation)} for a call's judged sub-goals, plus `OFF_SCRIPT`; never raises."""
     names = [str(getattr(goal, "name", "")) for goal in goals]
     evidence = CallEvidence(world, messages, recording, ", ".join(names))
     verdict: dict[str, tuple[bool | None, str]] = {}

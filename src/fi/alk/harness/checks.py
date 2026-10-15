@@ -44,8 +44,7 @@ class Outcome:
 
 
 def takes_reference(checker: Any) -> bool:
-    """Whether a check is written `check(world, calls, reference)`, read from its source when it
-    was compiled to run elsewhere."""
+    """Whether a check is written `check(world, calls, reference)`."""
     import ast
     import inspect
 
@@ -70,8 +69,7 @@ def run_check(
     name: str = "check",
     reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
-    """Execute one check against what the run left behind. A check written
-    `check(world, calls, reference)` is also given the scenario's reference solution."""
+    """Execute one check against what the run left behind, with the reference when it takes one."""
     namespace: dict[str, Any] = {}
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)

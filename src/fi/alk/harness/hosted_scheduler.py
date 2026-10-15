@@ -1590,11 +1590,8 @@ class HostedScheduler:
         call_outcome: Any,
         offered: dict[str, Any],
     ) -> tuple[list[tuple[bool | None, str]] | None, str]:
-        """All of a call's judged sub-goals in one conversation, or None to judge each alone, and
-        what the simulated customer did off their side when the judge reported it.
-
-        Any failure, including a single sub-goal left undecided, judges every one of them alone.
-        """
+        """All of a call's judged sub-goals in one conversation (None to judge each alone), and any
+        report that the customer left their side."""
         if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
             return None, ""
         try:
@@ -2171,7 +2168,6 @@ class HostedScheduler:
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
         off_script = ""
-        # For a sub-goal settled by its check and its criteria together: the check's verdict.
         checked: dict[int, _Verdict] = {}
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
@@ -2301,7 +2297,6 @@ class HostedScheduler:
                     name=goal.name, held=held, reason=why, judged=True
                 )
 
-        # A sub-goal settled by both fails when either fails, and is decided only when both are.
         for slot, verdict in checked.items():
             if not verdict.held:
                 judged = sub_goal_results[slot]
@@ -2320,8 +2315,6 @@ class HostedScheduler:
                 call=self._call_summary(call_outcome),
             )
         if off_script:
-            # The simulated customer left their side, so the call says nothing about the agent;
-            # its verdicts are kept for reading, never counted.
             return self._fault(
                 scenario,
                 world_index,
