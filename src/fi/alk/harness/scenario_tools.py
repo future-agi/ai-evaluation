@@ -1257,7 +1257,8 @@ def scenario_tools(
         "Python, or the name of a sub-goal in the catalogue), the calls an agent makes in that "
         "situation (played through a throwaway copy of the world, as in try_calls), and the "
         "reference a scenario would hand it (steps with `tool`, `arguments` and `fixed`). You see "
-        "whether the check held and what it said. Try every sub-goal before you write or name it: "
+        "whether the check held and what it said. Try each sub-goal once, when you write it or first "
+        "name it: "
         "an agent that does it right another way its instructions allow must pass, and an agent "
         "that gets a fixed value wrong must fail. Nothing is saved.",
         schema({"check": str, "calls": list, "reference": list, "setup_code": str}, ["check", "calls"]),

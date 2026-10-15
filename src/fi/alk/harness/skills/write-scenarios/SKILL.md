@@ -255,9 +255,10 @@ value in the solution fails a correct agent, and so does a step in it the agent'
 for in this situation: a check that finds the step in the solution expects the agent to take it. When
 a rule says to act at once, nothing comes before that action in the solution.
 
-**Try every sub-goal before you name it.** `try_check` runs a sub-goal's check against calls you
-write. For each one you name, try your solution, another way this agent's instructions allow, and
-your solution with a fixed value wrong. The first two must hold and the third must fail. A check that
+**Try a sub-goal once, the first time you name it.** `try_check` runs a sub-goal's check against
+calls you write. The first time you name a sub-goal in your session, and whenever you add or replace
+one, try your solution, another way this agent's instructions allow, and your solution with a fixed
+value wrong. Sub-goals are shared, so after that first try you reuse it without trying it again. The first two must hold and the third must fail. A check that
 gets any of them wrong does not belong in this scenario as it stands: replace it with add_sub_goal, or
 name another. A sub-goal you have not tried is a guess.
 
