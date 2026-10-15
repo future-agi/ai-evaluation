@@ -1263,7 +1263,7 @@ def world_tools(
         "scenario's reference solution: write `check(world, calls, reference)`, where `reference` "
         "is that scenario's solution steps (`tool`, and only the `arguments` the scenario marks "
         "fixed for its caller, so read them with .get()), take only what this sub-goal "
-        "settles and compare it with the call's arguments or result and the record's columns in "
+        "settles and compare it with the call's arguments or result and what the world holds in "
         "world.state(), returning 'not done: ...' or 'done wrong: <field> expected X, got Y'. A "
         "tool can be called more than once and one call can be reported twice with fewer "
         "arguments, so match each reference step to any successful call carrying its fields, "

@@ -1230,7 +1230,7 @@ def scenario_tools(
         "scenario's reference solution: write `check(world, calls, reference)`, where `reference` "
         "is that scenario's solution steps (`tool`, and only the `arguments` the scenario marks "
         "fixed for its caller, so read them with .get()), take only what this sub-goal "
-        "settles and compare it with the call's arguments or result and the record's columns in "
+        "settles and compare it with the call's arguments or result and what the world holds in "
         "world.state(), returning 'not done: ...' or 'done wrong: <field> expected X, got Y'. A "
         "tool can be called more than once and one call can be reported twice with fewer "
         "arguments, so match each reference step to any successful call carrying its fields, "
@@ -1504,7 +1504,7 @@ def scenario_tools(
                                 "additionalProperties": {"type": "string"},
                                 "description": "Each argument whose value something fixes for "
                                 "this caller, mapped to where it comes from: what the caller says, "
-                                "their record (which table and column), or the rule in the agent's "
+                                "what the world holds for them (and where), or the rule in the agent's "
                                 "instructions that names it, quoted. Checks and the judge are shown "
                                 "only these. Leave out any value you picked because the step needed "
                                 "one. Empty when none is fixed.",

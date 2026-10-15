@@ -571,14 +571,13 @@ out of the check, and when the choice matters, let a judged sub-goal decide whet
 situation. Read the agent's prompt and its tool definitions to tell which is which; never decide it
 from the field's name.
 
-Fill the check's `reference` with that answer for every field it compares, such as "account_id: the
-caller's record; amount: the balance on that record". A field you cannot fill in that way is the
+Fill the check's `reference` with that answer for every field it compares, such as "item_id: what the
+world holds for this person; quantity: what they asked for". A field you cannot fill in that way is the
 agent's choice. A check written to take `reference` is refused until it says this.
 
 **Check the outcome, not the route.** The reference is one correct way through the call. The agent's
 tools may reach the same outcome another way: a different tool for the same step, or a tool that does
-the step itself as part of its own work (one that declines a request and also hands the call over,
-one that books and also sends the confirmation). Read which tool the agent's instructions say to use for the step, and
+the step itself as part of its own work. Read which tool the agent's instructions say to use for the step, and
 what each tool does in the agent's code, before you write the check. Where the outcome leaves a record, check the record, which shows it however it
 came about; where only the calls show it, accept every call that achieves it. A check that demands
 the reference's tool fails a correct agent that took the other way.
