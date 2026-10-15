@@ -2785,9 +2785,9 @@ def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stay
         ready=lambda world: None,
     )
     claims = {
-        "saved": {"what": "w", "judged": "Pass when: it says what was reported", "both": "yes", "compares": "c"},
+        "saved": {"what": "w", "judged": "Pass when: it says what was reported", "both": "yes", "contract": "Reference: c"},
         "legacy": {"what": "w", "judged": "Pass when: x", "both": ""},
     }
     saved, legacy = _with_claims(scenario, claims).sub_goals
-    assert saved.both and saved.judged == "Pass when: it says what was reported" and saved.compares == "c"
+    assert saved.both and saved.judged == "Pass when: it says what was reported" and saved.compares == "Reference: c"
     assert not legacy.both and legacy.judged == ""

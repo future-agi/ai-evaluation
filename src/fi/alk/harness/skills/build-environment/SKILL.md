@@ -537,24 +537,40 @@ to the last call. When the reference sets the same thing twice, the later value 
 counts. Compare values with one right form (an identifier, a number, an amount, a date, a choice from
 a fixed set) after evening out case and spacing, and leave wording to a judged sub-goal.
 
+How each kind of value is compared:
+
+| Case | Rule |
+|---|---|
+| Account id, PIN, quantity | Exact, as the type it is; leading zeros count |
+| Address | The world's place or address id where it has one; otherwise its parts, where `Street` and `St` agree but a different unit does not, and a missing part fails |
+| Date, time zone, currency, unit | One common form; a tolerance only where the scenario states one |
+| Name | Exact spelling, the aliases the scenario lists, or the person's id; never a spelling the agent had no way to learn, such as a name only spoken |
+| Feedback, a reason | Judged by meaning against what the caller said: facts kept, nothing contradicted or invented, wording free |
+| A caller who corrects themselves | The final request; lookups and drafts on the way are fine |
+| A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |
+| A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
+| A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
+
+Never use a string-similarity score. When even out case and spacing cannot settle whether two values
+agree, make it a judged sub-goal, which may answer inconclusive.
+
 ```python
 def check(world, calls, reference):
     def same(a, b):
         return str(a).strip().lower() == str(b).strip().lower()
 
-    made = [call for call in calls if call.name == "confirm_address" and call.ok]
+    made = [call for call in calls if call.name == "set_detail" and call.ok]
     wanted = {}
     for step in reference:
-        if step["tool"] == "confirm_address":
-            args = step["arguments"]
-            wanted[args.get("address_kind")] = args  # the later value for each kind counts
-    for kind, args in wanted.items():
+        if step["tool"] == "set_detail":
+            wanted[step["arguments"]["field"]] = step["arguments"]["value"]  # the later one counts
+    for field, value in wanted.items():
         if not made:
-            return "not done: no address was confirmed"
-        if not any(same(c.arguments.get("place_id"), args.get("place_id"))
-                   for c in made if c.arguments.get("address_kind") == kind):
-            got = [c.arguments.get("place_id") for c in made if c.arguments.get("address_kind") == kind]
-            return f"done wrong: {kind} place expected {args.get('place_id')!r}, got {got!r}"
+            return "not done: no detail was set"
+        if not any(same(c.arguments.get("value"), value)
+                   for c in made if c.arguments.get("field") == field):
+            got = [c.arguments.get("value") for c in made if c.arguments.get("field") == field]
+            return f"done wrong: {field} expected {value!r}, got {got!r}"
     return None
 ```
 

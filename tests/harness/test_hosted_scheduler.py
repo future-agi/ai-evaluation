@@ -4353,3 +4353,20 @@ def test_a_customer_off_script_marks_the_call_invalid_and_keeps_its_verdicts(mon
     assert receipt.status == "errored"
     assert receipt.failure.code == "caller_off_script"
     assert [g.held for g in receipt.sub_goals] == [False, True]
+
+
+def test_an_inconclusive_verdict_leaves_the_call_undecided_not_failed(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {"confirmed": (None, "Inconclusive: the deciding turn cannot be heard"), "refused_card": (True, "ok")}
+
+    receipt, _ = _two_judged(monkeypatch, _all)
+    assert receipt.status == "errored" and receipt.failure.code == "judge_undecided"
+
+
+def test_sub_goals_that_did_not_arise_pass_as_not_applicable(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {goal.name: (True, "Not applicable: the situation never came up") for goal in goals}
+
+    receipt, _ = _two_judged(monkeypatch, _all)
+    assert receipt.status == "passed"
+    assert all(g.reason.startswith("Not applicable:") for g in receipt.sub_goals)

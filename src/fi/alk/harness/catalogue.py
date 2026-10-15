@@ -43,12 +43,34 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
-    # What is compared with what: where the right answer comes from, what of the run is read, how
-    # the two are compared and over which span. Shown with every verdict.
-    compares: str = ""
-    # Both the check and the judged criteria must hold. Without it a sub-goal with a check is
-    # settled by the check alone, as before.
-    both: bool = False
+    # The check contract, stated before the check is written and shown to the judge:
+    # where the right answer comes from (the reference solution, a seeded record, the caller's words),
+    reference: str = ""
+    # what of the run is read (tool arguments and results, records left, what the agent said),
+    observed: str = ""
+    # `code`, `llm` or `both` (each must hold); empty means the check settles it if there is one,
+    verifier: str = ""
+    # exact, normalised, structured, a stated tolerance or by meaning, and which differences pass,
+    comparison: str = ""
+    # final state or every action, which recovery is allowed and which effects are forbidden,
+    scope: str = ""
+    # and when the requirement applies and what evidence shows it applies.
+    applicability: str = ""
+
+    @property
+    def both(self) -> bool:
+        return self.verifier.strip().lower() == "both"
+
+    def contract(self) -> str:
+        """The check contract as one text, for the judge and for a reader."""
+        parts = (
+            ("Reference", self.reference),
+            ("Observed", self.observed),
+            ("Comparison", self.comparison),
+            ("Scope", self.scope),
+            ("Applicability", self.applicability),
+        )
+        return "\n".join(f"{label}: {text.strip()}" for label, text in parts if text.strip())
 
     def deterministic(self) -> bool:
         return bool(self.check.strip())
@@ -209,9 +231,10 @@ def without_delivery_overlay(sub_goal: SubGoal) -> tuple[SubGoal, str]:
 
 
 CRITERIA_RULES = (
-    "A sub-goal is judged by a model against its `criteria` when it turns on what this caller "
-    "asked (the right record, the right values) or when nothing observable settles it, the way a "
-    "platform eval is judged against its own. Write the criteria in `judged` as four labelled "
+    "A sub-goal is judged by a model against its `criteria` when it turns on meaning or behaviour "
+    "that nothing observable settles (what was said or read back, whether a refusal was explained), "
+    "the way a platform eval is judged against its own; the right record and the right values are "
+    "checked in code against the reference solution. Write the criteria in `judged` as four labelled "
     "lines:\n"
     "  Applies when: the situation in the conversation that makes this sub-goal testable.\n"
     "  Pass when: what the agent says or does that passes. When the step carries a value (an "
@@ -253,19 +276,16 @@ SUB_GOAL_RULES = (
     "never as a step demanded everywhere, since the rules skip some steps in some situations. "
     "Keep it only if its verdict tells the agent's builder something they can act on: which rule "
     "was kept or broken, which value was right or wrong.\n\n"
-    "Say in `compares` what the sub-goal compares with what, before writing it: where the right "
-    "answer comes from (the scenario's reference solution, a record set up before the call, or "
-    "what the caller said), what of the run is read (records afterwards, the calls and their "
-    "results, or what the agent said), how the two are compared (exactly, ignoring format, by "
-    "meaning) and over which span (the final records, or every call including ones later "
-    "undone). If you cannot say where the right answer comes from, the sub-goal cannot be "
-    "graded. Code settles structured facts and effects; the judge settles meaning and behaviour. "
-    "Most sub-goals are one or the other. Set `both` only when one outcome has a part code reads "
-    "and a part only meaning settles, such as a record that must be saved and must also say what "
-    "the caller actually reported: the check reads the record, the criteria judge only what the "
-    "check cannot read, and it passes only when each does. Criteria that restate what the check "
-    "already reads (a call was made, a record exists) add a judge and nothing else; drop `both` "
-    "then. An agent that skipped a required step fails; the sub-goal is not inapplicable because "
+    "State the check contract before writing the check: `reference`, where the right answer "
+    "comes from (this scenario's reference solution, a record set up before the call, what the "
+    "caller said); `observed`, what of the run is read (tool arguments and results, records left, "
+    "what the agent said); `verifier`, code for structured facts, effects and forbidden actions, "
+    "llm for meaning and behaviour, both when one outcome has a part each settles, then each must "
+    "hold; `comparison`, exact, normalised, structured, a stated tolerance or by meaning, and which "
+    "differences pass; `scope`, the final state or every action, which recovery is allowed and "
+    "which effects stay forbidden after it; `applicability`, when it applies and what evidence "
+    "shows that. If you cannot say where the right answer comes from, the sub-goal cannot be "
+    "graded. An agent that skipped a required step fails; the sub-goal is not inapplicable because "
     "the agent avoided it.\n\n"
 )
 
@@ -286,11 +306,15 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
             f"{sub_goal.name}: settles nothing. Give a check in code, or criteria a judge decides "
             "it by"
         )
-    if sub_goal.both and not (sub_goal.check.strip() and sub_goal.judged.strip()):
-        problems.append(
-            f"{sub_goal.name}: `both` needs a check and judged criteria; drop `both` to settle it "
-            "by one of them"
-        )
+    verifier = sub_goal.verifier.strip().lower()
+    if verifier not in ("", "code", "llm", "both"):
+        problems.append(f"{sub_goal.name}: verifier is code, llm or both, not {sub_goal.verifier!r}")
+    elif verifier == "both" and not (sub_goal.check.strip() and sub_goal.judged.strip()):
+        problems.append(f"{sub_goal.name}: verifier both needs a check and judged criteria")
+    elif verifier == "code" and not sub_goal.check.strip():
+        problems.append(f"{sub_goal.name}: verifier code needs a check")
+    elif verifier == "llm" and not sub_goal.judged.strip():
+        problems.append(f"{sub_goal.name}: verifier llm needs judged criteria")
     if sub_goal.output != "pass_fail":
         problems.append(f"{sub_goal.name}: output {sub_goal.output!r}; only pass_fail is judged today")
     if sub_goal.check.strip() and "def check(" not in sub_goal.check:

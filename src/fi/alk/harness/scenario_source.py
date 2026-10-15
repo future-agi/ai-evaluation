@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from . import outbound as ob
-from .catalogue import CATALOGUE
+from .catalogue import CATALOGUE, SubGoal
 from .job import FailureDomain
 
 if TYPE_CHECKING:
@@ -421,8 +421,10 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
-            "compares": str(entry.get("compares") or ""),
-            "both": "yes" if entry.get("both") is True else "",
+            "contract": SubGoal.model_validate({**entry, "name": entry["name"]}).contract()
+            if isinstance(entry, dict)
+            else "",
+            "both": "yes" if str(entry.get("verifier") or "").strip().lower() == "both" else "",
         }
     return claims
 
@@ -582,7 +584,7 @@ def _with_claims(
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
             both=combined(goal),
-            compares=claims[goal.name].get("compares", "") or goal.compares,
+            compares=claims[goal.name].get("contract", "") or goal.compares,
         )
         if goal.name in claims
         else goal

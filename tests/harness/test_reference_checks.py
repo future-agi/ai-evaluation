@@ -59,3 +59,79 @@ def test_a_two_argument_check_runs_as_before_and_is_never_given_the_reference():
     assert not takes_reference(lambda world, calls: None)
 
 
+
+
+def _call(name: str, ok: bool = True, **arguments: Any) -> Call:
+    return Call(name=name, arguments=arguments, result={}, ok=ok)
+
+
+# Checks written the way the guidance asks, one per row of the comparison table.
+EXACT = '''
+def check(world, calls, reference):
+    want = next(s["arguments"]["account_id"] for s in reference if s["tool"] == "open")
+    made = [c for c in calls if c.name == "open" and c.ok]
+    if not made:
+        return "not done: nothing was opened"
+    if not any(str(c.arguments.get("account_id")) == str(want) for c in made):
+        return f"done wrong: account_id expected {want!r}"
+    return None
+'''
+FINAL_NO_DUPLICATE = '''
+def check(world, calls, reference):
+    want = [s["arguments"]["item"] for s in reference if s["tool"] == "book"][-1]
+    rows = [r for r in world.state()["bookings"] if r.get("status") != "cancelled"]
+    if not rows:
+        return "not done: nothing is booked"
+    if len(rows) > 1:
+        return f"done wrong: {len(rows)} live bookings where one is expected"
+    if rows[0]["item"] != want:
+        return f"done wrong: item expected {want!r}, got {rows[0]['item']!r}"
+    return None
+'''
+NO_FORBIDDEN_CHANGE = '''
+def check(world, calls, reference):
+    if any(c.name == "refund" and c.ok for c in calls):
+        return "done wrong: a refund was made that the rules forbid"
+    return None
+'''
+
+
+def test_case_table_exact_identifier_keeps_leading_zeros():
+    ref = [{"tool": "open", "arguments": {"account_id": "0042"}}]
+    assert run_check(EXACT, _World([]), [_call("open", account_id="0042")], reference=ref).held
+    said = run_check(EXACT, _World([]), [_call("open", account_id="42")], reference=ref)
+    assert not said.held and said.said == "done wrong: account_id expected '0042'"
+
+
+def test_case_table_a_failed_call_is_not_done():
+    ref = [{"tool": "open", "arguments": {"account_id": "0042"}}]
+    said = run_check(EXACT, _World([]), [_call("open", ok=False, account_id="0042")], reference=ref)
+    assert not said.held and said.said.startswith("not done")
+
+
+class _Bookings:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    def state(self) -> dict[str, Any]:
+        return {"bookings": self.rows}
+
+
+def test_case_table_a_correction_counts_by_the_final_value_and_a_leftover_is_a_duplicate():
+    ref = [{"tool": "book", "arguments": {"item": "A"}}, {"tool": "book", "arguments": {"item": "B"}}]
+    corrected = _Bookings([{"item": "A", "status": "cancelled"}, {"item": "B", "status": "live"}])
+    assert run_check(FINAL_NO_DUPLICATE, corrected, [], reference=ref).held
+    left = _Bookings([{"item": "A", "status": "live"}, {"item": "B", "status": "live"}])
+    said = run_check(FINAL_NO_DUPLICATE, left, [], reference=ref)
+    assert not said.held and said.said == "done wrong: 2 live bookings where one is expected"
+
+
+def test_case_table_a_refusal_checks_the_forbidden_change_is_absent():
+    assert run_check(NO_FORBIDDEN_CHANGE, _World([]), [_call("lookup")], reference=[]).held
+    assert not run_check(NO_FORBIDDEN_CHANGE, _World([]), [_call("refund")], reference=[]).held
+
+
+def test_a_check_that_raises_is_an_execution_error_not_an_agent_failure():
+    broken = "def check(world, calls, reference):\n    return reference[5]['tool']\n"
+    said = run_check(broken, _World([]), [], reference=[])
+    assert said.broken and not said.held

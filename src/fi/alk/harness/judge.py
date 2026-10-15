@@ -124,9 +124,9 @@ VERDICT_FIELD = {"type": "string", "enum": list(VERDICTS)}
 
 
 def compared(goal: Any) -> str:
-    """The sub-goal's own statement of what it compares with what, when its author gave one."""
+    """The sub-goal's check contract, when its author stated one."""
     said = str(getattr(goal, "compares", "") or "").strip()
-    return f"What it compares: {said}\n" if said else ""
+    return f"Its check contract:\n{said}\n" if said else ""
 
 
 def judge_model() -> str:
