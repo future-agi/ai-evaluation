@@ -674,3 +674,65 @@ def test_failed_resolution_never_collects_unredacted_service_logs(
         )
     assert commands == ["config"]
     assert list(work.iterdir()) == []
+
+
+@pytest.mark.parametrize('create_host_path', [True, False])
+def test_bind_creation_policy_is_preserved_for_existing_source(tmp_path, create_host_path):
+    (tmp_path / 'config.txt').write_text('public')
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.txt', 'target': '/app/config.txt',
+        'bind': {'create_host_path': create_host_path},
+    }]
+    result = normalize_compose(document, tmp_path, capabilities=capabilities())
+    mount = result['services']['chat']['volumes'][0]
+    assert mount['source'] == str(tmp_path / 'config.txt')
+    assert mount['bind'] == {'create_host_path': create_host_path}
+
+
+def test_bind_no_create_rejects_missing_source_even_if_declared(tmp_path):
+    document = topology()
+    document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.env', 'target': '/app/config.env',
+        'bind': {'create_host_path': False},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='missing'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+def test_bind_create_allows_only_declared_missing_resource(tmp_path):
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.env', 'target': '/app/config.env',
+        'bind': {'create_host_path': True},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='missing'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+    document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
+    mount = normalize_compose(document, tmp_path, capabilities=capabilities())['services']['chat']['volumes'][0]
+    assert mount['read_only'] is True
+    assert mount['source'] == str(tmp_path / 'config.env')
+    assert mount['bind'] == {'create_host_path': True}
+
+
+@pytest.mark.parametrize('options', [None, True, [], {'propagation': 'rshared'}, {'recursive': True}, {'create_host_path': 'true'}, {'create_host_path': 1}])
+def test_bind_options_do_not_enable_unsafe_mount_semantics(tmp_path, options):
+    (tmp_path / 'config.txt').write_text('public')
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.txt', 'target': '/app/config.txt', 'bind': options,
+    }]
+    with pytest.raises(ComposeRuntimeError, match='bind_options'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+@pytest.mark.parametrize('origin', ['/etc/passwd', '../escape', '~/private'])
+def test_bind_create_cannot_escape_source(tmp_path, origin):
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': origin, 'target': '/app/config.txt',
+        'bind': {'create_host_path': True},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='host_bind|outside_source'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())

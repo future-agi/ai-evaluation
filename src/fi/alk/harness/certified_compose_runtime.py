@@ -347,14 +347,31 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                 "source",
                 "target",
                 "read_only",
+                "bind",
             }:
                 raise ComposeRuntimeError("compose_mount_fields_forbidden")
+            if "bind" in mount:
+                options = mount["bind"]
+                if (
+                    mount.get("type") != "bind"
+                    or not isinstance(options, dict)
+                    or set(options) - {"create_host_path"}
+                    or (
+                        "create_host_path" in options
+                        and type(options["create_host_path"]) is not bool
+                    )
+                ):
+                    raise ComposeRuntimeError("compose_bind_options_forbidden")
             target = _mount_destination(mount.get("target", ""))
             if mount.get("type") == "bind":
                 origin = mount.get("source", "")
                 if Path(origin).is_absolute() or origin.startswith("~"):
                     raise ComposeRuntimeError("compose_host_bind_forbidden")
-                path = _within(source, origin, exists=False)
+                path = _within(
+                    source,
+                    origin,
+                    exists=mount.get("bind", {}).get("create_host_path") is False,
+                )
                 resource = path.relative_to(source.resolve()).as_posix()
                 if resource in declared:
                     consumed.add(resource)
