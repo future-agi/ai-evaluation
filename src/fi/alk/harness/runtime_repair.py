@@ -31,6 +31,7 @@ _SAFE_RUNTIME_LAUNCHERS = {
     "uv",
     "poetry",
     "node",
+    "bun",
     "npm",
     "npx",
     "pnpm",
@@ -267,8 +268,28 @@ def validate_runtime_plan_patch(
             )
             if runtime.command[0] not in declared:
                 raise ValueError("runtime_repair_launcher_not_source_evidenced")
-        for token in runtime.command[1:]:
-            if Path(token).suffix.casefold() not in {".py", ".js", ".mjs", ".cjs"}:
+        entry_tokens = runtime.command[1:]
+        if launcher == "bun":
+            directories = []
+            arguments = iter(entry_tokens)
+            entry_tokens = []
+            for token in arguments:
+                if token == "--cwd":
+                    directories.append(next(arguments, ""))
+                elif token.startswith("--cwd="):
+                    directories.append(token.partition("=")[2])
+                else:
+                    entry_tokens.append(token)
+            if len(directories) > 1:
+                raise ValueError("runtime_repair_workdir_ambiguous")
+            if directories:
+                workdir = (workdir / directories[0]).resolve()
+                if not workdir.is_relative_to(root):
+                    raise ValueError("runtime_repair_workdir_escapes_repository")
+                if not directories[0] or not workdir.is_dir():
+                    raise ValueError("runtime_repair_workdir_missing")
+        for token in entry_tokens:
+            if Path(token).suffix.casefold() not in {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx"}:
                 continue
             entrypoint = (workdir / token).resolve()
             try:

@@ -37,6 +37,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -1287,6 +1288,47 @@ def _is_transient_build_network_failure(result: subprocess.CompletedProcess) -> 
     return any(marker in output for marker in _TRANSIENT_BUILD_NETWORK_MARKERS)
 
 
+def _build_step_evidence(
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    step: list[str],
+    process: str,
+    attempt: int,
+    directory: Path,
+    secret_values: dict[str, str] | None,
+    retain_log: Callable[[Path], None] | None,
+) -> str:
+    from fi._diagnostics import sanitize_diagnostic
+
+    def text(value: str | bytes | None) -> str:
+        return (
+            value.decode("utf-8", errors="replace")
+            if isinstance(value, bytes)
+            else value or ""
+        )
+
+    body = "stdout:\n" + text(stdout) + "\nstderr:\n" + text(stderr)
+    body = sanitize_diagnostic(body, secret_values or {}, limit=len(body))[-7600:]
+    header = sanitize_diagnostic(
+        f"Build process {process}, attempt {attempt + 1}, command {step!r}\n",
+        secret_values or {},
+        limit=512,
+    )
+    evidence = header + body
+    if retain_log is not None:
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w+", dir=directory, prefix="build-", suffix=".log"
+            ) as stream:
+                stream.write(evidence)
+                stream.flush()
+                retain_log(Path(stream.name))
+        except (OSError, ValueError, RecursionError):
+            logger.warning("build diagnostic retention failed")
+    return evidence
+
+
 def build_process_tree(
     process: SourceProcess,
     *,
@@ -1300,6 +1342,8 @@ def build_process_tree(
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
     build_step_network_retries: int = _DEFAULT_BUILD_STEP_NETWORK_RETRIES,
     sleep: Callable[[float], None] = time.sleep,
+    secret_values: dict[str, str] | None = None,
+    retain_process_log: Callable[[Path], None] | None = None,
 ) -> Path:
     """§2b: copy `source_root/<working_directory>` to `build_root/<name>/`, chowned to the
     process's `user` (F1), then argv-exec each `build_commands` step there under that same user —
@@ -1420,6 +1464,11 @@ def build_process_tree(
                     group=spawn_gid,
                 )
             except subprocess.TimeoutExpired as exc:
+                evidence = _build_step_evidence(
+                    exc.stdout, exc.stderr, step=step, process=process.name,
+                    attempt=network_attempt, directory=build_root.parent,
+                    secret_values=secret_values, retain_log=retain_process_log,
+                )
                 # F15, p5-round1-review: an install step wedged on a private registry with no DNS
                 # answer used to block the provisioner forever — the only backstop was the gateway's
                 # whole-job TTL, which arrives as SIGTERM to the entrypoint while this call is still
@@ -1427,7 +1476,7 @@ def build_process_tree(
                 raise ProcessRuntimeError(
                     "build",
                     "build_failed",
-                    f"{step!r} exceeded the {build_step_timeout_seconds}s build-step timeout",
+                    f"build step exceeded the {build_step_timeout_seconds}s timeout: {evidence[-2000:]}",
                     process=process.name,
                     domain=FailureDomain.AGENT,
                 ) from exc
@@ -1460,6 +1509,11 @@ def build_process_tree(
                     process=process.name,
                     domain=FailureDomain.AGENT,
                 ) from exc
+            evidence = _build_step_evidence(
+                result.stdout, result.stderr, step=step, process=process.name,
+                attempt=network_attempt, directory=build_root.parent,
+                secret_values=secret_values, retain_log=retain_process_log,
+            )
             if result.returncode == 0:
                 break
             if network_attempt < max(
@@ -1480,12 +1534,10 @@ def build_process_tree(
             break
         assert result is not None
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()[:2000]
             raise ProcessRuntimeError(
                 "build",
                 "build_failed",
-                f"{step!r} exited {result.returncode}"
-                + (f": {stderr}" if stderr else ""),
+                f"build step exited {result.returncode}: {evidence[-2000:]}",
                 process=process.name,
                 domain=FailureDomain.AGENT,
             )
@@ -4046,6 +4098,8 @@ def build_process_trees(
             require_declared_user=context.require_declared_user,
             chown=context.chown,
             build_step_timeout_seconds=context.build_step_timeout_seconds,
+            secret_values=context.secret_values,
+            retain_process_log=context.retain_process_log,
         )
         for process in manifest.processes
         if isinstance(process, SourceProcess)
