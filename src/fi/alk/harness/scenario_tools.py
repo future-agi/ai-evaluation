@@ -1227,7 +1227,8 @@ def scenario_tools(
         "A call's `ok` only means the tool ran without an error or refusal; what it decided (verified or not, found or not) is in its `result` or the records, so read those. Whether a step was right for "
         "this caller (the right record, the right values) is checked in code against the "
         "scenario's reference solution: write `check(world, calls, reference)`, where `reference` "
-        "is that scenario's solution steps (`tool`, `arguments`), take only what this sub-goal "
+        "is that scenario's solution steps (`tool`, and only the `arguments` the scenario marks "
+        "fixed for its caller, so read them with .get()), take only what this sub-goal "
         "settles and compare it with the call's arguments or result and the record's columns in "
         "world.state(), returning 'not done: ...' or 'done wrong: <field> expected X, got Y'. A "
         "tool can be called more than once and one call can be reported twice with fewer "
@@ -1497,8 +1498,16 @@ def scenario_tools(
                                 "`$call.book_ride.booking_ref` resolves that field from the "
                                 "most recent successful earlier reference call.",
                             },
+                            "fixed": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "The names of the arguments whose values this "
+                                "caller, their record or a rule of the agent fixes. Checks and "
+                                "the judge are shown only these; leave out any value you picked "
+                                "because the step needed one. Empty when none is fixed.",
+                            },
                         },
-                        "required": ["tool", "arguments"],
+                        "required": ["tool", "arguments", "fixed"],
                     },
                 },
                 "sub_goals": {

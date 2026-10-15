@@ -154,3 +154,15 @@ def test_a_reference_check_must_say_where_each_compared_value_comes_from():
     assert any("where each value it compares comes from" in one for one in validate_sub_goal(goal))
     sourced = goal.model_copy(update={"reference": "policy, loss_date: what the caller said"})
     assert not any("where each value it compares comes from" in one for one in validate_sub_goal(sourced))
+
+
+def test_a_check_is_given_only_the_arguments_a_step_marks_fixed():
+    from fi.alk.harness.checks import reference_of
+    from fi.alk.harness.scenario import Step
+
+    marked = Step(tool="hand_over", arguments={"account": "A-1", "queue": "picked"}, fixed=["account"])
+    unmarked = {"tool": "look_up", "arguments": {"account": "A-1"}}
+    assert reference_of([marked, unmarked]) == [
+        {"tool": "hand_over", "arguments": {"account": "A-1"}},
+        {"tool": "look_up", "arguments": {"account": "A-1"}},
+    ]

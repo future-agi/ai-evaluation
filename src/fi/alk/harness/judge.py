@@ -445,12 +445,13 @@ def _customer_side(scenario: Any) -> str:
 
 def _reference_solution(scenario: Any) -> str:
     """One correct way through the call, so the values the agent used can be told right or wrong."""
-    steps = []
-    for step in getattr(scenario, "solution", None) or ():
-        tool = step.get("tool") if isinstance(step, dict) else getattr(step, "tool", "")
-        arguments = step.get("arguments") if isinstance(step, dict) else getattr(step, "arguments", None)
-        if tool:
-            steps.append(f"- {tool}({json.dumps(arguments or {}, default=str, ensure_ascii=False)})")
+    from .checks import reference_of
+
+    steps = [
+        f"- {step['tool']}({json.dumps(step['arguments'], default=str, ensure_ascii=False)})"
+        for step in reference_of(getattr(scenario, "solution", None) or ())
+        if step["tool"]
+    ]
     if not steps:
         return ""
     return (

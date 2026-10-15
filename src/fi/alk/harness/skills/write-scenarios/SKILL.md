@@ -253,11 +253,16 @@ against it: the arguments, the result, the records left. So write it complete to
 this caller's values as they last corrected them, exactly as the agent's tools take them. A wrong
 value in the solution fails a correct agent, and so does a step in it the agent's rules do not call
 for in this situation: a check that finds the step in the solution expects the agent to take it. When
-a rule says to act at once, nothing comes before that action in the solution. Leave out an optional
-argument that nothing fixes (a destination or category the agent picks, a note): the tool's default
-applies, and no check can mistake a value you made up for the right one. A required argument the
-agent's instructions leave to it still needs a value; write a plain one, never one invented to look
-specific, which the judge reading your solution would take for the right answer.
+a rule says to act at once, nothing comes before that action in the solution.
+
+**Mark on every step which arguments are `fixed`.** An argument is fixed when its value comes from
+this caller (what they say or correct), their record in the world, or a rule of the agent that names
+the value for this situation. Only fixed arguments are shown to the checks and the judge. Everything
+else (a destination or category the agent picks, a free-text reason or note, a default) still gets a
+value so the step can run, but is not marked, so no check can take a value you made up for the right
+one. Leave out an optional argument nothing fixes; the tool's default applies. If a proof reports that
+a check could not find an argument in the reference, ask whether this caller really fixes it: mark it
+if so, and otherwise the check is wrong.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model

@@ -45,6 +45,19 @@ class Outcome:
         return f"  [{mark}] {self.name}" + (f" — {self.said}" if self.said else "")
 
 
+def reference_of(solution: Sequence[Any]) -> list[dict[str, Any]]:
+    """The reference a check is given: each step's tool and only the arguments it marks fixed."""
+    steps = []
+    for step in solution or ():
+        step = step if isinstance(step, dict) else step.model_dump()
+        arguments = dict(step.get("arguments") or {})
+        fixed = step.get("fixed")
+        if isinstance(fixed, list):
+            arguments = {name: value for name, value in arguments.items() if name in fixed}
+        steps.append({"tool": step.get("tool"), "arguments": arguments})
+    return steps
+
+
 def takes_reference(checker: object) -> bool:
     """Whether a check is written `check(world, calls, reference)`."""
     source = getattr(checker, "_alk_source", None)

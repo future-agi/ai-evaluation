@@ -526,9 +526,10 @@ the next.
 
 **Whether it was right for this caller is checked against the scenario's reference solution.** Write
 the check `check(world, calls, reference)` and each scenario hands it its own reference solution: a
-list of steps, each a `tool` and its `arguments`, holding this caller's values as last corrected and a
-value for every other argument too. Take from it only the fields this sub-goal settles and something
-fixes (below), and compare them with the agent's calls (their
+list of steps, each a `tool` and the `arguments` something fixes for this caller (what they said,
+their record, a rule that names the value), as last corrected. Arguments nothing fixes are left out,
+so read every one with `.get()` and compare only what is there. Take from it only the fields this
+sub-goal settles, and compare them with the agent's calls (their
 arguments and result) or the records in `world.state()`. Say which it was: *not done* when no
 successful call or record is there, *done wrong* naming what was expected and what was found.
 
@@ -555,13 +556,13 @@ How each kind of value is compared:
 | A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |
 | A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
 | A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
-| A value the agent picks that nothing fixes (where a handoff goes, a category or label it writes as free text, a note, a reason) | Not compared in code, exactly, by substring or by searching it for words, even when the reference holds one; the check asserts the step happened, for this caller, and a judged part decides whether the choice suited the situation |
+| A value the agent picks that nothing fixes (where a handoff goes, a category or label it writes as free text, a note, a reason) | Absent from the reference, and never compared in code, exactly, by substring or by searching it for words; the check asserts the step happened, for this caller, and a judged part decides whether the choice suited the situation |
 
-**A value in the reference is expected only where something fixes it.** You write the check before
-any scenario exists, and each scenario's writer later fills in every argument of every step, because
-a step cannot be left half written. So a reference holds two kinds of value: ones fixed for this
-caller, and ones the writer had to pick because the agent's instructions leave them open. Compare
-only the first kind. For each field, say where its right value comes from: what the caller said,
+**A value is expected only where something fixes it.** You write the check before any scenario
+exists. Each scenario's writer later marks which arguments of each step are fixed for that caller,
+and only those reach the check; a value the writer picked because the step needed one never does. So
+never require an argument to be in the reference: a scenario where nothing fixes it leaves it out.
+For each field you compare, say where its right value comes from: what the caller said,
 their record in the world, or a rule in the agent's instructions that names the value for this
 situation. When you can point to none (a category or destination the agent picks, a free-text
 reason or note, a default its instructions never mention), the value is the agent's choice: leave it
@@ -592,8 +593,8 @@ def check(world, calls, reference):
     made = [call for call in calls if call.name == "set_detail" and call.ok]
     wanted = {}
     for step in reference:
-        if step["tool"] == "set_detail":
-            wanted[step["arguments"]["field"]] = step["arguments"]["value"]  # the later one counts
+        if step["tool"] == "set_detail" and "value" in step["arguments"]:
+            wanted[step["arguments"].get("field")] = step["arguments"]["value"]  # the later one counts
     for field, value in wanted.items():
         if not made:
             return "not done: no detail was set"

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalogue import Catalogue
-from .checks import Outcome, run_check
+from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
@@ -296,8 +296,8 @@ def _run(
 
 
 def _steps(scenario: Scenario) -> list[dict[str, Any]]:
-    """The reference solution as a check is given it: each step's tool and arguments."""
-    return [step.model_dump() for step in getattr(scenario, "solution", None) or ()]
+    """The reference solution as a check is given it."""
+    return reference_of(getattr(scenario, "solution", None) or ())
 
 
 def prove(

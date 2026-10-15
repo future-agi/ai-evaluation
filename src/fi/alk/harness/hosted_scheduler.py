@@ -45,7 +45,7 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
-from .checks import takes_reference
+from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import judge_sub_goal as _judge
 from .outbound import (
@@ -2186,7 +2186,7 @@ class HostedScheduler:
                 goal.check,
                 check_handle,
                 calls,
-                *((list(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
+                *((reference_of(getattr(scenario, "solution", None) or ()),) if takes_reference(goal.check) else ()),
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
                 executor=self._executor,
