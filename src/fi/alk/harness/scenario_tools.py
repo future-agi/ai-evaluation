@@ -1232,7 +1232,10 @@ def scenario_tools(
         "scenario's reference solution: write `check(world, calls, reference)`, where `reference` "
         "is that scenario's solution steps (`tool`, `arguments`), take only what this sub-goal "
         "settles and compare it with the call's arguments or result and the record's columns in "
-        "world.state(), returning 'not done: ...' or 'done wrong: <field> expected X, got Y'. "
+        "world.state(), returning 'not done: ...' or 'done wrong: <field> expected X, got Y'. A "
+        "tool can be called more than once and one call can be reported twice with fewer "
+        "arguments, so match each reference step to any successful call carrying its fields, "
+        "never to the last call; when the reference sets a thing twice the later value counts. "
         "Use `judged` for what was said and what nothing observable settles; it holds the "
         "criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES

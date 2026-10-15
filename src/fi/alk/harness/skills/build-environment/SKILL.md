@@ -526,26 +526,35 @@ the next.
 **Whether it was right for this caller is checked against the scenario's reference solution.** Write
 the check `check(world, calls, reference)` and each scenario hands it its own reference solution: a
 list of steps, each a `tool` and its `arguments`, holding this caller's values as last corrected. Take
-from it only what this sub-goal settles, and compare: the arguments of the call that made the outcome,
-its result, the columns of the record it left in `world.state()`. Say which it was: *not done* when
-the call or record is missing, *done wrong* naming the field, the value expected and the value found.
-Compare what has one right form (an identifier, a number, an amount, a date, a choice from a fixed
-set) after evening out case, spacing and punctuation; leave wording to a judged sub-goal.
+from it only the fields this sub-goal settles, and compare them with the agent's calls (their
+arguments and result) or the records in `world.state()`. Say which it was: *not done* when no
+successful call or record is there, *done wrong* naming what was expected and what was found.
+
+Three things decide whether such a check is right. A tool can be called more than once (a lookup
+repeated, a pickup and a drop-off through the same tool) and one call can be reported twice, once with
+fewer arguments, so match each reference step to any successful call that carries its fields, never
+to the last call. When the reference sets the same thing twice, the later value is the one that
+counts. Compare values with one right form (an identifier, a number, an amount, a date, a choice from
+a fixed set) after evening out case and spacing, and leave wording to a judged sub-goal.
 
 ```python
 def check(world, calls, reference):
-    wanted = next((step["arguments"] for step in reference if step["tool"] == "book_ride"), None)
-    if wanted is None:
-        return None
-    made = [call for call in calls if call.name == "book_ride" and call.ok]
-    if not made:
-        return "not done: no ride was booked"
-    rows = [row for row in world.state()["bookings"] if row["id"] == made[-1].result.get("booking_id")]
-    if not rows:
-        return "not done: the booking left no record"
-    for field in ("pickup_place_id", "dropoff_place_id"):
-        if field in wanted and str(rows[0].get(field)) != str(wanted[field]):
-            return f"done wrong: {field} expected {wanted[field]!r}, got {rows[0].get(field)!r}"
+    def same(a, b):
+        return str(a).strip().lower() == str(b).strip().lower()
+
+    made = [call for call in calls if call.name == "confirm_address" and call.ok]
+    wanted = {}
+    for step in reference:
+        if step["tool"] == "confirm_address":
+            args = step["arguments"]
+            wanted[args.get("address_kind")] = args  # the later value for each kind counts
+    for kind, args in wanted.items():
+        if not made:
+            return "not done: no address was confirmed"
+        if not any(same(c.arguments.get("place_id"), args.get("place_id"))
+                   for c in made if c.arguments.get("address_kind") == kind):
+            got = [c.arguments.get("place_id") for c in made if c.arguments.get("address_kind") == kind]
+            return f"done wrong: {kind} place expected {args.get('place_id')!r}, got {got!r}"
     return None
 ```
 
