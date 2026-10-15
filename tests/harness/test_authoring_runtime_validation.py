@@ -743,7 +743,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
             )
             assert actual_provider._run_admission(1, kwargs["work_directory"]) == 1
             calls.append("provision")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *args, **kwargs):
             calls.append("reset")
@@ -872,7 +872,7 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
 
         async def provision(self, *_args, **_kwargs):
             calls.append("provision")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *_args, **_kwargs):
             calls.append("reset")
@@ -1004,7 +1004,7 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
 
         async def provision(self, *_args, **_kwargs):
             calls.append("provision")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *_args, **_kwargs):
             calls.append("reset")
@@ -1116,7 +1116,7 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
             assert kwargs["provider_expires_at"] is None
 
         async def provision(self, *_args, **_kwargs):
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *_args, **_kwargs):
             return None

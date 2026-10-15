@@ -849,6 +849,12 @@ async def validate_once(
                         raise
                     await check_setup_once(scenario, invariants, against, False)
 
+            from .local_certified_runtime import LocalCertifiedSink
+
+            phase_sink = LocalCertifiedSink(
+                authoring / "generic-harness" / "phase-observations"
+            )
+
             async def check_setup_once(scenario, invariants, against, keep_processes):
                 nonlocal baseline_state_digest
                 if isinstance(against, str):
@@ -873,7 +879,9 @@ async def validate_once(
                     ("ready", scenario.ready, world.read_only(), 15.0),
                 ):
                     result = await _run_phase(
-                        fn, target, timeout=timeout, phase=name, executor=executor
+                        fn, target, timeout=timeout, phase=name, executor=executor,
+                        audit_log=phase_sink.log,
+                        audit_context={"scenario_key": scenario.scenario_key, "world_index": against.world_index, "stage": "validation"},
                     )
                     if result.failure:
                         raise RuntimeValidationError(

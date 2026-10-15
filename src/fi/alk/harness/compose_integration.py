@@ -314,6 +314,11 @@ async def validate_native(
             instances=job.runtime.parallelism,
         )
         factory = ObservationWorldFactory(bundle)
+        from .local_certified_runtime import LocalCertifiedSink
+
+        phase_sink = LocalCertifiedSink(
+            authoring / "generic-harness" / "phase-observations"
+        )
         baseline_evidence = []
         for scenario in scenarios:
             runtime = runtimes[0]
@@ -326,6 +331,8 @@ async def validate_native(
                     timeout=30,
                     phase=name,
                     executor=executor,
+                    audit_log=phase_sink.log,
+                    audit_context={"scenario_key": scenario.scenario_key, "world_index": runtime.world_index, "stage": "validation"},
                 )
                 if result.failure:
                     raise RuntimeValidationError(
@@ -348,6 +355,8 @@ async def validate_native(
                     timeout=30,
                     phase="check",
                     executor=executor,
+                    audit_log=phase_sink.log,
+                    audit_context={"scenario_key": scenario.scenario_key, "world_index": runtime.world_index, "stage": "validation", "check": goal.name},
                 )
                 if result.failure:
                     raise RuntimeValidationError(
