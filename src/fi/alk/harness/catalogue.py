@@ -294,6 +294,14 @@ SUB_GOAL_RULES = (
 )
 
 
+def _takes_reference(check: str) -> bool:
+    from types import SimpleNamespace
+
+    from .checks import takes_reference
+
+    return takes_reference(SimpleNamespace(_alk_source=check, _alk_entry="check"))
+
+
 def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
     """Problems that make a sub-goal unusable.
 
@@ -319,6 +327,13 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         problems.append(f"{sub_goal.name}: verifier code needs a check")
     elif verifier == "llm" and not sub_goal.judged.strip():
         problems.append(f"{sub_goal.name}: verifier llm needs judged criteria")
+    if sub_goal.check.strip() and not sub_goal.reference.strip() and _takes_reference(sub_goal.check):
+        problems.append(
+            f"{sub_goal.name}: its check compares against the reference, so `reference` has to say "
+            "where each value it compares comes from: what the caller said, their record, or the "
+            "rule in the agent's instructions that names it. A value with none of these is the "
+            "agent's own choice; take it out of the check"
+        )
     if sub_goal.output != "pass_fail":
         problems.append(f"{sub_goal.name}: output {sub_goal.output!r}; only pass_fail is judged today")
     if sub_goal.check.strip() and "def check(" not in sub_goal.check:

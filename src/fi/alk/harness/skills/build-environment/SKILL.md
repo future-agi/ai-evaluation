@@ -553,6 +553,7 @@ How each kind of value is compared:
 | A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |
 | A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
 | A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
+| A value the agent picks that nothing fixes (where a handoff goes, a category or label it assigns, a note it writes) | Not compared, even though the reference holds one; the check asserts the step happened, for this caller, and a judged sub-goal decides whether the choice suited the situation |
 
 **A value in the reference is expected only where something fixes it.** You write the check before
 any scenario exists, and each scenario's writer later fills in every argument of every step, because
@@ -565,6 +566,10 @@ reason or note, a default its instructions never mention), the value is the agen
 out of the check, and when the choice matters, let a judged sub-goal decide whether it suited the
 situation. Read the agent's prompt and its tool definitions to tell which is which; never decide it
 from the field's name.
+
+Fill the check's `reference` with that answer for every field it compares, such as "account_id: the
+caller's record; amount: the balance on that record". A field you cannot fill in that way is the
+agent's choice. A check written to take `reference` is refused until it says this.
 
 **Check the outcome, not the route.** The reference is one correct way through the call. The agent's
 tools may reach the same outcome another way: a different tool for the same step, or a tool that does

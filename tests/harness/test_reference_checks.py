@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fi.alk.harness.checks import run_check, takes_reference
@@ -146,3 +145,12 @@ def test_a_check_compiled_to_run_in_the_hosted_worker_is_still_given_the_referen
     assert not takes_reference(two)
     world, calls = _filed(policy="MM-7", loss_date="2026-10-12")
     assert deferred(world, calls, REFERENCE) == "done wrong: loss_date expected '2026-10-11', got '2026-10-12'"
+
+
+def test_a_reference_check_must_say_where_each_compared_value_comes_from():
+    from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
+
+    goal = SubGoal(name="claim_filed", what="the claim is filed for the caller's policy", check=CHECK)
+    assert any("where each value it compares comes from" in one for one in validate_sub_goal(goal))
+    sourced = goal.model_copy(update={"reference": "policy, loss_date: what the caller said"})
+    assert not any("where each value it compares comes from" in one for one in validate_sub_goal(sourced))
