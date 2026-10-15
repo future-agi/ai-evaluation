@@ -3,7 +3,13 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from pathlib import Path
+import hashlib
+import mmap
+import os
+from pathlib import Path, PurePosixPath
+from typing import Literal, Sequence
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
@@ -64,3 +70,67 @@ def is_public_pem(path: Path) -> bool:
     except (ValueError, UnsupportedAlgorithm, binascii.Error):
         return False
     return True
+
+
+class PublicMaterialAdmission(BaseModel):
+    """Operator review of one token-shaped public value in one immutable source file."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    path: str = Field(min_length=1, max_length=4096)
+    file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pattern: Literal["github_token", "aws_access_key", "sk_token"]
+    match_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _safe_path(self):
+        path = PurePosixPath(self.path)
+        if (
+            path.is_absolute()
+            or not path.parts
+            or any(ord(char) < 32 for char in self.path)
+            or path.as_posix() != self.path
+            or ".." in path.parts
+            or "\\" in self.path
+            or ":" in self.path
+        ):
+            raise ValueError("public_material_admission_path_unsafe")
+        for value in (self.reason, self.evidence):
+            if any(
+                pattern.search(value.encode()) for pattern in SECRET_CONTENT_PATTERNS
+            ):
+                raise ValueError("public_material_admission_raw_match_forbidden")
+        return self
+
+
+_PATTERN_NAMES = ("private_key", "github_token", "aws_access_key", "sk_token")
+
+
+def inspect_public_file(
+    path: Path, admissions: Sequence[PublicMaterialAdmission] = ()
+) -> tuple[str, int]:
+    """Scan complete files so tokens crossing read boundaries cannot escape review."""
+    with path.open("rb") as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if size:
+            with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                digest = hashlib.sha256(data).hexdigest()
+                allowed = {(item.pattern, item.match_sha256) for item in admissions}
+                if any(item.file_sha256 != digest for item in admissions):
+                    raise ValueError("public_material_admission_file_changed")
+                observed = set()
+                for name, pattern in zip(_PATTERN_NAMES, SECRET_CONTENT_PATTERNS):
+                    for match in pattern.finditer(data):
+                        finding = (name, hashlib.sha256(match[0]).hexdigest())
+                        if finding not in allowed or name == "private_key":
+                            raise ValueError("public_material_unreviewed_match")
+                        observed.add(finding)
+                if observed != allowed:
+                    raise ValueError("public_material_admission_match_missing")
+        else:
+            digest = hashlib.sha256(b"").hexdigest()
+            if admissions:
+                raise ValueError("public_material_admission_match_missing")
+    return digest, size

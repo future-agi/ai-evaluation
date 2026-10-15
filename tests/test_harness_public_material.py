@@ -169,3 +169,14 @@ def test_generated_copy_keeps_credential_name_policy_for_public_symlink(
     _copy_sanitized_context(source, copied)
     assert (copied / "public.pem").read_bytes() == pem_material["public"]
     assert not (copied / name).exists()
+
+
+@pytest.mark.parametrize('boundary', BOUNDARIES)
+def test_token_crossing_chunk_boundary_is_rejected(tmp_path, boundary):
+    from fi.alk.harness.generated_runtime import GeneratedRuntimeError
+    source = tmp_path / 'source'
+    source.mkdir()
+    path = source / 'sample.txt'
+    path.write_bytes(b' ' * (1024 * 1024 - 12) + b'sk-unreviewedPublicLookingValue123456789')
+    with pytest.raises((BundleError, ArtifactIntegrityError, PreflightError, GeneratedRuntimeError)):
+        assert_boundary(source, path, boundary, allowed=True)

@@ -522,3 +522,27 @@ def test_unknown_target_config_alias_rejected(broker):
     with pytest.raises(module.BrokerError, match="unknown_target_alias"):
         dispatch(broker, request(broker.source, doc))
     assert not FakeProvider.instances
+
+
+def test_generated_manifest_cannot_grant_public_material_admission(broker):
+    from fi.alk.harness.public_material import PublicMaterialAdmission
+    token = b'sk-publicDemonstrationValueNotCredential'
+    path = broker.source / 'example.txt'
+    path.write_bytes(token)
+    broker.source_digest = source_fingerprint(broker.source)
+    admission = PublicMaterialAdmission(
+        source_digest=broker.source_digest, path='example.txt',
+        file_sha256=hashlib.sha256(token).hexdigest(), pattern='sk_token',
+        match_sha256=hashlib.sha256(token).hexdigest(),
+        reason='Reviewed public example', evidence='https://example.org/source/revision',
+    )
+    payload = request(broker.source)
+    manifest = EnvironmentBundleV2.model_validate(payload['manifest'])
+    manifest.provenance.public_material_admissions = [admission]
+    manifest.digest = seal_bundle_v2(manifest)
+    payload['manifest'] = manifest.model_dump(mode='json')
+    with pytest.raises(module.BrokerError, match='admission_mismatch'):
+        dispatch(broker, payload)
+    assert not FakeProvider.instances
+    broker.config.public_material_admissions = [admission]
+    assert dispatch(broker, payload)['session']

@@ -41,6 +41,7 @@ from pydantic import (
     model_validator,
 )
 
+from .public_material import PublicMaterialAdmission
 from .bundle import CapabilityProtocol, _reject_secret_values, _safe_relative
 
 BUNDLE_V2_SCHEMA_VERSION = "futureagi.environment-bundle.v2"
@@ -393,6 +394,9 @@ class BundleFileV2(BaseModel):
 class BundleProvenanceV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    public_material_admissions: list[PublicMaterialAdmission] = Field(
+        default_factory=list, max_length=128
+    )
     source_kind: str
     repository: str | None = None
     commit: str | None = None
@@ -404,6 +408,11 @@ class BundleProvenanceV2(BaseModel):
 
     @model_validator(mode="after")
     def _valid_source_digest(self) -> "BundleProvenanceV2":
+        if any(
+            item.source_digest != self.source_digest
+            for item in self.public_material_admissions
+        ):
+            raise ValueError("public_material_admission_source_changed")
         # Bare 64-hex, matching what `source_fingerprint` (v1's producer) actually emits — no
         # `sha256:` prefix, unlike `digest`/`inputs_digest`.
         if not re.fullmatch(r"[0-9a-f]{64}", self.source_digest):
@@ -447,6 +456,11 @@ class EnvironmentBundleV2(BaseModel):
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.digest):
             raise ValueError("bundle_digest_invalid")
 
+        if (
+            self.provenance.public_material_admissions
+            and self.runtime.kind is not RuntimeKindV2.COMPOSE
+        ):
+            raise ValueError("public_material_admission_requires_native_compose")
         if self.runtime.kind is RuntimeKindV2.PROCESS and not self.processes:
             raise ValueError("processes_required: kind=process")
         if self.runtime.kind is RuntimeKindV2.EXTERNAL and (

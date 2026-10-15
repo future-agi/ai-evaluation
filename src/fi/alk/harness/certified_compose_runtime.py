@@ -661,6 +661,12 @@ class CertifiedComposeRuntimeProvider:
         )
 
     def _provision(self, bundle, source, bundle_dir, work_directory, instances):
+        from .compose_integration import validate_source
+
+        validate_source(
+            source, bundle.provenance.public_material_admissions,
+            source_digest=bundle.provenance.source_digest,
+        )
         self._check_socket()
         if bundle.runtime.kind is not RuntimeKindV2.COMPOSE:
             raise ComposeRuntimeError("compose_bundle_required")

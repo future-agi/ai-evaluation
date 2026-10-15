@@ -157,6 +157,8 @@ def _reuse_certified_bundle(
     )
 
     manifest = load_bundle_v2(frozen)
+    if manifest.provenance.public_material_admissions != job.public_material_admissions:
+        raise BundleAuthorError("public_material_admission_policy_changed")
     source_digest = source_fingerprint(source)
     certificate = verify_runtime_certification(
         certificate_path,
@@ -3004,6 +3006,8 @@ def author_bundle_v2(
                                   output=output_root, contract=contract_body)
         if composed is not None:
             return composed
+    if job.public_material_admissions:
+        raise BundleAuthorError("public_material_admission_requires_native_compose")
     plan = resolve_environment_plan(
         source_root,
         job,
