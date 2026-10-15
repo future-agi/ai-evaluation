@@ -137,6 +137,26 @@ READY = """def ready(world):
 """
 
 
+def test_phase_output_cannot_publish_login_credentials(application, phase, capfd, caplog):
+    address, secrets, _ = application
+    world = ObservationWorld(0, random.Random(1), {"app": address})
+    caplog.set_level(logging.INFO, logger="fi.alk.harness.hosted_scheduler")
+    source = SETUP + """    import os, subprocess, sys
+    print(response, flush=True)
+    print(response, file=sys.stderr, flush=True)
+    os.write(1, response['json']['token'].encode())
+    os.write(2, response['json']['token'].encode())
+    subprocess.run([sys.executable, '-c', 'import sys; print(sys.argv[1])', response['json']['token']], check=True)
+"""
+    assert phase(source, world) is None
+    assert phase(READY, world.read_only(), "ready") is None
+    captured = capfd.readouterr()
+    public = captured.out + captured.err + caplog.text
+    assert all(secret not in public for secret in secrets.values())
+    assert '"status": 200' in caplog.text
+    assert "route_hash" in caplog.text
+
+
 def test_real_setup_ready_check_workers_keep_private_auth(application, phase, caplog):
     address, secrets, requests = application
     world = ObservationWorld(0, random.Random(1), {"app": address, "other": address})

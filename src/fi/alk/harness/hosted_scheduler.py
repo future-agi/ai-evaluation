@@ -697,6 +697,8 @@ async def _invoke(
                 payload,
                 environ=_allowlisted_ambient_env(dict(os.environ)),
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
+                # Authored phases can print private login responses before redaction.
+                suppress_output=True,
             )
             world.rng.setstate(tuples(result["rng"]))
             if isinstance(world, ObservationWorld):
