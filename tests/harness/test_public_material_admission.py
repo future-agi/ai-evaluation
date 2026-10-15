@@ -219,3 +219,28 @@ def test_compile_seal_load_and_provision_preserve_review(tmp_path, monkeypatch):
         update={"reason": "changed review"}
     )
     assert seal_bundle_v2(loaded) != manifest.digest
+
+
+def test_reset_rejects_changed_reviewed_source_before_copy(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from fi.alk.harness.certified_compose_runtime import CertifiedComposeRuntimeProvider
+
+    source = tmp_path / 'submitted'
+    source.mkdir()
+    (source / 'public.txt').write_bytes(TOKEN)
+    admission = approval(source, 'public.txt')
+    manifest = SimpleNamespace(provenance=BundleProvenanceV2(
+        source_kind='local', source_digest=admission.source_digest,
+        public_material_admissions=[admission],
+    ))
+    world_dir = tmp_path / 'world'
+    (world_dir / 'source').mkdir(parents=True)
+    runtime = SimpleNamespace(world_index=0)
+    provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / 'socket')
+    provider._source = source
+    provider._worlds[0] = runtime, world_dir, manifest
+    monkeypatch.setattr(provider, '_stop', lambda *args: None)
+    (source / 'public.txt').write_bytes(TOKEN + b' changed')
+    with pytest.raises(ValueError, match='source_changed'):
+        asyncio.run(provider.reset(runtime, work_directory=tmp_path))
+    assert not (world_dir / 'source').exists()

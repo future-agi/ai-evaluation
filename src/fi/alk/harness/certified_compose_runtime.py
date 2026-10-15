@@ -729,6 +729,13 @@ class CertifiedComposeRuntimeProvider:
         return [entry[0] for entry in self._worlds.values()]
 
     def _start(self, runtime, directory, bundle):
+        if bundle.provenance.public_material_admissions:
+            from .compose_integration import validate_source
+
+            validate_source(
+                self._source, bundle.provenance.public_material_admissions,
+                source_digest=bundle.provenance.source_digest,
+            )
         _copy_source(self._source, directory / "source")
         document = normalize_compose(
             self._document, directory / "source", capabilities=bundle.capabilities
