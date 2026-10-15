@@ -257,12 +257,23 @@ this caller's situation.
 Every code sub-goal you name is handed your solution and checks the agent's calls and records
 against it, so it is written for the checks as much as for the proof.
 
-**1. Write the call as this caller's call should go under the agent's rules.** Complete to the
-outcome, with this caller's values as they last corrected them, exactly as the agent's tools take
-them. Only the steps the agent's rules call for in this situation: when a rule says to act at once
-(hand over, stop, refuse), nothing comes before that action, and a step another tool already does
-inside its own work is not one the agent repeats. A wrong value or an extra step in the solution fails
-a correct agent, because a check that finds it there expects the agent to match it.
+**1. Write the call as this caller's call should go under the agent's rules.** First find the rule
+that governs this situation in the agent's instructions, then write only the steps that rule asks for,
+complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
+tools take them.
+
+- When the rule hands the caller over, stops, or refuses (something the agent may not handle, a
+  dispute, an injury, a request outside its scope), the solution is that action with nothing before
+  it the rule does not ask for: no identity check and no lookup. An identity check belongs before
+  disclosing or changing something, never before handing over.
+- A step another tool already does inside its own work is not one the agent repeats.
+- The outcome must be one the call itself can reach. The simulated caller can only talk: it cannot
+  open a link, use an app, read a screen or pay on a page. When the agent's flow needs one of those
+  (a payment link, an emailed code), the outcome is what the agent does around it (sends it, checks
+  it, offers the next step), never a completion only that outside action could bring.
+
+A wrong value or an extra step in the solution fails a correct agent, because a check that finds it
+there expects the agent to match it.
 
 **2. Mark on every step which arguments are `fixed`, and where each comes from.** An argument is fixed
 when its right value comes from one of three places, written against it as its source:
@@ -289,7 +300,9 @@ pass on all of them.
 **4. Name the sub-goals this scenario settles, and try each the first time you name it.** Read each in
 the catalogue (`inspect_world` lists them, and the catalogue file holds their checks): what it
 compares, and when it applies. Name one only when its situation arises here and a correct agent
-passes it whichever way its rules allow. Two is the usual number; one is right when the agent had
+passes it whichever way its rules allow, and whichever turn this caller may take within their
+situation: if the caller could reasonably ask for a person or change their mind, name sub-goals for
+what the agent must do either way, not for an outcome only one of those turns reaches. Two is the usual number; one is right when the agent had
 nothing to find out before acting, as when a rule tells it to act at once. The first time you name a
 sub-goal in your session, and whenever you add or replace one, run it with `try_check`: your solution,
 another way the instructions allow, and your solution with a fixed value wrong. The first two must
