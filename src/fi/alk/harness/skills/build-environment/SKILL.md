@@ -526,8 +526,9 @@ the next.
 
 **Whether it was right for this caller is checked against the scenario's reference solution.** Write
 the check `check(world, calls, reference)` and each scenario hands it its own reference solution: a
-list of steps, each a `tool` and its `arguments`, holding this caller's values as last corrected. Take
-from it only the fields this sub-goal settles, and compare them with the agent's calls (their
+list of steps, each a `tool` and its `arguments`, holding this caller's values as last corrected and a
+value for every other argument too. Take from it only the fields this sub-goal settles and something
+fixes (below), and compare them with the agent's calls (their
 arguments and result) or the records in `world.state()`. Say which it was: *not done* when no
 successful call or record is there, *done wrong* naming what was expected and what was found.
 
@@ -603,7 +604,7 @@ for that step. Demanding the step on its own fails a correct agent whose instruc
 that situation.
 
 Whether a step was right for this caller, the right time, address, item or amount, depends on what
-they asked, which only the scenario knows, and the reference solution holds it. Settle it in code
+they asked, which only the scenario knows, and the reference solution carries it to the check. Settle it in code
 against `reference`, as above, wherever the call or the records carry the value; a judged sub-goal is
 for what they cannot show, what was said or read back. Name a check for what it checks.
 
