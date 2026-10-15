@@ -740,6 +740,10 @@ left the grid undeclared: the writers produced a **`task` axis with 30 levels ac
 scenarios**, one per scenario, plus three axes a single writer had invented. Every pairwise share in
 that report was true arithmetic over noise.
 
+When the person asked for a level of an axis, in the build's instructions or in the conversation (no
+background noise on any call, only first-time callers), pass it in `aim_for`'s `asked_for` so it is not
+held to its usual share. Without such a request the shares stay as they are.
+
 `save_scenarios` still takes a `design` for the pairs that are deliberately not testable, and the
 axes you gave `aim_for` carry over without being typed again.
 

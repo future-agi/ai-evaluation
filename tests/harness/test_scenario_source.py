@@ -2753,3 +2753,19 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     assert writer.index(policy) < writer.index("a scenario coherent in itself")
     assert said.index(policy) < said.index("Before you brief anyone")
 
+
+
+def test_a_level_the_person_asked_for_is_not_held_to_its_share() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"interface": ["noisy_line", "quiet_line", "accented"]}
+    quiet = [Scenario(name=f"q{one}", coverage={"interface": "quiet_line"}) for one in range(5)]
+
+    assert "whole share" in _over_its_share({"interface": "quiet_line"}, grid, quiet, 25)
+    assert _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["quiet_line"]}
+    ) == ""
+    assert "whole share" in _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["accented"]}
+    )

@@ -140,7 +140,9 @@ what the gates check. Then:
 - **Edit one**: read it in full first, change only what was asked, and `submit_scenario` it under the
   same name with every other field kept exactly. That replaces it, keeps its number, and proves it.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
-  brief `scenario_writer` sub-agents in one message.
+  brief `scenario_writer` sub-agents in one message. When the person asks for a level of an axis (no
+  background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to
+  its usual share.
 - **Delete**: resolve numbers, a range or a description to names with `find_scenarios` (filters find
   "everything with accent X"), then `drop_scenarios`.
 - **Duplicate or vary**: read the original, then submit a copy under a new name with only the asked
