@@ -176,7 +176,7 @@ afterwards. It is a whole conversation from first contact to a settled outcome, 
 | `instruction` | What the person is trying to achieve, written to them, plus everything they hold. | yes |
 | `sub_goals` | Names from the shared catalogue that must hold. Nothing else grades this scenario. | yes |
 | `solution` | What a correct agent would do, as steps. Never run against the agent under test. | yes |
-| `fixture` | A readable manifest of the data this scenario relies on. Its `origin` must be `seed`, `generated` or `mixed`. A fixture changes nothing by itself. | yes, when the world has data |
+| `fixture` | A readable manifest of the data this scenario relies on. Its `origin` must be `seed`, `generated` or `mixed`. A fixture changes nothing by itself, with one exception: the number the caller calls from goes under `caller_phone`, and a call places from that key and no other. | yes, when the world has data |
 | `persona` | Who the person is, as structured fields. | yes, when the prompt asks for one |
 | `setup_code` | Python defining `setup(world)`. This is what actually changes the world. | when the instruction presumes anything |
 | `ready_code` | Python defining `ready(world)`. Returns `None` when the world is ready, or a sentence naming what is missing. | recommended |
@@ -284,7 +284,8 @@ there expects the agent to match it.
 when its right value comes from one of three places, written against it as its source:
 `caller: <what they say>`, `record: <where the world holds it>`, or
 `rule: "<the rule's own words>"`, quoted exactly as the agent's instructions write them and
-containing the value. The build refuses a source that does not hold. Only fixed arguments are shown to
+containing the value. A value from a record is written in the form the tool takes it: a prefix or
+format the tool's description names is part of the value. The build refuses a source that does not hold. Only fixed arguments are shown to
 the checks and the judge, so everything else stays out of their reach:
 
 - the agent's own choices: a destination or category it picks, a label or note it writes in its own
