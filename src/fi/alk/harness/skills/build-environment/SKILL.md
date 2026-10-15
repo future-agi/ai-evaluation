@@ -536,9 +536,11 @@ Three things decide whether such a check is right. A tool can be called more tha
 repeated, two records changed through the same tool) and one call can be reported twice, once with
 fewer arguments, so match each reference step to any successful call that carries its fields, never
 to the last call. When the reference sets the same thing twice, the later value is the one that
-counts. Compare values with one right form (an identifier, a number, an amount, a date, an option the
-caller or a rule picked from a fixed set) after evening out case and spacing, and leave wording to a
-judged sub-goal.
+counts. Compare values with one right form (an identifier, a number, an amount, a date, an option from
+a set the tool's definition declares) after evening out case, spacing and separators, and leave
+wording to a judged sub-goal. A free-text argument is the agent's own wording even when it names a
+category, so it is never compared exactly; only a set the tool declares makes a value one of a fixed
+few.
 
 How each kind of value is compared:
 
@@ -553,7 +555,7 @@ How each kind of value is compared:
 | A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |
 | A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
 | A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
-| A value the agent picks that nothing fixes (where a handoff goes, a category or label it assigns, a note it writes) | Not compared, even though the reference holds one; the check asserts the step happened, for this caller, and a judged sub-goal decides whether the choice suited the situation |
+| A value the agent picks that nothing fixes (where a handoff goes, a category or label it writes as free text, a note) | Not compared, even when the reference holds one; the check asserts the step happened, for this caller, and a judged sub-goal decides whether the choice suited the situation |
 
 **A value in the reference is expected only where something fixes it.** You write the check before
 any scenario exists, and each scenario's writer later fills in every argument of every step, because
