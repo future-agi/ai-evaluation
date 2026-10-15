@@ -109,6 +109,12 @@ harness-ui = [
 harness-stores = [
   "psycopg[binary]>=3.2",
 ]
+# Tracing instrumentors the hosted image installs, declared so uv.lock pins them with everything
+# else. traceai-google-adk is not here: it pins google-genai<2 while google-adk needs >=2.12, so
+# the image installs it separately without dependencies.
+hosted-tracing = [
+  "traceai-claude-agent-sdk>=0.1.0",
+]
 feedback = ["chromadb>=0.4.0"]
 notebook = [
   "ipykernel>=6",                        # kernel for examples/agent_learning_sdk_demo.ipynb

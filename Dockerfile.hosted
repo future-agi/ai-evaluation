@@ -91,28 +91,44 @@ RUN groupadd --gid 2000 svc-control \
     && install -d -o root -g root -m 0755 /opt/alk
 
 WORKDIR /opt/alk
-# Daytona's direct-image builder can reuse an image when only build-context
-# files change.  Bump this source revision whenever guest code changes so a
-# hosted test cannot silently execute an older installed ALK.
-ARG ALK_HOSTED_SOURCE_REVISION=20260923-parallel-world-slots-self-repair
-LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
-COPY pyproject.toml README.md ./
-COPY src ./src
-COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
+COPY pyproject.toml README.md uv.lock ./
 
 ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+# Third-party dependencies come from uv.lock, so no build runs a resolver, and this layer depends
+# only on pyproject.toml and uv.lock, so a source-only change reuses it. It must stay above the
+# source-revision ARG: every RUN after an ARG sees it, and the publisher sets it per commit.
 # The ADK instrumentor is installed without its declared dependencies: it still pins
-# google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. Resolving it
-# normally would either fail the build or hold the image back a major version. An absent or
+# google-genai<2 while google-adk 2.7 needs >=2.12, and it works against 2.12. An absent or
 # broken instrumentor is skipped at runtime, so a failure here costs tracing, never a run.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/alk-venv/bin/pip install '.[livekit,harness-ui,harness-stores]' 'traceai-claude-agent-sdk>=0.1.0' \
-    && /opt/alk-venv/bin/pip install --no-deps 'traceai-google-adk>=0.1.5' \
-    && chmod -R a-w /opt/alk /opt/alk-venv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    export UV_LINK_MODE=copy \
+    && uv export --frozen --no-dev --no-emit-project \
+      --extra livekit --extra harness-ui --extra harness-stores --extra hosted-tracing \
+      --output-file /tmp/alk-requirements.txt \
+    && uv pip install --python /opt/alk-venv/bin/python -r /tmp/alk-requirements.txt \
+    && uv pip install --python /opt/alk-venv/bin/python --no-deps 'traceai-google-adk==0.1.5' \
+    && rm /tmp/alk-requirements.txt \
+    && chmod -R a-w /opt/alk-venv
+
+# Daytona's direct-image builder can reuse an image when only build-context
+# files change.  Bump this source revision whenever guest code changes so a
+# hosted test cannot silently execute an older installed ALK.
+ARG ALK_HOSTED_SOURCE_REVISION=20260923-parallel-world-slots-self-repair
+LABEL io.futureagi.alk-source-revision="${ALK_HOSTED_SOURCE_REVISION}"
+COPY src ./src
+COPY hosted-snapshot/catalog.json /opt/alk/hosted-snapshot-catalog.json
+# Only the files this install creates are made read-only: a recursive chmod of the whole venv in
+# this layer would copy every file of the dependency layer into it.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    touch /tmp/alk-install-start \
+    && UV_LINK_MODE=copy uv pip install --python /opt/alk-venv/bin/python --no-deps . \
+    && find /opt/alk-venv -cnewer /tmp/alk-install-start -exec chmod a-w {} + \
+    && chmod -R a-w /opt/alk \
+    && rm /tmp/alk-install-start
 
 ENV PATH="/opt/alk-venv/bin:/usr/lib/postgresql/16/bin:/opt/erlang/bin:/opt/rabbitmq/sbin:/opt/node22/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
