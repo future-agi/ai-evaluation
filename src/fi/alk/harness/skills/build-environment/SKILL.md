@@ -784,7 +784,11 @@ Never work around a contract you believe is wrong. Everything after you inherits
 6. `declare_sequence` for at least one flow where state has to carry across calls. Every sequence
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
-8. `add_sub_goal` for each thing worth checking, with its check in code.
+8. `add_sub_goal` for each thing worth checking, with its check in code. Write nothing on faith:
+   before adding a check, run it with `try_check` against three agents you write yourself, one that
+   does it right the way the reference does, one that does it right another way its instructions
+   allow, and one that gets a fixed value wrong. The first two must hold and the third must fail;
+   if any verdict is wrong, the check is wrong.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

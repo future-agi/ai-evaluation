@@ -41,7 +41,7 @@ from ..catalogue import (
     weak_check_advisory,
     without_delivery_overlay,
 )
-from ..checks import run_check, run_world_check
+from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
     load_simulator_prompt,
@@ -53,7 +53,8 @@ from ..tools import schema
 from .kinds import for_contract
 from .mutate import UNDAMAGED, blind, unnoticed, unnoticed_in_place
 from .probe import dirty_state, probe
-from .runtime import GeneratedWorld
+from ..scenario import Step
+from .runtime import Call, GeneratedWorld
 from .snapshot import MANIFEST, read_manifest, restore, save
 from .stores.written import API as OPS_API
 
@@ -982,6 +983,37 @@ def world_tools(
         return _ok(f"ok: {_brief(call.result)}")
 
     @tool(
+        "try_check",
+        "Run a check against calls you write, before you trust it. Give the check's Python, the "
+        "calls an agent makes (each {name, arguments, result, ok}) and the reference a scenario "
+        "would hand it (steps with `tool`, `arguments` and `fixed`). It runs against those calls "
+        "and the world as it stands, and changes nothing. Try every sub-goal before you add it: "
+        "an agent that does it right another way its instructions allow must pass, and an agent "
+        "that gets a fixed value wrong must fail.",
+        schema({"check": str, "calls": list, "reference": list}, ["check", "calls"]),
+    )
+    async def try_check(args: dict[str, Any]) -> dict[str, Any]:
+        source = str(args.get("check") or "")
+        if "def check(" not in source:
+            return _err("give the check's Python, defining check(world, calls, reference)")
+        try:
+            calls = [
+                Call(
+                    name=str(one.get("name") or ""),
+                    arguments=dict(one.get("arguments") or {}),
+                    result=one.get("result"),
+                    ok=bool(one.get("ok", True)),
+                )
+                for one in args.get("calls") or []
+            ]
+            reference = reference_of([Step.model_validate(one) for one in args.get("reference") or []])
+        except Exception as invalid:
+            return _err(f"invalid call or step: {invalid}"[:600])
+        outcome = run_check(source, world, calls, name="trial", reference=reference)
+        verdict = "broken" if outcome.broken else ("held" if outcome.held else "failed")
+        return _ok(f"{verdict}: {outcome.said or 'nothing wrong'}")
+
+    @tool(
         "declare_sequence",
         "Declare a series of calls whose end state should hold, so consistency across calls is "
         "checked. Each call is {tool, arguments}. expect_state keys are 'table.column' or "
@@ -1680,6 +1712,7 @@ def world_tools(
             seed,
             change_data,
             run_tool,
+            try_check,
             declare_sequence,
             drop_sequence,
             amend_contract,
@@ -1712,6 +1745,7 @@ TOOL_NAMES = (
     "adopt_store",
     "adopt_tool",
     "run_tool",
+    "try_check",
     "declare_sequence",
     "drop_sequence",
     "amend_contract",

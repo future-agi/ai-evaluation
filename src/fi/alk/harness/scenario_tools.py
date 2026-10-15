@@ -51,6 +51,7 @@ from .folder import (
     write_folder,
     write_index,
 )
+from .checks import reference_of, run_check
 from .prove import play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
@@ -1251,6 +1252,44 @@ def scenario_tools(
             world.close()
 
     @tool(
+        "try_check",
+        "Run a check against a situation you write, before you trust it. Give the check (its "
+        "Python, or the name of a sub-goal in the catalogue), the calls an agent makes in that "
+        "situation (played through a throwaway copy of the world, as in try_calls), and the "
+        "reference a scenario would hand it (steps with `tool`, `arguments` and `fixed`). You see "
+        "whether the check held and what it said. Try every sub-goal before you write or name it: "
+        "an agent that does it right another way its instructions allow must pass, and an agent "
+        "that gets a fixed value wrong must fail. Nothing is saved.",
+        schema({"check": str, "calls": list, "reference": list, "setup_code": str}, ["check", "calls"]),
+    )
+    async def try_check(args: dict[str, Any]) -> dict[str, Any]:
+        source = str(args.get("check") or "")
+        named = catalogue.named(source.strip())
+        if named is not None:
+            source = named.check
+        if "def check(" not in source:
+            return _err("give a check's Python, or the name of a sub-goal that has a check")
+        try:
+            reference = [Step.model_validate(step) for step in args.get("reference") or []]
+            steps = [Step.model_validate(step) for step in args.get("calls") or []]
+        except Exception as invalid:
+            return _err(f"invalid step: {invalid}"[:600])
+        world = restore(world_root)
+        try:
+            world.reset()
+            applied = apply_setup(Scenario(name="trial", setup_code=str(args.get("setup_code") or "")), world)
+            if not applied.ok:
+                return _err(f"the setup did not run: {applied.said}")
+            world.calls = []
+            for step in steps:
+                play_reference_step(world, step)
+            outcome = run_check(source, world, list(world.calls), name="trial", reference=reference_of(reference))
+        finally:
+            world.close()
+        verdict = "broken" if outcome.broken else ("held" if outcome.held else "failed")
+        return _ok(f"{verdict}: {outcome.said or 'nothing wrong'}")
+
+    @tool(
         "add_sub_goal",
         "Add a named thing this agent can be checked on, shared by every scenario that needs it. "
         "`check` is Python: define check(world, calls) returning a sentence when something is "
@@ -2189,6 +2228,7 @@ def scenario_tools(
             inspect_world,
             inspect_scenario,
             try_calls,
+            try_check,
             add_sub_goal,
             submit_scenario,
             amend_contract,
@@ -2209,6 +2249,7 @@ _ALWAYS = (
     "inspect_world",
     "inspect_scenario",
     "try_calls",
+    "try_check",
     "add_sub_goal",
     "submit_scenario",
     "amend_contract",

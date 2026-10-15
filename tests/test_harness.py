@@ -8096,3 +8096,23 @@ def test_prove_refuses_a_fixed_value_no_check_notices_when_wrong(tmp_path):
     assert prove(fixed, catalogue, root).unchecked == ["add.item_id"]
     compared = fixed.model_copy(update={"sub_goals": ["listed-first", "added-what-was-asked"]})
     assert prove(compared, catalogue, root).unchecked == []
+
+
+def test_try_check_runs_a_check_against_calls_the_harness_writes(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.world import tools as world_tools
+
+    root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, root)
+    run = next(spec for spec in server.tools if spec.name == "try_check").handler
+    check = (
+        "def check(world, calls, reference):\n"
+        "    wanted = {s['arguments'].get('item_id') for s in reference if s['tool'] == 'add'} - {None}\n"
+        "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+        "    return None if any(c.arguments.get('item_id') in wanted for c in made) else 'done wrong: item_id'\n"
+    )
+    reference = [{"tool": "add", "arguments": {"item_id": "big_mac"}, "fixed": {"item_id": "caller: big_mac"}}]
+    right = asyncio.run(run({"check": check, "calls": [{"name": "add", "arguments": {"item_id": "big_mac"}}], "reference": reference}))
+    wrong = asyncio.run(run({"check": check, "calls": [{"name": "add", "arguments": {"item_id": "fries"}}], "reference": reference}))
+    assert "held" in str(right) and "failed" in str(wrong)

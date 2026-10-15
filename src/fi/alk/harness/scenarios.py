@@ -62,7 +62,7 @@ TURNS_EACH = 9
 TURNS_FLOOR = 120
 # One writer's own ceiling, so a single slice cannot spend the whole stage budget.
 WRITER_TURNS = int(os.environ.get("ALK_HARNESS_WRITER_TURNS", "300") or 300)
-WRITER_TOOLS = ("inspect_world", "try_calls", "add_sub_goal", "submit_scenario")
+WRITER_TOOLS = ("inspect_world", "try_calls", "try_check", "add_sub_goal", "submit_scenario")
 # Withheld from a loop that hands the suite out.
 WRITES_A_SCENARIO = ("try_calls", "submit_scenario")
 # Above this, the loop hands the suite out instead of writing it. Zero: always.

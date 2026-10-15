@@ -255,6 +255,12 @@ value in the solution fails a correct agent, and so does a step in it the agent'
 for in this situation: a check that finds the step in the solution expects the agent to take it. When
 a rule says to act at once, nothing comes before that action in the solution.
 
+**Try every sub-goal before you name it.** `try_check` runs a sub-goal's check against calls you
+write. For each one you name, try your solution, another way this agent's instructions allow, and
+your solution with a fixed value wrong. The first two must hold and the third must fail. A check that
+gets any of them wrong does not belong in this scenario as it stands: replace it with add_sub_goal, or
+name another. A sub-goal you have not tried is a guess.
+
 **Read what each sub-goal you name compares before you write the solution.** `inspect_world` lists
 every sub-goal with what its check compares and where each of those values comes from. Your
 solution is the answer key it reads: write it as this caller's call should go, and mark as `fixed`
