@@ -38,7 +38,10 @@ async def main() -> None:
     try:
         if state.get("kind") == "native_observation":
             from .world.observation import ObservationWorld
-            world = ObservationWorld(state["world_index"], rng, state.get("endpoints", {}))
+            world = ObservationWorld(
+                state["world_index"], rng, state.get("endpoints", {}),
+                observations=state.get("observations", {}),
+            )
             world._restore_private_http_state(payload.get("private_http", {}))
         else:
             world = HostedWorld(

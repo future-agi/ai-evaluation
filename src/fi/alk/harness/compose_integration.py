@@ -289,7 +289,7 @@ async def validate_native(
             work_directory=work,
             instances=job.runtime.parallelism,
         )
-        factory = ObservationWorldFactory()
+        factory = ObservationWorldFactory(bundle)
         baseline_evidence = []
         for scenario in scenarios:
             runtime = runtimes[0]
