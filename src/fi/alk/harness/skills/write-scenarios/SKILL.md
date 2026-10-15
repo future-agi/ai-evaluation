@@ -271,7 +271,9 @@ it so: find that source yourself, in this caller's situation, their record or th
 instructions, and write it against the argument in `fixed`: `caller: <what they say>`,
 `record: <where the world holds it>`, or `rule: "<the rule's own words>"`, quoted exactly as the
 instructions write them and containing the value. If you cannot write where a value comes from, it is
-not fixed.
+not fixed. A label or category the agent writes in its own words is never fixed, even when the caller
+asked for that very thing: the caller fixes what they want, not the words the agent records it under.
+Never mark a value fixed because a check compares it.
 
 **Write the other ways too.** Where the agent's instructions or tools allow another way to the same
 outcome (a rule names one tool and another tool does the same step, or one tool does a step itself),
@@ -321,8 +323,9 @@ nothing can fill.
 settles what the world must still hold; a completed task settles the call and the state it left.
 **Whatever your reference solution does last is the outcome the scenario exists for, and a sub-goal
 has to assert it.** Scenarios whose solution ended on a final lookup named sub-goals only for the
-step before it, so an agent that skipped the lookup passed them all. Name at least two: the call
-passes only when every one holds, so one leaves the rest of it unmeasured. Before naming one, say in
+step before it, so an agent that skipped the lookup passed them all. Two is the working
+number; one is right only when the agent had nothing to find out before acting, as when a rule tells
+it to act at once. Before naming one, say in
 a line what a wrong agent would do in this scenario to fail it; if you cannot, it does not belong,
 and a sub-goal whose situation never comes up here is filler that passes for nothing. When the
 catalogue has no sub-goal for what this caller came for, add one rather than naming a filler.
