@@ -463,8 +463,9 @@ def test_generic_candidate_hash_ignores_repository_metadata_and_own_artifacts(
     assert _generic_candidate_hash(source, authoring) == before
 
 
+@pytest.mark.parametrize("invariants_status", ["passed", "not_applicable"])
 def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, invariants_status
 ) -> None:
     from fi.alk.harness import certification
 
@@ -493,6 +494,9 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     (authoring / "contract.json").write_text("{}", encoding="utf-8")
+    from fi.alk.harness.source_data_invariants import ARTIFACT
+
+    (authoring / ARTIFACT).write_text(json.dumps({"status": invariants_status}))
     report = SimpleNamespace(certified_or_runtime_only=1, total=1)
     action_report = SimpleNamespace(passed=1, certified=1, executable=1, total=1)
     manifest = SimpleNamespace(
@@ -519,6 +523,9 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
     assert evidence.compiler_version == "futureagi.no-state-compiler.v1"
     assert evidence.checks.schema_and_seed is CheckStatus.PASSED
     assert evidence.checks.world_isolation is CheckStatus.NOT_RUN
+    assert evidence.checks.source_invariants.value == invariants_status
+    if invariants_status == "not_applicable":
+        assert any("private application state" in item for item in evidence.limitations)
 
 
 def test_fixed_port_single_world_marks_concurrent_isolation_not_applicable() -> None:
@@ -596,8 +603,9 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
     assert checks.world_isolation is CheckStatus.NOT_APPLICABLE
 
 
+@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
 def test_generic_certificate_combines_runtime_evidence_and_repair_history(
-    tmp_path,
+    tmp_path, source_invariants,
 ) -> None:
     authoring = tmp_path / "authoring"
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
@@ -618,6 +626,7 @@ def test_generic_certificate_combines_runtime_evidence_and_repair_history(
                 static=CheckStatus.PASSED,
                 schema_and_seed=CheckStatus.PASSED,
                 scenario_setup_ready="2/2",
+                source_invariants=source_invariants,
             ),
             limitations=("tool trajectories not run",),
         )
@@ -639,6 +648,7 @@ def test_generic_certificate_combines_runtime_evidence_and_repair_history(
     assert certificate.runtime.snapshot == "snapshot-r1"
     assert certificate.runtime.validation_attempts == 1
     assert certificate.checks.scenario_setup_ready == "2/2"
+    assert certificate.checks.source_invariants is source_invariants
     assert (
         json.loads((authoring / "runtime-validation.json").read_text())["fingerprint"]
         == certificate.fingerprint

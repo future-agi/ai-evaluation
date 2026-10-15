@@ -1662,8 +1662,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
 def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
-    tmp_path: Path,
+    tmp_path: Path, source_invariants,
 ) -> None:
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
@@ -1712,13 +1713,14 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             schema_and_seed=CheckStatus.PASSED,
             processes=CheckStatus.PASSED,
             chat_ingress=CheckStatus.PASSED,
-            source_invariants=CheckStatus.PASSED,
+            source_invariants=source_invariants,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
             action_behavior="0/0",
             reset_equivalence=CheckStatus.PASSED,
             world_isolation=CheckStatus.PASSED,
         ),
+        limitations=("No runtime SQL business tables; private state is not certified",),
         repairs=RepairHistory(
             decisions=(),
             results=(),
@@ -1744,6 +1746,16 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
     assert reused.digest == manifest.digest
     assert (tmp_path / "runtime-validation.json").is_file()
     assert load_bundle_v2(execution).digest == manifest.digest
+
+    changed_world = WorldIR.create(
+        source_model_fingerprint="sha256:" + "f" * 64, tables=()
+    )
+    (artifact_root / "world-ir.json").write_text(changed_world.model_dump_json())
+    with pytest.raises(BundleAuthorError, match="certified_bundle_inputs_changed: world"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-world"
+        )
+    (artifact_root / "world-ir.json").write_text(world.model_dump_json())
 
     # A black-box hosted agent has no harness-owned schema/world. Those fingerprints are
     # intentionally synthetic and must not be compared to model-authored placeholder artifacts
@@ -2706,8 +2718,9 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert readiness.path == "/docs"
 
 
+@pytest.mark.parametrize("declare_mount_root", [False, True])
 def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch, declare_mount_root: bool
 ) -> None:
     fixture = Path(__file__).parents[1] / "fixtures" / "gpt_researcher_compose.yml"
     shutil.copyfile(fixture, tmp_path / "docker-compose.yml")
@@ -2715,6 +2728,26 @@ def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
         "FROM python:3.12\nCMD uvicorn main:app --port 8000\n"
     )
     (tmp_path / "main.py").write_text("print('server')\n")
+    monkeypatch.setenv("PWD", "/ambient-private")
+    if declare_mount_root:
+        (tmp_path / "alk.yaml").write_text(
+            'schema_version: "1"\nruntime:\n  environment:\n    PWD: "."\n'
+        )
+    else:
+        with pytest.raises(
+            BundleAuthorError, match="compose_structural_configuration_missing: PWD"
+        ):
+            resolve_environment_plan(
+                tmp_path,
+                _job(connector="auto"),
+                contract_modality="chat",
+                contract_interface_kind="http",
+                contract_runtime={
+                    "command": ["python", "main.py"],
+                    "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+                },
+            )
+        return
     plan = resolve_environment_plan(
         tmp_path,
         _job(connector="auto"),
@@ -2731,6 +2764,7 @@ def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
         "gpt-researcher",
     ]
     agent = plan.processes[1]
+    assert agent.environment["PWD"] == "."
     assert agent.run_command == ["python", "main.py"]
     assert agent.fixed_port == 8000
     assert plan.capabilities["target_http"].container_port == 8000
