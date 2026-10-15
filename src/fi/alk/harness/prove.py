@@ -320,8 +320,26 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
-def _other_choices(scenario: Scenario, calls: Sequence[Call]) -> tuple[list[Call], set[str]]:
-    """The same calls with every text argument the scenario does not mark fixed set otherwise."""
+def _declared_options(world_root: Path) -> set[str]:
+    """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
+    import json
+
+    try:
+        tools = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8")).get("tools") or []
+    except (OSError, ValueError):
+        return {}
+    return {
+        f"{tool.get('name')}.{name}"
+        for tool in tools
+        for name, values in (tool.get("arg_values") or {}).items()
+        if values
+    }
+
+
+def _other_choices(
+    scenario: Scenario, calls: Sequence[Call], declared: set[str] = frozenset()
+) -> tuple[list[Call], set[str]]:
+    """The same calls with every free text argument the scenario does not mark fixed set otherwise."""
     steps = list(getattr(scenario, "solution", None) or ())
     if any(step.fixed is None for step in steps):
         return list(calls), set()
@@ -337,7 +355,7 @@ def _other_choices(scenario: Scenario, calls: Sequence[Call]) -> tuple[list[Call
         for name, value in call.arguments.items():
             written = step.arguments.get(name)
             chained = isinstance(written, str) and written.startswith("$")
-            if name not in fixed and not chained and isinstance(value, str) and value:
+            if name not in fixed and not chained and isinstance(value, str) and value and f"{call.name}.{name}" not in declared:
                 arguments[name] = f"another {name}"
                 changed.add(f"{call.name}.{name}")
         varied.append(replace(call, arguments=arguments))
@@ -416,7 +434,7 @@ def prove(
             run_check(source, world, calls, name=name, reference=_steps(scenario))
             for name, source in checks
         ]
-        varied, changed = _other_choices(scenario, calls)
+        varied, changed = _other_choices(scenario, calls, _declared_options(world_root))
         if changed:
             proof.too_strict = [
                 f"{name} (the agent chose: {', '.join(sorted(changed))})"

@@ -1272,7 +1272,11 @@ def scenario_tools(
             return _err("give a check's Python, or the name of a sub-goal that has a check")
         try:
             reference = [Step.model_validate(step) for step in args.get("reference") or []]
-            steps = [Step.model_validate(step) for step in args.get("calls") or []]
+            steps = [
+                Step.model_validate({**step, "tool": step.get("tool") or step.get("name")})
+                for step in args.get("calls") or []
+                if isinstance(step, dict)
+            ]
         except Exception as invalid:
             return _err(f"invalid step: {invalid}"[:600])
         world = restore(world_root)

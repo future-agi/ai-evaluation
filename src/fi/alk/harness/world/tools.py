@@ -985,7 +985,7 @@ def world_tools(
     @tool(
         "try_check",
         "Run a check against calls you write, before you trust it. Give the check's Python, the "
-        "calls an agent makes (each {name, arguments, result, ok}) and the reference a scenario "
+        "calls an agent makes (each {tool, arguments, result, ok}) and the reference a scenario "
         "would hand it (steps with `tool`, `arguments` and `fixed`). It runs against those calls "
         "and the world as it stands, and changes nothing. Try every sub-goal before you add it: "
         "an agent that does it right another way its instructions allow must pass, and an agent "
@@ -999,7 +999,7 @@ def world_tools(
         try:
             calls = [
                 Call(
-                    name=str(one.get("name") or ""),
+                    name=str(one.get("name") or one.get("tool") or ""),
                     arguments=dict(one.get("arguments") or {}),
                     result=one.get("result"),
                     ok=bool(one.get("ok", True)),
