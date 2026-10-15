@@ -8009,3 +8009,121 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
     assert not by_name[0] and "nothing is saved yet" in by_name[1]
     assert not everything[0] and "nothing is saved yet" in everything[1]
     assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
+
+
+def test_a_kept_scenario_saves_its_proof_for_the_platform(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    said = accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[])
+    assert not said.get("is_error"), said
+
+    proof = load_proofs(root)["adds-a-big-mac"]
+    assert proof["holds"] is True
+    assert proof["ready"] and proof["solvable"] and proof["not_vacuous"]
+    assert proof["why"] == ""
+    assert proof["proved_at"].endswith("Z")
+
+
+def test_a_refused_scenario_saves_no_proof(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    said = accept_scenario(
+        _delta(
+            solution=[
+                {"tool": "lst", "arguments": {}},
+                {"tool": "add", "arguments": {"item_id": "sushi"}},
+            ]
+        ),
+        world_root=root,
+        catalogue=catalogue,
+        kept=[],
+    )
+    assert said["is_error"]
+    assert load_proofs(root) == {}
+
+
+def test_a_writer_sharing_the_folder_still_saves_its_proof(tmp_path):
+    """Parallel writers never save folders, but the build's final suite still needs proofs."""
+    from fi.alk.harness.proofs import PROOFS, load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    said = accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+    assert not said.get("is_error"), said
+    assert kept and not (root / "scenarios" / "adds-a-big-mac").exists()
+    assert load_proofs(root)["adds-a-big-mac"]["holds"] is True
+    assert (root / PROOFS).stat().st_mode & 0o777 == 0o644
+
+
+def test_a_renamed_scenario_keeps_a_key_and_its_proof(tmp_path):
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(
+        _delta(), world_root=root, catalogue=catalogue, kept=kept, persist=False
+    )
+    said = accept_scenario(
+        _delta(),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+        persist=False,
+        rename_on_collision=True,
+    )
+
+    assert not said.get("is_error"), said
+    assert [one.scenario_key for one in kept] == ["adds-a-big-mac", "adds-a-big-mac-2"]
+    assert set(load_proofs(root)) == {"adds-a-big-mac", "adds-a-big-mac-2"}
+
+
+def test_a_rewritten_check_records_whether_each_scenario_still_holds(tmp_path):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.proofs import load_proofs
+    from fi.alk.harness.scenario_tools import _no_longer_hold, accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=[])
+    stricter = Catalogue(
+        sub_goals=[
+            SubGoal(
+                name="item-added",
+                what="two items reached the cart",
+                check=(
+                    "def check(world, calls):\n"
+                    "    rows = world.state()['cart']\n"
+                    "    return None if len(rows) == 2 else 'not two'\n"
+                ),
+            ),
+            *[one for one in catalogue.sub_goals if one.name != "item-added"],
+        ]
+    )
+
+    failed = _no_longer_hold(root, stricter, ["adds-a-big-mac"], root)
+
+    assert [name for name, _why in failed] == ["adds-a-big-mac"]
+    proof = load_proofs(root)["adds-a-big-mac"]
+    assert proof["holds"] is False and proof["why"]
+
+
+def test_proofs_merge_by_key_and_survive_a_bad_file(tmp_path):
+    from fi.alk.harness.proofs import PROOFS, load_proofs, record_unprovable
+
+    (tmp_path / PROOFS).write_text("{not json", encoding="utf-8")
+    assert load_proofs(tmp_path) == {}
+
+    record_unprovable(tmp_path, "one", "RuntimeError")
+    record_unprovable(tmp_path, "two", "ValueError")
+
+    proofs = load_proofs(tmp_path)
+    assert set(proofs) == {"one", "two"}
+    assert proofs["one"]["holds"] is False and proofs["one"]["why"] == "RuntimeError"
+    assert not list(tmp_path.glob(".proofs-*"))

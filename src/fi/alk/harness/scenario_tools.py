@@ -50,6 +50,7 @@ from .folder import (
     write_index,
 )
 from .prove import play_reference_step, prepared, prove
+from .proofs import record_proof, record_unprovable
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -63,6 +64,7 @@ from .scenario import (
     level_name,
     _pinned_identity,
     _QUIET_INTERFACE,
+    _slug,
     unpinned_callers,
     crowded_cells,
     duplicated_branches,
@@ -155,8 +157,10 @@ def _no_longer_hold(
         try:
             proof = prove(scenario, catalogue, world_root)
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
+            record_unprovable(destination, scenario.scenario_key, type(exc).__name__)
             failed.append((scenario.name, type(exc).__name__))
             continue
+        record_proof(destination, scenario.scenario_key, proof)
         if not proof.holds:
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
@@ -846,7 +850,8 @@ def accept_scenario(
         stem, suffix = scenario.name, 2
         while f"{stem}-{suffix}" in taken:
             suffix += 1
-        scenario = scenario.model_copy(update={"name": f"{stem}-{suffix}", "scenario_key": ""})
+        renamed = f"{stem}-{suffix}"
+        scenario = scenario.model_copy(update={"name": renamed, "scenario_key": _slug(renamed)})
         replaced = False
     else:
         kept[:] = [one for one in kept if one.name != scenario.name]
@@ -868,6 +873,9 @@ def accept_scenario(
     # A proved scenario is already valuable work. Persist it immediately so a stopped model,
     # browser refresh, process restart, or later scenario failure cannot make the UI say none
     # were written. ``save_scenarios`` remains the suite-level diversity/finality gate.
+    # Saved on both paths: parallel writers share this process, so the proof file is safe to
+    # write even where the folders are not.
+    record_proof(world_root, scenario.scenario_key or _slug(scenario.name), proof)
     if persist:
         write_scenarios(kept, world_root, catalogue)
     else:
