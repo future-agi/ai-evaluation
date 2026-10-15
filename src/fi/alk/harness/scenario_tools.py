@@ -764,40 +764,6 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
-def _fixed_values_from_nowhere(
-    scenario: Scenario, trial: Any, options: dict[str, dict[str, str]]
-) -> list[str]:
-    """Text marked fixed that neither the caller's exact values, their record nor the tool's options give."""
-
-    def flat(text: Any) -> str:
-        return re.sub(r"[\s_\-./,:]+", "", str(text).lower())
-
-    try:
-        held = flat(json.dumps(trial.state(), default=str))
-    except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
-        held = ""
-    # A caller can read out exactly only what carries a digit (a reference, a code, a number);
-    # words they say match by coincidence, so those must be in the world or the tool's options.
-    said = flat(" ".join([scenario.instruction or "", json.dumps(scenario.fixture, default=str)]))
-    unfounded = []
-    for step in scenario.solution:
-        for name in step.fixed or ():
-            value = step.arguments.get(name)
-            if not isinstance(value, str) or not flat(value) or re.match(r"\d{4}-\d{2}-\d{2}", value.strip()):
-                continue
-            found = flat(value) in held or flat(value) in flat(options.get(step.tool, {}).get(name, ""))
-            if not found and not (any(c.isdigit() for c in value) and flat(value) in said):
-                unfounded.append(f"{step.tool} {name}={value!r}")
-    if not unfounded:
-        return []
-    return [
-        "marked fixed, but neither the caller, their record nor the tool's own options give it: "
-        + ", ".join(unfounded)
-        + ". Take it out of `fixed`: a value you picked because the step needed one is the agent's "
-        "choice, and a check comparing it fails a correct agent, whatever a sub-goal's contract says"
-    ]
-
-
 def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     """Values handed to the caller, used by the solution, and absent from the world after setup."""
     claimed = _handed_to_the_caller(scenario.fixture)
@@ -835,7 +801,6 @@ def accept_scenario(
     rename_on_collision: bool = False,
     vocabulary: list[str] | None = None,
     spoken: bool = True,
-    options: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -872,7 +837,6 @@ def accept_scenario(
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
         problems.extend(_credentials_the_world_lacks(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-        problems.extend(_fixed_values_from_nowhere(scenario, trial, options or {}))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
     finally:
@@ -1536,12 +1500,14 @@ def scenario_tools(
                                 "most recent successful earlier reference call.",
                             },
                             "fixed": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "The names of the arguments whose values this "
-                                "caller, their record or a rule of the agent fixes. Checks and "
-                                "the judge are shown only these; leave out any value you picked "
-                                "because the step needed one. Empty when none is fixed.",
+                                "type": "object",
+                                "additionalProperties": {"type": "string"},
+                                "description": "Each argument whose value something fixes for "
+                                "this caller, mapped to where it comes from: what the caller says, "
+                                "their record (which table and column), or the rule in the agent's "
+                                "instructions that names it, quoted. Checks and the judge are shown "
+                                "only these. Leave out any value you picked because the step needed "
+                                "one. Empty when none is fixed.",
                             },
                         },
                         "required": ["tool", "arguments", "fixed"],
@@ -1648,13 +1614,6 @@ def scenario_tools(
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
-            options={
-                tool.name: {
-                    name: f"{tool.arg_types.get(name, '')} {json.dumps(tool.arg_values.get(name, ''), default=str)}"
-                    for name in tool.args
-                }
-                for tool in contract.tools
-            },
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

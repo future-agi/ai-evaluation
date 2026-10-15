@@ -71,8 +71,8 @@ class Step(BaseModel):
     # has to drive the real dependency so its database effects can be checked, so it may carry
     # that dependency payload separately.  Agent runs never read this field.
     environment_arguments: dict[str, Any] = Field(default_factory=dict)
-    # The arguments whose values the caller, their record or a rule fixes; checks see only these.
-    fixed: list[str] | None = None
+    # Each argument the caller, their record or a rule fixes, and where it comes from; checks see only these.
+    fixed: dict[str, str] | None = None
 
 
 # The language every accent in the platform's accent vocabulary is a way of speaking.

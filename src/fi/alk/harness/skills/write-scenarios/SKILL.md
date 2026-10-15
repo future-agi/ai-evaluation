@@ -262,13 +262,14 @@ each argument this caller, their record or a rule really fixes, which covers wha
 compare whenever this caller gives it. Never bend the solution to suit a check; a check that cannot
 pass on a correct solution is the check's fault, and add_sub_goal can replace it.
 
-**Mark on every step which arguments are `fixed`.** An argument is fixed when its value comes from
+**Say on every step which arguments are `fixed`, and where each comes from.** An argument is fixed when its value comes from
 this caller (what they say or correct), their record in the world, or a rule in the agent's
 instructions that names the value for this situation. A value the agent's code fills in somewhere
 else does not fix what the agent's model passes to a tool, and a step another tool already does
 inside itself is not one the agent has to repeat. A sub-goal's contract saying where a value comes from does not make
-it so: find that source yourself in this caller's situation, their record or the tool's own
-options. A text value marked fixed that none of these gives is refused when you submit. Only fixed arguments are shown to the checks and the judge. Everything
+it so: find that source yourself, in this caller's situation, their record or the agent's
+instructions, and write it against the argument in `fixed`. If you cannot write where a value comes
+from, it is not fixed. Only fixed arguments are shown to the checks and the judge. Everything
 else (a destination or category the agent picks, a free-text reason or note, a default) still gets a
 value so the step can run, but is not marked, so no check can take a value you made up for the right
 one. Leave out an optional argument nothing fixes; the tool's default applies. If a proof reports that

@@ -52,7 +52,7 @@ def reference_of(solution: Sequence[Any]) -> list[dict[str, Any]]:
         step = step if isinstance(step, dict) else step.model_dump()
         arguments = dict(step.get("arguments") or {})
         fixed = step.get("fixed")
-        if isinstance(fixed, list):
+        if isinstance(fixed, (dict, list)):
             arguments = {name: value for name, value in arguments.items() if name in fixed}
         steps.append({"tool": step.get("tool"), "arguments": arguments})
     return steps
