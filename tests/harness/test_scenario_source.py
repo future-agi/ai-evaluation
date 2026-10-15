@@ -2769,3 +2769,25 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     assert writer.index(policy) < writer.index("a scenario coherent in itself")
     assert said.index(policy) < said.index("Before you brief anyone")
 
+
+
+def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stays_code_only():
+    from fi.alk.harness.scenario_source import _CompiledScenario, _CompiledSubGoal, _with_claims
+
+    def check(world, calls):
+        return None
+
+    scenario = _CompiledScenario(
+        scenario_key="k",
+        scenario_id="",
+        sub_goals=(_CompiledSubGoal(name="saved", judged="", check=check), _CompiledSubGoal(name="legacy", judged="", check=check)),
+        setup=lambda world: None,
+        ready=lambda world: None,
+    )
+    claims = {
+        "saved": {"what": "w", "judged": "Pass when: it says what was reported", "both": "yes", "compares": "c"},
+        "legacy": {"what": "w", "judged": "Pass when: x", "both": ""},
+    }
+    saved, legacy = _with_claims(scenario, claims).sub_goals
+    assert saved.both and saved.judged == "Pass when: it says what was reported" and saved.compares == "c"
+    assert not legacy.both and legacy.judged == ""

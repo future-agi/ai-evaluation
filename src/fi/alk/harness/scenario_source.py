@@ -246,8 +246,11 @@ class _CompiledSubGoal:
 
     name: str
     judged: str
-    check: Callable[[Any, Any], object]
+    check: Callable[..., object]
     what: str = ""
+    # The check and the judged criteria must both hold (`judged` then carries the criteria).
+    both: bool = False
+    compares: str = ""
 
 
 @dataclass(frozen=True)
@@ -418,6 +421,8 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
+            "compares": str(entry.get("compares") or ""),
+            "both": "yes" if entry.get("both") is True else "",
         }
     return claims
 
@@ -564,13 +569,20 @@ def _with_claims(
     """
     if not claims:
         return scenario
+
+    def combined(goal: _CompiledSubGoal) -> bool:
+        claim = claims[goal.name]
+        return bool(claim.get("both")) and not goal.judged and bool(claim.get("judged"))
+
     restored = tuple(
         replace(
             goal,
             judged=(claims[goal.name].get("judged") or goal.judged)
-            if goal.judged
+            if goal.judged or combined(goal)
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
+            both=combined(goal),
+            compares=claims[goal.name].get("compares", "") or goal.compares,
         )
         if goal.name in claims
         else goal

@@ -39,7 +39,7 @@ import re
 import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
@@ -47,6 +47,7 @@ from . import observability
 from .job import FailureDomain, HarnessStage
 from .judge import judge_sub_goal as _judge
 from .checks import takes_reference
+from .joint_judge import OFF_SCRIPT
 from .outbound import (
     HostedAttemptSupersededError,
     HostedChannelFailedError,
@@ -394,6 +395,7 @@ _CODE_DOMAIN: dict[str, FailureDomain] = {
     "ready_broken": FailureDomain.SIMULATOR,
     "check_broken": FailureDomain.SIMULATOR,
     "judge_undecided": FailureDomain.SIMULATOR,
+    "caller_off_script": FailureDomain.SIMULATOR,
     "evidence_missing": FailureDomain.SIMULATOR,
     "world_usage": FailureDomain.SIMULATOR,
     "world_unavailable": FailureDomain.ENVIRONMENT,
@@ -1585,22 +1587,24 @@ class HostedScheduler:
         calls: Sequence[Any],
         call_outcome: Any,
         offered: dict[str, Any],
-    ) -> list[tuple[bool, str]] | None:
-        """All of a call's judged sub-goals in one conversation, or None to judge each alone.
+    ) -> tuple[list[tuple[bool | None, str]] | None, str]:
+        """All of a call's judged sub-goals in one conversation, or None to judge each alone, and
+        what the simulated customer did off their side when the judge reported it.
 
         Any failure, including a single sub-goal left undecided, judges every one of them alone.
         """
         if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
-            return None
+            return None, ""
         try:
             accepted = inspect.signature(self._joint_judge).parameters
             context = {name: value for name, value in offered.items() if name in accepted}
             decided = await self._joint_judge(goals, world, calls, messages=call_outcome.messages, **context)
+            off_script = decided.get(OFF_SCRIPT, (None, ""))[1] if isinstance(decided, dict) else ""
             verdicts = [decided[goal.name] for goal in goals]
         except Exception as exc:  # noqa: BLE001 - a failed shared judge falls back, never errors the call
             logger.warning("judging %d sub-goals together failed, judging each alone: %r", len(goals), exc)
-            return None
-        return verdicts
+            return None, ""
+        return verdicts, str(off_script or "")
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -2164,6 +2168,9 @@ class HostedScheduler:
 
         sub_goal_results: list[SubGoalResult] = []
         judged_pending: list[tuple[int, Any]] = []
+        off_script = ""
+        # For a sub-goal settled by its check and its criteria together: the check's verdict.
+        checked: dict[int, _Verdict] = {}
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
@@ -2203,6 +2210,17 @@ class HostedScheduler:
             if goal.judged:
                 # A judged sub-goal has no code to settle it: a model decides, here, while the
                 # world the call left behind is still alive. Collected and run together below.
+                if getattr(goal, "both", False):
+                    verdict = _classify_check(outcome.value)
+                    if verdict.broken:
+                        broken_failure = _failure(
+                            "check_broken", f"{goal.name}: check() returned {outcome.value!r}"
+                        )
+                        sub_goal_results.append(
+                            SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
+                        )
+                        continue
+                    checked[len(sub_goal_results)] = verdict
                 judged_pending.append((len(sub_goal_results), goal))
                 sub_goal_results.append(
                     SubGoalResult(name=goal.name, held=None, reason=None, judged=True)
@@ -2234,7 +2252,7 @@ class HostedScheduler:
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:
                 offered = {"scenario": scenario, "recording": call_outcome.recording}
-                joint_verdicts = await self._judge_jointly(
+                joint_verdicts, off_script = await self._judge_jointly(
                     [goal for _, goal in judged_pending], check_handle, calls, call_outcome, offered
                 )
                 try:
@@ -2281,6 +2299,15 @@ class HostedScheduler:
                     name=goal.name, held=held, reason=why, judged=True
                 )
 
+        # A sub-goal settled by both fails when either fails, and is decided only when both are.
+        for slot, verdict in checked.items():
+            if not verdict.held:
+                judged = sub_goal_results[slot]
+                reason = " ".join(
+                    filter(None, [_sub_goal_reason(scenario.sub_goals[slot], verdict), judged.reason or None])
+                )
+                sub_goal_results[slot] = replace(judged, held=False, reason=reason or None)
+
         if broken_failure is not None:
             return self._fault(
                 scenario,
@@ -2289,6 +2316,18 @@ class HostedScheduler:
                 broken_failure,
                 sub_goals=tuple(sub_goal_results),
                 call=self._call_summary(call_outcome),
+            )
+        if off_script:
+            # The simulated customer left their side, so the call says nothing about the agent;
+            # its verdicts are kept for reading, never counted.
+            return self._fault(
+                scenario,
+                world_index,
+                attempt,
+                _failure("caller_off_script", off_script),
+                sub_goals=tuple(sub_goal_results),
+                call=self._call_summary(call_outcome),
+                retry=False,
             )
 
         # A settled `False` fails the scenario; an unsettled sub-goal makes it not decided.
