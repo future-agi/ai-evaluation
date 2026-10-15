@@ -64,6 +64,8 @@ _SERVICE_KEYS = {
     "extra_hosts",
     "container_name",
     "deploy",
+    "cap_drop",
+    "security_opt",
 }
 _NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
@@ -218,6 +220,18 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
             raise ComposeRuntimeError(
                 f"compose_service_fields_forbidden: {name}: {','.join(sorted(set(service) - _SERVICE_KEYS))}"
             )
+        dropped = service.get("cap_drop", [])
+        if not isinstance(dropped, list) or any(
+            not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", value)
+            for value in dropped
+        ):
+            raise ComposeRuntimeError("compose_cap_drop_invalid")
+        security = service.get("security_opt", [])
+        if not isinstance(security, list) or any(
+            value not in ("no-new-privileges:true", "no-new-privileges=true")
+            for value in security
+        ):
+            raise ComposeRuntimeError("compose_service_fields_forbidden: security_opt")
         if "deploy" in service:
             deploy = service["deploy"]
             if not isinstance(deploy, dict) or set(deploy) != {"replicas"}:
