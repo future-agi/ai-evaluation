@@ -682,6 +682,10 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 21. Does the instruction say when the person gives in, cooperates, acknowledges or hangs up?
 22. On a spoken call, is a noise place that fits where the person is named, unless the brief dealt a
     quiet line?
+23. Would an agent that follows its rules to the letter pass every named sub-goal? If a rule says to
+    act at once on what this caller says, does the solution start with that act, with no
+    verification or lookup before it? Does any sub-goal need the caller to do something off the
+    line?
 
 ## The three gates
 
