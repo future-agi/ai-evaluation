@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
+from fi import agentcc
+
 from .backends import SessionSpec, resolve
 
 # The first backend's default, kept importable because callers and tests name it. The model a
@@ -34,10 +36,7 @@ def credentials_hint() -> str:
     which is a legitimate setup and an easy accident. The accident produces a provider auth
     error several layers down, so it is worth saying out loud which one is in play.
     """
-    if (
-        os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
-        or os.environ.get("AGENTCC_API_KEY", "").strip()
-    ):
+    if os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip() or agentcc.gateway():
         return "credentials: Agent Command Center virtual key"
     named = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if named:
@@ -122,9 +121,7 @@ def refuse_a_model_we_cannot_afford(model: str) -> None:
 
 def behind_gateway(model: str) -> bool:
     """Whether this model is reached through Agent Command Center rather than the CLI's own route."""
-    return bool(os.environ.get("AGENTCC_API_KEY", "").strip()) and "claude" not in (
-        model or ""
-    ).lower()
+    return agentcc.gateway() is not None and "claude" not in (model or "").lower()
 
 
 def gateway_wire_model(model: str) -> str:
@@ -149,18 +146,13 @@ def provider_env(model: str | None = None) -> dict[str, str]:
     chosen = chosen_model(model)
     refuse_a_model_we_cannot_afford(chosen)
     # Agent Command Center speaks Anthropic Messages in front of the model this run chose.
-    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
-    if agentcc_key and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
-        base_url = (
-            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
-            .strip()
-            .rstrip("/")
-        )
+    gateway = agentcc.gateway()
+    if gateway is not None and not os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip():
         wire = gateway_wire_model(chosen)
         return {
             # Bearer token, which is how a virtual key authenticates (API_KEY would use x-api-key).
-            "ANTHROPIC_AUTH_TOKEN": agentcc_key,
-            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": gateway.api_key,
+            "ANTHROPIC_BASE_URL": gateway.base_url,
             # ClaudeAgentOptions.env is merged over the parent's, so a parent's Vertex flag must be undone.
             "CLAUDE_CODE_USE_VERTEX": "0",
             # The SDK cannot look up a non-Claude context window, so it is declared.
@@ -208,24 +200,6 @@ def provider_env(model: str | None = None) -> dict[str, str]:
                 "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
                 "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
                 "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-            }
-        )
-        return env
-
-    agentcc_key = os.environ.get("AGENTCC_API_KEY", "").strip()
-    if agentcc_key:
-        base_url = (
-            os.environ.get("AGENTCC_BASE_URL", "https://gateway.futureagi.com")
-            .strip()
-            .rstrip("/")
-        )
-        env.update(
-            {
-                # AUTH_TOKEN is sent as a Bearer token, which is how AgentCC virtual keys
-                # authenticate. API_KEY would instead use Anthropic's x-api-key header.
-                "ANTHROPIC_AUTH_TOKEN": agentcc_key,
-                "ANTHROPIC_BASE_URL": base_url,
-                "CLAUDE_CODE_USE_VERTEX": "0",
             }
         )
         return env

@@ -32,6 +32,8 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 
+from fi import agentcc
+
 from .base import (
     ASK_TOOL,
     DELEGATE_TOOL,
@@ -362,22 +364,15 @@ class ClaudeBackend:
 
     def can_drive(self, model: str) -> bool:
         # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
-        # translates it for the provider named by the model. Without a gateway, this backend
-        # still only advertises models supported by Claude Code directly.
+        # translates it for any provider configured behind the virtual key. Without a gateway,
+        # this backend only advertises models supported by Claude Code directly.
         named = (model or "").lower()
         if "claude" in named:
             return True
-        if os.environ.get("AGENTCC_API_KEY", "").strip():
-            return True
-        gateway_ready = bool(
-            (
-                os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
-                and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
-            )
-            or os.environ.get("AGENTCC_API_KEY", "").strip()
+        gateway_ready = agentcc.gateway() is not None or bool(
+            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
         )
-        # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
-        # translates it for any provider configured behind the virtual key.
         return gateway_ready and bool(named)
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
