@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -58,20 +59,58 @@ def _mapping(node, loader):
     }
 
 
-def _admit(path: Path, root: Path, base: Path):
-    """Check file-reading features before the native parser can follow them."""
+def _expand_volume_node(node, environment, active=None, seen=None, depth=0):
+    from .runtime_selection import _interpolate_structure
+
+    active = set() if active is None else active
+    seen = set() if seen is None else seen
+    if id(node) in active or depth > 32:
+        raise ValueError("compose_overlay_volume_cycle_or_depth")
+    if id(node) in seen:
+        return
+    if len(seen) >= 8192:
+        raise ValueError("compose_overlay_volume_too_large")
+    seen.add(id(node))
+    active.add(id(node))
+    if isinstance(node, yaml.ScalarNode):
+        if node.tag == "tag:yaml.org,2002:str":
+            node.value = _interpolate_structure(node.value, environment)
+            if len(node.value) > 65536:
+                raise ValueError("compose_structural_interpolation_limit")
+    elif isinstance(node, yaml.SequenceNode):
+        for item in node.value:
+            _expand_volume_node(item, environment, active, seen, depth + 1)
+    elif isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            _expand_volume_node(key, environment, active, seen, depth + 1)
+            _expand_volume_node(value, environment, active, seen, depth + 1)
+    active.remove(id(node))
+
+
+def _admit(path: Path, root: Path, base: Path, environment: dict[str, str]):
+    """Admit file reads and expand volume syntax before native Compose parses colons."""
     loader = yaml.SafeLoader(path.read_text())
     try:
-        document = _mapping(loader.get_single_node(), loader)
+        document_node = loader.get_single_node()
+        document = _mapping(document_node, loader)
         if set(document) & {"include", "configs", "secrets"}:
             raise ValueError("compose_overlay_file_loading_unsupported")
         services = (
             _mapping(document["services"], loader) if "services" in document else {}
         )
+        seen_services = set()
         for service in services.values():
+            if id(service) in seen_services:
+                continue
+            seen_services.add(id(service))
             fields = _mapping(service, loader)
             if set(fields) & {"extends", "label_file"}:
                 raise ValueError("compose_overlay_file_loading_unsupported")
+            for index, (key, value) in enumerate(service.value):
+                if key.value == "volumes":
+                    volume = copy.deepcopy(value)
+                    _expand_volume_node(volume, environment)
+                    service.value[index] = (key, volume)
             if "env_file" not in fields:
                 continue
             node = fields["env_file"]
@@ -90,13 +129,16 @@ def _admit(path: Path, root: Path, base: Path):
                     or not (base / value).resolve().is_relative_to(root)
                 ):
                     raise ValueError("compose_overlay_env_file_outside_source")
+        return yaml.serialize(document_node)
     except (yaml.YAMLError, RecursionError) as exc:
         raise ValueError("compose_overlay_yaml_invalid") from exc
     finally:
         loader.dispose()
 
 
-def merge_compose(root: Path, paths: list[Path]) -> dict:
+def merge_compose(
+    root: Path, paths: list[Path], *, public_environment: dict[str, str] | None = None
+) -> dict:
     root = root.resolve()
     resolved = [path.resolve() for path in paths]
     if not 2 <= len(resolved) <= 9 or len(set(resolved)) != len(resolved):
@@ -105,8 +147,12 @@ def merge_compose(root: Path, paths: list[Path]) -> dict:
         raise ValueError("compose_overlay_path_outside_source_or_missing")
     if sum(path.stat().st_size for path in resolved) > LIMIT:
         raise ValueError("compose_overlay_input_too_large")
-    for path in resolved:
-        _admit(path, root, resolved[0].parent)
+    documents = [
+        _admit(path, root, resolved[0].parent, public_environment or {})
+        for path in resolved
+    ]
+    if sum(len(document.encode("utf-8")) for document in documents) > LIMIT:
+        raise ValueError("compose_overlay_input_too_large")
     binary = next(
         (
             path
@@ -126,23 +172,24 @@ def merge_compose(root: Path, paths: list[Path]) -> dict:
         "--project-directory",
         str(resolved[0].parent),
     ]
-    for path in resolved:
-        command.extend(["-f", str(path)])
-    command.extend(
-        [
-            "config",
-            "--format",
-            "json",
-            "--no-interpolate",
-            "--no-env-resolution",
-            "--no-path-resolution",
-            "--no-normalize",
-        ]
-    )
+    config_flags = [
+        "config",
+        "--format",
+        "json",
+        "--no-interpolate",
+        "--no-env-resolution",
+        "--no-path-resolution",
+        "--no-normalize",
+    ]
     with (
         tempfile.TemporaryDirectory(prefix="alk-compose-config-") as config,
         tempfile.TemporaryFile() as output,
     ):
+        for index, document in enumerate(documents):
+            path = Path(config) / f"compose-{index}.yaml"
+            path.write_text(document)
+            command.extend(["-f", str(path)])
+        command.extend(config_flags)
         process = subprocess.Popen(
             command,
             cwd=root,

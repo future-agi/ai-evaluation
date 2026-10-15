@@ -446,3 +446,99 @@ def test_native_plain_named_volume_normalizes_like_short_syntax(tmp_path, cli):
     assert native_mount == {"type": "volume", "source": "storage", "target": "/data"}
     assert native_mount.get("read_only", False) is short_mount.pop("read_only") is False
     assert native_mount == short_mount
+
+
+def test_overlay_nested_bind_defaults_use_only_public_environment(
+    tmp_path, cli, monkeypatch
+):
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "small.yaml"
+    base.write_text("""services:
+  gateway:
+    image: example/image:1
+    volumes:
+      - '${DATA_DIR:-${HOME:-/tmp}/.data}:/data'
+    command: ['echo', '$$UNCHANGED']
+""")
+    overlay.write_text("services:\n  gateway:\n    environment: [MODE=small]\n")
+    original = [p.read_bytes() for p in (base, overlay)]
+    monkeypatch.setenv("HOME", "/ambient-secret")
+    monkeypatch.setenv("DATA_DIR", "/ambient-data")
+    (tmp_path / ".env").write_text("DATA_DIR=/dotenv-secret\n")
+    selected = selection(tmp_path)
+    assert selected.services["gateway"]["volumes"][0]["source"] == "/tmp/.data"
+    assert selected.services["gateway"]["volumes"][0]["target"] == "/data"
+    assert selected.services["gateway"]["command"] == ["echo", "$$UNCHANGED"]
+    selected = select_runtime(
+        tmp_path,
+        {
+            "execution": "compose",
+            "compose_file": "base.yaml",
+            "compose_overrides": ["small.yaml"],
+            "service": "gateway",
+        },
+        public_environment={"DATA_DIR": "./local"},
+    )
+    assert selected.services["gateway"]["volumes"][0]["source"] == "./local"
+    assert [p.read_bytes() for p in (base, overlay)] == original
+
+
+@pytest.mark.parametrize("tag", ["!override", "!reset"])
+def test_overlay_volume_tags_and_escaped_dollars(tmp_path, cli, tag):
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "small.yaml"
+    base.write_text(
+        'services:\n  gateway:\n    image: example/image:1\n    volumes: ["./old:/old"]\n'
+    )
+    overlay.write_text(
+        f'services:\n  gateway:\n    volumes: {tag} ["./$$LITERAL:/data"]\n'
+    )
+    selected = selection(tmp_path)
+    if tag == "!override":
+        assert selected.services["gateway"]["volumes"][0]["source"] == "./$LITERAL"
+    else:
+        assert selected.services["gateway"].get("volumes", []) == []
+
+
+def test_overlay_volume_alias_expansion_does_not_change_other_fields(tmp_path, cli):
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "small.yaml"
+    base.write_text("""x-command: &command ['./$$TOKEN:/data']
+services:
+  gateway: &service
+    image: example/image:1
+    command: *command
+    volumes: *command
+  second: *service
+""")
+    overlay.write_text("services: {}\n")
+    merged = merge_compose(tmp_path, [base, overlay])
+    for service in merged["services"].values():
+        assert service["command"] == ["./$$TOKEN:/data"]
+        assert service["volumes"][0]["source"] == "./$TOKEN"
+
+
+def test_overlay_volume_cycle_rejected_before_cli(tmp_path, monkeypatch):
+    base, overlay = files(tmp_path)
+    overlay.write_text("services:\n  gateway:\n    volumes: &loop [*loop]\n")
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("CLI invoked"))
+    with pytest.raises(ValueError, match="cycle_or_depth"):
+        merge_compose(tmp_path, [base, overlay])
+
+
+def test_overlay_relative_env_file_keeps_source_base(tmp_path, cli):
+    base, overlay = files(tmp_path)
+    (tmp_path / "service.env").write_text("MODE=from-file\n")
+    overlay.write_text("services:\n  gateway:\n    env_file: [service.env]\n")
+    merged = merge_compose(tmp_path, [base, overlay])
+    assert merged["services"]["gateway"]["env_file"] == [
+        {"path": "service.env", "required": True}
+    ]
+
+
+def test_overlay_expanded_volume_size_is_bounded_before_cli(tmp_path, monkeypatch):
+    base, overlay = files(tmp_path)
+    overlay.write_text('services:\n  gateway:\n    volumes: ["${DATA_DIR}:/data"]\n')
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('CLI invoked'))
+    with pytest.raises(ValueError, match='interpolation_limit'):
+        merge_compose(tmp_path, [base, overlay], public_environment={'DATA_DIR': 'a' * 65537})
