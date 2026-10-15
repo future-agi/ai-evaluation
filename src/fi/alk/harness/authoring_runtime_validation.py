@@ -119,6 +119,18 @@ def _write_runtime_evidence(
         )
         schema_and_seed = CheckStatus.PASSED
         source_invariants = CheckStatus.PASSED
+        from .source_data_invariants import ARTIFACT
+
+        invariant_review = authoring / ARTIFACT
+        if (
+            invariant_review.is_file()
+            and json.loads(invariant_review.read_text()).get("status") == "not_applicable"
+        ):
+            source_invariants = CheckStatus.NOT_APPLICABLE
+            limitations.append(
+                "No runtime SQL business tables were available for source invariants; "
+                "private application state is not certified by this check"
+            )
     if world_isolation is CheckStatus.NOT_RUN:
         limitations.append(
             "concurrent world isolation was not applicable or runtime parallelism was safely degraded"
