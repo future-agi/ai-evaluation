@@ -262,10 +262,12 @@ that governs this situation in the agent's instructions, then write only the ste
 complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
 tools take them.
 
-- When the rule hands the caller over, stops, or refuses (something the agent may not handle, a
-  dispute, an injury, a request outside its scope), the solution is that action with nothing before
-  it the rule does not ask for: no identity check and no lookup. An identity check belongs before
-  disclosing or changing something, never before handing over.
+- When the caller states something a rule says to hand over, stop or refuse on (an injury, a lawyer,
+  a dispute, a request outside the agent's scope), the solution is that action with nothing before it
+  the rule does not ask for: no identity check and no lookup. An identity check belongs before
+  disclosing or changing something, never before handing over. When the reason to hand over can only
+  be found by looking (an account's state the caller does not mention), the lookups that find it come
+  first, as in the example under "What is not a scenario".
 - A step another tool already does inside its own work is not one the agent repeats.
 - The outcome must be one the call itself can reach. The simulated caller can only talk: it cannot
   open a link, use an app, read a screen or pay on a page. When the agent's flow needs one of those
@@ -792,6 +794,12 @@ GOOD   solution   [find_account(identifier=...), get_account(account_id=...),
        (the handoff now has to be reached by discovering the reason for it, and
         account_state_checked holds on any lookup whose result carried the status)
 ```
+
+That is the case where the reason is found by looking. When the caller states the reason and a rule
+says to hand over at once, the solution is the hand-over alone, and the scenario can still fail: an
+agent that carries on (keeps taking details, verifies first, files a claim) instead of handing over.
+Name sub-goals for exactly that, the hand-over and the forbidden carrying on, never for the lookups
+the rule skips.
 
 ## The coordinate is a promise. The instruction has to keep it.
 
