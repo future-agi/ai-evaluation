@@ -1253,8 +1253,8 @@ def world_tools(
         "tool call made, each with .name, .arguments, .ok and .refused — so a check can insist "
         "a call happened with the right arguments, not merely that it happened.\n\n"
         + SUB_GOAL_RULES
-        + "Use `check` only for a change the call must leave in the records, made as it should be "
-        "whatever the caller asked, reading the world and the call that made it, never only a "
+        + "Use `check` only for a change the call must leave in the records, made as it should be, "
+        "reading the world and the call that made it, never only a "
         "call's name. Whether a forbidden thing happened is judged from the records: a check that "
         "holds on an untouched world grades nothing and is refused. A check that a step comes before something "
         "fails only when that something happened without it, and accepts every tool for the step. "
@@ -1268,8 +1268,8 @@ def world_tools(
         "arguments, so match each reference step to any successful call carrying its fields, "
         "never to the last call; when the reference sets a thing twice the later value counts. "
         "Compare only what the reference fixes for this caller (what they asked for, their "
-        "identifiers, amounts, dates), never a choice the instructions leave to the agent (a queue, "
-        "a wording, a topic label). "
+        "identifiers, amounts, dates), never a choice the instructions leave to the agent (where a "
+        "handoff goes, a wording, a label). "
         "Use `judged` for what was said and what nothing observable settles; it holds the "
         "criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES

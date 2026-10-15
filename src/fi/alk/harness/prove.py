@@ -304,8 +304,6 @@ def prove(
     scenario: Scenario,
     catalogue: Catalogue,
     world_root: Path,
-    *,
-    allow_judged_only_with_state: bool = False,  # noqa: ARG001 - kept for callers; judged-only is always allowed
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()

@@ -433,8 +433,8 @@ def weak_check_advisory(sub_goal: SubGoal) -> str:
     return (
         f"{sub_goal.name}: the check reads the arguments but only tests that they are present and "
         "non-empty. An agent that mishears a detail and acts confidently on the wrong one passes "
-        "that. Compare the value against the world row it should match, or judge whether it is "
-        "what this caller asked for"
+        "that. Compare the value against the scenario's reference solution or the world row it "
+        "should match"
     )
 
 

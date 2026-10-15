@@ -273,8 +273,7 @@ class _CompiledScenario:
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
     source_scenario_key: str | None = None
-    # One correct way through the call, shown to the judge so it can tell the right value from a
-    # wrong one. Never replayed here.
+    # One correct way through the call: handed to reference checks and shown to the judge.
     solution: tuple[dict[str, Any], ...] = ()
 
 

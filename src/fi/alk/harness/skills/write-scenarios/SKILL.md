@@ -295,11 +295,11 @@ catalogue has no sub-goal for what this caller came for, add one rather than nam
 
 **And, when the agent has tools, settle it from the evidence the call left.** The last step is a call,
 so the call log and the world both hold the evidence, and the judge reads both as well as the
-conversation: name the values in its criteria, and add a check only for what the records settle on
-their own. One suite of sixty left its closing status lookup to
+conversation: a check compares the call and the records with your reference solution, and the
+judge settles what was said. One suite of sixty left its closing status lookup to
 a judge and nothing else asserted it, which is the same hole as naming no sub-goal for it at all.
-A check reads what the records show; whether the step was right for this caller (their record,
-their values, as last corrected) is a judged sub-goal named alongside it.
+A check handed your reference solution settles whether the step was right for this caller (their
+record, their values, as last corrected).
 
 The two failures look opposite and are both real. One suite defined thirty-nine sub-goals and used
 twenty-six of them exactly once: a bespoke check wherever a shared one would have done, so nothing
@@ -385,17 +385,17 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
 
 - **Deterministic.** The sub-goal carries a `check`: Python receiving the world as the run left it and
   every call the agent made with its arguments, returning nothing if it held or a sentence saying
-  what was wrong. It is shared by every scenario naming it, so it settles what holds whatever the
-  caller asked.
+  what was wrong. It is shared by every scenario naming it; written `check(world, calls, reference)`,
+  it is also handed this scenario's solution and settles whether this caller's values were used.
 - **Judged.** The sub-goal carries no check, so a model hears the call and decides. Use it for what
   nothing observable can settle, whether a refusal was explained kindly, whether a number was
-  invented, and for whether a step matched what this caller asked: the right time, place or amount.
+  invented.
 
 Use a check only for a change the call must leave in the records, made as it should be. Whether a
 forbidden thing happened is judged from the records: a check that holds on an untouched world grades
 nothing and is refused. The judge reads every call with its arguments and the records as well as
 the conversation, so judged does not mean read from the transcript alone, and anything the agent says
-or whether a step was right is judged.
+is judged.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
 that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves

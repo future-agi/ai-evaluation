@@ -381,7 +381,7 @@ def test_a_proof_says_which_steps_it_could_not_run():
 
 
 def test_a_world_with_state_keeps_a_scenario_whose_sub_goals_are_judged(tmp_path):
-    """Whether a step was right for this caller is judged, so a judged-only scenario is kept once ready."""
+    """A scenario whose sub-goals are all judged is kept once ready."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.prove import prove
 

@@ -200,7 +200,7 @@ class SubGoal(Protocol):
 
 
 JudgeFn = Callable[..., Awaitable[tuple[bool | None, str]]]
-JointJudgeFn = Callable[..., Awaitable[dict[str, tuple[bool, str]]]]
+JointJudgeFn = Callable[..., Awaitable[dict[str, tuple[bool | None, str]]]]
 # By default all of a call's judged sub-goals are judged in one conversation; "separate" judges each in its own.
 JUDGE_MODE_ENV = "ALK_JUDGE_MODE"
 

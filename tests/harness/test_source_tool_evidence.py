@@ -352,7 +352,7 @@ def test_a_judged_sub_goal_must_say_why_it_is_judged():
 
 
 def test_judged_criteria_may_read_the_actions_and_records():
-    """Whether a step was right for this caller is judged from the call and the records it left."""
+    """Judged criteria may read the agent's actions and records, not only the transcript."""
     from fi.alk.harness.catalogue import validate_sub_goal
 
     judged = _goal(

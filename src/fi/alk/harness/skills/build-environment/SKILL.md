@@ -485,8 +485,8 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
-**Give every outcome a caller comes for its own judged sub-goal**, settled with the values (a record
-changed, a record looked up and told back, a document sent), so a scenario never has to borrow an
+**Give every outcome a caller comes for its own sub-goal**, checked against the reference where the
+call or the records carry the value (a record changed, a record looked up, a document sent), so a scenario never has to borrow an
 unrelated one to name two.
 
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
@@ -498,9 +498,10 @@ of subject partway through, a request outside what the agent handles, pressure t
 behaviour each, named once, so the suite can report how often the agent got that moment right.
 
 **Write the check as code for what holds in every scenario.** A sub-goal is shared by every
-scenario that names it, so its check never knows what this caller asked for. Code settles what is
-true whatever they asked: a forbidden change did not happen, an order went on an account that
-exists, a cancelled record is really cancelled.
+scenario that names it, so its check carries no one caller's values: it reads them from `reference`.
+Code settles what is true in every scenario (a forbidden change did not happen, an order went on an
+account that exists, a cancelled record is really cancelled) and, with `reference`, whether this
+caller's values were the ones used.
 
 **Code only for what the records settle on their own.** Anything the agent says, a read-back, a
 disclosure, a refusal, an escalation, an explanation, is judged: a check sees that a tool was called,
@@ -531,7 +532,7 @@ arguments and result) or the records in `world.state()`. Say which it was: *not 
 successful call or record is there, *done wrong* naming what was expected and what was found.
 
 Three things decide whether such a check is right. A tool can be called more than once (a lookup
-repeated, a pickup and a drop-off through the same tool) and one call can be reported twice, once with
+repeated, two records changed through the same tool) and one call can be reported twice, once with
 fewer arguments, so match each reference step to any successful call that carries its fields, never
 to the last call. When the reference sets the same thing twice, the later value is the one that
 counts. Compare values with one right form (an identifier, a number, an amount, a date, a choice from
@@ -553,7 +554,7 @@ How each kind of value is compared:
 
 Compare only what the reference fixes for this caller: what they asked for, their identifiers, their
 amounts and dates, the record they meant. A value the agent chooses among several its instructions
-allow (which queue a transfer goes to, how a reason or a summary is worded, which label names a topic)
+allow (where a handoff goes, how something is worded, which label it is given)
 is not compared; a judged sub-goal decides whether the choice suited the situation.
 
 Never use a string-similarity score. When even out case and spacing cannot settle whether two values
@@ -593,9 +594,8 @@ for what they cannot show, what was said or read back. Name a check for what it 
 Read the agent's whole prompt before writing any sub-goal: a step it skips in some
 situations must not fail an agent that skipped it there.
 
-Use `judged` only where nothing observable settles it, or where what is right depends on what this
-caller asked: whether a refusal was explained, whether a price was invented, whether the values
-the agent used were the ones this caller gave. (An agent reached only by conversation has no world
+Use `judged` only where nothing observable settles it: whether a refusal was explained, whether a
+price was invented. (An agent reached only by conversation has no world
 and no calls to read: then every sub-goal is judged, and the rules below matter all the more.)
 
 A quality of every call, such as turn length, tone or varied phrasing, is not a sub-goal: the suite
@@ -631,7 +631,7 @@ behaviour can keep it from arising (it never asked for the booking reference, it
 before the question came), say that this fails, because the missing situation is the failure.
 Where both are possible, say which way each one goes.
 
-Four shapes cover most of them:
+Three shapes cover most of them:
 
 ```
 A condition the agent has to meet when it comes up
@@ -652,13 +652,6 @@ A step the agent is meant to take on its own
   Fail when: it changes the account without confirming who it is speaking to.
   If it does not arise: Fail if the agent changed nothing because it never got as far as asking
   for identity; Pass if the caller asked for nothing that changes the account.
-
-A step that has to be done with the right value
-  Applies when: the caller asks the agent to make a change for them.
-  Pass when: the change the agent made is the one the caller asked for, to the record they named,
-  with the values they gave, as last corrected.
-  Fail when: it changes anything else, uses another value, or says it made a change it did not make.
-  If it does not arise: Pass, because the caller asked for no change.
 ```
 
 Pass when and Fail when together cover every way the agent can handle the situation: a safe response
