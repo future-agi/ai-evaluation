@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from .public_material import is_public_pem, inspect_public_file
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 BUNDLE_SCHEMA_VERSION = "futureagi.environment-bundle.v1"
 BUNDLE_MANIFEST = "manifest.json"
@@ -185,7 +185,7 @@ def _iter_files(root: Path) -> list[Path]:
 def _inspect_file(root: Path, path: Path, *, admissions=()) -> BundleFile:
     relative = path.relative_to(root).as_posix()
     _safe_relative(relative)
-    if path.name in _SECRET_FILES or (
+    if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
         path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
         and not is_public_pem(path)
     ):
@@ -399,7 +399,7 @@ def export_session_bundle(
             if any(part in _COPY_IGNORED for part in relative.parts):
                 continue
             if (
-                path.name in _SECRET_FILES
+                (path.name in _SECRET_FILES and not is_public_npm_config(path))
                 or path.name.startswith(".env.")
                 and path.name != ".env.example"
             ):
