@@ -558,22 +558,11 @@ def test_world_snapshot_accepts_scalar_source_owned_state(tmp_path):
     assert tables == {"attempts": 1, "enabled": 1, "note": 5}
 
 
-def test_a_scenario_with_one_sub_goal_is_refused():
-    """The call passes only when every named sub-goal holds, so one leaves the rest unmeasured."""
+def test_a_scenario_with_one_sub_goal_is_kept():
+    """A rule that tells the agent to act at once leaves one thing to check, so one sub-goal is enough."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.scenario import validate_scenario
 
-    catalogue = Catalogue(
-        sub_goals=[
-            SubGoal(name="change_made_as_asked", what="the change", judged="j"),
-            SubGoal(name="confirmed_first", what="confirmation", judged="j"),
-        ]
-    )
+    catalogue = Catalogue(sub_goals=[SubGoal(name="change_made_as_asked", what="the change", judged="j")])
     one = Scenario(name="makes_a_change", instruction="Ask for a change.", sub_goals=["change_made_as_asked"])
-    two = Scenario(
-        name="makes_a_change",
-        instruction="Ask for a change.",
-        sub_goals=["change_made_as_asked", "confirmed_first"],
-    )
-    assert any("fewer than two sub-goals" in line for line in validate_scenario(one, catalogue, {}))
-    assert not any("fewer than two sub-goals" in line for line in validate_scenario(two, catalogue, {}))
+    assert not any("sub-goal" in line for line in validate_scenario(one, catalogue, {}))
