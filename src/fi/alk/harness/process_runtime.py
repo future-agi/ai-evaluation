@@ -1285,10 +1285,10 @@ def _build_step_evidence(
         )
 
     body = "stdout:\n" + text(stdout) + "\nstderr:\n" + text(stderr)
-    body = sanitize_diagnostic(body, secret_values or {}, limit=len(body))[-7600:]
+    body = sanitize_diagnostic(body, secret_values, limit=len(body))[-7600:]
     header = sanitize_diagnostic(
         f"Build process {process}, attempt {attempt + 1}, command {step!r}\n",
-        secret_values or {},
+        secret_values,
         limit=512,
     )
     evidence = header + body
