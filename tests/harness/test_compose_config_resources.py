@@ -36,7 +36,7 @@ def document():
 
 def test_missing_resources_normalize_without_writing_original(tmp_path):
     normalized = normalize_compose(document(), tmp_path, capabilities={})
-    assert normalized["services"]["app"]["volumes"][0]["read_only"] is True
+    assert normalized["services"]["app"]["volumes"][0]["read_only"] is False
     assert not list(tmp_path.iterdir())
 
 
@@ -64,7 +64,11 @@ def test_logs_preserve_declared_public_values_but_not_private_collisions(
         "services": {"app": {"image": "example/app", "env_file": [".env"]}},
     }
     (bundle_dir / "compose.json").write_text(json.dumps(doc))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -138,8 +142,9 @@ def test_resource_symlink_is_rejected(tmp_path):
         normalize_compose(document(), tmp_path, capabilities={})
 
 
+@pytest.mark.parametrize("read_only", [False, True])
 def test_config_and_directories_are_private_reset_and_never_build_inputs(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, read_only
 ):
     source, bundle_dir, work = [
         tmp_path / name for name in ("source", "bundle", "work")
@@ -147,11 +152,16 @@ def test_config_and_directories_are_private_reset_and_never_build_inputs(
     for path in (source, bundle_dir, work):
         path.mkdir()
     (source / "Dockerfile").write_text("FROM example/app\nCOPY . /app\n")
-    (source / ".env").write_text("PORT=1234\n")
+    (source / "untouched.txt").write_text("original source\n")
     doc = document()
     doc["services"]["app"]["build"] = "."
+    doc["services"]["app"]["volumes"][0] += ":ro" if read_only else ":rw"
     (bundle_dir / "compose.json").write_text(json.dumps(doc))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "f" * 64,
@@ -186,7 +196,11 @@ def test_config_and_directories_are_private_reset_and_never_build_inputs(
             assert not config.is_relative_to(directory / "source")
             assert config.stat().st_mode & 0o777 == 0o600
             assert config.read_text() == 'PASSWORD="private$value"\nPORT="3000"\n'
-            assert mounts["/app/.env"]["read_only"] is True
+            assert mounts["/app/.env"]["read_only"] is read_only
+            assert config.stat().st_uid == os.getuid()
+            if not read_only:
+                config.write_text(config.read_text() + 'GENERATED_SALT="runtime-value"\n')
+                assert 'GENERATED_SALT' in config.read_text()
             assert not (data / "state").exists()
             (data / "state").write_text("changed")
             snapshots.append(config)
@@ -203,7 +217,8 @@ def test_config_and_directories_are_private_reset_and_never_build_inputs(
 
     asyncio.run(run())
     assert len(snapshots) == 2
-    assert (source / ".env").read_text() == "PORT=1234\n"
+    assert (source / "untouched.txt").read_text() == "original source\n"
+    assert not (source / ".env").exists()
     assert not (source / "data").exists()
     assert not list(work.iterdir())
 
@@ -215,7 +230,11 @@ def test_missing_alias_fails_before_docker(tmp_path, monkeypatch):
     for path in (source, bundle_dir, work):
         path.mkdir()
     (bundle_dir / "compose.json").write_text(json.dumps(document()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "f" * 64,
@@ -242,7 +261,10 @@ def test_compiler_config_alias_requires_target_purpose(tmp_path, purpose):
     from fi.alk.harness.compose_integration import compile_bundle
 
     refs = {} if purpose is None else {"KEY": SimpleNamespace(purpose=purpose)}
-    job = SimpleNamespace(agent=SimpleNamespace(secret_refs=refs))
+    job = SimpleNamespace(
+        agent=SimpleNamespace(secret_refs=refs),
+        public_material_admissions=[], public_test_fixture_admissions=[],
+    )
     contract = {
         "runtime": {"config_files": {".env": {"secret_aliases": {"PASSWORD": "KEY"}}}}
     }
@@ -269,7 +291,11 @@ def test_bound_dotenv_interpolation_rejected_before_docker(
     if public:
         doc["x-alk-config-files"][".env"]["values"]["VARIABLE"] = "${HOME}"
     (bundle_dir / "compose.json").write_text(json.dumps(doc))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "f" * 64,
@@ -354,3 +380,13 @@ def test_directory_ownership_includes_children_without_following_symlinks(
     assert sorted(changed) == ["file", "nested"]
     assert set(fchanged) == {root.stat().st_ino, nested.stat().st_ino}
     assert external.stat().st_ino not in fchanged
+
+
+@pytest.mark.parametrize('mode', [None, 0, 1, 'false', 'true'])
+def test_resource_mount_mode_requires_boolean(tmp_path, mode):
+    doc = document()
+    doc['services']['app']['volumes'][0] = {
+        'type':'bind', 'source':'./.env', 'target':'/app/.env', 'read_only':mode,
+    }
+    with pytest.raises(ComposeRuntimeError, match='read_only_invalid'):
+        normalize_compose(doc, tmp_path, capabilities={})

@@ -69,7 +69,11 @@ def test_materialized_files_are_private_readonly_and_not_interpolated(
     for path in (source, bundle_dir, work):
         path.mkdir()
     (bundle_dir / "compose.json").write_text(json.dumps(document()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "f" * 64,
@@ -163,7 +167,11 @@ http.server.HTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
     value["services"]["app"].pop("image")
     value["services"]["app"]["build"] = "."
     (bundle_dir / "compose.json").write_text(json.dumps(value))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "f" * 64,
@@ -209,7 +217,10 @@ def test_compiler_rejects_secret_binding_without_target_reference(tmp_path, purp
     source.mkdir()
     (source / "compose.yaml").write_text("services:\n  app:\n    image: example/app\n")
     refs = {"ADC": SimpleNamespace(purpose=purpose)} if purpose else {}
-    job = SimpleNamespace(agent=SimpleNamespace(secret_refs=refs))
+    job = SimpleNamespace(
+        agent=SimpleNamespace(secret_refs=refs),
+        public_material_admissions=[], public_test_fixture_admissions=[],
+    )
     contract = {
         "modality": "chat",
         "runtime": {
