@@ -20,7 +20,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from .public_material import PublicMaterialAdmission
+from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .bundle_v2 import EnvironmentBundleV2, RuntimeKindV2, seal_bundle_v2
 from .certified_compose_runtime import (
     CertifiedComposeRuntimeProvider,
@@ -47,6 +47,9 @@ class BrokerConfig(BaseModel):
     client_gid: int = Field(gt=0)
     target_configuration: dict[str, str] = Field(default_factory=dict)
     public_material_admissions: list[PublicMaterialAdmission] = Field(
+        default_factory=list, max_length=512
+    )
+    public_test_fixture_admissions: list[PublicTestFixtureAdmission] = Field(
         default_factory=list, max_length=128
     )
     lifetime_seconds: int = Field(default=14400, ge=60, le=86400)
@@ -189,6 +192,8 @@ class ComposeBroker:
         if (
             manifest.provenance.public_material_admissions
             != self.config.public_material_admissions
+            or manifest.provenance.public_test_fixture_admissions
+            != self.config.public_test_fixture_admissions
         ):
             raise BrokerError("compose_broker_public_material_admission_mismatch")
         if manifest.runtime.kind != RuntimeKindV2.COMPOSE or (

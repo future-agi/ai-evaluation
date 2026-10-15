@@ -182,16 +182,17 @@ def _iter_files(root: Path) -> list[Path]:
     return files
 
 
-def _inspect_file(root: Path, path: Path, *, admissions=()) -> BundleFile:
+def _inspect_file(root: Path, path: Path, *, admissions=(), fixture=None) -> BundleFile:
     relative = path.relative_to(root).as_posix()
     _safe_relative(relative)
     if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
         path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
         and not is_public_pem(path)
+        and not (path.suffix.lower() == ".key" and fixture is not None)
     ):
         raise BundleError(f"bundle_secret_file_forbidden: {relative}")
     try:
-        digest, size = inspect_public_file(path, admissions)
+        digest, size = inspect_public_file(path, admissions, fixture=fixture)
     except ValueError as exc:
         raise BundleError(f"bundle_secret_material_detected: {relative}: {exc}") from exc
     return BundleFile(path=relative, sha256=digest, size=size)

@@ -546,3 +546,26 @@ def test_generated_manifest_cannot_grant_public_material_admission(broker):
     assert not FakeProvider.instances
     broker.config.public_material_admissions = [admission]
     assert dispatch(broker, payload)['session']
+
+
+def test_fixture_only_policy_requires_trusted_broker_review(broker):
+    from fi.alk.harness.public_material import PublicTestFixtureAdmission
+    data = b'-----BEGIN PRIVATE KEY----- fixed negative test'
+    path = broker.source / 'test.ts'
+    path.write_bytes(data)
+    broker.source_digest = source_fingerprint(broker.source)
+    review = PublicTestFixtureAdmission(
+        source_digest=broker.source_digest, path='test.ts',
+        file_sha256=hashlib.sha256(data).hexdigest(),
+        reason='Whole fixed test file reviewed', evidence='https://example.org/pinned-source',
+    )
+    payload = request(broker.source)
+    manifest = EnvironmentBundleV2.model_validate(payload['manifest'])
+    manifest.provenance.public_test_fixture_admissions = [review]
+    manifest.digest = seal_bundle_v2(manifest)
+    payload['manifest'] = manifest.model_dump(mode='json')
+    with pytest.raises(module.BrokerError, match='admission_mismatch'):
+        dispatch(broker, payload)
+    assert not FakeProvider.instances
+    broker.config.public_test_fixture_admissions = [review]
+    assert dispatch(broker, payload)['session']

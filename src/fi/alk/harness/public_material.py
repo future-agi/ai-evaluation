@@ -72,15 +72,13 @@ def is_public_pem(path: Path) -> bool:
     return True
 
 
-class PublicMaterialAdmission(BaseModel):
-    """Operator review of one token-shaped public value in one immutable source file."""
+class ReviewedPublicSourceFile(BaseModel):
+    """Operator evidence bound to the complete immutable source file."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     source_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     path: str = Field(min_length=1, max_length=4096)
     file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    pattern: Literal["github_token", "aws_access_key", "sk_token"]
-    match_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     reason: str = Field(min_length=1, max_length=2000)
     evidence: str = Field(min_length=1, max_length=2000)
 
@@ -105,11 +103,25 @@ class PublicMaterialAdmission(BaseModel):
         return self
 
 
+class PublicMaterialAdmission(ReviewedPublicSourceFile):
+    pattern: Literal["github_token", "aws_access_key", "sk_token"]
+    match_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PublicTestFixtureAdmission(ReviewedPublicSourceFile):
+    """Whole-file review of publicly committed fixed cryptographic test material."""
+
+    purpose: Literal["public_test_fixture"] = "public_test_fixture"
+
+
 _PATTERN_NAMES = ("private_key", "github_token", "aws_access_key", "sk_token")
 
 
 def inspect_public_file(
-    path: Path, admissions: Sequence[PublicMaterialAdmission] = ()
+    path: Path,
+    admissions: Sequence[PublicMaterialAdmission] = (),
+    *,
+    fixture: PublicTestFixtureAdmission | None = None,
 ) -> tuple[str, int]:
     """Scan complete files so tokens crossing read boundaries cannot escape review."""
     with path.open("rb") as stream:
@@ -120,9 +132,13 @@ def inspect_public_file(
                 allowed = {(item.pattern, item.match_sha256) for item in admissions}
                 if any(item.file_sha256 != digest for item in admissions):
                     raise ValueError("public_material_admission_file_changed")
+                if fixture is not None and fixture.file_sha256 != digest:
+                    raise ValueError("public_test_fixture_file_changed")
                 observed = set()
                 for name, pattern in zip(_PATTERN_NAMES, SECRET_CONTENT_PATTERNS):
                     for match in pattern.finditer(data):
+                        if name == "private_key" and fixture is not None:
+                            continue
                         finding = (name, hashlib.sha256(match[0]).hexdigest())
                         if finding not in allowed or name == "private_key":
                             raise ValueError("public_material_unreviewed_match")
@@ -133,6 +149,8 @@ def inspect_public_file(
             digest = hashlib.sha256(b"").hexdigest()
             if admissions:
                 raise ValueError("public_material_admission_match_missing")
+            if fixture is not None and fixture.file_sha256 != digest:
+                raise ValueError("public_test_fixture_file_changed")
     return digest, size
 
 
