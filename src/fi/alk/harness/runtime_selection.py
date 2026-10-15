@@ -118,7 +118,7 @@ def select_runtime(
     services = {
         name: {
             key: _interpolate_structure(value, public_environment or {})
-            if key in {"build", "image", "ports", "depends_on", "deploy"}
+            if key in {"build", "image", "ports", "depends_on", "deploy", "volumes"}
             else value
             for key, value in service.items()
         }
@@ -494,7 +494,7 @@ def _rebase_service(service, base, destination, root, environment):
         if isinstance(mount, str):
             parts = mount.split(":")
             if parts[0].startswith((".", "/", "~")):
-                parts[0] = relative(parts[0])
+                parts[0] = relative(parts[0], interpolate=False)
                 mounts[index] = ":".join(parts)
         elif isinstance(mount, dict) and mount.get("type") == "bind":
-            mount["source"] = relative(mount["source"])
+            mount["source"] = relative(mount["source"], interpolate=False)
