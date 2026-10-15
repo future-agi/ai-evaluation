@@ -311,13 +311,13 @@ def _merge_traces_headers(ours: list[tuple[str, str]]) -> None:
     )
 
 
-class _CallStamp:
+class _CallFile:
     def __init__(self, path: str) -> None:
         self._path = path
         self._seen = None
         self._call = None
 
-    def _current_call(self):
+    def current(self):
         try:
             stat = os.stat(self._path)
         except FileNotFoundError:
@@ -329,23 +329,6 @@ class _CallStamp:
             self._seen = seen
         return self._call
 
-    def on_start(self, span, parent_context=None) -> None:
-        try:
-            call = self._current_call()
-            if call:
-                span.set_attribute(_CALL_KEY, call)
-        except Exception:
-            pass
-
-    def on_end(self, span) -> None:
-        pass
-
-    def shutdown(self) -> None:
-        pass
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        return True
-
 
 def _patch_tracer_provider(module, path: str) -> None:
     cls = module.TracerProvider
@@ -353,11 +336,22 @@ def _patch_tracer_provider(module, path: str) -> None:
     if getattr(original, _PATCHED, False):
         return
 
+    call_file = _CallFile(path)
+
+    class CallStamp(module.SpanProcessor):
+        def on_start(self, span, parent_context=None) -> None:
+            try:
+                call = call_file.current()
+                if call:
+                    span.set_attribute(_CALL_KEY, call)
+            except Exception:
+                pass
+
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
         original(self, *args, **kwargs)
         try:
-            self.add_span_processor(_CallStamp(path))
+            self.add_span_processor(CallStamp())
         except Exception:
             _write("failed")
 
