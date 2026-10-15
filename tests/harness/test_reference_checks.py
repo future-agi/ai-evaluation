@@ -166,3 +166,26 @@ def test_a_check_is_given_only_the_arguments_a_step_marks_fixed():
         {"tool": "hand_over", "arguments": {"account": "A-1"}},
         {"tool": "look_up", "arguments": {"account": "A-1"}},
     ]
+
+
+def test_a_value_marked_fixed_must_come_from_the_caller_their_record_or_the_tools_options():
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import _fixed_values_from_nowhere
+
+    class Trial:
+        def state(self) -> dict[str, Any]:
+            return {"policies": [{"policy_number": "MM-4471902"}]}
+
+    scenario = Scenario(
+        name="hurt_in_a_crash",
+        instruction="You were rear-ended this morning and your passenger is hurt. Ask whether glass is covered.",
+        solution=[
+            Step(tool="verify", arguments={"policy_number": "MM-4471902"}, fixed=["policy_number"]),
+            Step(tool="get_coverage", arguments={"coverage_type": "glass"}, fixed=["coverage_type"]),
+            Step(tool="hand_over", arguments={"queue": "injury_claims", "reason": "hurt"}, fixed=["queue"]),
+        ],
+    )
+    options = {"get_coverage": {"coverage_type": "Literal['glass', 'collision']"}, "hand_over": {"queue": "str"}}
+    said = _fixed_values_from_nowhere(scenario, Trial(), options)
+    assert len(said) == 1 and "hand_over queue='injury_claims'" in said[0]
+    assert "policy_number" not in said[0] and "coverage_type" not in said[0]
