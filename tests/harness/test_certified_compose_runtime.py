@@ -47,6 +47,35 @@ def test_publish_only_declared_loopback_ports_and_project_owned_volume(tmp_path)
     assert original == topology()
 
 
+@pytest.mark.parametrize("option", ["no-new-privileges:true", "no-new-privileges=true"])
+def test_preserve_restrictive_container_security(tmp_path, option):
+    document = topology()
+    document["services"]["chat"].update(
+        cap_drop=["NET_RAW", "NET_ADMIN"], security_opt=[option]
+    )
+    normalized = normalize_compose(document, tmp_path, capabilities=capabilities())
+    assert normalized["services"]["chat"]["cap_drop"] == ["NET_RAW", "NET_ADMIN"]
+    assert normalized["services"]["chat"]["security_opt"] == ["no-new-privileges:true"]
+
+
+@pytest.mark.parametrize("value", ["ALL", None, [1], ["--privileged"], ["NET_RAW\n"]])
+def test_reject_malformed_capability_drops(tmp_path, value):
+    document = topology()
+    document["services"]["chat"]["cap_drop"] = value
+    with pytest.raises(ComposeRuntimeError, match="compose_cap_drop_invalid"):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+@pytest.mark.parametrize(
+    "value", [None, "no-new-privileges:true", ["no-new-privileges:false"], [{}]]
+)
+def test_reject_unsafe_security_options(tmp_path, value):
+    document = topology()
+    document["services"]["chat"]["security_opt"] = value
+    with pytest.raises(ComposeRuntimeError, match="fields_forbidden"):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
