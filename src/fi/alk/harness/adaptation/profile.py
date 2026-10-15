@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..bundle_v2 import _canonical_json
 from ..provider_import import (
     ProviderImportError,
     ToolAdmission,
@@ -15,7 +16,6 @@ from ..provider_import import (
     admitted_tool_definitions,
     inspect_provider_target,
 )
-from ..bundle_v2 import _canonical_json
 from ..provider_lifecycle import ProviderType
 from ..releases import AgentRef, BindingMode, ToolDefinition, seal_agent_binding
 from .errors import AdaptationFailure

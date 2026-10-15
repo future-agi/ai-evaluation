@@ -10,7 +10,7 @@ changes the environment only through the tools that prove each change.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ from .session import Stage
 from .tools import schema
 
 BUILDER = "builder"
+BIND_AGENT = "bind-agent"
 KNOWLEDGE_SERVER = "knowledge"
 BUILDER_TURNS = 200
 # The builder's own skill is its system prompt; every other skill is loaded when needed.
@@ -590,6 +591,44 @@ def open_for_building(
         builtins=tuple(dict.fromkeys((*work.spec.builtins, *FILE_TOOLS, ASK_TOOL))),
         workers=dict(work.spec.workers),
         cwd=str(out),
+        max_turns=BUILDER_TURNS,
+        model=chosen_model(),
+        ask=ask,
+    )
+    return Stage(spec, name=BUILDER)
+
+
+def open_for_adapting(
+    workbench: Any,
+    *,
+    approve: Callable[[str, list[str]], Awaitable[str]],
+    ask: Callable[..., Any] | None = None,
+    hosted_prompt: str = "",
+) -> Stage:
+    """The same harness on a prebuilt environment it does not own, binding the person's agent to
+    it. The environment and its suite are sealed: the binding tools are the only way to change
+    anything, and they, not the session, decide whether the binding is proved and sealed."""
+    from .adaptation.workbench import binding_server
+
+    adaptation = binding_server(workbench, approve)
+    spec = SessionSpec(
+        system_prompt=(
+            load_skill(BUILDER)
+            + "\n\n## What you know\n\nLoad any of these with `read_skill` before you answer a "
+            "question it covers or do work it governs.\n\n"
+            + "\n".join(f"- `{name}`: {about}" for name, about in skill_index().items())
+            + "\n\n## The work in front of you now\n\n"
+            + load_skill(BIND_AGENT, preamble=False)
+            + "\n\n## This adaptation\n\n"
+            + workbench.brief()
+            + hosted_prompt
+        ),
+        servers={
+            adaptation.name: adaptation,
+            KNOWLEDGE_SERVER: knowledge_server(None, workbench.output),
+        },
+        builtins=(ASK_TOOL,) if ask is not None else (),
+        cwd=str(workbench.output),
         max_turns=BUILDER_TURNS,
         model=chosen_model(),
         ask=ask,

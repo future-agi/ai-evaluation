@@ -78,7 +78,9 @@ def scratch_cluster(parent: Path | None = None) -> Iterator[str]:
             data_dir=data_dir, credentials=credentials, pwfile=pwfile
         )
         argv[0] = _binary(argv[0])
-        bootstrap = subprocess.run(argv, capture_output=True, text=True, **ids)
+        bootstrap = subprocess.run(
+            argv, capture_output=True, text=True, check=False, **ids
+        )
         if bootstrap.returncode != 0:
             raise RuntimeError(
                 f"initdb exited {bootstrap.returncode}: {bootstrap.stderr[-2000:]}"

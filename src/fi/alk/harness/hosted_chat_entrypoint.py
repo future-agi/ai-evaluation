@@ -274,6 +274,8 @@ class HostedChatRuntime:
         self._opened_with: tuple[bool, bool] | None = None
         self._last_progress: Any = None
         self._idle_turns = 0
+        # Set when an adaptation job's session opens: the binding work and its gates.
+        self.workbench: Any = None
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
@@ -293,17 +295,20 @@ class HostedChatRuntime:
         from .poc_guest_booking import guest_booking_policy_job
         from .understand import load as load_contract
 
-        policy_job = guest_booking_policy_job(self.job)
-        contract = load_contract(self.workspace)
-        self._opened_with = self._what_exists()
-        if not self._opened_with[1]:
-            stage = self._open_for_building(contract)
+        if self._adapting():
+            stage = await self._open_for_adapting()
         else:
-            try:
-                overview = await self.client.overview()
-            except ConversationTransportError:
-                overview = None
-            stage = self._open_built(contract, overview, policy_job)
+            policy_job = guest_booking_policy_job(self.job)
+            contract = load_contract(self.workspace)
+            self._opened_with = self._what_exists()
+            if not self._opened_with[1]:
+                stage = self._open_for_building(contract)
+            else:
+                try:
+                    overview = await self.client.overview()
+                except ConversationTransportError:
+                    overview = None
+                stage = self._open_built(contract, overview, policy_job)
         if not self._control_only():
             self._guard(stage.spec)
         capabilities = self.client.capabilities
@@ -341,6 +346,35 @@ class HostedChatRuntime:
             "requested work as completed until a tool result proves it."
             + _HOSTED_CHAT_CAPABILITIES
         )
+
+    def _adapting(self) -> bool:
+        """An adaptation job: the harness binds the person's agent to a prebuilt environment."""
+        return isinstance((self.job.get("metadata") or {}).get("adaptation"), dict)
+
+    async def _open_for_adapting(self) -> Stage:
+        from . import spend
+        from .adaptation.hosted import load_workbench
+        from .builder import open_for_adapting
+
+        # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+        spend.journal_to(self.workspace / "cost.json")
+        self.workbench = await load_workbench(self.workspace)
+        return open_for_adapting(
+            self.workbench,
+            approve=self._approve,
+            ask=self._ask,
+            hosted_prompt=(
+                "\n\n## Hosted conversation behavior\n"
+                "Reply directly to the user in this conversation. Never describe requested work "
+                "as completed until a tool result proves it."
+            ),
+        )
+
+    async def _approve(self, question: str, options: list[str]) -> str:
+        """The person's answer to a question code asks, not the model."""
+        answer = await self._ask("finish_adaptation", {"question": question, "options": options}, None)
+        content = answer.get("content") if isinstance(answer, dict) else None
+        return "\n".join(str(part.get("text") or "") for part in content or [])
 
     def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
         from .builder import environment_brief, open_builder
@@ -1072,24 +1106,36 @@ class HostedChatRuntime:
         if (self.workspace / _PENDING_QUESTION).is_file():
             return False
         exists = self._what_exists()
-        progress = (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        progress = (
+            (self.workbench.fingerprint() if self.workbench is not None else "")
+            if self._adapting()
+            else (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        )
         if progress != self._last_progress:
             self._last_progress, self._idle_turns = progress, 0
         elif self._idle_turns >= 3:
             return False
         self._idle_turns += 1
-        await asyncio.to_thread(self._after_saved)
-        if self._opened_with is not None and exists != self._opened_with:
-            await self.conversation.close()
-            said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
-        else:
-            asked = int(self.job.get("scenario_count") or 0)
+        if self._adapting():
+            missing = self.workbench.unfinished() if self.workbench is not None else []
             said = (
-                f"[The build is not finished: the test environment for this agent, with {asked} "
-                "scenarios. Carry on, and call finish_build when it is.]"
-                if asked
-                else "[The build is not finished. Carry on, and call finish_build when it is.]"
+                "[The adaptation is not finished"
+                + (":\n- " + "\n- ".join(missing) if missing else "")
+                + "\nCarry on, and call finish_adaptation, or stop_adaptation with the reason.]"
             )
+        else:
+            await asyncio.to_thread(self._after_saved)
+            if self._opened_with is not None and exists != self._opened_with:
+                await self.conversation.close()
+                said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
+            else:
+                asked = int(self.job.get("scenario_count") or 0)
+                said = (
+                    f"[The build is not finished: the test environment for this agent, with {asked} "
+                    "scenarios. Carry on, and call finish_build when it is.]"
+                    if asked
+                    else "[The build is not finished. Carry on, and call finish_build when it is.]"
+                )
         await self._handle(
             {
                 "sequence": self.client.command_watermark,

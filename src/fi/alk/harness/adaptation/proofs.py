@@ -1,29 +1,20 @@
-"""Proving candidate scenarios for adaptation, through the release sealer only.
+"""Laying out and proving suites for adaptation, through the release sealer only.
 
-The sealer proves a whole suite or refuses it, so a scenario is proved on its own by sealing a
-scratch suite that holds just that scenario. Nothing here re-implements a gate: every verdict is
-`seal_suite_release` (SQLite and PostgreSQL) or `prove_binding`.
+Nothing here re-implements a gate: every verdict is `seal_suite_release` (SQLite and PostgreSQL)
+or `prove_binding`.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..catalogue import Catalogue, save_catalogue
-from ..releases import (
-    PolicyProfile,
-    ReleaseError,
-    ScenarioOrigin,
-    SuiteScenario,
-    load_suite_release,
-    seal_suite_release,
-)
+from ..releases import SuiteScenario, load_suite_release
 
 SIMULATOR_PROMPT = "simulator_prompt.md"
 
@@ -70,80 +61,6 @@ def write_suite_tree(
 def _sub_goal_names(folder: Path) -> list[str]:
     body = json.loads((folder / "scenario.json").read_text(encoding="utf-8"))
     return [str(name) for name in body.get("sub_goals") or []]
-
-
-def _seal_scratch(
-    workdir: Path,
-    candidates: Sequence[Candidate],
-    catalogue: Catalogue,
-    simulator_prompt: str,
-    *,
-    environment_root: Path,
-    profile: PolicyProfile,
-    postgres_dsn: str,
-) -> Path:
-    root = Path(tempfile.mkdtemp(prefix="scratch-suite-", dir=workdir))
-    write_suite_tree(root, candidates, catalogue, simulator_prompt)
-    seal_suite_release(
-        root,
-        name="adaptation_scratch",
-        environment_root=environment_root,
-        scenarios=[
-            candidate.entry.model_copy(
-                update={"origin": ScenarioOrigin.BASE, "derived_from": None}
-            )
-            for candidate in candidates
-        ],
-        policy_profile=profile,
-        postgres_dsn=postgres_dsn,
-    )
-    return root
-
-
-def prove_candidates(
-    workdir: Path,
-    candidates: Sequence[Candidate],
-    catalogue: Catalogue,
-    simulator_prompt: str,
-    *,
-    environment_root: Path,
-    profile: PolicyProfile,
-    postgres_dsn: str,
-) -> tuple[dict[str, str], Path | None]:
-    """Why each candidate does not prove under `profile`, and a sealed suite of those that do.
-
-    The whole set is tried first; only a refusal costs one scratch seal per scenario.
-    """
-    if not candidates:
-        return {}, None
-    options = {
-        "environment_root": environment_root,
-        "profile": profile,
-        "postgres_dsn": postgres_dsn,
-    }
-    try:
-        return {}, _seal_scratch(
-            workdir, candidates, catalogue, simulator_prompt, **options
-        )
-    except ReleaseError as exc:
-        if exc.code != "suite_scenario_unproved":
-            raise
-    failures: dict[str, str] = {}
-    held: list[Candidate] = []
-    for candidate in candidates:
-        try:
-            _seal_scratch(workdir, [candidate], catalogue, simulator_prompt, **options)
-        except ReleaseError as exc:
-            if exc.code != "suite_scenario_unproved":
-                raise
-            failures[candidate.key] = exc.detail
-            continue
-        held.append(candidate)
-    if not held:
-        return failures, None
-    return failures, _seal_scratch(
-        workdir, held, catalogue, simulator_prompt, **options
-    )
 
 
 @dataclass(frozen=True)
