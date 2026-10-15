@@ -549,10 +549,11 @@ _SPAWN_GUARDED_KEYS = (
     "FI_WORKER_HEALTH_PORT",
 )
 
-# The mark hook alone, for a process that needs no LiveKit hook. Any failure to import or run it
-# must leave the customer's interpreter exactly as it would be without it.
+# The mark hook alone, for a process that needs no LiveKit hook. A failure to import or run it
+# writes the failed line and the process starts without the mark; the next `sitecustomize` on the
+# path, which `install()` runs, does not run either.
 _SIMULATION_MARK_SITECUSTOMIZE = (
-    "# Installs the simulation mark hook beside this file; a failure leaves the process as is.\n"
+    "# Installs the simulation mark hook beside this file; a failure is reported on stderr.\n"
     "try:\n"
     "    import simulation_mark_bootstrap\n"
     "    simulation_mark_bootstrap.install()\n"
@@ -895,7 +896,8 @@ def select_process_secrets(
     OBSERVABILITY_EXPORT` is the opposite: the platform owns it and, when
     `include_observability_export` is true (the process's platform-decided environment holds
     `FI_SIMULATION_EXPORT`), the process gets it whether or not the bundle claims it
-    (preflight refuses a claim, so a bundle cannot ask). Without a mode it gets none.
+    (preflight refuses a claim, and a claim that reaches here is dropped). Without a mode it gets
+    none.
     """
     claimed = {
         purpose.value
@@ -904,6 +906,7 @@ def select_process_secrets(
         not in {
             SecretPurpose.SOURCE_CHECKOUT,
             SecretPurpose.SIMULATOR_PROVIDER,
+            SecretPurpose.OBSERVABILITY_EXPORT,
         }
     }
     if include_observability_export:
@@ -5461,9 +5464,8 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     The platform decides at launch whether the run exports and writes the answer into
     ``/work/job.json`` as ``metadata.customer_code_environment``. A missing file, metadata or
     key leaves the run exactly as it would be without the feature, silently. A value of the wrong
-    shape does too, but with one warning that names neither the key nor the value, because the
-    export secrets are still injected and someone has to be able to find out why the run is
-    unmarked. Nothing here raises and nothing is re-validated: the platform already checked the
+    shape does too, but with one warning that names neither the key nor the value, so that
+    someone can find out why the run is neither marked nor exporting. Nothing here raises and nothing is re-validated: the platform already checked the
     names and the values.
     """
     try:

@@ -27,8 +27,11 @@ try:
     import simulation_mark_bootstrap
 
     simulation_mark_bootstrap.install()
-except ImportError:
-    pass
+except ImportError as exc:
+    if exc.name != "simulation_mark_bootstrap":
+        import sys
+
+        sys.stderr.write("simulation mark hook: failed\n")
 except Exception:  # noqa: BLE001 - the mark must never cost tool tracing or worker isolation
     import sys
 

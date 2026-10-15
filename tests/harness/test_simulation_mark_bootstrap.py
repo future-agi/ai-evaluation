@@ -465,19 +465,39 @@ def _scenario_system_exit(tmp_path: Path, world: Path) -> None:
     "scenario",
     [
         pytest.param(_scenario_sdk_after, id="sdk_after"),
-        pytest.param(_scenario_dormant(None), id="dormant_absent"),
-        pytest.param(_scenario_dormant(""), id="dormant_empty"),
+        pytest.param(_scenario_sdk_before, id="sdk_before"),
+        pytest.param(_scenario_reload, id="reload"),
+        pytest.param(_scenario_original_raises, id="original_raises"),
+        pytest.param(_scenario_merge_raises, id="merge_raises"),
+    ],
+)
+def test_hook_merges_the_mark_into_every_resource(tmp_path: Path, scenario) -> None:
+    scenario(tmp_path, _world(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        pytest.param(_scenario_dormant(None), id="absent"),
+        pytest.param(_scenario_dormant(""), id="empty"),
         pytest.param(
             _scenario_dormant(
                 "project_name=Our%20Agent,fi.simulation.run_id=run-1,service.name=c"
             ),
-            id="dormant_no_origin",
+            id="no_origin",
         ),
-        pytest.param(_scenario_sdk_before, id="sdk_before"),
-        pytest.param(_scenario_reload, id="reload"),
         pytest.param(_scenario_never_imports_sdk, id="never_imports_sdk"),
-        pytest.param(_scenario_original_raises, id="original_raises"),
-        pytest.param(_scenario_merge_raises, id="merge_raises"),
+    ],
+)
+def test_hook_touches_nothing_without_the_origin_pair_or_the_sdk(
+    tmp_path: Path, scenario
+) -> None:
+    scenario(tmp_path, _world(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
         pytest.param(_scenario_chain_layouts, id="chain_layouts"),
         pytest.param(_scenario_chain_when_dormant, id="chain_when_dormant"),
         pytest.param(_scenario_broken_repo_hook, id="broken_repo_hook"),
@@ -485,7 +505,7 @@ def _scenario_system_exit(tmp_path: Path, world: Path) -> None:
         pytest.param(_scenario_system_exit, id="system_exit"),
     ],
 )
-def test_hook_merges_the_mark_into_every_resource(tmp_path: Path, scenario) -> None:
+def test_hook_hands_on_to_the_next_sitecustomize(tmp_path: Path, scenario) -> None:
     scenario(tmp_path, _world(tmp_path))
 
 
@@ -658,6 +678,10 @@ import opentelemetry.sdk.resources as resources
 import simulation_mark_bootstrap
 
 simulation_mark_bootstrap.install()
+simulation_mark_bootstrap.install()
+finders = sum(
+    type(finder) is simulation_mark_bootstrap._ResourceFinder for finder in sys.meta_path
+)
 spec = importlib.util.spec_from_file_location(
     "second_copy", os.path.join(os.environ["WORLD"], "simulation_mark_bootstrap.py")
 )
@@ -665,10 +689,16 @@ second = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(second)
 second.install()
 importlib.reload(resources)
-print(json.dumps({"attributes": dict(resources.Resource({"x": "y"}).attributes)}))
+print(json.dumps({
+    "attributes": dict(resources.Resource({"x": "y"}).attributes),
+    "finders": finders,
+}))
 """
     result = _run(script, path=[world], cwd=tmp_path, extra_env={"WORLD": str(world)})
-    assert _reported(result)["attributes"] == {"x": "y", **OURS}
+    reported = _reported(result)
+    assert reported["attributes"] == {"x": "y", **OURS}
+    # The sitecustomize already installed it, so neither call here adds a finder.
+    assert reported["finders"] == 1
     # One line for the first patch and one for the class the reload made; the second install
     # and the second copy patched nothing the first had not.
     assert result.stderr == APPLIED * 2
