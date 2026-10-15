@@ -271,7 +271,9 @@ class HTTPAgentWrapper(AgentWrapper):
             headers = _template_headers(
                 headers,
                 self.headers_template,
-                _template_context(input, extra=self._setup_values),
+                _template_context(
+                    input, extra={**self._setup_values, **self._setup_secret_values}
+                ),
             )
             self._response_text = ""
             self._response_status = 0
