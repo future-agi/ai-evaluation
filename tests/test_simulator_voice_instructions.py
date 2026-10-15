@@ -9,6 +9,11 @@ def test_simulator_waits_for_final_confirmation_before_closing() -> None:
     assert "do not reveal or request the later action" in SIMULATOR_INSTRUCTIONS
 
 
+def test_simulator_speaks_opaque_identifiers_character_by_character() -> None:
+    assert "R E S, J K nine zero" in SIMULATOR_INSTRUCTIONS
+    assert "one character at a time" in SIMULATOR_INSTRUCTIONS
+
+
 def test_the_caller_may_not_claim_an_action_it_cannot_perform():
     """The deadlock this closes: the caller says it tapped a link, the world never changed, and the
     agent waits for a state change that cannot arrive."""

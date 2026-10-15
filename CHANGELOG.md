@@ -36,6 +36,17 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   ringing call so people and slow lines could never answer; the engine now
   waits for `sip.callStatus == "active"` in the room within the answer
   deadline and reports a rejected call's reason (e.g. `user_unavailable`).
+- With `AGENTCC_API_KEY` (and `AGENTCC_BASE_URL`) set, the simulated caller's
+  LLM and the `vertex-gemini` harness backend reach Gemini through Agent
+  Command Center in the Gemini API's own format, as the claude backend already
+  did, so no Vertex credential is needed. `fi.agentcc` is the one place that
+  reads the gateway settings.
+- Simulator model fallbacks: `SIMULATOR_LLM_FALLBACK_MODELS` (ordered,
+  comma-separated) gives the simulated caller models to switch to when an
+  attempt fails or times out before it speaks.
+- The `vertex-gemini` backend no longer fails on its first reply with the locked
+  ADK (2.7.1), which does not re-export `GetSessionConfig` from
+  `google.adk.sessions`.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

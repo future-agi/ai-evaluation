@@ -8,6 +8,8 @@ ALK_HARNESS=claude          # default; Claude Code loop, exactly the pre-seam be
 ALK_HARNESS=vertex-gemini   # Google's ADK against Vertex (location=global)
 ALK_HARNESS_MODEL=...       # optional; unset means the backend's own default
 ALK_VERTEX_LOCATION=...     # vertex-gemini only; defaults to global (Gemini 3.x lives there)
+AGENTCC_API_KEY=...         # both backends then reach their models through Agent Command Center
+AGENTCC_BASE_URL=...        # (fi/agentcc.py)
 ```
 
 ## The seam
