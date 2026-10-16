@@ -267,7 +267,6 @@ class HostedChatRuntime:
         self._last_health = ""
         # Set when the person answered a question in this turn, or when the opening health check
         # asked for a small repair: then consequential writes are allowed.
-        self._repairing = False
         self._opened_with: tuple[bool, bool] | None = None
         self._last_progress: Any = None
         self._idle_turns = 0
@@ -302,11 +301,7 @@ class HostedChatRuntime:
                 overview = None
             stage = self._open_built(contract, overview, policy_job)
         if not self._control_only():
-            # Once the environment is published, consequential changes wait for the person's yes.
-            stage.spec.servers = {
-                name: replace(server, tools=[self._confirmed(one) for one in server.tools])
-                for name, server in stage.spec.servers.items()
-            }
+            self._guard(stage.spec)
         capabilities = self.client.capabilities
         stage.configure(
             apply_chat_policy(
@@ -431,22 +426,38 @@ class HostedChatRuntime:
 
         return load_contract(self.workspace) is not None, bool(world_saved(self.workspace))
 
+    def _guard(self, spec: SessionSpec) -> None:
+        """Once the environment is published, consequential changes wait for the person's yes,
+        whoever makes them: the builder or a sub-agent it briefed."""
+
+        def guarded(servers: dict[str, Any]) -> dict[str, Any]:
+            return {
+                name: replace(server, tools=[self._confirmed(one) for one in server.tools])
+                for name, server in servers.items()
+            }
+
+        spec.servers = guarded(spec.servers)
+        spec.workers = {
+            name: replace(worker, servers=guarded(worker.servers))
+            for name, worker in spec.workers.items()
+        }
+
     def _confirmed(self, spec: Any) -> Any:
         """A consequential tool that runs only once the person has said yes to this very call.
 
         A change to what a scenario tests, a removal, a replaced sub-goal, or a change to the world
         or contract does not run on the strength of the request alone: the person is asked to
-        confirm the exact call, and only that answer runs it. Adding scenarios, surface edits and
-        repairs of a broken suite do not ask.
+        confirm the exact call, and only that answer runs it. Adding scenarios and surface edits
+        do not ask.
         """
         if spec.name not in _NEEDS_CONFIRMATION:
             return spec
         handler = spec.handler
 
         async def guarded(args: dict[str, Any]) -> Any:
-            if spec.name == "submit_scenario" and (self._repairing or not self._changes_meaning(args)):
+            if spec.name == "submit_scenario" and not self._changes_meaning(args):
                 return await handler(args)
-            if spec.name == "add_sub_goal" and (self._repairing or not self._replaces_sub_goal(args)):
+            if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
             answer = await self._ask(
                 spec.name,
@@ -683,10 +694,7 @@ class HostedChatRuntime:
         return tool_server(name="platform", version="0.1.0", tools=tools)
 
     def _note_health(self, problems: str) -> None:
-        # Restoring a broken suite changes nothing the person decided, so its scenarios are
-        # rewritten unasked; removals and world or contract changes still wait for a yes.
         self._last_health = problems
-        self._repairing = True
 
     def _ledger(self) -> dict[str, Any]:
         try:
@@ -1143,8 +1151,6 @@ class HostedChatRuntime:
         assistant_message_id = str(uuid.uuid4())
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
-        # The platform's check of a finished build corrects the builder's own work, as a repair does.
-        self._repairing = bool(payload.get("builder_check"))
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,

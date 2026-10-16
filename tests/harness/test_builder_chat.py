@@ -312,9 +312,9 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     assert "drop_scenarios" in asked[0] and "add_sub_goal" in asked[2]
 
     runtime._note_health("one is broken")
-    assert asyncio.run(submit.handler(meaning)).get("is_error") is None
     answers.append("No")
-    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
+    assert asyncio.run(submit.handler(meaning))["is_error"] is True
+    assert asyncio.run(submit.handler(surface)).get("is_error") is None
     assert len(calls) == 5
 
 
@@ -534,38 +534,57 @@ def test_a_retried_run_start_sends_the_same_operation_id(monkeypatch):
     assert len(sent) == 2 and sent[0]["operation_id"] == sent[1]["operation_id"]
 
 
-def test_the_platform_check_of_a_build_repairs_without_asking_but_drops_still_ask(tmp_path, monkeypatch):
-    from fi.alk.harness.backends import ToolSpec
+def test_a_sub_agent_replacing_a_shared_sub_goal_waits_for_a_yes(tmp_path, monkeypatch):
+    from fi.alk.harness.backends import SessionSpec, ToolSpec, WorkerSpec, tool_server
 
-    client = BuilderClient()
-    runtime = _runtime(tmp_path, client, monkeypatch)
-    runtime.conversation = EditingConversation(tmp_path, writes=False)
-    runtime._published_fingerprint()
-    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(json.dumps({"name": "one", "instruction": "refund"}))
+    runtime = _runtime(tmp_path, BuilderClient(), monkeypatch)
     (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
-    asked = []
+    ran, asked = [], []
+
+    async def handler(args):
+        ran.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
 
     async def ask(tool, payload, context):
         asked.append(tool)
         return {"content": [{"type": "text", "text": "No"}]}
 
-    async def handler(args):
-        return {"content": [{"type": "text", "text": "kept"}]}
-
     runtime._ask = ask
-    _turn(runtime, {"content": "The environment is validated and sealed.", "builder_check": True})
-    assert runtime._repairing is True
+    server = tool_server(name="scenarios", version="1", tools=[ToolSpec("add_sub_goal", "", {}, handler)])
+    spec = SessionSpec(
+        system_prompt="", servers={"scenarios": server},
+        workers={"scenario_writer": WorkerSpec(description="", instructions="", servers={"scenarios": server})},
+    )
+    runtime._guard(spec)
+    replace_goal = spec.workers["scenario_writer"].servers["scenarios"].tools[0].handler
 
-    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
-    goal = runtime._confirmed(ToolSpec("add_sub_goal", "", {}, handler))
-    drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
-    assert asyncio.run(submit.handler({"name": "one", "instruction": "cancel"})).get("is_error") is None
-    assert asyncio.run(goal.handler({"name": "refunded"})).get("is_error") is None
-    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
-    assert asked == ["drop_scenarios"]
+    assert asyncio.run(replace_goal({"name": "refunded"}))["is_error"] is True
+    assert asyncio.run(replace_goal({"name": "a-new-goal"})).get("is_error") is None
+    assert asked == ["add_sub_goal"] and ran == [{"name": "a-new-goal"}]
 
-    asyncio.run(runtime._handle({"sequence": 2, "message_id": "m-2", "kind": "user_message", "payload": {"content": "make it harder"}}))
-    assert runtime._repairing is False
+
+def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
+    from fi.alk.harness.backends.files import file_tools
+    from fi.alk.harness.backends.vertex_gemini import _spec_tool
+
+    work = tmp_path / "work"
+    (work / "scenarios").mkdir(parents=True)
+    (work / "scenarios" / "a.json").write_text("SENTINEL-free")
+    (work / ".env").write_text("SENTINEL=1")
+    (work / "service_account.json").write_text('{"SENTINEL": 1}')
+    tools = {spec.name: _spec_tool(spec.name, spec) for spec in file_tools(str(work / "scenarios"))}
+
+    def run(name, **args):
+        result = asyncio.run(tools[name].run_async(args=args, tool_context=None))
+        return result["content"][0]["text"]
+
+    assert "SENTINEL=1" not in run("Read", file_path="../.env")
+    assert "SENTINEL" not in run("Read", file_path=str(work / "service_account.json")).replace("SENTINEL-free", "")
+    found = run("Grep", pattern="SENTINEL", path="..")
+    assert "SENTINEL-free" in found and "SENTINEL=1" not in found and '{"SENTINEL' not in found
+    assert ".env" not in run("Glob", pattern="*", path="..")
+    assert "a.json" in run("Glob", pattern="*.json")
+    assert "kept out of this session" in run("Grep", pattern="x", path="/")
 
 
 def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
