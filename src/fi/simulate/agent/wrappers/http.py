@@ -1115,7 +1115,7 @@ def _tool_result_error(result: Any, path: str) -> bool:
         return False
     current = json.loads(result) if isinstance(result, str) else result
     json.dumps(current, allow_nan=False)
-    segments = [part for part in path.removeprefix("$").strip(".").split(".") if part]
+    segments = path.removeprefix("$.").split(".")
     for segment in segments:
         if isinstance(current, Mapping):
             if segment not in current:

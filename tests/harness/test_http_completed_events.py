@@ -273,6 +273,7 @@ def test_page_budget_fails_instead_of_partial_evidence():
         {"correlation_header": "X-Auth\r\nInjected"},
         {"max_pages": 21},
         {"observation_kind": "action"},
+        {"error_path": "", "result_error_path": "error"},
     ],
 )
 def test_contract_rejects_invalid_observation_config(changes):

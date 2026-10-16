@@ -1204,7 +1204,7 @@ def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, 
         "action_kind": "function_call", "observation_kind": "function_call_output",
         "action_id_path": "call_id", "observation_action_id_path": "call_id",
         "name_path": "name", "arguments_path": "arguments", "result_path": "output",
-        "status_path": "status", "completed_status": "completed",
+        "status_path": "status", "completed_status": "completed", "error_path": "failed",
     }
     data = contract.runtime.model_dump()
     if change != "unchanged":
@@ -1257,7 +1257,7 @@ def observable_transport_patch(tmp_path):
             "action_kind": "call", "observation_kind": "result",
             "action_id_path": "id", "observation_action_id_path": "call_id",
             "name_path": "name", "arguments_path": "arguments", "result_path": "output",
-            "status_path": "status", "completed_status": "completed",
+            "status_path": "status", "completed_status": "completed", "error_path": "failed",
         },
     )
     patch = RuntimePlanPatch(
