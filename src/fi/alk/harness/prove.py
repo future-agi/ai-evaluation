@@ -26,6 +26,7 @@ Only a scenario that clears all three is kept. That is the green light.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -326,12 +327,10 @@ def _run(
 
 def _declared_options(world_root: Path) -> set[str]:
     """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
-    import json
-
     try:
         tools = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8")).get("tools") or []
     except (OSError, ValueError):
-        return {}
+        return set()
     return {
         f"{tool.get('name')}.{name}"
         for tool in tools
@@ -386,11 +385,6 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any]]]:
     return wrong
 
 
-def _steps(scenario: Scenario) -> list[dict[str, Any]]:
-    """The reference solution as a check is given it."""
-    return reference_of(getattr(scenario, "solution", None) or ())
-
-
 def prove(
     scenario: Scenario,
     catalogue: Catalogue,
@@ -399,6 +393,7 @@ def prove(
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
+    reference = reference_of(scenario.solution)
     if not checks:
         # Every sub-goal is judged on the call itself, so the gates that still mean something are
         # that setup and ready ran; the writer proves the reference solution with try_calls.
@@ -435,7 +430,7 @@ def prove(
     proof.assumed = assumed
     try:
         proof.with_solution = [
-            run_check(source, world, calls, name=name, reference=_steps(scenario))
+            run_check(source, world, calls, name=name, reference=reference)
             for name, source in checks
         ]
         varied, changed = _other_choices(scenario, calls, _declared_options(world_root))
@@ -444,7 +439,7 @@ def prove(
                 f"{name} (the agent chose: {', '.join(sorted(changed))})"
                 for name, source in checks
                 if any(one.name == name and one.held for one in proof.with_solution)
-                and not run_check(source, world, varied, name=name, reference=_steps(scenario)).held
+                and not run_check(source, world, varied, name=name, reference=reference).held
             ]
     finally:
         world.close()
@@ -456,7 +451,7 @@ def prove(
                 f"{', '.join(step.tool for step in other)})"
                 for name, source in checks
                 if any(one.name == name and one.held for one in proof.with_solution)
-                and not run_check(source, alt_world, alt_calls, name=name, reference=_steps(scenario)).held
+                and not run_check(source, alt_world, alt_calls, name=name, reference=reference).held
             ]
         finally:
             alt_world.close()
@@ -464,7 +459,10 @@ def prove(
     for label, steps in _with_one_wrong(scenario) if held else ():
         wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:
-            if all(run_check(source, wrong_world, wrong_calls, name=name, reference=_steps(scenario)).held for name, source in held):
+            if all(
+                run_check(source, wrong_world, wrong_calls, name=name, reference=reference).held
+                for name, source in held
+            ):
                 proof.unchecked.append(label)
         finally:
             wrong_world.close()
@@ -476,7 +474,7 @@ def prove(
     untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [
-            run_check(source, untouched, nothing, name=name, reference=_steps(scenario))
+            run_check(source, untouched, nothing, name=name, reference=reference)
             for name, source in checks
         ]
         # A call-presence check can pass the no-op gate yet credit failed operations.
@@ -493,7 +491,7 @@ def prove(
                 name
                 for name, source in checks
                 if not any(one.name == name and one.held for one in proof.with_nothing)
-                and run_check(source, untouched, crashed, name=name, reference=_steps(scenario)).held
+                and run_check(source, untouched, crashed, name=name, reference=reference).held
             ]
     finally:
         untouched.close()
