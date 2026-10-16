@@ -551,10 +551,15 @@ async def _probe_runtime_readiness(
     try:
         try:
             await probe_chat_ingress(
-                interface=interface, endpoint=endpoint.address, opening_message="Hello",
-                authoring=authoring, candidate_hash=receipt["candidate_hash"],
-                bundle_digest=manifest.digest, secret_values=values,
+                interface=interface,
+                endpoint=endpoint.address,
+                opening_message="Hello",
+                authoring=authoring,
+                candidate_hash=receipt["candidate_hash"],
+                bundle_digest=manifest.digest,
+                secret_values=values,
                 redaction_values=redactions,
+                local_auth_values=getattr(runtime, "_local_auth_values", None),
                 tools=_tools(contract) if interface.include_tools else (),
                 timeout=_chat_target_timeout_seconds(),
             )
@@ -1064,6 +1069,7 @@ async def validate_once(
                         bundle_digest=manifest.digest,
                         secret_values=target_secret_values,
                         redaction_values=redaction_values,
+                        local_auth_values=getattr(runtime, "_local_auth_values", None),
                         tools=_tools(contract) if interface.include_tools else (),
                         scenario_id=scenarios[0].scenario_id,
                         timeout=_chat_target_timeout_seconds(),

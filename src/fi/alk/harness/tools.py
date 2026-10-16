@@ -27,6 +27,7 @@ from .contract import (
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
+    LocalHttpAuth,
     known_modalities,
     validate_contract,
 )
@@ -845,6 +846,7 @@ def contract_tools(
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": CompletedToolEvents.model_json_schema(),
+                                "local_auth": LocalHttpAuth.model_json_schema(),
                                 "setup_secrets": {
                                     "type": "object",
                                     "additionalProperties": {"type": "string"},

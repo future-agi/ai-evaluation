@@ -408,7 +408,33 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_dependency_requires_missing_loader")
 
     runtime = patch.runtime
-    if "chat_ingress_failed" in allowed_diagnostic_codes:
+    from .contract import _runtime_template_names
+
+    original_auth = (
+        contract.runtime.interface.local_auth
+        if contract.runtime and contract.runtime.interface
+        else None
+    )
+    auth = runtime.interface.local_auth if runtime.interface else None
+    if original_auth and auth != original_auth:
+        raise ValueError("runtime_repair_local_auth_binding_changed")
+    if auth:
+        auth.reject_collisions(available_secret_aliases)
+        if auth != original_auth and not any(
+            auth.server_environment
+            in path.read_text(encoding="utf-8", errors="replace")
+            for path in evidence_files
+            if path.stat().st_size <= 1_000_000
+        ):
+            raise ValueError("runtime_repair_local_auth_source_evidence_required")
+    if allowed_diagnostic_codes == {"credential_missing"}:
+        if not auth or original_auth:
+            raise ValueError("runtime_repair_local_auth_addition_required")
+        if runtime.model_dump(exclude={"interface"}) != contract.runtime.model_dump(
+            exclude={"interface"}
+        ):
+            raise ValueError("runtime_repair_credential_only_local_auth_allowed")
+    if allowed_diagnostic_codes & {"chat_ingress_failed", "credential_missing"}:
         from packaging.utils import canonicalize_name
         from .generated_runtime import (
             _context_excludes,
@@ -427,9 +453,19 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_readiness_interface_changed")
         if runtime.interface is not None and original.interface is not None:
             if runtime.interface.model_dump(
-                exclude={"setup_requests", "setup_secrets"}
+                exclude={
+                    "setup_requests",
+                    "setup_secrets",
+                    "local_auth",
+                    "headers_template",
+                }
             ) != original.interface.model_dump(
-                exclude={"setup_requests", "setup_secrets"}
+                exclude={
+                    "setup_requests",
+                    "setup_secrets",
+                    "local_auth",
+                    "headers_template",
+                }
             ):
                 raise ValueError("runtime_repair_readiness_interface_changed")
             if len(runtime.interface.setup_requests) != len(
@@ -442,6 +478,26 @@ def validate_runtime_plan_patch(
                 )
             ):
                 raise ValueError("runtime_repair_readiness_setup_protocol_changed")
+            old_headers = original.interface.headers_template
+            new_headers = runtime.interface.headers_template
+            if any(new_headers.get(key) != value for key, value in old_headers.items()):
+                raise ValueError("runtime_repair_readiness_header_binding_changed")
+            added_headers = set(new_headers) - set(old_headers)
+            if added_headers and (
+                not auth
+                or original_auth
+                or any(
+                    auth.template_variable
+                    not in _runtime_template_names(new_headers[key])
+                    for key in added_headers
+                )
+            ):
+                raise ValueError("runtime_repair_readiness_header_binding_changed")
+            if allowed_diagnostic_codes == {"credential_missing"} and (
+                runtime.interface.setup_requests != original.interface.setup_requests
+                or runtime.interface.setup_secrets != original.interface.setup_secrets
+            ):
+                raise ValueError("runtime_repair_credential_only_local_auth_allowed")
             old_bindings = original.interface.setup_secrets
             new_bindings = runtime.interface.setup_secrets
             if any(
@@ -668,8 +724,8 @@ async def request_runtime_plan_patch(
     """Inspect an unfamiliar repository and submit one constrained runtime-plan revision."""
 
     allowed = {item.code for item in diagnostics}
-    setup_investigation = allowed == {"chat_ingress_failed"}
-    if setup_investigation:
+    setup_investigation = allowed in ({"chat_ingress_failed"}, {"credential_missing"})
+    if allowed == {"chat_ingress_failed"}:
         candidate = _explicit_dependency_candidate(source_root, contract, guidance)
         if candidate is not None:
             print("runtime repair: source-declared dependency candidate", flush=True)
@@ -761,7 +817,13 @@ add only specifically justified source-declared dependencies. You may correct co
 values or add secret bindings to supplied target aliases. Preserve existing config paths, formats
 and secret bindings. You may correct body_template in existing interface.setup_requests and add
 interface.setup_secrets bindings to supplied aliases. Preserve the setup request count and every
-other request field, including paths, accepted statuses, capture and failure rules. Every other
+other request field, including paths, accepted statuses, capture and failure rules. For a source-owned
+local HTTP server token only, you may add interface.local_auth with server_environment and
+ template_variable names and add its source-required headers_template binding. Inspect and cite the
+server auth guard. ALK supplies a private random token; never write a value, disable auth, or use
+this for external account credentials. Preserve existing auth and header bindings. On
+credential_missing this local_auth plus header addition is the ONLY permitted correction.
+Every other
 runtime and interface field must remain identical, including command, model and response decoding.
 Preserve requested provider/model intent. Do not invent secrets or bind simulator credentials.
 If source evidence does not justify a correction, stop without submitting a patch.

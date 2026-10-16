@@ -514,6 +514,7 @@ class HostedChatCallRunner:
             endpoint.address,
             wrapper_type=HTTPAgentWrapper,
             secret_values=self._context.target_provider_secret_values,
+            local_auth_values=getattr(runtime, "_local_auth_values", None),
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
@@ -556,7 +557,11 @@ class HostedChatCallRunner:
             wrapped = CallAborted(
                 f"chat_target_failed: {type(exc).__name__}: "
                 + sanitize_diagnostic(
-                    str(exc), self._context.target_provider_secret_values
+                    str(exc),
+                    {
+                        **self._context.target_provider_secret_values,
+                        **getattr(runtime, "_local_auth_values", {}),
+                    },
                 ),
                 code="target_agent_failed",
             )
