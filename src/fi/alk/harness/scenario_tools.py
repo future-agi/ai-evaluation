@@ -805,10 +805,19 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
     def plain(text: Any) -> str:
         return " ".join(re.sub(r"[_-]", " ", str(text).lower()).split())
 
+    def values(node: Any) -> list[str]:
+        if isinstance(node, dict):
+            return [one for child in node.values() for one in values(child)]
+        if isinstance(node, (list, tuple)):
+            return [one for child in node for one in values(child)]
+        return [plain(node)]
+
     try:
-        held = plain(json.dumps(trial.state(), default=str))
+        state = trial.state()
+        held = plain(json.dumps(state, default=str))
+        stored = set(values(state))
     except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
-        held = ""
+        held, stored = "", set()
     said = plain(f"{scenario.instruction} {json.dumps(scenario.fixture, default=str)}")
     known = plain(instructions)
     wrong = []
@@ -821,8 +830,9 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
             quoted = re.findall(r'"([^"]+)"', str(source))
             holds = {
                 "caller": plain(value) in said,
-                # A tool can take a record's value under a prefix it names (`kind:id`).
-                "record": plain(value) in held or plain(value.rsplit(":", 1)[-1]) in held,
+                # A tool can take a record's value wrapped in a format it names (`kind:id`, `a/b`).
+                "record": plain(value) in held
+                or any(plain(part) in stored for part in re.split(r"[:/|#=]", value)),
                 "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
             }.get(kind)
             if not holds:
