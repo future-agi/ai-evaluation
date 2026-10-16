@@ -96,7 +96,10 @@ FILE_TOOLS = ("Read", "Glob", "Grep")
 ASK_TOOL = "AskUserQuestion"
 # Backend-neutral name for running part of a stage in a sub-session.
 DELEGATE_TOOL = "Delegate"
-KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL)
+# A shell and file edits, for the one session that operates a whole environment the way a
+# developer would. Never granted to an authoring stage, whose writes go through checked tools.
+OPERATOR_TOOLS = ("Bash", "Write", "Edit")
+KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL, *OPERATOR_TOOLS)
 
 # Ceiling on workers in flight at once.
 MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "48") or 48)

@@ -2770,6 +2770,24 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     assert said.index(policy) < said.index("Before you brief anyone")
 
 
+
+def test_a_level_the_person_asked_for_is_not_held_to_its_share() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"interface": ["noisy_line", "quiet_line", "accented"]}
+    quiet = [Scenario(name=f"q{one}", coverage={"interface": "quiet_line"}) for one in range(5)]
+
+    refused = _over_its_share({"interface": "quiet_line"}, grid, quiet, 25)
+    assert "whole share" in refused and "asked_for" in refused
+    assert _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["quiet_line"]}
+    ) == ""
+    assert "whole share" in _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["accented"]}
+    )
+
+
 def test_a_coded_sub_goal_marked_both_carries_its_criteria_and_a_legacy_one_stays_code_only():
     from fi.alk.harness.scenario_source import _CompiledScenario, _CompiledSubGoal, _with_claims
 

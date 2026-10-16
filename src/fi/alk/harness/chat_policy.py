@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .backends.base import ASK_TOOL, SessionSpec
 
 KNOWN_CHAT_STAGES = frozenset(
-    {"reception", "understand", "build", "scenarios", "run"}
+    {"reception", "understand", "build", "scenarios", "run", "builder"}
 )
 
 

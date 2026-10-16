@@ -1,0 +1,386 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from fi.alk.harness import builder
+from fi.alk.harness.chat_policy import load_chat_policy
+from fi.alk.harness.hosted_chat_entrypoint import BuilderConversation, HostedChatRuntime
+from fi.alk.harness.hosted_conversation import (
+    ConversationCapabilities,
+    ConversationClient,
+    ConversationTransportError,
+)
+from fi.alk.harness.session import Event as RuntimeEvent
+
+
+def _capabilities() -> ConversationCapabilities:
+    conversation_id = "4f1ddaa9-569e-4ddd-bef0-74926bb42b16"
+    prefix = f"https://platform.example/simulate/api/harness/conversations/{conversation_id}"
+    names = ("commands", "events", "rerun", "adjust", "workspace", "session_store")
+    endpoints = {name: f"{prefix}/{name.replace('_', '-')}/" for name in names}
+    endpoints["run_status"] = f"{prefix}/run-status/"
+    endpoints["session_store_append"] = f"{prefix}/session-store/append/"
+    return ConversationCapabilities.model_validate(
+        {
+            "schema_version": "futureagi.harness-conversation.v1",
+            "conversation_id": conversation_id,
+            "job_id": "job-1",
+            "token": "token",
+            "fence": "fence",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+            "identity": {"app_name": "alk-harness", "user_id": "conversation-user"},
+            "turn_context": {"conversation_id": conversation_id, "stage": "builder"},
+            "endpoints": endpoints,
+        }
+    )
+
+
+class BuilderClient:
+    def __init__(self, *, applied: bool = True):
+        self.capabilities = _capabilities()
+        self.turn_context = self.capabilities.turn_context
+        self.command_watermark = 0
+        self.events: list[dict] = []
+        self.checkpoints = 0
+        self.published: list[str] = []
+        self.queries: list[dict] = []
+        self.applied = applied
+
+    async def emit(self, kind, **kwargs):
+        self.events.append({"kind": kind, **kwargs})
+        acknowledged = kwargs.get("acknowledge_through")
+        if acknowledged is not None:
+            self.command_watermark = max(self.command_watermark, acknowledged)
+        return self.events[-1]
+
+    async def checkpoint(self, workspace):
+        self.checkpoints += 1
+        return {"digest": f"sha256:{self.checkpoints:064x}", "size": 1}
+
+    async def publish(self, digest):
+        self.published.append(digest)
+        if not self.applied:
+            return {"applied": False, "code": "conversation_checkpoint_invalid", "message": "bad"}
+        return {
+            "applied": True,
+            "revision": "sha256:new",
+            "scenario_count": 41,
+            "added": [{"number": 41, "name": "late_driver"}],
+            "removed": [],
+            "changed": [],
+        }
+
+    async def scenarios(self, query):
+        self.queries.append(query)
+        return {"rows": [{"number": 7, "name": "seven"}, {"number": 12, "name": "twelve"}]}
+
+    async def append_session(self, key, entries):
+        return None
+
+    async def load_session(self, key):
+        return {"entries": []}
+
+
+class EditingConversation(BuilderConversation):
+    """A builder whose model writes one scenario file and never calls save_changes."""
+
+    def __init__(self, workspace: Path, *, writes: bool):
+        super().__init__(lambda: None)
+        self.workspace = workspace
+        self.writes = writes
+        self.messages: list[str] = []
+
+    async def say(self, message, on_event=None):
+        self.messages.append(message)
+        if self.writes:
+            (self.workspace / "scenarios" / "late_driver").mkdir(parents=True)
+            (self.workspace / "scenarios" / "late_driver" / "scenario.json").write_text("{}")
+        on_event(RuntimeEvent(kind="text", text="Added it.", detail={"stage": "builder"}))
+
+
+def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
+    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    (tmp_path / "scenarios" / "one").mkdir(parents=True)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("schema_version: 1\nharness_chat:\n  enabled: true\n", encoding="utf-8")
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=tmp_path,
+        source=tmp_path,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 1},
+    )
+    return runtime
+
+
+def _turn(runtime: HostedChatRuntime, payload: dict) -> None:
+    command = {"sequence": 1, "message_id": "m-1", "kind": "user_message", "payload": payload}
+    asyncio.run(runtime._handle(command))
+
+
+def _reply(client: BuilderClient) -> str:
+    return next(e for e in client.events if e["kind"] == "assistant_message")["payload"]["text"]
+
+
+def test_selected_rows_reach_the_builder_by_tab_number(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    conversation = EditingConversation(tmp_path, writes=False)
+    runtime.conversation = conversation
+    runtime._published_fingerprint()
+
+    _turn(runtime, {"content": "make these harder", "scenario_ids": ["a", "b"]})
+
+    assert client.queries == [{"ids": ["a", "b"], "page_size": 100}]
+    assert conversation.messages == [
+        "[Selected on the Scenarios tab (2): #7 seven, #12 twelve]\n\nmake these harder"
+    ]
+    assert client.published == []
+
+
+def test_unsaved_changes_are_published_and_reported_by_number(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._published_fingerprint()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
+
+    _turn(runtime, {"content": "add one"})
+
+    assert len(client.published) == 1
+    assert "Saved to the environment: added #41 late_driver" in _reply(client)
+    basis = json.loads((tmp_path / ".futureagi-authoring-basis.json").read_text())
+    assert basis == {"authoring_revision": "sha256:new"}
+    # Saved once; nothing is left for the next turn to publish again.
+    assert asyncio.run(runtime._save_changes())["unchanged"] is True
+
+
+def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
+    client = BuilderClient(applied=False)
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=True)
+    runtime._published_fingerprint()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
+
+    _turn(runtime, {"content": "add one"})
+
+    assert "These changes were NOT saved to the environment: bad." in _reply(client)
+    assert not (tmp_path / ".futureagi-authoring-basis.json").exists()
+
+
+def test_read_only_tools_skip_the_workspace_checkpoint(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime._published_fingerprint()
+
+    class ReadingConversation(EditingConversation):
+        async def say(self, message, on_event=None):
+            for name in ("find_scenarios", "submit_scenario"):
+                on_event(
+                    RuntimeEvent(
+                        kind="tool", tool=f"mcp__x__{name}", detail={"call_id": name}
+                    )
+                )
+            on_event(RuntimeEvent(kind="text", text="ok", detail={}))
+
+    runtime.conversation = ReadingConversation(tmp_path, writes=False)
+    _turn(runtime, {"content": "look"})
+
+    # One before the turn, one for the write, one at the end; none for the read.
+    assert client.checkpoints == 3
+
+
+def test_older_platforms_without_builder_endpoints_still_load(monkeypatch):
+    body = _capabilities().model_dump(mode="json")
+    capabilities = ConversationCapabilities.model_validate(body)
+    client = ConversationClient(capabilities)
+    with pytest.raises(ConversationTransportError, match="does not offer"):
+        asyncio.run(client.scenarios({}))
+
+
+def test_every_skill_is_loadable_by_the_builder_except_its_own():
+    index = builder.skill_index()
+    assert "write-scenarios" in index and "platform" in index
+    assert builder.BUILDER not in index
+    assert all(index.values())
+
+
+def test_the_secret_guard_refuses_env_reads_and_scrubs_the_shell():
+    from fi.alk.harness.config import scrubbed_command, secret_refusal
+
+    for tool, arguments in (
+        ("Bash", {"command": "printenv"}),
+        ("Bash", {"command": "echo $SOME_API_KEY"}),
+        ("Bash", {"command": "cat /proc/1/environ"}),
+        ("Read", {"file_path": "/work/authoring/.env"}),
+        ("Read", {"file_path": "/run/futureagi/conversation.json"}),
+        ("Write", {"file_path": "/work/authoring/scenarios/a/scenario.json"}),
+    ):
+        assert secret_refusal(tool, arguments), (tool, arguments)
+    for tool, arguments in (
+        ("Bash", {"command": "ls scenarios | wc -l"}),
+        ("Read", {"file_path": "/work/authoring/contract.json"}),
+        ("Write", {"file_path": "/tmp/analysis.py"}),
+    ):
+        assert not secret_refusal(tool, arguments), (tool, arguments)
+    assert scrubbed_command("ls").startswith("env -i ")
+
+
+def test_world_change_is_all_or_nothing_and_reports_counts(tmp_path):
+    import sqlite3
+
+    from fi.alk.harness.builder import world_change
+
+    db = sqlite3.connect(tmp_path / "world.sqlite")
+    db.executescript(
+        "PRAGMA foreign_keys=ON; CREATE TABLE a(id TEXT PRIMARY KEY);"
+        "CREATE TABLE b(id TEXT, a_id TEXT REFERENCES a(id));"
+        "INSERT INTO a VALUES ('x'); INSERT INTO b VALUES ('1', 'x');"
+    )
+    db.close()
+
+    assert "1 rows changed" in world_change(tmp_path, "INSERT INTO a VALUES ('y')")
+    assert "refused" in world_change(tmp_path, "DELETE FROM a WHERE id = 'x'")
+    assert "exactly one" in world_change(tmp_path, "DROP TABLE a")
+    assert "a: 2, b: 1" in world_change(tmp_path, "UPDATE b SET id = '2'")
+
+
+def test_meaning_changes_wait_for_a_yes_but_surface_edits_do_not(tmp_path, monkeypatch):
+    from fi.alk.harness.backends import ToolSpec
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana"}})
+    )
+    calls = []
+
+    async def handler(args):
+        calls.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
+
+    surface = {"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana", "accent": "Indian"}}
+    meaning = {"name": "one", "instruction": "ask for a cancellation", "persona": {"name": "Ana"}}
+    added = {"name": "two", "instruction": "anything"}
+    assert asyncio.run(submit.handler(surface)).get("is_error") is None
+    assert asyncio.run(submit.handler(added)).get("is_error") is None
+    assert asyncio.run(submit.handler(meaning))["is_error"] is True
+    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
+    runtime._approved = True
+    assert asyncio.run(submit.handler(meaning)).get("is_error") is None
+    assert len(calls) == 3
+
+
+def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_HARNESS", "claude")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n      enabled: true\n"
+        "  lifecycle:\n    request_user_input: true\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("def answer():\n    return 'hi'\n", encoding="utf-8")
+    workspace = tmp_path / "authoring"
+    workspace.mkdir()
+
+    class LiveBuildClient(BuilderClient):
+        def __init__(self):
+            super().__init__()
+            self.turn_context = {**self.capabilities.turn_context, "capabilities": {"control_only": True}}
+
+        async def overview(self):
+            return {}
+
+    client = LiveBuildClient()
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=source,
+        job={"metadata": {"agent_name": "demo"}, "scenario_count": 3},
+    )
+    assert isinstance(runtime.conversation, BuilderConversation)
+    stage = asyncio.run(runtime._open_builder())
+    granted = set(stage.spec.granted())
+    assert "mcp__platform__finish_build" in granted and "mcp__knowledge__read_skill" in granted
+    assert any(name.endswith("submit_contract") for name in granted)
+    assert "Sub-goals are shared" in stage.spec.system_prompt or "shared sub-goals" in stage.spec.system_prompt
+
+    finish = next(one for one in stage.spec.servers["platform"].tools if one.name == "finish_build")
+    refused = asyncio.run(finish.handler({}))
+    assert refused["is_error"] and "no contract is saved" in refused["content"][0]["text"]
+
+    from fi.alk.harness import builder, scenario_tools
+
+    monkeypatch.setattr(runtime, "_what_exists", lambda: (True, True))
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: ["one", "two"])
+    monkeypatch.setattr(builder, "suite_health", lambda *args, **kwargs: [])
+    short = asyncio.run(finish.handler({}))
+    assert short["is_error"] and "2 of the 3 scenarios" in short["content"][0]["text"]
+    assert not (workspace / ".futureagi-build-finished.json").exists()
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: ["one", "two", "three", "four"])
+    over = asyncio.run(finish.handler({}))
+    assert over["is_error"] and "the build asked for 3" in over["content"][0]["text"]
+    assert not (workspace / ".futureagi-build-finished.json").exists()
+
+
+    async def commands():
+        return [{"sequence": 7, "message_id": "m7", "kind": "user_message", "payload": {"content": "add a lapsed policy"}}]
+
+    client.commands = commands
+    stopped = []
+
+    class Working:
+        async def interrupt_response(self):
+            stopped.append(True)
+            return True
+
+        async def close(self):
+            pass
+
+    runtime.conversation = Working()
+
+    async def building():
+        while not stopped:
+            await asyncio.sleep(0.05)
+
+    yielded = asyncio.run(runtime._turn_until_interrupted(building(), command_sequence=1))
+    assert yielded["message_id"] == "m7" and stopped
+    # Answered next as its own turn, so it is not acknowledged here.
+    assert runtime._turn_acknowledged_through == 0
+
+
+
+def test_opening_a_chat_on_a_built_environment_does_not_reprove_the_whole_suite(tmp_path, monkeypatch):
+    import pytest
+
+    from fi.alk.harness import builder
+    from fi.alk.harness.backends import ToolServer
+    from fi.alk.harness.contract import AgentContract
+
+    class Opened(Exception):
+        pass
+
+    def health(*args, **kwargs):
+        raise Opened(kwargs)
+
+    empty = ToolServer(name="stub", version="1", tools=[])
+    monkeypatch.setattr(builder, "load_scenarios", lambda out: ["saved"])
+    monkeypatch.setattr(builder, "scenario_tools", lambda *args, **kwargs: (empty, ["saved"]))
+    monkeypatch.setattr(builder, "knowledge_server", lambda *args, **kwargs: empty)
+    monkeypatch.setattr(builder, "suite_server", lambda *args, **kwargs: empty)
+    monkeypatch.setattr(builder, "suite_health", health)
+    with pytest.raises(Opened) as opened:
+        builder.open_builder(AgentContract(agent_name="demo"), out=tmp_path, source_root=None)
+    assert not opened.value.args[0].get("prove_all")

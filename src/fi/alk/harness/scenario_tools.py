@@ -552,6 +552,8 @@ def _over_its_share(
             )
             + "Write one of these instead: "
             + ", ".join(sorted(thin)[:8])
+            + f". If the person asked for {mine!r}, call aim_for with it in asked_for under "
+            f"{axis!r} and submit again."
         )
     return ""
 
@@ -1700,8 +1702,11 @@ def scenario_tools(
         if twin:
             return _refuse(twin)
         if cap() and target.get("people") != "alike":
+            # A replacement does not count against itself.
             crowded = crowded_field(
-                kept, Scenario.model_validate(args).persona, cap()
+                [one for one in kept if one.name != str(args.get("name") or "")],
+                Scenario.model_validate(args).persona,
+                cap(),
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)

@@ -270,7 +270,9 @@ def test_local_sandbox_exposes_generated_stage_outputs_and_adjustments(
     adjusted = sandbox.adjust(
         response.job.job_id,
         SandboxAdjustmentRequest(
-            instruction="Add 10 more scenarios covering payment failures"
+            instruction="Add 10 more scenarios covering payment failures",
+            target_stage="scenarios",
+            scenario_delta=10,
         ),
     )
 

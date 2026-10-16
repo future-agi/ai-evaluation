@@ -11,6 +11,7 @@ environment, which is also how the rest of the platform resolves them.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -260,6 +261,93 @@ UNWANTED = (
 )
 
 
+# Where credentials live in a sandbox or a checkout, and what reads them. A session never needs
+# any of them: the platform hands secrets to processes as files and environment, not to a model.
+_SECRET_PATHS = re.compile(
+    r"(^|/)(\.env[^/]*|\.claude|\.ssh|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc)(/|$)"
+    r"|^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
+    r"|(credential|secret|token|service[-_]?account)[^/]*\.json$|\.(pem|key|p12)$",
+    re.IGNORECASE,
+)
+_SECRET_COMMANDS = re.compile(
+    r"\b(env|printenv|export\s+-p|declare\s+-[a-z]*x|set)\s*($|[|;&>])|/proc/"
+    r"|\b(ps|pgrep|pkill|top|htop)\b"
+    r"|\$\{?[A-Za-z_]*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)[A-Za-z_]*\}?"
+    r"|os\.environ|getenv|process\.env|/run/futureagi|/run/secrets|\.env\b|\.claude/"
+    r"|GOOGLE_APPLICATION_CREDENTIALS|simulator-secrets|-sa\.json",
+    re.IGNORECASE,
+)
+SECRET_REFUSAL = (
+    "Environment variables, credentials, keys and tokens are kept out of this session on purpose. "
+    "Do not read, print or work around this; tell the person you cannot share or handle secrets, "
+    "and carry on with the rest of the task."
+)
+
+
+# What only the checked tools may change: a hand edit here would skip the proof that makes it true.
+_PROVED_FILES = re.compile(
+    r"(^|/)(scenarios(/|\.json$)|sub_goals\.json$|contract\.json$|coverage\.json$"
+    r"|environment-bundle/|generic-harness/|runtime-validation\.json$|world\.(py|sqlite)$"
+    r"|simulator_prompt\.md$|handlers/)"
+    r"|^/work/source(/|$)"
+)
+
+
+# A shell command that writes, and a proved file named in it.
+_SHELL_WRITES = re.compile(
+    r"(>|\btee\b|sed\s+-i|\bperl\s+-[a-z]*i|\bmv\b|\bcp\b|\brm\b|\btruncate\b|\bsqlite3\b"
+    r"|write_text|write_bytes|\.write\(|json\.dump\(|open\([^)]*['\"][wa])"
+)
+_PROVED_NAMES = re.compile(
+    r"scenarios(/|\.json)|sub_goals\.json|contract\.json|coverage\.json|environment-bundle"
+    r"|generic-harness|runtime-validation\.json|world\.(py|sqlite)|simulator_prompt\.md|handlers/"
+    r"|/work/source"
+)
+
+
+def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
+    """Why this call would expose a secret or skip a proof, or empty when it would not."""
+    if tool in ("Write", "Edit") and _PROVED_FILES.search(str(arguments.get("file_path") or "")):
+        return (
+            "That file is part of the proved environment and only changes through the tool that "
+            "checks it (submit_scenario, drop_scenarios, add_sub_goal, the contract tools). The "
+            "agent's own source is read-only. Use the tool, or write scratch files elsewhere."
+        )
+    if tool == "Bash":
+        command = str(arguments.get("command") or "")
+        if _SECRET_COMMANDS.search(command):
+            return SECRET_REFUSAL
+        if _SHELL_WRITES.search(command) and _PROVED_NAMES.search(command):
+            return (
+                "That command would change part of the proved environment by hand. Those files "
+                "only change through the tools that check them. If no tool can make this change, "
+                "stop and ask the person how to proceed, with the options you see."
+            )
+        return ""
+    paths = [
+        str(arguments.get(key) or "")
+        for key in ("file_path", "path", "notebook_path")
+        if arguments.get(key)
+    ]
+    pattern = str(arguments.get("pattern") or "") if tool == "Glob" else ""
+    if any(_SECRET_PATHS.search(one) for one in [*paths, pattern] if one):
+        return SECRET_REFUSAL
+    return ""
+
+
+def scrubbed_command(command: str) -> str:
+    """Run a shell command with no inherited environment beyond what finding programs needs."""
+    keep = {
+        name: os.environ[name]
+        for name in ("PATH", "HOME", "LANG", "PYTHONPATH", "TMPDIR")
+        if os.environ.get(name)
+    }
+    import shlex
+
+    assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in keep.items())
+    return f"env -i {assignments} bash -c {shlex.quote(command)}"
+
+
 def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
     """Deny anything a stage was not given, at the point the SDK actually asks.
 
@@ -280,7 +368,30 @@ def gate_hooks(granted: Iterable[str]) -> dict[str, Any]:
         payload: dict[str, Any], _tool_use_id: Any, _context: Any
     ) -> dict[str, Any]:
         name = str(payload.get("tool_name") or "")
-        if not name or name in permitted:
+        if name in permitted:
+            arguments = payload.get("tool_input") or {}
+            refusal = secret_refusal(name, arguments)
+            if refusal:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": refusal,
+                    }
+                }
+            if name == "Bash" and arguments.get("command"):
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": {
+                            **arguments,
+                            "command": scrubbed_command(str(arguments["command"])),
+                        },
+                    }
+                }
+            return {}
+        if not name:
             return {}
         return {
             "hookSpecificOutput": {
