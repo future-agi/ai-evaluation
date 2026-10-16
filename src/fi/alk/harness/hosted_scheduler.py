@@ -236,6 +236,27 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
 
 
+def _sub_actor_absent(goal: Any, call_outcome: CallOutcome) -> str:
+    """Why a sub-goal about a sub-actor does not apply to this call, or nothing.
+
+    A sub-actor that was never heard, or whose faulted tool was never called, never entered the
+    call, so nothing the agent did could have been a response to it.
+    """
+    wanted = str(getattr(goal, "sub_actor", "") or "")
+    if not wanted:
+        return ""
+    heard = any(
+        isinstance(message, dict)
+        and message.get("role") == "sub_actor"
+        and message.get("sub_actor") == wanted
+        for message in call_outcome.messages
+    )
+    faulted = any(getattr(call, "sub_actor", "") == wanted for call in call_outcome.calls)
+    if heard or faulted:
+        return ""
+    return f"Not applicable: {wanted} did not enter this call, so there was nothing to respond to."
+
+
 class CallAborted(RuntimeError):
     """The call step started but did not finish. `partial`, when known, carries whatever timing
     the call runner already measured — the receipt's `call` field must not be null once the call
@@ -2135,6 +2156,14 @@ class HostedScheduler:
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
+            absent = _sub_actor_absent(goal, call_outcome)
+            if absent:
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=True, reason=absent, judged=goal.judged != ""
+                    )
+                )
+                continue
             if broken_failure is not None:
                 sub_goal_results.append(
                     SubGoalResult(

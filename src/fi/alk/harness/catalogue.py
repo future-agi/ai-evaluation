@@ -43,6 +43,8 @@ class SubGoal(BaseModel):
     output: str = "pass_fail"
     # Which overlay level this sub-goal is the claim for, when it is one.
     overlay: str = ""
+    # The sub-actor this sub-goal is about. A call it never entered cannot fail it.
+    sub_actor: str = ""
 
     def deterministic(self) -> bool:
         return bool(self.check.strip())
@@ -494,10 +496,11 @@ def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / CATALOGUE
-    path.write_text(
-        json.dumps(catalogue.model_dump(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    body = catalogue.model_dump()
+    for one in body.get("sub_goals") or []:
+        if not one.get("sub_actor"):
+            one.pop("sub_actor", None)
+    path.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
 
 

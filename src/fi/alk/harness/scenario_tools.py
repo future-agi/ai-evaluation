@@ -1262,9 +1262,23 @@ def scenario_tools(
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal.",
+        "is what makes one available. Leave it empty for an ordinary task sub-goal."
+        + (
+            " `sub_actor` names the sub-actor this sub-goal is about; a call that sub-actor never "
+            "entered cannot fail it."
+            if sub_actors_enabled()
+            else ""
+        ),
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str},
+            {
+                "name": str,
+                "what": str,
+                "check": str,
+                "judged": str,
+                "output": str,
+                "overlay": str,
+                **({"sub_actor": str} if sub_actors_enabled() else {}),
+            },
             ["name", "what"],
         ),
     )
@@ -1276,6 +1290,7 @@ def scenario_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            sub_actor=str(args.get("sub_actor") or ""),
         )
         problems = validate_sub_goal(sub_goal)
         if problems:

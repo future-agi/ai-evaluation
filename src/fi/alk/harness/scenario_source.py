@@ -248,6 +248,7 @@ class _CompiledSubGoal:
     judged: str
     check: Callable[[Any, Any], object]
     what: str = ""
+    sub_actor: str = ""
 
 
 @dataclass(frozen=True)
@@ -415,6 +416,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
+            "sub_actor": str(entry.get("sub_actor") or ""),
         }
     return claims
 
@@ -567,6 +569,7 @@ def _with_claims(
             if goal.judged
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
+            sub_actor=claims[goal.name].get("sub_actor", "") or goal.sub_actor,
         )
         if goal.name in claims
         else goal
