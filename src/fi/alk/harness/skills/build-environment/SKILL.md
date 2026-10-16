@@ -11,6 +11,12 @@ sub-goals just to satisfy a checklist below. Preserve and provision the real wor
 connections; write the simulator prompt and conversational evaluation criteria. Save the empty
 world normally. Internal harness bookkeeping is not agent business data.
 
+Tools do not imply a database. Native filesystem, command and API tools can also have no
+harness-managed record store. Keep that authoring world empty. Do not create tables to stand
+in for files or remote application state. Use completed native tool results with source-grounded
+schemas, declared observations, or real workspace bindings. Private readiness and real chats
+must verify these tools; a local fixture table cannot prove that the target ran them.
+
 You are building the world an AI agent will be tested in. Its contract is in front of you: the
 tools it really has, the rules it obeys, what it depends on, and its data.
 

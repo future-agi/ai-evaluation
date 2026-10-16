@@ -203,7 +203,10 @@ def open_stage(
         + declared_store
         + ", and the baseline seeded here is replayed into that engine before the first call. "
         "Seed structured columns as real lists and objects, never as JSON text."
-        if declared_store.lower() not in ("", "sqlite", "in_process", "memory")
+        if any(
+            marker in declared_store.lower()
+            for marker in ("postgres", "mysql", "mariadb", "clickhouse")
+        )
         else ""
     )
     if provisioned is not None and provisioned.running:
@@ -291,19 +294,23 @@ def open_stage(
     elif deferred_runtime:
         environment_note = (
             "\n\n## Runtime deferred to hosted execution\n\n"
-            "The submitted repository processes and datastore will be built, started and "
-            "validated inside the Daytona execution sandbox from the sealed process bundle. "
-            "Do not start containers here. Build the deterministic baseline, simulator prompt, "
-            "sub-goals and world checks. Runtime tools are owned by the submitted process for "
-            "every modality: do not replace, bind or smoke-call them in this credentialed "
-            "control process. Their dependencies are installed in the writable target build "
-            "tree and their real behavior is validated when generated scenarios run in Daytona."
+            "The submitted repository processes and declared services will be built, started "
+            "and validated in the hosted execution sandbox. Do not start containers here. "
+            "Runtime tools belong to the submitted process for every modality: do not replace, "
+            "bind or smoke-call them in this credentialed control process. "
+            "Write the simulator prompt and sub-goals. Create schema and seed baseline records "
+            "only for a source-backed datastore the target actually uses. For filesystem, "
+            "command or API tools without such a datastore, keep the authoring world empty; "
+            "do not create tables to represent files, tool calls or remote state. A table named "
+            "files does not create files in the target workspace. Seed task files only through "
+            "a declared runtime.workspaces binding in scenario setup and verify them in ready; "
+            "without that binding, use self-contained tasks that create their own inputs."
             + declared_store_note
-            + "\n\nYou cannot call a tool here, so you have not seen a single real response "
-            "shape. Write every world check and sub-goal against world state you can read now, "
-            "never against the fields or wording you expect a tool response to carry. A check "
-            "that asserts on an imagined response passes or fails for the wrong reason and "
-            "reports the agent did nothing when it did."
+            + "\n\nChecks may inspect completed native tool results whose schema is established "
+            "by source, declared runtime observations, or real bound state. Do not guess result "
+            "fields or manufacture shadow state to make checks run locally. Local authoring "
+            "does not prove these checks: private runtime readiness and real scenario chats "
+            "must verify actual tool execution and outcomes before acceptance."
         )
     server, _world = world_tools(
         contract,
@@ -387,9 +394,11 @@ def opening(
         return (
             f"Build the logical baseline for {contract.agent!r}.\n\n"
             "The submitted runtime and all of its tools are built later by the isolated process "
-            "runtime. Do not adopt or smoke-call those tools here. Seed the source-backed data "
-            "described by the contract, write the simulator prompt, add observable sub-goals "
-            "and world checks, then check_world and save_world. Runtime tool coverage and "
+            "runtime. Do not adopt or smoke-call those tools here. Seed only source-backed "
+            "datastore records. Keep the world empty for runtime tools without such a store; "
+            "do not create tables for files or remote state. Write the simulator prompt and "
+            "checks against actual bound state or source-grounded completed native tool results, "
+            "then check_world and save_world. Runtime tool coverage and "
             "stateful ordering are proven by the real generated scenarios."
         )
     return (
