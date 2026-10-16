@@ -82,6 +82,7 @@ class IsolatedChatCallRunner:
                 if context.source_directory
                 else None,
                 "target_secrets": dict(context.target_provider_secret_values),
+                "local_auth_values": dict(runtime._local_auth_values),
                 "attempt_number": context.attempt_number,
                 "runtime": runtime.model_dump(mode="json"),
                 "scenario_key": scenario.scenario_key,
@@ -163,13 +164,15 @@ async def main() -> None:
             if job.agent.connector == "retell_chat"
             else HostedChatCallRunner
         )
+        runtime = EnvironmentRuntime.model_validate(payload["runtime"])
+        runtime._local_auth_values = dict(payload.get("local_auth_values", {}))
         outcome = await runner_type(collector, context).run(
             SimpleNamespace(
                 scenario_key=payload["scenario_key"],
                 source_scenario_key=payload.get("source_scenario_key"),
                 scenario_id=payload["scenario_id"],
             ),
-            EnvironmentRuntime.model_validate(payload["runtime"]),
+            runtime,
         )
         result = {"outcome": asdict(outcome), "artifacts": collector.artifacts}
     except CallAborted as exc:

@@ -26,6 +26,74 @@ from fi.alk.harness.process_runtime import (
 from fi.simulate.agent.wrapper import AgentResponse
 
 
+def test_isolated_chat_worker_preserves_private_runtime_auth(tmp_path, monkeypatch):
+    context = _context(tmp_path)
+    adapter = _Adapter()
+    contract_path = context.bundle_dir / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["runtime"]["interface"].update(
+        local_auth={
+            "server_environment": "API_SERVER_KEY", "template_variable": "api_key",
+        },
+        headers_template={"Authorization": "Bearer {{api_key}}"},
+    )
+    contract_path.write_text(json.dumps(contract))
+    token = "private-runtime-auth-token"
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http", protocol="http", address="http://agent.invalid",
+            )
+        },
+    )
+    runtime._local_auth_values = {"API_SERVER_KEY": token}
+    requests = []
+
+    def request_json(_self, _endpoint, *, headers, **_kwargs):
+        assert headers["Authorization"] == f"Bearer {token}"
+        requests.append(True)
+        return 200, {"choices": [{"message": {
+            "role": "assistant", "content": f"Account active. {token}",
+        }}]}
+
+    async def worker(_module, payload, *, environ, work_directory):
+        assert token not in json.dumps(payload["runtime"])
+        assert token not in json.dumps(environ)
+        result_path = tmp_path / "worker-result.json"
+        monkeypatch.setattr(chat_worker.sys, "stdin", io.StringIO(json.dumps(payload)))
+        monkeypatch.setattr(chat_worker.sys, "argv", ["chat_worker", str(result_path)])
+        await chat_worker.main()
+        assert result_path.stat().st_mode & 0o777 == 0o600
+        return json.loads(result_path.read_text())
+
+    monkeypatch.setattr(chat_worker, "run_json_worker", worker)
+    monkeypatch.setattr(chat_call_runner.HTTPAgentWrapper, "_request_json", request_json)
+    monkeypatch.setattr(chat_call_runner, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", _single_exchange)
+    outcome = asyncio.run(
+        chat_worker.IsolatedChatCallRunner(adapter, context).run(
+            SimpleNamespace(
+                scenario_key="trial-1", source_scenario_key="one", scenario_id="id-1",
+            ),
+            runtime,
+        )
+    )
+    assert requests == [True]
+    assert outcome.messages[-1] == {
+        "role": "assistant", "content": "Account active. <redacted>",
+    }
+    assert token not in repr(outcome)
+    assert all(token.encode() not in data for data in adapter.uploads)
+    assert all(
+        token.encode() not in path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file()
+    )
+
+
 def test_isolated_chat_worker_uses_authored_scenario_for_selected_trial(
     tmp_path, monkeypatch
 ):
@@ -105,6 +173,12 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
             assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
             assert environ["ALK_CLAUDE_GATEWAY_API_KEY"] == "simulator-claude-key"
             assert environ["ALK_CLAUDE_GATEWAY_URL"] == "https://claude.example"
+            index = payload["runtime"]["world_index"]
+            assert payload["local_auth_values"] == {
+                "API_SERVER_KEY": f"private-world-{index}"
+            }
+            assert "private-world-" not in json.dumps(payload["runtime"])
+            assert "private-world-" not in json.dumps(environ)
             payloads.append(payload)
             if len(payloads) == 2:
                 both.set()
@@ -132,6 +206,17 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
 
         monkeypatch.setattr(chat_worker, "run_json_worker", worker)
         runner = chat_worker.IsolatedChatCallRunner(adapter, context)
+        runtimes = [
+            EnvironmentRuntime(
+                runtime_id=f"runtime-{index}",
+                world_index=index,
+                bundle_digest="sha256:" + "a" * 64,
+                state=RuntimeState.READY,
+            )
+            for index in range(2)
+        ]
+        for index, runtime in enumerate(runtimes):
+            runtime._local_auth_values = {"API_SERVER_KEY": f"private-world-{index}"}
         outcomes = await asyncio.gather(
             *(
                 runner.run(
@@ -140,12 +225,7 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
                         source_scenario_key=f"authored-{index}",
                         scenario_id=f"id-{index}",
                     ),
-                    EnvironmentRuntime(
-                        runtime_id=f"runtime-{index}",
-                        world_index=index,
-                        bundle_digest="sha256:" + "a" * 64,
-                        state=RuntimeState.READY,
-                    ),
+                    runtimes[index],
                 )
                 for index in range(2)
             )
