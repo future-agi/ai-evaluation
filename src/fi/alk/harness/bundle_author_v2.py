@@ -3192,36 +3192,6 @@ def author_bundle_v2(
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
         runtime_dependencies=contract_body.get("runtime_dependencies"),
     )
-    # In-process framework tools do not cross the HTTP tool proxy. Trace only source-declared
-    # callable boundaries inside the target Python process; the trace is observational and
-    # never replays the tool. The same mechanism works for any Python framework with an
-    # importable callable recorded during source understanding.
-    trace_bindings = [
-        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-        for raw in contract_body.get("tool_entrypoints", [])
-        if isinstance(raw, dict)
-        for entry in [ToolEntry.model_validate(raw)]
-        if entry.mode in {"import", "construct"} and entry.module and entry.callable
-    ]
-    if contract_modality == "chat" and trace_bindings:
-        plan = replace(
-            plan,
-            processes=tuple(
-                process.model_copy(
-                    update={
-                        "environment": {
-                            **process.environment,
-                            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
-                            "ALK_TOOL_TRACE_BINDINGS": json.dumps(trace_bindings),
-                        }
-                    }
-                )
-                if isinstance(process, SourceProcess)
-                and process.name == plan.control_service
-                else process
-                for process in plan.processes
-            ),
-        )
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
