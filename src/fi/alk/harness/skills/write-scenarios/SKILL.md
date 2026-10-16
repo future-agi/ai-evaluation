@@ -291,13 +291,21 @@ the checks and the judge, so everything else stays out of their reach:
 - the agent's own choices: a destination or category it picks, a label or note it writes in its own
   words, even when the caller asked for that very thing (the caller fixes what they want, not the
   words the agent records it under), and the same for a place or description the caller gave and
-  the agent writes down;
+  the agent writes down (the identifier the world resolves it to is fixed, from the record);
 - a value the agent's code fills in elsewhere, which does not fix what the agent's model passes;
 - an optional argument nothing fixes: leave it out, and the tool's default applies.
 
 Find each source yourself in this caller's situation, their record or the agent's instructions; a
 sub-goal's contract saying where a value comes from does not make it so. Never mark a value fixed
 because a check compares it.
+
+**Everything the person came for is fixed somewhere, on the step where it enters.** List what they
+want and whose record it touches; each item is a fixed value on some step of the solution, or only
+what is said can settle it. When the outcome is assembled over several steps and a last one commits
+it (choices made one by one, then a confirm), the values sit on the earlier steps, and a committing
+step that carries none of them is normal. The record being acted on is fixed too, from the record,
+on every step that names it, even when the agent could find it on its own. A solution with almost
+nothing fixed leaves the checks nothing to compare, and every agent that does the steps passes.
 
 **3. Write the other ways the agent's instructions allow, in `alternatives`.** Where a rule names one
 tool and another tool reaches the same outcome, or one tool does a step inside its own work, write each

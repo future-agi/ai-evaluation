@@ -531,7 +531,11 @@ mention). Decide this from what the instructions and code say, never from a fiel
 outcome leaves in the world: it shows the outcome however it came about. Where only the calls show
 it, accept a successful call to any tool that achieves it. A tool can be called more than once and one
 call can be reported twice with fewer arguments, so match each reference step to any successful call
-that carries its fields, never to the first or the last.
+that carries its fields, never to the first or the last. When the outcome is assembled over several
+steps and a last call commits it, that call often carries none of its parts: the check compares every
+value the reference fixes on the steps that build it, against the committed record where the world
+keeps one, otherwise against those steps' successful calls. A check that reads only the committing
+call asserts that something was done, not that it was this person's thing.
 
 **3. Compare only what something fixes.** Read each reference value with `.get()`: a scenario leaves
 out every argument nothing fixes for its caller, so an absent value means there is nothing to compare,

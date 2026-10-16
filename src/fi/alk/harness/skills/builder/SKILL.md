@@ -202,7 +202,12 @@ The suite must always be runnable and true to the agent, the world and the contr
   wrong about the agent (a solution step the agent need not take, data the agent cannot use, a
   check stricter than the rule) means the contract is wrong there: correct the contract first, then
   every scenario the correction affects, save and run again. A passing call whose transcript shows
-  the agent doing something wrong means a sub-goal is too weak: tighten it. A failure that looks
+  the agent doing something wrong means a sub-goal is too weak: tighten it. A pass is evidence only
+  when the same call done wrong would have failed: the results are a postmortem of the agent, so for
+  each passing call name the mistakes an agent could make in that scenario (another record, another
+  value the person asked for, a safeguard skipped or done after the change it guards, a rule broken)
+  and find the sub-goal and the fixed value that fails each; `try_check` with that mistake shows it.
+  Where nothing would, tighten the fixed marks or the sub-goal. A failure that looks
   like the agent's own fault, or that you cannot place, you report with the evidence and ask about.
   Say the environment is ready only after this.
 - **Never call the suite healthy or ready unless the last `check_health` said so.** If problems
