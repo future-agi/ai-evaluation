@@ -33,7 +33,7 @@ from .hosted_conversation import (
     load_conversation_capabilities,
 )
 from .tools import schema
-from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event, Stage
+from .session import ARTIFACT, DONE, RESULT, STAGE_IDLE_TIMEOUT_SECONDS, TEXT, TOOL, Event, Stage
 
 _NUMBERS = {"type": "array", "items": {"type": "integer"}}
 _RANGES = {
@@ -72,7 +72,8 @@ _NEEDS_CONFIRMATION = frozenset(
 )
 _CONFIRM = "Yes, make this change"
 _RUN_FINISHED = frozenset({"completed", "failed", "canceled"})
-_RUN_WAIT_SECONDS = 900
+# A wait ends a minute before the turn would be stopped for being idle.
+_RUN_WAIT_SECONDS = max(60.0, STAGE_IDLE_TIMEOUT_SECONDS - 60)
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -567,7 +568,8 @@ class HostedChatRuntime:
             "The environment's runs, newest first, or with `run_id` one run's calls: each "
             "scenario's number and name, pass or fail, every sub-goal with whether it held and "
             "why, turns, duration and how the call ended. `wait` with a `run_id` holds until "
-            "that run has finished (up to 15 minutes), so its results are read in one go.",
+            "that run has finished or a few minutes have passed; a run still going says so, and "
+            "you wait on it again.",
             schema({"run_id": str, "limit": int, "wait": bool}, []),
         )
         async def read_runs(args: dict[str, Any]) -> dict[str, Any]:

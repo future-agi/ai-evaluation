@@ -609,3 +609,10 @@ def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
     result = asyncio.run(read({"run_id": "r-1", "wait": True}))
 
     assert '"completed"' in result["content"][0]["text"]
+
+
+def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():
+    from fi.alk.harness.hosted_chat_entrypoint import _RUN_WAIT_SECONDS
+    from fi.alk.harness.session import STAGE_IDLE_TIMEOUT_SECONDS
+
+    assert _RUN_WAIT_SECONDS < STAGE_IDLE_TIMEOUT_SECONDS
