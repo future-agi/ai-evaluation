@@ -33,7 +33,7 @@ DONE = dict(kind="completed", action_id="a", result={"bytes": 42}, failed=False)
 
 
 @contextmanager
-def server(*, pages=None, correlation="conversation-1", redirect=False):
+def server(*, pages=None, correlation="conversation-1", redirect=False, event_status=200, malformed=False):
     requests = []
     pages = (
         pages
@@ -64,9 +64,9 @@ def server(*, pages=None, correlation="conversation-1", redirect=False):
                 self.end_headers()
                 return
             index = 1 if "?page=" in self.path else 0
-            self.send_response(200)
+            self.send_response(event_status if self.path.startswith("/events/") else 404)
             self.end_headers()
-            self.wfile.write(json.dumps(pages[min(index, len(pages) - 1)]).encode())
+            self.wfile.write(b"not json" if malformed else json.dumps(pages[min(index, len(pages) - 1)]).encode())
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=http.serve_forever, daemon=True)
@@ -89,6 +89,97 @@ def wrapper(base, spec=None):
 
 def invoke(target):
     return asyncio.run(target.call(AgentInput(thread_id="one", messages=[])))
+
+
+def test_missing_event_route_is_repairable_after_successful_chat(tmp_path):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+    from fi.alk.harness.chat_readiness import probe_chat_ingress
+    from fi.alk.harness.contract import AgentContract, Runtime
+    from fi.alk.harness.runtime_repair import RuntimePlanPatch, _contract_hash, validate_runtime_plan_patch
+
+    (tmp_path / "app.py").write_text('EVENT_ROUTE = "/events/{conversation_id}"\n')
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", port=8080, path="/chat", protocol="openai_chat",
+            completed_tool_events={**SPEC, "path": "/missing/{{correlation_id}}"},
+        ),
+    ))
+    with server() as (base, requests):
+        with pytest.raises(RuntimeValidationError) as error:
+            asyncio.run(probe_chat_ingress(
+                interface=contract.runtime.interface, endpoint=base, authoring=tmp_path,
+                candidate_hash="candidate", bundle_digest="bundle", secret_values={}, redaction_values={},
+            ))
+        diagnostic = error.value.diagnostics[0]
+        assert diagnostic.code == "chat_tool_evidence_unverified"
+        receipt = json.loads(next((tmp_path / "generic-harness/chat-readiness").glob("*.json")).read_text())
+        assert receipt["trace"]["status_code"] == 404
+        assert receipt["trace"]["failure_stage"] == "tool_events"
+        assert requests == [("POST", "/chat"), ("GET", "/missing/conversation-1")]
+        runtime = contract.runtime.model_copy(deep=True)
+        runtime.interface.completed_tool_events.path = SPEC["path"]
+        patch = RuntimePlanPatch(
+            base_contract_hash=_contract_hash(contract), runtime=runtime,
+            evidence_paths=("app.py",), diagnostic_codes=(diagnostic.code,),
+            summary="Correct the source-owned event route.",
+        )
+        repaired = validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={diagnostic.code},
+        )
+        response = invoke(wrapper(base, repaired.runtime.interface.completed_tool_events.model_dump()))
+        assert response.metadata["external_agent"]["success"] is True
+        assert len(response.metadata["native_completed_tools"]) == 1
+        assert response.metadata["native_completed_tools"][0]["result"] == {"bytes": 42}
+
+
+@pytest.mark.parametrize("status,code", [
+    (401, "credential_missing"), (403, "credential_missing"),
+    (429, "external_service_unavailable"), (503, "external_service_unavailable"),
+])
+def test_event_http_failure_retains_status_and_auth_or_transient_classification(status, code):
+    from fi.alk.harness.chat_readiness import _failure_code
+
+    with server(event_status=status) as (base, _):
+        trace = invoke(wrapper(base)).metadata["external_agent"]
+    assert trace["status_code"] == status
+    assert trace["failure_stage"] == "tool_events"
+    assert _failure_code(trace) == code
+    assert trace["response_excerpt"] == ""
+
+
+def test_malformed_event_payload_is_an_observation_failure():
+    from fi.alk.harness.chat_readiness import _failure_code
+
+    with server(malformed=True) as (base, _):
+        trace = invoke(wrapper(base)).metadata["external_agent"]
+    assert trace["status_code"] == 200
+    assert trace["failure_stage"] == "tool_events"
+    assert _failure_code(trace) == "chat_tool_evidence_unverified"
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_event_network_failure_does_not_report_prior_chat_status(monkeypatch, timeout):
+    import urllib.error
+    from fi.alk.harness.chat_readiness import _failure_code
+
+    with server() as (base, requests):
+        target = wrapper(base)
+        open_request = target._opener.open
+
+        def fail_event(request, **kwargs):
+            if request.get_method() == "GET":
+                if timeout:
+                    raise TimeoutError("event deadline")
+                raise urllib.error.URLError("event connection failed")
+            return open_request(request, **kwargs)
+
+        monkeypatch.setattr(target._opener, "open", fail_event)
+        trace = invoke(target).metadata["external_agent"]
+        assert requests == [("POST", "/chat")]
+    assert trace["status_code"] == 0
+    assert trace["failure_stage"] == "tool_events"
+    assert _failure_code(trace) == ("chat_ingress_timeout" if timeout else "external_service_unavailable")
 
 
 def test_native_paginated_tools_recorded_once_without_execution_or_continuation():
