@@ -1313,6 +1313,7 @@ async def validate_and_repair(
                         _active_repair_diagnostics,
                         guidance=guidance,
                         available_secret_aliases=available_secret_aliases,
+                        allow_ingress_repair=readiness_only,
                     )
                 if generic and all(
                     (artifact_root / name).is_file()
@@ -1551,6 +1552,7 @@ async def validate_and_repair(
                                 item.code for item in diagnostics
                             },
                             available_secret_aliases=available_secret_aliases,
+                            allow_ingress_repair=readiness_only,
                         )
                         patch_path = (
                             authoring
