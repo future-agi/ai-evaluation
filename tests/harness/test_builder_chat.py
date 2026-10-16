@@ -566,3 +566,23 @@ def test_the_platform_check_of_a_build_repairs_without_asking_but_drops_still_as
 
     asyncio.run(runtime._handle({"sequence": 2, "message_id": "m-2", "kind": "user_message", "payload": {"content": "make it harder"}}))
     assert runtime._repairing is False
+
+
+def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
+    client = BuilderClient()
+    states = iter(["running", "running", "completed"])
+
+    async def runs(run_id, limit):
+        return {"run_id": run_id, "state": next(states), "calls": []}
+
+    async def no_sleep(_delay):
+        return None
+
+    client.runs = runs
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    read = next(spec for spec in runtime._builder_platform_server().tools if spec.name == "read_runs").handler
+
+    result = asyncio.run(read({"run_id": "r-1", "wait": True}))
+
+    assert '"completed"' in result["content"][0]["text"]

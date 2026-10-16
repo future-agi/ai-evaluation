@@ -243,7 +243,8 @@ the start of every message. Resolve a note once it no longer applies.
 
 `run_scenarios` plays the numbered scenarios against the agent, each `repeats` times. Each call costs
 real time and money, so confirm the numbers and repeats first unless the person already said exactly
-what to run. Saved changes are what runs. Then `read_runs` shows progress and each call's result.
+what to run, or it is your check of a finished build, which needs no confirmation. Saved changes are
+what runs. Then `read_runs` shows progress and each call's result.
 
 ## Working with the person
 

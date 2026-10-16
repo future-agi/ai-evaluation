@@ -71,6 +71,8 @@ _NEEDS_CONFIRMATION = frozenset(
     }
 )
 _CONFIRM = "Yes, make this change"
+_RUN_FINISHED = frozenset({"completed", "failed", "canceled"})
+_RUN_WAIT_SECONDS = 900
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -553,19 +555,34 @@ class HostedChatRuntime:
             "read_runs",
             "The environment's runs, newest first, or with `run_id` one run's calls: each "
             "scenario's number and name, pass or fail, every sub-goal with whether it held and "
-            "why, turns, duration and how the call ended.",
-            schema({"run_id": str, "limit": int}, []),
+            "why, turns, duration and how the call ended. `wait` with a `run_id` holds until "
+            "that run has finished (up to 15 minutes), so its results are read in one go.",
+            schema({"run_id": str, "limit": int, "wait": bool}, []),
         )
         async def read_runs(args: dict[str, Any]) -> dict[str, Any]:
-            return await call(
-                self.client.runs(str(args.get("run_id") or ""), int(args.get("limit") or 10))
-            )
+            run_id, limit = str(args.get("run_id") or ""), int(args.get("limit") or 10)
+            deadline = asyncio.get_running_loop().time() + _RUN_WAIT_SECONDS
+            try:
+                result = await self.client.runs(run_id, limit)
+                while (
+                    args.get("wait")
+                    and run_id
+                    and result.get("state") not in _RUN_FINISHED
+                    and asyncio.get_running_loop().time() < deadline
+                    and not self.stopping.is_set()
+                ):
+                    await asyncio.sleep(20)
+                    result = await self.client.runs(run_id, limit)
+            except ConversationTransportError as exc:
+                return text(str(exc), error=True)
+            return text(result)
 
         @tool(
             "run_scenarios",
             "Start a run of the numbered scenarios against the agent, each played `repeats` times "
             "(1 to 20). Every call costs time and money: confirm the numbers and repeats with the "
-            "person first unless they said exactly what to run. Unsaved changes are saved first.",
+            "person first unless they said exactly what to run or this is your check of a finished "
+            "build. Unsaved changes are saved first.",
             schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
         )
         async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
