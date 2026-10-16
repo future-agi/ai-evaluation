@@ -444,7 +444,12 @@ class RuntimeInterface(BaseModel):
     # of ``{{name}}`` preserves the canonical value's JSON type; embedded placeholders render as
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
-    response_path: str = ""
+    response_path: str = Field(
+        default="",
+        description="For json_template only: optional dot-separated object keys and numeric "
+        "list-index segments selecting assistant text. Negative indexes are supported, "
+        "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
+    )
     headers_template: dict[str, str] = Field(default_factory=dict)
     completed_tool_events: CompletedToolEvents | None = None
     completed_tools: CompletedToolRows | None = None
