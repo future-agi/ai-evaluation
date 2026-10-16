@@ -20,7 +20,7 @@ def _job(source: Path, *, required: bool = True) -> HarnessJob:
             "connector": "auto",
             "config": {"target_model": "vertex_ai/gemini-3.7-flash"},
             "secret_refs": {
-                "GOOGLE_APPLICATION_CREDENTIALS": {
+                "GOOGLE_APPLICATION_CREDENTIALS_JSON": {
                     "manager": "platform-vault",
                     "key": "private-vault-reference",
                     "purpose": "target_provider",
@@ -107,6 +107,7 @@ def test_job_entrypoint_keeps_intent_through_stages_and_count_repair(
         briefing = "\n".join(guidance)
         assert "vertex_ai/gemini-3.7-flash" in briefing
         assert "GOOGLE_APPLICATION_CREDENTIALS" in briefing
+        assert "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in briefing
         assert "private-vault-reference" not in briefing
         assert "SIMULATOR_OPENAI_API_KEY" not in briefing
         assert "private-simulator-reference" not in briefing
@@ -213,6 +214,7 @@ def test_runtime_repair_keeps_job_intent(tmp_path):
     assert "require_tool_workflow" in observed[0]
     assert "vertex_ai/gemini-3.7-flash" in observed[0]
     assert "GOOGLE_APPLICATION_CREDENTIALS" in observed[0]
+    assert "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in observed[0]
     assert "private-vault-reference" not in observed[0]
     assert "SIMULATOR_OPENAI_API_KEY" not in observed[0]
 
