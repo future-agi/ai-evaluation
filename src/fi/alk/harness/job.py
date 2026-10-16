@@ -268,6 +268,13 @@ class HarnessJob(BaseModel):
 
     def authoring_guidance(self) -> list[str]:
         instructions = list(self.guidance)
+        if self.metadata.get("generic_harness_v1") is True:
+            instructions.append(
+                "A standalone Dockerfile cannot be built or run in this job's runtime. Inspect it "
+                "as source evidence for dependencies and startup, then select a supported "
+                "native source command when the repository provides one. Do not invent a replacement agent "
+                "when its required runtime is unsupported."
+            )
         names = {
             alias
             for alias, reference in self.agent.secret_refs.items()

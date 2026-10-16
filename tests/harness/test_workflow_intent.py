@@ -310,3 +310,12 @@ def test_authoring_rejects_invalid_target_model(tmp_path, model):
     job.agent.config["target_model"] = model
     with pytest.raises(ValueError, match="target_model_must_be_nonempty_string"):
         job.authoring_guidance()
+
+
+def test_generic_job_briefs_authoring_on_its_execution_limit(tmp_path):
+    job = _job(tmp_path)
+    assert "standalone Dockerfile" not in "\n".join(job.authoring_guidance())
+    job.metadata["generic_harness_v1"] = True
+    briefing = "\n".join(job.authoring_guidance())
+    assert "A standalone Dockerfile cannot be built or run" in briefing
+    assert "Do not invent a replacement agent" in briefing
