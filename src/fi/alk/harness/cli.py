@@ -408,6 +408,12 @@ async def _build(args: argparse.Namespace) -> int:
         print(f"spent: ${stage.spent_usd:.4f}")
         return 0
 
+    if deferred_runtime:
+        print(f"\nworld: {destination}")
+        print("Runtime bundle validation follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
     # Seal the exact environment now that its generated world exists. Local and hosted
     # execution consume this same internal bundle; the source repository is never a special
     # runtime path after this boundary.

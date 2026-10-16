@@ -457,7 +457,12 @@ submit_runtime_plan_patch. The replacement must use paths and commands that exis
 repository. runtime.install is evidence only and is never executed. Select required source-declared
 optional dependency groups in runtime.extras and additional requirements manifests in
 runtime.requirements_files (relative to selected workdir). Deleting install evidence cannot repair an omitted
-group. Call the tool once the smallest complete correction is known, then stop."""
+group. For packaging diagnostics, inspect the reported files and dependency/entrypoint evidence.
+Use runtime.context_excludes only for paths unnecessary for the selected runtime, relative to its
+component directory. Retain required modules, manifests, assets and tool implementations. Never
+approve credential-like material, rewrite it, or disable scanning. Every retained file is rescanned;
+the packaged context must build and answer a real chat before the plan is accepted.
+Call the tool once the smallest complete correction is known, then stop."""
     if allowed == {"generated_runtime_plan_invalid"}:
         system_prompt += """ You may also submit runtime_dependencies only to fill a missing
 reached.loader_module on existing entries with a nonempty engine and empty dsn_env, host,

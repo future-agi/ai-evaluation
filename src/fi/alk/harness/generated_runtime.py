@@ -37,10 +37,7 @@ _IGNORED_DIRECTORIES = {
     ".tox",
     ".venv",
     "__pycache__",
-    "coverage",
     "node_modules",
-    "target",
-    "vendor",
 }
 _SECRET_NAMES = {
     ".env",
@@ -995,14 +992,16 @@ def _context_excludes(
         for name in (dependency, "pyproject.toml", "package.json")
         if name and component.joinpath(name).is_file()
     }
-    required.update(
-        Path(token)
-        for token in command
-        if token
-        and not Path(token).is_absolute()
-        and ".." not in Path(token).parts
-        and component.joinpath(token).is_file()
-    )
+    for token in command:
+        path = Path(token)
+        if not token or path.is_absolute() or ".." in path.parts:
+            continue
+        try:
+            if component.joinpath(path).is_file():
+                required.add(path)
+        except OSError:
+            # Inline interpreter programs are arguments, not filesystem paths.
+            continue
     values: set[str] = set()
     for raw in getattr(runtime, "context_excludes", None) or []:
         if any(char in str(raw) for char in "*?[]"):
@@ -1051,6 +1050,7 @@ def _copy_sanitized_context(
 ) -> None:
     count = 0
     total = 0
+    rejected_files: list[str] = []
     source = source.resolve()
 
     def copy_file(path: Path, relative: Path) -> None:
@@ -1072,10 +1072,9 @@ def _copy_sanitized_context(
             raise GeneratedRuntimeError("generated_runtime_context_limit_exceeded")
         try:
             inspect_public_file(path)
-        except ValueError as exc:
-            raise GeneratedRuntimeError(
-                "generated_runtime_secret_material_detected: " + relative.as_posix()
-            ) from exc
+        except ValueError:
+            rejected_files.append(relative.as_posix())
+            return
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target, follow_symlinks=True)
@@ -1123,6 +1122,11 @@ def _copy_sanitized_context(
                 )
 
     copy_directory(source, Path(), frozenset())
+    if rejected_files:
+        raise GeneratedRuntimeError(
+            "generated_runtime_secret_material_detected: "
+            + json.dumps({"files": rejected_files[:32], "total": len(rejected_files)})
+        )
 
 
 def _sensitive_file(relative: Path, source: Path) -> bool:
