@@ -186,6 +186,24 @@ afterwards. It is a whole conversation from first contact to a settled outcome, 
 | `variables` | Extra values the prompt asks for, by slot name. Each is substituted into the prompt where its name appears. | when the prompt asks |
 | `max_turns` | How many turns the conversation may take. Defaults to 10. | no |
 
+### One situation, and every field written from it
+
+A scenario is one call, so every field describes the same one. Decide the situation first, in one
+sentence: who calls, what they want, what is true in the world, and what makes it hard. Then write the
+fields from it, in this order, each from the one before:
+
+1. `setup_code` makes that world true, by changing what the world already holds; `ready_code` checks
+   each thing the situation needs, and nothing else.
+2. `solution` is what the agent does in that world under its rules, step by step, ending on the
+   outcome this situation reaches.
+3. `instruction` gives the person what they know and want in that situation, and only that.
+4. `sub_goals` assert that outcome and the hard moment, against the solution's fixed values.
+5. `name`, `branch`, `tests`, `use_case` and the coordinate label that situation.
+
+Read it back once as the agent, the person and the world would meet it: each field must tell the same
+call. When you change one field, rewrite every field that follows from it; a scenario patched in one
+place and not the others is wrong in the others.
+
 `branch` and `tests` are different and easy to confuse. `branch` is the **condition**: what is
 different about this scenario's world or request. `tests` is the **question**: what the run will find
 out. For a scenario about an expired payment method, `branch` is "the method on file has expired" and
