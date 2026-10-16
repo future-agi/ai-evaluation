@@ -25,10 +25,10 @@ from typing import Any, Callable, Sequence
 
 import requests
 
-from .backends import tool
+from .backends import SessionSpec, tool, tool_server
 from .catalogue import criteria_text
 from .config import chosen_model, provider_env
-from .session import record_turn
+from .session import Stage, record_turn
 from .tools import schema
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,10 @@ def verdict_of(args: dict[str, Any]) -> tuple[bool | None, str]:
 def compared(goal: Any) -> str:
     said = str(getattr(goal, "compares", "") or "").strip()
     return f"Its check contract:\n{said}\n" if said else ""
+
+
+class NoGateway(RuntimeError):
+    pass
 
 
 def judge_model() -> str:
@@ -264,8 +268,8 @@ async def run_judge_conversation(
 ) -> list[dict[str, Any]]:
     """Run the judge's turns until `done`, the steps run out, or it stops twice without deciding.
 
-    Never raises: an unplayable recording falls back to the transcript, and a failed turn is
-    retried once before the conversation is handed back undecided.
+    Raises only NoGateway: an unplayable recording falls back to the transcript, and a failed
+    turn is retried once before the conversation is handed back undecided.
     """
     asked_again = False
     failed_turns = 0
@@ -273,6 +277,8 @@ async def run_judge_conversation(
         forced = step == steps - 1
         try:
             reply = await asyncio.to_thread(_complete, conversation, tools, forced)
+        except NoGateway:
+            raise
         except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
             logger.warning("judge for %s could not run: %s: %s", evidence.label, type(exc).__name__, exc)
             if evidence.audio == "sent":
@@ -397,18 +403,38 @@ async def judge_sub_goal(
         + "Look as needed, then call decide."
     )
     ask = "Everything needed is above. Call decide now with its verdict."
-    conversation = await run_judge_conversation(
-        [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": prompt}],
-        tools,
-        evidence,
-        done=lambda: "it" in verdict,
-        nudge=lambda: (
-            f"No verdict yet for sub-goal {name!r}.\n\nWhat was said:\n"
-            f"{_transcript(messages) if messages else '(nothing captured)'}\n\n{ask}"
-        ),
-    )
-    if "it" not in verdict:
-        await request_final_verdicts(_INSTRUCTIONS, prompt, conversation, evidence, decide, ask)
+
+    def nudge() -> str:
+        said = _transcript(messages) if messages else "(nothing captured)"
+        return f"No verdict yet for sub-goal {name!r}.\n\nWhat was said:\n{said}\n\n{ask}"
+
+    try:
+        conversation = await run_judge_conversation(
+            [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": prompt}],
+            tools,
+            evidence,
+            done=lambda: "it" in verdict,
+            nudge=nudge,
+        )
+        if "it" not in verdict:
+            await request_final_verdicts(_INSTRUCTIONS, prompt, conversation, evidence, decide, ask)
+    except NoGateway:
+        evidence.looked.add("listen")
+        spec = SessionSpec(
+            system_prompt=_INSTRUCTIONS,
+            servers={"world": tool_server(name="world", tools=[t for t in tools if t.name != "listen"])},
+            max_turns=12,
+            model=judge_model(),
+        )
+        for text in (prompt, f"{prompt}\n\n{nudge()}"):
+            try:
+                async with Stage(spec, name="judge-sub-goals", overheard=False) as stage:
+                    await stage.say(text)
+            except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
+                logger.warning("judge for %s could not run: %s: %s", name, type(exc).__name__, exc)
+            if "it" in verdict:
+                break
+            evidence.looked.add("transcript")
     if "it" in verdict:
         return verdict["it"]
     logger.warning("judge gave no verdict for %s", name)
@@ -486,7 +512,7 @@ def _complete(
     env = provider_env(judge_model())
     base, key = env.get("ANTHROPIC_BASE_URL"), env.get("ANTHROPIC_AUTH_TOKEN")
     if not base or not key:
-        raise RuntimeError("no gateway configured for the judge")
+        raise NoGateway("no gateway configured for the judge")
     body: dict[str, Any] = {
         "model": env["ANTHROPIC_MODEL"],
         "messages": conversation,
