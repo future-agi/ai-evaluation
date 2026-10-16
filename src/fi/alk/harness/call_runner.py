@@ -808,6 +808,7 @@ def _clear_file_tool_calls(runtime: EnvironmentRuntime) -> None:
 # Marks lines written by livekit_tool_trace_bootstrap._record. That module is copied into the
 # agent's interpreter as a standalone sitecustomize, so it cannot import this constant.
 _LIVEKIT_HOOK_SOURCE = "livekit"
+_MISSING = object()
 
 
 def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -859,7 +860,23 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         # runs: the arguments it executed with and the structured result, but no time. The hook
         # writes the same call after the step, with the model's arguments, a stringified output
         # and when the model issued it. Keep the agent's evidence and take the hook's time.
-        written = next((pending for pending in untimed if pending.name == name), None)
+        # A name alone does not identify the call: LiveKit rejects malformed arguments without
+        # running the tool, so a batch can hold a failed hook line with no agent line next to a
+        # same-name success. Pair only when the outcome agrees and every argument the model
+        # sent is one the agent executed with (agents may add their own, e.g. a booking ref).
+        written = next(
+            (
+                pending
+                for pending in untimed
+                if pending.name == name
+                and pending.ok == call.ok
+                and all(
+                    pending.arguments.get(key, _MISSING) == value
+                    for key, value in call.arguments.items()
+                )
+            ),
+            None,
+        )
         if written is None:
             calls.append(call)
             continue
