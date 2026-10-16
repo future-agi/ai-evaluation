@@ -55,6 +55,23 @@ def test_source_image_selection_preserves_source_and_other_builds(tmp_path):
     assert (tmp_path / "compose.yaml").read_bytes() == before
 
 
+def test_image_selection_ignores_only_selected_build_configuration(tmp_path):
+    build = {"context": ".", "args": {"TOKEN": "${BUILD_TOKEN:?build only}"}}
+    source(tmp_path, chat={"image": "example/chat:1", "build": build})
+    selected = select_runtime(tmp_path, declaration())
+    assert selected.services["chat"]["image"] == "example/chat:1"
+    assert "build" not in selected.services["chat"]
+
+    source(
+        tmp_path,
+        worker={"image": "example/worker:1", "build": build},
+    )
+    with pytest.raises(
+        RuntimeSelectionError, match="compose_structural_configuration_missing: BUILD_TOKEN"
+    ):
+        select_runtime(tmp_path, declaration())
+
+
 @pytest.mark.parametrize(
     "changes",
     [
