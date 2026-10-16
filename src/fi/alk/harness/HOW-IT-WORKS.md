@@ -343,6 +343,14 @@ record a source-evidenced identifier when the endpoint requires one. For a custo
 JSON envelope, `json_template` can instead supply a literal `model` and
 `"messages": "{{messages}}"` in `request_template`; `openai_chat` does not use templates.
 
+`agent.config.target_model` supplies the caller's desired backing model, for example
+`vertex_ai/gemini-3.7-flash`. Authoring and runtime repair receive this preference and
+the names of supplied target environment values. They must derive the repository's
+provider configuration and initialization requests from source and verify a real
+chat. Secret values, vault references, simulator credential names, and arbitrary
+connection settings are not included in this briefing. The backing model preference
+does not replace `runtime.interface.model`, which may identify an application profile.
+
 `runtime.extras` selects optional dependency groups declared in the selected Python
 project. For a uv workspace root, a group absent from the root must have exactly
 one owner among included members. The installer then includes workspace packages

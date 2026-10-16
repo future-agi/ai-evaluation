@@ -16,7 +16,22 @@ def _job(source: Path, *, required: bool = True) -> HarnessJob:
         run_id="workflow",
         execution="local",
         source={"kind": "local_repository", "local_path": str(source)},
-        agent={"connector": "auto"},
+        agent={
+            "connector": "auto",
+            "config": {"target_model": "vertex_ai/gemini-3.7-flash"},
+            "secret_refs": {
+                "GOOGLE_APPLICATION_CREDENTIALS": {
+                    "manager": "platform-vault",
+                    "key": "private-vault-reference",
+                    "purpose": "target_provider",
+                },
+                "SIMULATOR_OPENAI_API_KEY": {
+                    "manager": "platform-config",
+                    "key": "private-simulator-reference",
+                    "purpose": "simulator_provider",
+                },
+            },
+        },
         scenario_count=2,
         require_tool_workflow=required,
         guidance=["Test a failed lookup followed by recovery."],
@@ -89,6 +104,12 @@ def test_job_entrypoint_keeps_intent_through_stages_and_count_repair(
     for _, guidance in observed:
         assert "Test a failed lookup followed by recovery." in guidance
         assert any("require_tool_workflow" in item for item in guidance) is required
+        briefing = "\n".join(guidance)
+        assert "vertex_ai/gemini-3.7-flash" in briefing
+        assert "GOOGLE_APPLICATION_CREDENTIALS" in briefing
+        assert "private-vault-reference" not in briefing
+        assert "SIMULATOR_OPENAI_API_KEY" not in briefing
+        assert "private-simulator-reference" not in briefing
 
 
 def test_declared_tool_without_executable_entry_is_rejected(tmp_path):
@@ -190,6 +211,10 @@ def test_runtime_repair_keeps_job_intent(tmp_path):
     assert len(observed) == 1
     assert "Test a failed lookup followed by recovery." in observed[0]
     assert "require_tool_workflow" in observed[0]
+    assert "vertex_ai/gemini-3.7-flash" in observed[0]
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in observed[0]
+    assert "private-vault-reference" not in observed[0]
+    assert "SIMULATOR_OPENAI_API_KEY" not in observed[0]
 
 
 @pytest.mark.parametrize(
@@ -247,3 +272,41 @@ def test_job_requirement_is_in_serialized_schema(tmp_path):
         HarnessJob.model_json_schema()["properties"]["require_tool_workflow"]["default"]
         is False
     )
+
+
+def test_authoring_context_does_not_expose_arbitrary_config_or_simulator_names(
+    tmp_path,
+):
+    job = _job(tmp_path)
+    job.agent.config.update(
+        OPENAI_API_KEY="private-config-value",
+        headers={"X-API-Key": "private-header-value"},
+    )
+    job.metadata["environment_value_names"] = [
+        "LOCAL_MODEL_PROJECT",
+        "SIMULATOR_OPENAI_API_KEY",
+        "invalid=value",
+        None,
+    ]
+    restored = HarnessJob.model_validate_json(job.model_dump_json())
+    briefing = "\n".join(restored.authoring_guidance())
+    assert "LOCAL_MODEL_PROJECT" in briefing
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in briefing
+    assert "vertex_ai/gemini-3.7-flash" in briefing
+    for excluded in (
+        "private-config-value",
+        "private-header-value",
+        "SIMULATOR_OPENAI_API_KEY",
+        "invalid=value",
+        "private-vault-reference",
+        "private-simulator-reference",
+    ):
+        assert excluded not in briefing
+
+
+@pytest.mark.parametrize("model", ["", "  ", 42, {"name": "model"}])
+def test_authoring_rejects_invalid_target_model(tmp_path, model):
+    job = _job(tmp_path)
+    job.agent.config["target_model"] = model
+    with pytest.raises(ValueError, match="target_model_must_be_nonempty_string"):
+        job.authoring_guidance()
