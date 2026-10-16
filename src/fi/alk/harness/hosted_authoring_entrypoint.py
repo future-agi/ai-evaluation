@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import observability
 from .authoring_entrypoint import main as authoring_main
+from .cast import SWITCH as SUB_ACTORS_SWITCH
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
@@ -29,6 +30,7 @@ _PASSTHROUGH = {
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
     "ALK_BACKGROUND_NOISE_CATALOG",
+    SUB_ACTORS_SWITCH,
     # Temporary, private guest-booking scenario policy. The exact
     # target comes from platform deployment configuration, never from customer environment input.
     TARGET_PHONE_ENV,
@@ -167,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
                 "AGENTCC_BASE_URL",
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
+                SUB_ACTORS_SWITCH,
                 TARGET_PHONE_ENV,
                 PIN_ENV,
             )
