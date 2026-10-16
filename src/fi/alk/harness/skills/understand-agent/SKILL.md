@@ -97,6 +97,11 @@ Find, in roughly this order:
    Never declare token values, disable authentication, override supplied credentials, or use this
    for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
 
+   Inspect the selected chat route's response producers for structured application failures,
+   including errors returned with HTTP 200. Declare `runtime.interface.failure_rule` using the
+   source-defined status field, failure or success values, and error message path. A readable
+   assistant message does not prove successful execution. Do not infer failure from prose alone.
+
    Inspect whether the selected chat route returns pending tool requests for its caller to execute,
    or executes tools internally before replying. For internal execution, inspect the source response
    schema or correlated event API and declare `runtime.interface.completed_tools` or
