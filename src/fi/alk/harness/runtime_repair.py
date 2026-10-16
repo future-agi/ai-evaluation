@@ -216,6 +216,7 @@ def validate_runtime_plan_patch(
         from .generated_runtime import (
             _context_excludes,
             select_python_extras,
+            python_workspace_root,
             select_python_requirements,
         )
 
@@ -241,12 +242,14 @@ def validate_runtime_plan_patch(
                 dependency_root, runtime, "pyproject.toml", runtime.command
             ),
         )
+        workspace_root = python_workspace_root(root, dependency_root)
+        prefix = dependency_root.relative_to(workspace_root)
         select_python_extras(
-            dependency_root,
+            workspace_root,
             runtime.extras,
-            context_excludes=_context_excludes(
+            context_excludes=tuple((prefix / path).as_posix() for path in _context_excludes(
                 dependency_root, runtime, "pyproject.toml", runtime.command
-            ),
+            )),
         )
     workdir = (root / runtime.workdir).resolve() if runtime.workdir else root
     try:

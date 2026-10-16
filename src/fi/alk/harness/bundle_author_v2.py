@@ -62,6 +62,8 @@ from .generated_runtime import (
     GeneratedRuntimeError,
     _python_language_version,
     select_python_extras,
+    python_workspace_root,
+    _pyproject_document,
     select_python_requirements,
     supplemental_requirements_command,
     validate_local_install_extras,
@@ -1165,6 +1167,10 @@ def _plan_python(
         )
     if not run_override and entry is not None and not (root / entry).is_file():
         raise BundleAuthorError(f"runtime_entrypoint_missing: {name}:{entry}")
+    source, component = source.resolve(), root.resolve()
+    root = python_workspace_root(source, component)
+    member = component.relative_to(root)
+    workspace_excludes = tuple((member / path).as_posix() for path in context_excludes)
     relative = root.relative_to(source).as_posix() or "."
     process = _python_process(
         name=name,
@@ -1183,15 +1189,34 @@ def _plan_python(
                 python = f"python{python}"
         else:
             python = _docker_python(root)
-        validate_local_install_extras(root, install, extras or [], context_excludes=context_excludes)
-        selection = select_python_extras(root, extras or [], context_excludes=context_excludes)
-        requirements = select_python_requirements(root, requirements_files or [], context_excludes=context_excludes)
+        validate_local_install_extras(
+            component, install, extras or [], context_excludes=context_excludes
+        )
+        selection = select_python_extras(
+            root, extras or [], context_excludes=workspace_excludes
+        )
+        requirements = select_python_requirements(
+            component, requirements_files or [], context_excludes=context_excludes
+        )
+        requirements = tuple((member / path).as_posix() for path in requirements)
     except GeneratedRuntimeError as exc:
         raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
-        commands = [
-            _uv_sync_build_command(root, python, extra_arguments=selection.uv_arguments)
-        ]
+        arguments = selection.uv_arguments
+        if component != root and not selection.all_packages:
+            package = (
+                _pyproject_document(component / "pyproject.toml")
+                .get("project", {})
+                .get("name")
+            )
+            if not package:
+                raise BundleAuthorError(
+                    "generated_runtime_workspace_member_name_missing"
+                )
+            arguments = [*arguments, "--package", package]
+        commands = [_uv_sync_build_command(root, python, extra_arguments=arguments)]
+        if component != root:
+            commands.append(["ln", "-s", "../" * len(member.parts) + ".venv", (member / ".venv").as_posix()])
         if livekit_download:
             commands.append(
                 [
@@ -1234,8 +1259,29 @@ def _plan_python(
         commands.append(supplemental_requirements_command(".venv/bin/python", requirements))
         commands.append(["uv", "pip", "check", "--python", ".venv/bin/python"])
     return process.model_copy(
-        update={"build_commands": commands, "run_command": run_override or run}
+        update={"build_commands": commands, "run_command": run_override or run, "source_component": member.as_posix()}
     )
+
+def _python_component_command(
+    *, source: Path, component: Path, process: SourceProcess
+) -> SourceProcess:
+    build_root = (source / process.working_directory).resolve()
+    relative = component.resolve().relative_to(build_root).as_posix()
+    if relative == ".":
+        return process
+    return process.model_copy(
+        update={
+            "run_command": [
+                "sh",
+                "-c",
+                'cd "./$1" && shift && exec "$@"',
+                "alk-source-process",
+                relative,
+                *process.run_command,
+            ]
+        }
+    )
+
 
 def _plan_source_process(
     source: Path, *, language: str = "", **kwargs: Any
@@ -1334,6 +1380,7 @@ def _plan_source_process(
                 ["bun", "install", "--frozen-lockfile"],
             ],
             "run_command": run,
+            "source_component": child,
         }
     )
 
@@ -2356,6 +2403,8 @@ def resolve_environment_plan(
                         ),
                     }
                 )
+            if not (declared_runtime and runtime_model.language.lower() == "bun"):
+                process = _python_component_command(source=root, component=service_root, process=process)
             processes.append(process)
             if port:
                 slug = "target_http" if service_name == control_name else "tools_api"
@@ -2582,6 +2631,8 @@ def resolve_environment_plan(
                 final_run_command, process.environment, component, root
             )
             process = process.model_copy(update=update)
+        if not is_bun_runtime:
+            process = _python_component_command(source=root, component=root if is_callback else component, process=process)
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(
@@ -2701,9 +2752,8 @@ def resolve_environment_plan(
         process.model_copy(update={
             "workspaces": {
                 name: (
-                    Path(runtime_workdir).relative_to(process.working_directory) / path
+                    Path(process.source_component) / path
                 ).as_posix()
-                if is_bun_runtime and runtime_workdir else path
                 for name, path in runtime_model.workspaces.items()
             }
         })
@@ -2745,13 +2795,9 @@ def _package_process_sources(
         )
         if selected_runtime is not None:
             required.extend(selected_runtime.requirements_files)
-        declared_component = component
-        if selected_runtime is not None and selected_runtime.workdir:
-            declared_component = (source / selected_runtime.workdir).resolve()
-            if not declared_component.is_relative_to(component):
-                raise GeneratedRuntimeError(
-                    "generated_runtime_context_component_mismatch"
-                )
+        declared_component = (component / process.source_component).resolve()
+        if not declared_component.is_relative_to(component):
+            raise GeneratedRuntimeError("generated_runtime_context_component_mismatch")
         exclusions = _context_excludes(
             declared_component,
             selected_runtime,
