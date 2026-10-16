@@ -868,6 +868,15 @@ class Runtime(BaseModel):
                 )
             ):
                 raise ValueError("runtime_additional_services_invalid")
+        if self.interface and self.interface.kind == "command" and any(
+            re.search(r"\{\{\s*(?:messages|new_message(?:_content)?)\s*\}\}", argument)
+            for argument in self.command
+        ):
+            raise ValueError(
+                "runtime_command_message_template_unsupported: command argv is literal. "
+                "Use a source-owned HTTP interface or a noninteractive command that reads "
+                "JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON."
+            )
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:
@@ -904,20 +913,6 @@ class Runtime(BaseModel):
         if isinstance(value, str):
             return shlex.split(value)
         return value
-
-    @field_validator("command")
-    @classmethod
-    def _reject_message_templates(cls, command: list[str]) -> list[str]:
-        if any(
-            re.search(r"\{\{\s*(?:messages|new_message(?:_content)?)\s*\}\}", argument)
-            for argument in command
-        ):
-            raise ValueError(
-                "runtime_command_message_template_unsupported: command argv is literal. "
-                "Use a source-owned HTTP interface or a noninteractive command that reads "
-                "JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON."
-            )
-        return command
 
     @field_validator("extras", mode="before")
     @classmethod
