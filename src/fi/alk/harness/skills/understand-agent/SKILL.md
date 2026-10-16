@@ -296,8 +296,10 @@ ten judgements per call and buys little over four.
 Call `submit_contract` with the whole contract as one flat object. It is validated when you call
 it; if anything is wrong you get the full list back and you fix it and call again.
 
-Before you submit, check your own work once: open the source again for every tool you listed and
-confirm the name, the arguments and the types are exactly as written there. A contract that is
-structurally valid and factually wrong passes every automatic check and fails everything after.
+Before you submit, have your draft checked. With a repository, brief one `agent_reader` with every
+tool, rule and caller fact in your draft and ask it to list each place the source disagrees, then
+correct them; otherwise open the source again for every tool you listed and confirm the name, the
+arguments and the types are exactly as written there. A contract that is structurally valid and
+factually wrong passes every automatic check and fails everything after.
 
 Then say briefly what this agent is, what it can do, and anything you were unsure about.

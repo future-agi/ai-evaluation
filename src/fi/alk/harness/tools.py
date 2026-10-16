@@ -231,7 +231,9 @@ def contract_tools(
         "one flat object. Every field is described in the schema; fill in what the source "
         "supports and leave the rest out.\n\n"
         "It is validated when you call it. If anything is wrong you get the whole list back at "
-        "once, in terms of what to fix, and you submit again.",
+        "once, in terms of what to fix, and you submit again. When the agent's source is in front "
+        "of you, submit only after an `agent_reader` has checked your draft against it and you "
+        "have corrected what it found.",
         # Nothing required, and that is deliberate. This layer runs before the tool body, so
         # anything it rejects never reaches the code that could have understood it — a contract
         # sent inside a wrapper is complete and correct, and is unwrapped a few lines below, but
