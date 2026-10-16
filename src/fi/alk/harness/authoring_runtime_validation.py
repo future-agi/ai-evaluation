@@ -469,6 +469,7 @@ class RuntimeValidationError(RuntimeError):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
         self.process_evidence = ""
+        self.target_process_evidence = ""
         super().__init__(detail)
 
 
@@ -1143,6 +1144,12 @@ async def validate_once(
                     validation_error.process_evidence = retained_process_evidence(
                         process_logs, logs_before, redaction_values
                     )
+                    control_service = getattr(manifest.runtime, "control_service", None)
+                    if control_service:
+                        validation_error.target_process_evidence = retained_process_evidence(
+                            process_logs, logs_before, redaction_values,
+                            process_name=control_service,
+                        )
                 except OSError:
                     pass
 
@@ -1423,6 +1430,12 @@ async def validate_and_repair(
                         "\n<untrusted_current_attempt_process_logs>\n"
                         + exc.process_evidence
                         + "\n</untrusted_current_attempt_process_logs>"
+                    )
+                if exc.target_process_evidence:
+                    guidance += (
+                        "\n<untrusted_current_target_process_logs>\n"
+                        + exc.target_process_evidence
+                        + "\n</untrusted_current_target_process_logs>"
                     )
                 _active_repair_diagnostics = diagnostics
                 scenarios_before = None

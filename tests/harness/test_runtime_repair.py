@@ -341,7 +341,8 @@ def test_dependency_investigation_shows_sibling_optional_extras_without_manifest
 
     class CapturingStage:
         def __init__(self, spec, **kwargs):
-            pass
+            schema = spec.servers["runtime_repair"].tools[0].input_schema
+            assert "runtime_dependencies" not in schema["properties"]
 
         async def __aenter__(self):
             return self
@@ -467,6 +468,172 @@ def test_runtime_repair_progress_reports_tools_and_rejection_codes_without_paylo
     assert "runtime repair: failed" in output
     assert "secret-file" not in output
     assert "secret-value" not in output
+
+
+def test_runtime_repair_hides_loader_field_without_missing_loader(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    contract = AgentContract(agent="test", runtime=Runtime(language="python"))
+
+    class InspectingStage:
+        def __init__(self, spec, **kwargs):
+            schema = spec.servers["runtime_repair"].tools[0].input_schema
+            assert "runtime_dependencies" not in schema["properties"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, *, on_event=None):
+            pass
+
+    monkeypatch.setattr(runtime_repair, "Stage", InspectingStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime",
+        code="generated_runtime_plan_invalid",
+        message="bad runtime",
+    )
+    with pytest.raises(RuntimeError, match="typed_runtime_plan_patch_not_submitted"):
+        asyncio.run(
+            runtime_repair.request_runtime_plan_patch(tmp_path, contract, (diagnostic,))
+        )
+
+
+def test_explicit_install_hint_selects_only_validated_workspace_extra(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+    from fi.alk.harness.runtime_repair import _explicit_dependency_candidate
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server", "sdk"]\n'
+    )
+    server = tmp_path / "server"
+    server.mkdir()
+    (server / "pyproject.toml").write_text(
+        '[project]\nname="server"\nversion="1"\ndependencies=["agent-sdk"]\n'
+    )
+    sdk = tmp_path / "sdk"
+    sdk.mkdir()
+    (sdk / "pyproject.toml").write_text(
+        '[project]\nname="agent-sdk"\nversion="1"\n'
+        '[project.optional-dependencies]\nvertex=["google-cloud-aiplatform"]\n'
+    )
+    contract = AgentContract(
+        agent="test",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            workdir="server",
+            command=["python", "-m", "server"],
+        ),
+    )
+    guidance = (
+        "<untrusted_current_target_process_logs>\nagent.log\n"
+        'Vertex SDK. Install with: pip\ninstall\n"agent-sdk[vertex]"\n'
+        "</untrusted_current_target_process_logs>"
+    )
+    patch = _explicit_dependency_candidate(tmp_path, contract, guidance)
+    assert patch is not None
+    assert patch.runtime.extras == ["vertex"]
+    assert patch.evidence_paths == ("sdk/pyproject.toml",)
+    assert patch.runtime_dependencies is None
+    monkeypatch.setattr(
+        runtime_repair,
+        "Stage",
+        lambda *_args, **_kwargs: pytest.fail(
+            "explicit candidate should bypass model repair"
+        ),
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="HTTP 500",
+    )
+    assert (
+        asyncio.run(
+            runtime_repair.request_runtime_plan_patch(
+                tmp_path, contract, (diagnostic,), guidance=guidance
+            )
+        )
+        == patch
+    )
+    assert (
+        _explicit_dependency_candidate(tmp_path, contract, "install agent-sdk[vertex]")
+        is None
+    )
+    assert _explicit_dependency_candidate(
+        tmp_path, contract,
+        guidance.replace("current_target_process", "current_attempt_process"),
+    ) is None
+    assert _explicit_dependency_candidate(
+        tmp_path, contract,
+        "<untrusted_current_attempt_process_logs>\n"
+        "build.log\ninstall agent-sdk[vertex]\n"
+        "sidecar.log\ninstall agent-sdk[vertex]\n"
+        "</untrusted_current_attempt_process_logs>\n"
+        "<untrusted_current_target_process_logs>\n"
+        "agent.log\nHTTP 500\n</untrusted_current_target_process_logs>",
+    ) is None
+    assert (
+        _explicit_dependency_candidate(
+            tmp_path, contract, guidance.replace("agent-sdk[vertex]", "unknown[vertex]")
+        )
+        is None
+    )
+    assert (
+        _explicit_dependency_candidate(
+            tmp_path,
+            contract,
+            guidance.replace(
+                "</untrusted_current_target_process_logs>",
+                "install server[other]\n</untrusted_current_target_process_logs>",
+            ),
+        )
+        is None
+    )
+
+
+def test_explicit_install_hint_rejects_excluded_or_external_manifest(tmp_path):
+    from fi.alk.harness.runtime_repair import _explicit_dependency_candidate
+
+    source = tmp_path / "source"
+    source.mkdir()
+    sdk = source / "sdk"
+    sdk.mkdir()
+    manifest = sdk / "pyproject.toml"
+    manifest.write_text(
+        '[project]\nname="agent-sdk"\nversion="1"\n'
+        "[project.optional-dependencies]\nvertex=[]\n"
+    )
+    root_manifest = source / "pyproject.toml"
+    root_manifest.write_text('[tool.uv.workspace]\nmembers=["sdk"]\nexclude=["sdk"]\n')
+    contract = AgentContract(agent="test", runtime=Runtime(language="python"))
+    guidance = (
+        "<untrusted_current_target_process_logs>\n"
+        'install "agent-sdk[vertex]"\n</untrusted_current_target_process_logs>'
+    )
+    assert _explicit_dependency_candidate(source, contract, guidance) is None
+    root_manifest.write_text('[tool.uv.workspace]\nmembers=["sdk"]\n')
+    manifest.unlink()
+    outside = tmp_path / "outside.toml"
+    outside.write_text(
+        '[project]\nname="agent-sdk"\n[project.optional-dependencies]\nvertex=[]\n'
+    )
+    manifest.symlink_to(outside)
+    assert _explicit_dependency_candidate(source, contract, guidance) is None
 
 
 @pytest.mark.parametrize(

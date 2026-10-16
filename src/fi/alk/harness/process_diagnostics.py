@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import uuid
 from collections.abc import Mapping
@@ -98,7 +99,9 @@ async def upload_process_logs(root: Path, adapter, **kwargs) -> None:
         os.close(fd)
 
 
-def retained_process_evidence(directory: Path, before: set[Path], secrets) -> str:
+def retained_process_evidence(
+    directory: Path, before: set[Path], secrets, *, process_name: str | None = None
+) -> str:
     """Read only bounded, sanitized logs retained by the current validation attempt."""
     if not directory.is_dir() or directory.is_symlink():
         return ""
@@ -108,6 +111,10 @@ def retained_process_evidence(directory: Path, before: set[Path], secrets) -> st
     try:
         for name in sorted(os.listdir(fd)):
             if not name.endswith(".log") or directory / name in before:
+                continue
+            if process_name is not None and not re.fullmatch(
+                rf"worlds-w\d+-{re.escape(process_name)}-[0-9a-f]{{32}}\.log", name
+            ):
                 continue
             try:
                 log_fd = os.open(
