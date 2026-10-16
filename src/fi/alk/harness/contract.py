@@ -904,6 +904,20 @@ class Runtime(BaseModel):
             return shlex.split(value)
         return value
 
+    @field_validator("command")
+    @classmethod
+    def _reject_message_templates(cls, command: list[str]) -> list[str]:
+        if any(
+            re.search(r"\{\{\s*(?:messages|new_message(?:_content)?)\s*\}\}", argument)
+            for argument in command
+        ):
+            raise ValueError(
+                "runtime_command_message_template_unsupported: command argv is literal. "
+                "Use a source-owned HTTP interface or a noninteractive command that reads "
+                "JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON."
+            )
+        return command
+
     @field_validator("extras", mode="before")
     @classmethod
     def _normalize_extras(cls, value: Any) -> Any:
