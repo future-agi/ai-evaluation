@@ -190,6 +190,9 @@ def test_a_fixed_value_must_be_where_its_stated_source_says():
     assert not problems('rule: "Use the priority line for emergencies"', "priority")
     assert not problems("caller: says A-12", "A-12")
     assert not problems("record: accounts.id", "A-77")
+    assert not problems("record: accounts.id, under the tool's prefix", "account:A-77")
+    assert problems("record: accounts.id, under the tool's prefix", "account:A-78")
+    assert not problems("caller: says their account", "my_account")
 
 
 def test_a_solution_step_must_match_the_agents_contract(tmp_path):

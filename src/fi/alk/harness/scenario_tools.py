@@ -803,7 +803,7 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
     """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
 
     def plain(text: Any) -> str:
-        return " ".join(str(text).lower().split())
+        return " ".join(re.sub(r"[_-]", " ", str(text).lower()).split())
 
     try:
         held = plain(json.dumps(trial.state(), default=str))
@@ -821,7 +821,8 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
             quoted = re.findall(r'"([^"]+)"', str(source))
             holds = {
                 "caller": plain(value) in said,
-                "record": plain(value) in held,
+                # A tool can take a record's value under a prefix it names (`kind:id`).
+                "record": plain(value) in held or plain(value.rsplit(":", 1)[-1]) in held,
                 "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
             }.get(kind)
             if not holds:
