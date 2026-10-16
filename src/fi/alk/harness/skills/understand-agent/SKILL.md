@@ -102,7 +102,9 @@ Find, in roughly this order:
    schema or correlated event API and declare `runtime.interface.completed_tools` or
    `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
    actions and observations using source identifiers and preserve conversation correlation. Tool
-   declarations and assistant text are not execution evidence. Never fabricate events or replay
+   declarations, registration/factory calls, and assistant text are not execution evidence.
+   Importable tool bindings do not replace a completed-result observation mapping for internal
+   execution. Never fabricate events or replay
    completed tools. If the source offers equivalent chat routes, prefer one that exposes completed
    tool results over a text-only compatibility route. If no supported observation seam exists,
    record that limitation.
