@@ -266,7 +266,8 @@ def test_unsupported_prose_does_not_require_python_discovery_for_patch(
     patch = RuntimePlanPatch(
         base_contract_hash=_contract_hash(contract),
         runtime=Runtime(
-            language="node", execution="native", command=["node", "server"]
+            language="node", execution="native", command=["node", "server"],
+            interface={"kind": "http", "port": 8000, "path": "/chat"},
         ),
         evidence_paths=("package.json",),
         diagnostic_codes=("generated_runtime_plan_invalid",),
@@ -297,7 +298,8 @@ def test_invalid_original_selection_does_not_block_runtime_repair(tmp_path):
     patch = RuntimePlanPatch(
         base_contract_hash=_contract_hash(contract),
         runtime=Runtime(
-            execution="native", command=["python", "server.py"], extras=["cloud-sdk"]
+            execution="native", command=["python", "server.py"], extras=["cloud-sdk"],
+            interface={"kind": "http", "port": 8000, "path": "/chat"},
         ),
         evidence_paths=("pyproject.toml",),
         diagnostic_codes=("generated_runtime_plan_invalid",),
@@ -463,11 +465,50 @@ def test_selected_requirements_allow_nested_constraints_and_deduplicate(tmp_path
     )
 
 
+def test_selected_requirements_accept_hashed_exports_without_rewriting(tmp_path):
+    from fi.alk.harness.generated_runtime import select_python_requirements
+
+    source = (
+        '# Generated export\n-r dependencies.txt\n'
+        'client[search]==1; python_version >= "3.11" \\\n'
+        f'    --hash=sha256:{"a" * 64} \\\n'
+        f'    --hash sha512:{"b" * 128} # wheel hashes\n'
+    )
+    (tmp_path / "requirements.txt").write_text(source)
+    (tmp_path / "dependencies.txt").write_text(
+        f'supplement==1 --hash=sha384:{"c" * 96}\n'
+    )
+    assert select_python_requirements(tmp_path, ["requirements.txt"]) == ("requirements.txt",)
+    assert (tmp_path / "requirements.txt").read_text() == source
+
+
+@pytest.mark.parametrize("entry", [
+    "client==1 --hash=sha256:short",
+    "client==1 --hash=md5:" + "a" * 32,
+    "client==1 --hash=sha256:" + "a" * 64 + " --index-url https://example.com",
+    "client==1 --config-settings=unsafe --hash=sha256:" + "a" * 64,
+    "client @ file:///etc/client --hash=sha256:" + "a" * 64,
+    "--hash=sha256:" + "a" * 64,
+    "client==1 \\\n --trusted-host example.com",
+    "# comment \\\nclient @ file:///etc/client",
+    "   # comment \\\n--index-url https://example.com",
+    "client==1\\\n# comment \\\n--index-url https://example.com",
+])
+def test_selected_hashed_requirements_reject_unsupported_entries(tmp_path, entry):
+    from fi.alk.harness.generated_runtime import select_python_requirements
+
+    (tmp_path / "requirements.txt").write_text(entry + "\n")
+    with pytest.raises(GeneratedRuntimeError, match="generated_runtime_requirements"):
+        select_python_requirements(tmp_path, ["requirements.txt"])
+
+
 @pytest.mark.parametrize("baseline", ["wheel", "workspace"])
 @pytest.mark.parametrize("requested_version, succeeds", [("1", True), ("2", False)])
+@pytest.mark.parametrize("hash_mode", ["none", "valid", "invalid"])
 def test_supplemental_requirements_preserve_installed_extra_resolution(
-    tmp_path, requested_version, succeeds, baseline
+    tmp_path, requested_version, succeeds, baseline, hash_mode
 ):
+    import hashlib
     import os
     import shutil
     import subprocess
@@ -500,10 +541,20 @@ def test_supplemental_requirements_preserve_installed_extra_resolution(
         (tmp_path / "sdk/pyproject.toml").write_text('[project]\nname="sdk"\nversion="1"\n[project.optional-dependencies]\nsearch=["client<2"]\n[tool.uv]\npackage=false\n')
         subprocess.run([uv, "sync", "--all-packages", "--extra", "search"], cwd=tmp_path, env=env, check=True, capture_output=True)
     (tmp_path / "server.py").write_text("")
-    (tmp_path / "supplement.txt").write_text(f"client=={requested_version}\nsupplement==1\n")
+    requirements = []
+    for name, version in [("client", requested_version), ("supplement", "1")]:
+        requirement = f"{name}=={version}"
+        if hash_mode != "none":
+            digest = hashlib.sha256((wheels / f"{name}-{version}-py3-none-any.whl").read_bytes()).hexdigest()
+            if hash_mode == "invalid" and name == "supplement":
+                digest = "0" * 64
+            requirement += f" \\\n    --hash=sha256:{digest}"
+        requirements.append(requirement)
+    (tmp_path / "supplement.txt").write_text("\n".join(requirements) + "\n")
     process = _plan_python(tmp_path, name="agent", root=tmp_path, entry="server.py", control=True, needs_secrets=False, requirements_files=["supplement.txt"])
     # The existing environment represents a successful source-owned sync, including extras.
     result = subprocess.run(process.build_commands[-2], cwd=tmp_path, env=env, capture_output=True, text=True)
+    succeeds = succeeds and hash_mode != "invalid"
     assert (result.returncode == 0) is succeeds, result.stderr
     version = subprocess.check_output([str(tmp_path / ".venv/bin/python"), "-c", "from importlib.metadata import version; print(version('client'))"], text=True).strip()
     assert version == "1"
