@@ -292,19 +292,6 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
     _write("applied")
 
 
-def _merge_traces_headers(ours: list[tuple[str, str]]) -> None:
-    current = os.environ.get(_TRACES_HEADERS) or os.environ.get(_GENERIC_HEADERS)
-    kept = [
-        (name, value)
-        for name, value in _header_entries(current)
-        if name.lower() not in _AUTH_HEADERS
-    ]
-    os.environ[_TRACES_HEADERS] = ",".join(
-        f"{urllib.parse.quote(name, safe='')}={urllib.parse.quote(value, safe='')}"
-        for name, value in kept + ours
-    )
-
-
 def _report_chained_failure(err: Exception) -> None:
     """Say what Python itself says when a ``sitecustomize`` fails, in its words, so the owner of
     that hook still learns of the failure. It is theirs, not a failure of our patch, so it is
@@ -375,7 +362,6 @@ def install() -> None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
         ingest = _read_ingest()
         if ingest is not None:
-            _merge_traces_headers(ingest[0])
             for name, lower in _EXPORTERS.items():
                 _PATCHES[name] = functools.partial(
                     _patch_exporter, ingest=ingest, lower=lower
