@@ -15,6 +15,7 @@ from fi.alk.harness.bundle_author_v2 import (
     _contract_sql_type,
     _sqlite_sql,
     author_bundle_v2,
+    reseal_scenarios,
     resolve_environment_plan,
 )
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
@@ -2589,3 +2590,117 @@ def test_livekit_pinned_in_requirements_is_read(tmp_path):
 
     (tmp_path / "requirements.txt").write_text("livekit-agents[silero]==1.4.0\n")
     assert _livekit_isolatable(tmp_path)
+
+
+def test_livekit_lower_bound_in_pyproject_is_read(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _livekit_isolatable
+
+    (tmp_path / "pyproject.toml").write_text('dependencies = ["livekit-agents>=1.6.9,<2"]\n')
+    assert _livekit_isolatable(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('dependencies = ["livekit-agents>=1.2,<2"]\n')
+    assert not _livekit_isolatable(tmp_path)
+
+
+def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "provider-target"
+    source.mkdir()
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "reseal-job",
+            "run_id": "reseal-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "retell",
+                "mode": ProviderExecutionMode.CONNECT_ONLY.value,
+                "config": {"agent_id": "agent_existing"},
+                "secret_refs": {
+                    "RETELL_API_KEY": {
+                        "manager": "platform-vault",
+                        "key": "retell-key",
+                        "purpose": "target_provider",
+                    }
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+    bundle = authoring / "environment-bundle"
+    sealed = author_bundle_v2(source=source, job=job, authoring=authoring, output=bundle)
+    added = authoring / "scenarios" / "two"
+    shutil.copytree(authoring / "scenarios" / "one", added)
+    (added / "scenario.json").write_text(
+        json.dumps({"name": "two", "instruction": "Test two", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+
+    digest = reseal_scenarios(authoring)
+
+    resealed = load_bundle_v2(bundle)
+    assert digest == resealed.digest != sealed.digest
+    assert sorted(path.name for path in (bundle / "scenarios").iterdir()) == ["one", "two"]
+    assert json.loads((bundle / "scenarios" / "two" / "scenario.json").read_text())[
+        "scenario_key"
+    ] == "two"
+    preflight_bundle(
+        bundle, resealed, parallelism=1, secret_refs={"RETELL_API_KEY": "target_provider"}
+    )
+
+
+def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
+    assert reseal_scenarios(_authoring(tmp_path)) is None
+
+
+def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> None:
+    from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceTable
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT);\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    artifact_root = authoring / "generic-harness"
+    artifact_root.mkdir()
+    columns = tuple(
+        SourceColumn(name=name, logical_type=LogicalType.STRING, native_type="text", nullable=name != "id", has_default=False)
+        for name in ("id", "label")
+    )
+    source_model = SourceModel.create(
+        source_digest="sha256:" + source_fingerprint(source),
+        engine="postgres",
+        tables=(SourceTable(name="places", columns=columns, primary_key=("id",)),),
+    )
+    (artifact_root / "source-model.json").write_text(source_model.model_dump_json(), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT)")
+        database.execute("INSERT INTO places VALUES ('home', 'home')")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        world = import_sqlite_world(database, source_model, validate=False).world
+    (artifact_root / "world-ir.json").write_text(world.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    sealed = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=bundle,
+    )
+
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    digest = reseal_scenarios(authoring)
+
+    assert digest is not None and digest != sealed.digest
+    assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
+    assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
+    assert reseal_scenarios(authoring) == digest

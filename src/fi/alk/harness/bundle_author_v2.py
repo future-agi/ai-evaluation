@@ -17,6 +17,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+from contextlib import closing
 import sys
 import tempfile
 from dataclasses import dataclass, replace
@@ -1165,14 +1166,14 @@ def _livekit_cli_fixed_health_port(
 def _livekit_isolatable(*roots: Path) -> bool:
     """Whether the pinned livekit-agents has the ``AgentServer`` the isolation shim drives (1.3+)."""
     for root in roots:
-        for name in ("uv.lock", "poetry.lock", "requirements.txt"):
+        for name in ("uv.lock", "poetry.lock", "requirements.txt", "pyproject.toml"):
             path = root / name
             if not path.is_file():
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
             found = re.search(
                 r'name = "livekit-agents"\s*\nversion = "(\d+)\.(\d+)', text
-            ) or re.search(r"livekit-agents(?:\[[^\]]*\])?\s*==\s*(\d+)\.(\d+)", text)
+            ) or re.search(r"livekit-agents(?:\[[^\]]*\])?\s*(?:==|>=|~=)\s*(\d+)\.(\d+)", text)
             if found:
                 return (int(found[1]), int(found[2])) >= (1, 3)
     return False
@@ -2627,6 +2628,170 @@ def author_bundle_v2(
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
+
+
+def reseal_scenarios(authoring: str | Path) -> str | None:
+    """Carry an edited scenario set into the sealed bundle and seal it again.
+
+    Runs replay the bundle, never the authoring folders, so a scenario added or rewritten after
+    the build would otherwise be unknown to every Run. Only the scenario-owned files move; the
+    runtime, seed and processes stay exactly what was built and validated. A generic harness's
+    certificate binds the bundle digest, so it is reissued for the new set with the edit recorded
+    as a limitation: those scenarios were proved against the authoring world, not the runtime.
+    Returns the new digest, or None when there is no sealed bundle to update.
+    """
+    authoring_root = Path(authoring)
+    bundle = authoring_root / "environment-bundle"
+    if not (bundle / BUNDLE_V2_MANIFEST).is_file():
+        return None
+    manifest = load_bundle_v2(bundle)
+    count = sum(1 for path in (authoring_root / "scenarios").iterdir() if path.is_dir())
+    staging = Path(tempfile.mkdtemp(prefix=".environment-bundle.", dir=authoring_root))
+    try:
+        shutil.rmtree(staging)
+        shutil.copytree(bundle, staging)
+        (staging / BUNDLE_V2_MANIFEST).unlink()
+        shutil.rmtree(staging / "scenarios", ignore_errors=True)
+        _copy_scenarios(authoring_root, staging, count=count)
+        if (authoring_root / CATALOGUE).is_file():
+            shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
+        if (staging / "contract.json").is_file() and (authoring_root / "contract.json").is_file():
+            shutil.copy2(authoring_root / "contract.json", staging / "contract.json")
+        seed = _reseeded(manifest, authoring_root, staging)
+        world_changed = seed is not manifest.seed
+        resealed = manifest.model_copy(update={"files": _files(staging), "seed": seed})
+        resealed = resealed.model_copy(update={"digest": seal_bundle_v2(resealed)})
+        (staging / BUNDLE_V2_MANIFEST).write_text(
+            json.dumps(resealed.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        load_bundle_v2(staging)
+        previous = bundle.with_name(bundle.name + ".previous")
+        shutil.rmtree(previous, ignore_errors=True)
+        bundle.rename(previous)
+        staging.rename(bundle)
+        shutil.rmtree(previous)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if (resealed.metadata or {}).get("generic_harness") == "v1":
+        _recertify_scenarios(
+            authoring_root, bundle_digest=resealed.digest, count=count, world_changed=world_changed
+        )
+    return resealed.digest
+
+
+def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> Seed:
+    """The seed with a changed authoring world carried in, or the sealed seed unchanged.
+
+    The authoring SQLite file is the world the chat changes. It reaches the runtime database
+    either as the sealed SQLite seed itself or through the World IR imported from it.
+    """
+    changed = _carried_world(authoring, staging)
+    if not changed:
+        return manifest.seed
+    engines = {
+        process.name: process
+        for process in manifest.processes
+        if isinstance(process, ManagedProcess)
+    }
+    stores = []
+    for store in manifest.seed.stores:
+        if not changed.intersection(store.seed_files):
+            stores.append(store)
+            continue
+        managed = engines.get("world-db") or next(iter(engines.values()), None)
+        digest = compute_inputs_digest(
+            staging,
+            store.migrations,
+            store.seed_files,
+            engine=managed.engine if managed is not None else ManagedEngine.POSTGRES,
+            version=managed.version if managed is not None else "16",
+        )
+        stores.append(
+            store.model_copy(
+                update={"baseline": store.baseline.model_copy(update={"inputs_digest": digest})}
+            )
+        )
+    return manifest.seed.model_copy(update={"stores": stores})
+
+
+def _carried_world(authoring: Path, staging: Path) -> set[str]:
+    """Write a changed authoring world into the staged seed; the seed files it changed."""
+    world = authoring / "world.sqlite"
+    if not world.is_file():
+        return set()
+    sealed = staging / "seed" / "world.sqlite"
+    if sealed.is_file():
+        if world.read_bytes() == sealed.read_bytes():
+            return set()
+        shutil.copy2(world, sealed)
+        return {"seed/world.sqlite"}
+    ir = staging / "seed" / "world-ir.json"
+    source = staging / "seed" / "source-model.json"
+    if not ir.is_file() or not source.is_file():
+        return set()
+    from .source_model import SourceModel
+    from .world_import.sqlite import import_sqlite_world
+
+    with closing(sqlite3.connect(f"file:{world}?mode=ro", uri=True)) as connection:
+        imported = import_sqlite_world(
+            connection, SourceModel.model_validate_json(source.read_text(encoding="utf-8")), validate=False
+        ).world.model_dump(mode="json")
+    if imported == json.loads(ir.read_text(encoding="utf-8")):
+        return set()
+    body = json.dumps(imported, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+    ir.write_text(body, encoding="utf-8")
+    canonical = authoring / "generic-harness" / "world-ir.json"
+    if canonical.is_file():
+        canonical.write_text(body, encoding="utf-8")
+    return {"seed/world-ir.json"}
+
+
+def _recertify_scenarios(
+    authoring: Path, *, bundle_digest: str, count: int, world_changed: bool = False
+) -> None:
+    from .authoring_runtime_validation import _artifact_digest
+    from .certification import GenericHarnessArtifactStore, HarnessCertification
+
+    path = authoring / "runtime-validation.json"
+    if not path.is_file():
+        return
+    held = HarnessCertification.model_validate_json(path.read_text(encoding="utf-8"))
+    note = (
+        "scenarios changed after runtime validation were proved against the authoring world, "
+        "not the runtime"
+    )
+    certificate = HarnessCertification.create(
+        status=held.status,
+        source=held.source,
+        authoring=held.authoring.model_copy(
+            update={"scenario_set_hash": _artifact_digest(authoring / "scenarios")}
+        ),
+        compiler=held.compiler.model_copy(update={"bundle_digest": bundle_digest}),
+        runtime=held.runtime,
+        checks=held.checks.model_copy(update={"scenario_setup_ready": f"{count}/{count}"}),
+        repairs=held.repairs,
+        diagnostics=held.diagnostics,
+        limitations=(
+            *held.limitations,
+            note,
+            *(
+                ("world data changed after runtime validation was carried into the seed; the "
+                 "affected scenarios were re-proved against the authoring world",)
+                if world_changed
+                else ()
+            ),
+        ),
+    )
+    path.write_text(certificate.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    store = authoring / "generic-harness"
+    if store.is_dir():
+        GenericHarnessArtifactStore(store).write_certification(certificate)
+        frozen = store / _CERTIFIED_BUNDLE_DIRECTORY
+        if frozen.is_dir():
+            shutil.rmtree(frozen)
+            shutil.copytree(authoring / "environment-bundle", frozen)
 
 
 def _load_job(path: Path) -> HarnessJob:

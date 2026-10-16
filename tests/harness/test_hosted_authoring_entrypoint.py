@@ -174,3 +174,66 @@ def test_hosted_entrypoint_passes_one_shot_provider_secret_to_authoring(
         "values": {"RETELL_API_KEY": "retell-secret"},
     }
     assert not target_secrets.exists()
+
+
+def test_early_review_starts_on_the_saved_world_and_retries_a_failure(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from fi.alk.harness import authoring_entrypoint as entry
+    from fi.alk.harness import authoring_runtime_validation as validation
+
+    output = tmp_path / "authoring"
+    (output / "scenarios" / "a").mkdir(parents=True)
+    (output / "manifest.json").write_text("{}")
+    (output / "contract.json").write_text(
+        json.dumps({"agent": "a", "tools": [{"name": "lookup"}], "data_store": {"kind": "postgres"}})
+    )
+    calls = []
+
+    async def failing(job, source, staging, review=None):
+        calls.append((job.scenario_count, sorted(path.name for path in staging.iterdir())))
+        raise RuntimeError("runtime could not start")
+
+    monkeypatch.setattr(validation, "validate_once", failing)
+    monkeypatch.setattr(entry.time, "sleep", lambda seconds: None)
+    done = threading.Event()
+    job = SimpleNamespace(scenario_count=20, model_copy=lambda update: SimpleNamespace(**update))
+    worker = threading.Thread(target=entry._review_while_writing, args=(job, tmp_path, output, done))
+    worker.start()
+    worker.join(timeout=2)
+    done.set()
+    worker.join(timeout=5)
+
+    assert len(calls) == 2
+    assert calls[0] == (0, ["contract.json", "manifest.json", "scenarios"])
+    note = output / "generic-harness" / "source-data-review-early-error.txt"
+    assert note.read_text().count("runtime could not start") == 2
+
+
+def test_early_review_never_starts_for_an_agent_without_data(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from fi.alk.harness import authoring_entrypoint as entry
+    from fi.alk.harness import authoring_runtime_validation as validation
+
+    output = tmp_path / "authoring"
+    output.mkdir()
+    (output / "manifest.json").write_text("{}")
+    (output / "contract.json").write_text(
+        json.dumps({"agent": "a", "tools": [], "real_use_cases": ["Chat"]})
+    )
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("no runtime for an agent without data")
+
+    monkeypatch.setattr(validation, "validate_once", forbidden)
+    worker = threading.Thread(
+        target=entry._review_while_writing,
+        args=(SimpleNamespace(scenario_count=3), tmp_path, output, threading.Event()),
+    )
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert not (output / "generic-harness").exists()

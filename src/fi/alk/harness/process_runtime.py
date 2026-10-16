@@ -6846,6 +6846,73 @@ class ProcessRuntimeProvider:
         )
         current.state = RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
 
+    async def clone_world_database(
+        self, runtime: EnvironmentRuntime, name: str
+    ) -> EnvironmentRuntime | None:
+        """`runtime` with its postgres endpoint on logical database `name`, freshly cloned from
+        the sealed baseline on the same job-shared engine. None unless the world is exactly one
+        `template_database` store, so callers keep whole-runtime worlds for every other shape."""
+        import asyncio
+
+        return await asyncio.to_thread(self._clone_world_database_sync, runtime, name)
+
+    def _clone_world_database_sync(
+        self, runtime: EnvironmentRuntime, name: str
+    ) -> EnvironmentRuntime | None:
+        manifest, context, build_output = (
+            self._manifest,
+            self._context,
+            self._build_output,
+        )
+        if (
+            manifest is None
+            or context is None
+            or build_output is None
+            or not _stores_reset_in_place(manifest)
+        ):
+            return None
+        stores = _store_by_process_name(manifest)
+        endpoints = [
+            (key, endpoint)
+            for key, endpoint in runtime.endpoints.items()
+            if endpoint.protocol == "postgres"
+        ]
+        if len(stores) != 1 or len(endpoints) != 1:
+            return None
+        key, endpoint = endpoints[0]
+        process_name = next(iter(stores))
+        capability = manifest.capabilities.get(endpoint.capability)
+        record = next(
+            (r for r in build_output.stores if r.process_name == process_name), None
+        )
+        credentials = context.credentials.get(process_name)
+        if (
+            capability is None
+            or capability.service != process_name
+            or process_name not in self._job_shared_handles
+            or record is None
+            or credentials is None
+        ):
+            return None
+        _reset_template_database(
+            host="localhost",
+            port=context.port_plan.port_for(process_name, runtime.world_index),
+            credentials=credentials,
+            world_db=name,
+            template_db=record.baseline_reference,
+            sql_runner=context.sql_runner,
+            process_name=process_name,
+        )
+        address = urlsplit(endpoint.address)._replace(path=f"/{name}").geturl()
+        return runtime.model_copy(
+            update={
+                "endpoints": {
+                    **runtime.endpoints,
+                    key: endpoint.model_copy(update={"address": address}),
+                }
+            }
+        )
+
     async def close(self, *, work_directory: Path) -> None:
         import asyncio
 
