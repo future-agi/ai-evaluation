@@ -142,10 +142,10 @@ def _dependency_root(root: Path, runtime: Runtime) -> Path:
     return _discovered_python_component(root)[0]
 
 
-def _optional_extra_inventory(source_root: Path, runtime: Runtime) -> str:
-    """Show source-declared groups without sending arbitrary manifest text to the model."""
-    from packaging.requirements import InvalidRequirement, Requirement
-
+def _source_project_manifests(
+    source_root: Path, runtime: Runtime
+) -> list[tuple[Path, dict]]:
+    """Read only selected-workspace manifests contained in the submitted source."""
     from .generated_runtime import (
         _pyproject_document,
         python_workspace_members,
@@ -153,7 +153,7 @@ def _optional_extra_inventory(source_root: Path, runtime: Runtime) -> str:
     )
 
     if runtime is None:
-        return ""
+        return []
     source_root = source_root.resolve()
     try:
         component = (
@@ -162,24 +162,40 @@ def _optional_extra_inventory(source_root: Path, runtime: Runtime) -> str:
             else source_root
         )
         if not component.is_relative_to(source_root):
-            return ""
+            return []
         # Workspace discovery reads each ancestor manifest. Check every one before calling it.
         for directory in (component, *component.parents):
             if not directory.is_relative_to(source_root):
                 break
             manifest = directory / "pyproject.toml"
             if manifest.exists() and not manifest.resolve().is_relative_to(source_root):
-                return ""
+                return []
         workspace = python_workspace_root(source_root, component)
         projects = [workspace, *sorted(python_workspace_members(workspace))]
-    except (OSError, ValueError, TypeError, AttributeError):
-        return ""
-    rows = []
+    except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+        return []
+    documents = []
     for project in projects[:32]:
         manifest = project / "pyproject.toml"
-        if not manifest.resolve().is_relative_to(source_root):
+        try:
+            admitted = manifest.resolve().is_relative_to(source_root)
+        except (OSError, RuntimeError):
+            continue
+        if not admitted:
             continue
         metadata = _pyproject_document(manifest).get("project", {})
+        if isinstance(metadata, dict):
+            documents.append((manifest, metadata))
+    return documents
+
+
+def _optional_extra_inventory(source_root: Path, runtime: Runtime) -> str:
+    """Show source-declared groups without sending arbitrary manifest text to the model."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    source_root = source_root.resolve()
+    rows = []
+    for manifest, metadata in _source_project_manifests(source_root, runtime):
         optional = (
             metadata.get("optional-dependencies", {})
             if isinstance(metadata, dict)
@@ -197,7 +213,7 @@ def _optional_extra_inventory(source_root: Path, runtime: Runtime) -> str:
                     packages.append(Requirement(raw).name)
                 except (InvalidRequirement, TypeError):
                     continue
-            path = (project / "pyproject.toml").relative_to(source_root).as_posix()
+            path = manifest.relative_to(source_root).as_posix()
             rows.append(f"{path}: {group} -> {', '.join(packages[:12]) or '(empty)'}")
             if len(rows) == 64:
                 return "\n".join(rows)
@@ -228,6 +244,67 @@ def _process_error_clues(guidance: str) -> str:
         if len(clues) >= 12:
             break
     return "\n".join(clues)[:2000]
+
+
+def _explicit_dependency_candidate(
+    source_root: Path, contract: AgentContract, guidance: str
+) -> RuntimePlanPatch | None:
+    """Try one source-backed extra named explicitly by the failing target process."""
+    from packaging.utils import canonicalize_name
+
+    marker = "<untrusted_current_target_process_logs>"
+    closing = "</untrusted_current_target_process_logs>"
+    if marker not in guidance or closing not in guidance or contract.runtime is None:
+        return None
+    logs = guidance.rsplit(marker, 1)[1].split(closing, 1)[0]
+    hints = {
+        (canonicalize_name(package), canonicalize_name(extra))
+        for package, extra in re.findall(
+            r"\binstall\s+[\"']?([A-Za-z0-9][A-Za-z0-9_.-]*)\[([A-Za-z0-9][A-Za-z0-9_.-]*)\]",
+            logs,
+            re.I,
+        )
+    }
+    if len(hints) != 1:
+        return None
+    package, extra = next(iter(hints))
+    matches = []
+    for manifest, metadata in _source_project_manifests(source_root, contract.runtime):
+        name = metadata.get("name")
+        groups = metadata.get("optional-dependencies", {})
+        if not isinstance(name, str) or canonicalize_name(name) != package:
+            continue
+        if not isinstance(groups, dict):
+            continue
+        matches.extend(
+            (manifest, group)
+            for group in groups
+            if isinstance(group, str) and canonicalize_name(group) == extra
+        )
+    if len(matches) != 1 or extra in {
+        canonicalize_name(item) for item in contract.runtime.extras
+    }:
+        return None
+    manifest, group = matches[0]
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(
+            update={"extras": [*contract.runtime.extras, group]}
+        ),
+        evidence_paths=(manifest.relative_to(source_root.resolve()).as_posix(),),
+        diagnostic_codes=("chat_ingress_failed",),
+        summary="Select the source-declared optional dependency requested by the failing target.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
 
 
 def _repair_progress(event: Event) -> None:
@@ -533,14 +610,30 @@ async def request_runtime_plan_patch(
     """Inspect an unfamiliar repository and submit one constrained runtime-plan revision."""
 
     allowed = {item.code for item in diagnostics}
-    dependency_investigation = "chat_ingress_failed" in allowed
+    dependency_investigation = allowed == {"chat_ingress_failed"}
+    if dependency_investigation:
+        candidate = _explicit_dependency_candidate(source_root, contract, guidance)
+        if candidate is not None:
+            print("runtime repair: source-declared dependency candidate", flush=True)
+            return candidate
     captured: list[RuntimePlanPatch] = []
+    submission_schema = _RuntimeSubmission.model_json_schema()
+    missing_loader = any(
+        dependency.engine
+        and not any(
+            getattr(dependency.reached, field)
+            for field in ("dsn_env", "host", "config_key", "loader_module")
+        )
+        for dependency in contract.runtime_dependencies
+    )
+    if allowed != {"generated_runtime_plan_invalid"} or not missing_loader:
+        submission_schema["properties"].pop("runtime_dependencies")
 
     @tool(
         "submit_runtime_plan_patch",
         "Submit a complete evidence-backed replacement for generated runtime metadata. "
         "This cannot edit source, agent behavior, tools, scenarios, credentials, or policy.",
-        _RuntimeSubmission.model_json_schema(),
+        submission_schema,
     )
     async def submit(arguments: dict[str, object]) -> dict[str, object]:
         try:
