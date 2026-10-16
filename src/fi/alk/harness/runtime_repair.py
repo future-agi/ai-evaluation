@@ -717,7 +717,6 @@ def validate_runtime_plan_patch(
             _context_excludes,
             select_python_extras,
             python_workspace_root,
-            select_python_requirements,
         )
 
         original = contract.runtime
@@ -831,13 +830,6 @@ def validate_runtime_plan_patch(
             dependency_root = _dependency_root(root, runtime)
             if dependency_root is None:
                 raise ValueError("runtime_repair_control_build_missing")
-            select_python_requirements(
-                dependency_root,
-                runtime.requirements_files,
-                context_excludes=_context_excludes(
-                    dependency_root, runtime, "pyproject.toml", runtime.command
-                ),
-            )
             workspace_root = python_workspace_root(root, dependency_root)
             prefix = dependency_root.relative_to(workspace_root)
             select_python_extras(
@@ -924,9 +916,20 @@ def validate_runtime_plan_patch(
         _context_excludes,
         local_editable_install_operands,
         local_install_extra_claims,
+        select_python_requirements,
         validate_local_install_extras,
     )
 
+    if runtime.requirements_files:
+        dependency_root = _dependency_root(root, runtime)
+        if dependency_root is not None:
+            select_python_requirements(
+                dependency_root,
+                runtime.requirements_files,
+                context_excludes=_context_excludes(
+                    dependency_root, runtime, "pyproject.toml", runtime.command
+                ),
+            )
     original_claims = ()
     if contract.runtime and local_editable_install_operands(contract.runtime.install):
         from .bundle_author_v2 import BundleAuthorError
@@ -1098,7 +1101,8 @@ change tools/scenarios, or hide a failure. Your only write capability is
 submit_runtime_plan_patch. The replacement must use paths and commands that exist in the submitted
 repository. runtime.install is evidence only and is never executed. Select required source-declared
 optional dependency groups in runtime.extras and additional requirements manifests in
-runtime.requirements_files (relative to selected workdir). Deleting install evidence cannot repair an omitted
+runtime.requirements_files (relative to the selected installable project root, which may be an
+ancestor of workdir). Deleting install evidence cannot repair an omitted
 group. For packaging diagnostics, inspect the reported files and dependency/entrypoint evidence.
 Use runtime.context_excludes only for paths unnecessary for the selected runtime, relative to its
 component directory. Retain required modules, manifests, assets and tool implementations. Never

@@ -759,7 +759,7 @@ class Runtime(BaseModel):
     )
     requirements_files: list[str] = Field(
         default_factory=list,
-        description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+        description="Additional source-declared Python requirements files relative to the selected installable project root, which may be an ancestor of workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
     )
     observations: dict[str, HttpObservation] = Field(
         default_factory=dict,

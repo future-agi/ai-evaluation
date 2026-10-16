@@ -821,6 +821,43 @@ def test_readiness_patch_adds_source_requirements_without_changing_extras(
         )
 
 
+@pytest.mark.parametrize("ancestor_project", [False, True])
+@pytest.mark.parametrize("manifest", ["missing", "missing_include", "valid"])
+def test_runtime_patch_validates_requirements_before_writing(
+    tmp_path, ancestor_project, manifest
+):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "app.py").write_text("print('source')\n")
+    project = tmp_path if ancestor_project else service
+    (project / "pyproject.toml").write_text('[project]\nname="agent"\nversion="1"\n')
+    if manifest != "missing":
+        (service / "dependencies.txt").write_text("-r included.txt\n")
+    if manifest == "valid":
+        (service / "included.txt").write_text("client>=1\n")
+    contract = AgentContract(runtime=Runtime(language="python"))
+    path = tmp_path / "contract.json"
+    path.write_text(contract.model_dump_json())
+    before = path.read_bytes()
+    selected = "service/dependencies.txt" if ancestor_project else "dependencies.txt"
+    patch = _patch(contract, execution="native", requirements_files=[selected])
+    patch = patch.model_copy(update={"evidence_paths": (
+        (project / "pyproject.toml").relative_to(tmp_path).as_posix(),
+        "service/app.py",
+    )})
+    if manifest == "valid":
+        repaired = apply_runtime_plan_patch(
+            tmp_path, path, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+        assert repaired.runtime.requirements_files == [selected]
+    else:
+        with pytest.raises(ValueError, match="requirements_path_invalid"):
+            apply_runtime_plan_patch(
+                tmp_path, path, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+            )
+        assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("public_image", [False, True])
 def test_compose_repair_uses_same_native_selection_policy(
