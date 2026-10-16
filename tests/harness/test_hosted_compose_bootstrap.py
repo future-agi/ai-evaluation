@@ -82,6 +82,8 @@ def test_registration_freezes_source_and_only_target_values(setup):
     assert result == {"initialized": True, "source_digest": request.source_digest}
     config = registration.broker.config
     assert config.target_configuration == {"TARGET": "target-only"}
+    assert config.source_repository == job.source.repository
+    assert config.source_revision == job.source.commit_sha
     frozen = Path(config.source) / "app.py"
     assert frozen.read_text() == "print('hello')\n"
     assert stat.S_IMODE(frozen.stat().st_mode) == 0o444
@@ -497,3 +499,15 @@ def test_expired_registration_cannot_copy_source(setup, monkeypatch):
     with pytest.raises(module.BrokerError, match="registration_exhausted"):
         registration.initialize(request)
     assert list(Path(profile.private_root).iterdir()) == []
+
+
+def test_existing_snapshot_is_never_removed_by_failed_registration(setup):
+    profile, _, request = setup
+    previous = Path(profile.private_root) / "source"
+    previous.mkdir()
+    marker = previous / "previous-job.txt"
+    marker.write_text("preserve this snapshot")
+    with pytest.raises(module.BrokerError):
+        module._Registration(profile).initialize(request)
+    assert marker.read_text() == "preserve this snapshot"
+    assert list(Path(profile.private_root).iterdir()) == [previous]

@@ -361,8 +361,11 @@ class _Registration:
             )
             if time.monotonic() >= deadline:
                 raise _failure("copy_deadline")
-            published = Path(profile.private_root) / "source"
-            staging.rename(published)
+            destination = Path(profile.private_root) / "source"
+            if destination.exists() or destination.is_symlink():
+                raise _failure("registration_storage_conflict")
+            staging.rename(destination)
+            published = destination
             staging = None
             published.chmod(0o555)
             scratch = Path(profile.private_root) / "scratch"
@@ -373,6 +376,10 @@ class _Registration:
             directories.append(artifacts)
             config = BrokerConfig(
                 source=str(published),
+                source_repository=job.source.repository,
+                source_revision=job.source.commit_sha.lower()
+                if job.source.commit_sha
+                else None,
                 scratch=str(scratch),
                 artifacts=str(artifacts),
                 socket=profile.broker_socket,
