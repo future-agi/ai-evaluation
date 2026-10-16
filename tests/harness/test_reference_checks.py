@@ -192,6 +192,9 @@ def test_a_fixed_value_must_be_where_its_stated_source_says():
     assert not problems("record: accounts.id", "A-77")
     assert not problems("record: accounts.id, under the tool's prefix", "account:A-77")
     assert problems("record: accounts.id, under the tool's prefix", "account:A-78")
+    assert problems("record: accounts.id, under the tool's prefix", "account:9999")
+    assert problems("record: accounts", "id")
+    assert problems("record: accounts.id", "7")
     assert not problems("record: accounts.id, in the tool's path form", "accounts/A-77")
     assert not problems("caller: says their account", "my_account")
 

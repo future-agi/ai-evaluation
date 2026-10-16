@@ -813,11 +813,9 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
         return [plain(node)]
 
     try:
-        state = trial.state()
-        held = plain(json.dumps(state, default=str))
-        stored = set(values(state))
+        stored = set(values(trial.state()))
     except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
-        held, stored = "", set()
+        stored = set()
     said = plain(f"{scenario.instruction} {json.dumps(scenario.fixture, default=str)}")
     known = plain(instructions)
     wrong = []
@@ -828,11 +826,11 @@ def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions
                 continue
             kind = next((one for one in ("caller", "record", "rule") if plain(source).startswith(one)), "")
             quoted = re.findall(r'"([^"]+)"', str(source))
+            parts = [plain(part) for part in re.split(r"[:/|#=]", value) if part]
             holds = {
                 "caller": plain(value) in said,
                 # A tool can take a record's value wrapped in a format it names (`kind:id`, `a/b`).
-                "record": plain(value) in held
-                or any(plain(part) in stored for part in re.split(r"[:/|#=]", value)),
+                "record": plain(value) in stored or (len(parts) > 1 and all(part in stored for part in parts[1:])),
                 "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
             }.get(kind)
             if not holds:
