@@ -22,8 +22,14 @@ def _failure_code(trace):
         return "chat_ingress_configuration_invalid"
     if status in {401, 403}:
         return "credential_missing"
-    if status in {408, 429} or trace.get("network_error"):
+    if (
+        status in {408, 429}
+        or trace.get("network_error")
+        or (stage == "tool_events" and 500 <= status < 600)
+    ):
         return "external_service_unavailable"
+    if stage == "tool_events":
+        return "chat_tool_evidence_unverified"
     return "chat_ingress_failed"
 
 

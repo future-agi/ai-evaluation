@@ -346,9 +346,12 @@ class HTTPAgentWrapper(AgentWrapper):
                         )
                     )
                 }
-            status_code = getattr(exc, "status", self._response_status or status_code)
+            status_code = getattr(
+                exc, "status",
+                self._response_status if stage == "tool_events" else self._response_status or status_code,
+            )
             failure_stage = (
-                "setup" if stage == "setup" else getattr(exc, "stage", stage)
+                stage if stage in {"setup", "tool_events"} else getattr(exc, "stage", stage)
             )
             if stage == "tool_events":
                 self._response_text = ""
@@ -819,7 +822,7 @@ class HTTPAgentWrapper(AgentWrapper):
             )
             if not 200 <= status < 300:
                 raise _ResponseFailure(
-                    "tool_events", self._response_status, "event endpoint failed"
+                    "tool_events", status, "event endpoint failed"
                 )
             items = _select_response_value(payload, spec.items_path)
             if not isinstance(items, list):
