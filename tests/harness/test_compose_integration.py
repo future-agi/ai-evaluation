@@ -39,6 +39,8 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     image: nginx:alpine
     profiles: [extra]
 """)
+    if image_selected:
+        (source / "unused-test.py").write_text("TOKEN = 'ghp_" + "x" * 36 + "'\n")
     if included:
         (source / "deploy" / "parts").mkdir()
         (source / "deploy" / "parts" / "db.yaml").write_text(
@@ -321,3 +323,50 @@ def test_provider_native_runtime_records_completed_tools_without_sql(
             await provider.close(work_directory=work)
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("definition", ["base", "include", "overlay", "overlay_alias"])
+def test_source_compose_definitions_keep_content_admission(
+    tmp_path, monkeypatch, definition, resolved_compose_images
+):
+    from fi.alk.harness.bundle import BundleError
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    base = source / "compose.yaml"
+    base.write_text("services:\n  app:\n    image: example/chat:1\n    ports: ['3000:3000']\n")
+    runtime = {
+        "execution": "compose", "compose_file": "compose.yaml", "service": "app",
+        "interface": {"kind": "http", "protocol": "json_template", "port": 3000,
+                      "path": "/chat", "request_template": {"message": "{{new_message_content}}"}},
+    }
+    if definition == "include":
+        base.write_text("include: [part.yaml]\n" + base.read_text())
+        selected = source / "part.yaml"
+        selected.write_text("services: {}\n")
+    elif definition in {"overlay", "overlay_alias"}:
+        runtime["compose_overrides"] = ["overlay.yaml"]
+        selected = source / "overlay.yaml"
+        selected.write_text("services: {}\n")
+        if definition == "overlay_alias":
+            target = source / "real-overlay.yaml"
+            selected.rename(target)
+            selected.symlink_to(target.name)
+            selected = target
+    else:
+        selected = base
+    selected.write_text(selected.read_text() + "# Public test token: ghp_" + "x" * 36 + "\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = {"modality": "chat", "runtime": runtime}
+    (authoring / "contract.json").write_text(json.dumps(contract))
+    job = HarnessJob.model_validate({
+        "job_id": "compose", "run_id": "compose", "execution": "local",
+        "source": {"kind": "local_repository", "local_path": str(source)},
+        "agent": {"connector": "auto"},
+    })
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+    with pytest.raises(BundleError, match="bundle_secret_material_detected"):
+        compile_bundle(source=source, job=job, authoring=authoring,
+                       output=tmp_path / "bundle", contract=contract, include_scenarios=False)

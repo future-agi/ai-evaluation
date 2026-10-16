@@ -10,7 +10,6 @@ from fi.alk.harness.certified_compose_runtime import (
     CertifiedComposeRuntimeProvider,
     ComposeRuntimeError,
     normalize_compose,
-    _copy_source,
 )
 from fi.alk.harness.bundle_v2 import CapabilityV2, RuntimeKindV2, ReadinessProbeV2
 from fi.alk.harness.process_runtime import RuntimeState
@@ -148,7 +147,9 @@ def test_source_symlink_escape_never_reaches_daemon(tmp_path):
     source.mkdir()
     (source / "outside").symlink_to(tmp_path)
     with pytest.raises(ComposeRuntimeError, match="symlink_escape"):
-        _copy_source(source, tmp_path / "copy")
+        from fi.alk.harness.compose_source import source_inputs
+
+        source_inputs(source, topology(), capabilities=capabilities())
 
 
 @pytest.mark.parametrize(
@@ -168,7 +169,9 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch, locked_im
     for path in (source, bundle_dir, work):
         path.mkdir()
     (source / "fixture.txt").write_text("baseline")
+    (source / "unused-test.py").write_text("TOKEN = 'ghp_" + "x" * 36 + "'\n")
     document = topology()
+    document["services"]["chat"]["volumes"] = ["./fixture.txt:/app/fixture.txt"]
     if locked_images:
         for service in document["services"].values():
             service["image"] = service["image"].split(":")[0] + "@sha256:" + "a" * 64
@@ -217,10 +220,12 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch, locked_im
         assert worlds[0].runtime_id != worlds[1].runtime_id
         assert all(world.metadata == {"observation_mode": "native"} for world in worlds)
         directories = [entry[1] for entry in provider._worlds.values()]
+        assert all(not (path / "source/unused-test.py").exists() for path in directories)
         (directories[0] / "source/fixture.txt").write_text("changed0")
         (directories[1] / "source/fixture.txt").write_text("changed1")
         await provider.reset(worlds[0], work_directory=work)
         assert (directories[0] / "source/fixture.txt").read_text() == "baseline"
+        assert not (directories[0] / "source/unused-test.py").exists()
         assert (directories[1] / "source/fixture.txt").read_text() == "changed1"
         assert await provider.healthy(worlds[0], work_directory=work)
         await provider.close(work_directory=work)
