@@ -256,6 +256,21 @@ def _with_ingest(
     return {(name.lower() if lower else name): value for name, value in kept + ours}
 
 
+def _without_auth(bound, supplied) -> None:
+    """The fail-closed form of the headers: the customer's own key is replaced by blank ones, so
+    our collector refuses the span instead of storing it under the customer's project."""
+    try:
+        entries = (
+            _environment_headers() if supplied is None else _header_entries(supplied)
+        )
+    except (TypeError, ValueError):
+        entries = []
+    kept = [
+        (name, value) for name, value in entries if name.lower() not in _AUTH_HEADERS
+    ]
+    bound.arguments["headers"] = dict(kept + [(name, "") for name in _AUTH_HEADERS])
+
+
 def _patch_exporter(module, ingest, lower: bool) -> None:
     cls = module.OTLPSpanExporter
     original = cls.__init__
@@ -267,6 +282,7 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
         call_args, call_kwargs = (self,) + args, kwargs
+        aimed_at_us = None
         try:
             bound = signature.bind(self, *args, **kwargs)
             endpoint = (
@@ -275,6 +291,7 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
                 or os.environ.get(_GENERIC_ENDPOINT)
             )
             if _host_port(endpoint) == collector:
+                aimed_at_us = bound
                 supplied = bound.arguments.get("headers")
                 entries = (
                     _environment_headers()
@@ -285,6 +302,12 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
                 call_args, call_kwargs = bound.args, bound.kwargs
         except Exception:
             _write("failed")
+            if aimed_at_us is not None:
+                try:
+                    _without_auth(aimed_at_us, aimed_at_us.arguments.get("headers"))
+                    call_args, call_kwargs = aimed_at_us.args, aimed_at_us.kwargs
+                except Exception:
+                    pass
         return original(*call_args, **call_kwargs)
 
     setattr(wrapper, _PATCHED, True)
@@ -360,7 +383,11 @@ def install() -> None:
         pairs = _read_pairs()
         if pairs is not None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
-        ingest = _read_ingest()
+        ingest = None
+        try:
+            ingest = _read_ingest()
+        except ValueError:
+            _write("failed")
         if ingest is not None:
             for name, lower in _EXPORTERS.items():
                 _PATCHES[name] = functools.partial(
