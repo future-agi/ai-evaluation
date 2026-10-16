@@ -1038,7 +1038,44 @@ print(json.dumps(sent(exporter)))
 """
     result = _export_run(tmp_path, script)
 
-    assert _reported(result) == {"x-api-key": "c", "x-team": "a"}
+    assert _reported(result) == {"x-api-key": "", "x-secret-key": "", "x-team": "a"}
+    assert result.stderr.count(FAILED) == 1
+
+
+def test_a_failed_patch_never_sends_the_customers_own_key_to_our_collector(
+    tmp_path: Path,
+) -> None:
+    script = """
+endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+print(json.dumps({
+    "unreadable": sent(Http(endpoint=endpoint, headers=(pair for pair in [("x-api-key", "c"), ("x-team", "a")]))),
+    "from_environment": sent(Http(endpoint=endpoint, headers=(p for p in []))),
+    "elsewhere": sent(Http(endpoint="http://elsewhere.test:4318/v1/traces", headers={"x-api-key": "c"})),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    for name in ("unreadable", "from_environment"):
+        assert reported[name].get("x-api-key") == "", name
+        assert reported[name].get("x-secret-key") == "", name
+    assert reported["elsewhere"] == {"x-api-key": "c"}
+
+
+def test_a_bad_collector_port_does_not_cost_the_process_its_resource_marks(
+    tmp_path: Path,
+) -> None:
+    script = """
+from opentelemetry.sdk.resources import Resource
+
+attributes = dict(Resource(attributes={"a": "b"}).attributes)
+print(json.dumps({"marked": attributes.get("fi.simulation.origin")}))
+"""
+    bad = {
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://collector.test:notaport/v1/traces"
+    }
+    result = _export_run(tmp_path, script, bad)
+
+    assert _reported(result) == {"marked": "simulation"}
     assert result.stderr.count(FAILED) == 1
 
 
