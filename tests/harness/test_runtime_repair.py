@@ -305,7 +305,7 @@ def test_setup_investigation_may_decline_after_bounded_decision(
         is None
     )
     assert len(calls) == 2
-    assert budgets == [40, 4]
+    assert budgets == [80, 4]
 
 
 def test_dependency_investigation_shows_sibling_optional_extras_without_manifest_values(

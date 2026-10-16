@@ -196,7 +196,7 @@ _REREADABLE = frozenset(
 )
 
 _READS_KEPT_WHOLE = 2
-_READ_CHARS_BEFORE_FORGETTING = 60_000
+_READ_CHARS_BEFORE_FORGETTING = 180_000
 _FORGOTTEN = "[dropped to keep this session small] "
 
 

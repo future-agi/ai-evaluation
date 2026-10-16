@@ -203,10 +203,10 @@ def test_small_sessions_keep_every_read() -> None:
 
 def test_a_long_session_keeps_recent_reads_within_the_character_budget() -> None:
     contents = [
-        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 30_000) for n in range(10)
     ]
     _forget_old_reads(contents)
-    kept = [one for one in contents if _said(one) == "x" * 10_000]
+    kept = [one for one in contents if _said(one) == "x" * 30_000]
     assert len(kept) == 6
     assert kept == contents[-6:]
     assert "inspect_world" in _said(contents[0])
@@ -214,22 +214,22 @@ def test_a_long_session_keeps_recent_reads_within_the_character_budget() -> None
 
 def test_forgetting_is_per_tool_and_leaves_writes_alone() -> None:
     contents = [
-        _read("c0", "mcp__scenarios__inspect_world", "w" * 30_000),
-        _read("c1", "mcp__scenarios__inspect_world", "w" * 30_000),
-        _read("c2", "mcp__scenarios__inspect_world", "w" * 30_000),
+        _read("c0", "mcp__scenarios__inspect_world", "w" * 90_000),
+        _read("c1", "mcp__scenarios__inspect_world", "w" * 90_000),
+        _read("c2", "mcp__scenarios__inspect_world", "w" * 90_000),
         _read("c3", "mcp__scenarios__inspect_scenario", "s" * 100),
         _read("c4", "mcp__scenarios__submit_scenario", "gate said no" * 500),
     ]
     _forget_old_reads(contents)
     assert _said(contents[0]).startswith("[dropped")
-    assert _said(contents[1]) == "w" * 30_000
+    assert _said(contents[1]) == "w" * 90_000
     assert _said(contents[3]) == "s" * 100
     assert _said(contents[4]) == "gate said no" * 500
 
 
 def test_forgetting_twice_changes_nothing_more() -> None:
     contents = [
-        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 30_000) for n in range(10)
     ]
     _forget_old_reads(contents)
     once = [_said(one) for one in contents]
@@ -241,7 +241,7 @@ def test_forgetting_leaves_the_session_event_alone() -> None:
     from google.genai import types
 
     session = [
-        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
+        _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 30_000) for n in range(10)
     ]
     request = [
         types.Content(role=one.role, parts=[part.model_copy() for part in one.parts])
@@ -249,7 +249,7 @@ def test_forgetting_leaves_the_session_event_alone() -> None:
     ]
     _forget_old_reads(request)
     assert _said(request[0]).startswith("[dropped")
-    assert all(_said(one) == "x" * 10_000 for one in session)
+    assert all(_said(one) == "x" * 30_000 for one in session)
 
 
 def test_compaction_is_configured_and_can_be_switched_off(monkeypatch) -> None:
