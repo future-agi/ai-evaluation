@@ -570,7 +570,8 @@ wrong record calls exactly the tools it should have, and only a comparison of th
 Identify the caller before disclosing, confirm before changing: when nothing was disclosed or changed,
 the check holds, and it accepts every tool the agent has for that step. A check that demands the step
 on its own fails a correct agent whose instructions skip it in that situation, such as a rule that
-says to hand over at once.
+says to hand over at once. "Before" is a position in `calls`: the step must appear earlier than the
+change it guards. Finding both somewhere in the call passes an agent that changed first and asked after.
 
 **5. State the contract, then try the check.** Fill `reference` with where each compared value comes
 from ("item_id: what the world holds for this person; quantity: what they asked for"); a check that
