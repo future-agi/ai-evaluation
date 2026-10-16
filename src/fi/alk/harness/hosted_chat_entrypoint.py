@@ -261,6 +261,7 @@ class HostedChatRuntime:
             )
         self.transcript_store = PlatformSessionStore(client)
         self.stopping = asyncio.Event()
+        self._from_platform = False
         self._turn_acknowledged_through = 0
         self._tool_names: dict[str, str] = {}
         self._checkpoint_lock = asyncio.Lock()
@@ -456,6 +457,8 @@ class HostedChatRuntime:
         handler = spec.handler
 
         async def guarded(args: dict[str, Any]) -> Any:
+            if self._from_platform:
+                return await handler(args)
             if spec.name == "submit_scenario" and not self._changes_meaning(args):
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
@@ -1097,6 +1100,8 @@ class HostedChatRuntime:
                 acknowledge_through=sequence,
             )
             return
+        # The build and its check are sent by the platform; nobody is there to answer during them.
+        self._from_platform = bool(payload.get("from_platform"))
 
         journal = self._read_journal()
         state = str(journal.get(message_id) or "")
@@ -1499,6 +1504,16 @@ class HostedChatRuntime:
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
+        if self._from_platform:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Nobody answers during the build or its check. Decide it yourself from "
+                        "the agent and the contract, and say what you decided in your summary.",
+                    }
+                ]
+            }
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
         question = str(
             payload.get("question")

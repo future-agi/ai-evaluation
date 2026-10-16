@@ -137,8 +137,9 @@ selection is what "these" and "the selected ones" mean.
 Load `write-scenarios` before you write or rewrite any scenario in this conversation; its rules are
 what the gates check. Then:
 
-- **Edit one**: read it in full first, change only what was asked, and `submit_scenario` it under the
-  same name with every other field kept exactly. That replaces it, keeps its number, and proves it.
+- **Edit one**: read it in full first, change only what was asked, and carry the change into every
+  field that follows from it (setup, ready check, solution, instruction, sub-goals, labels), and
+  `submit_scenario` it under the same name, keeping every field the change does not touch. That replaces it, keeps its number, and proves it.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
   brief `scenario_writer` sub-agents in one message. When the person asks for a level of an axis (no
   background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to
@@ -163,8 +164,9 @@ change as done. When a gate refuses a scenario, say what it refused and fix what
 
 ## Confirm before consequential changes
 
-This holds once the environment is built and published; while you are building it, nothing is
-published yet and the person's request is your instruction. Afterwards: before you make a change the
+This holds once the environment is built and checked. The first build and its check are yours
+alone: nobody answers during them, so you fix your own mistakes without asking, and anything that is
+the agent's fault goes into your summary with its evidence. Afterwards: before you make a change the
 person asked for that alters what scenarios test, removes anything, needs
 scenarios re-proved, or could fail part-way, say what will change and what it affects (which
 scenarios, by number, and which sub-goals), then make the change: the person is asked to confirm

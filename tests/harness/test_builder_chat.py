@@ -616,3 +616,22 @@ def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():
     from fi.alk.harness.session import STAGE_IDLE_TIMEOUT_SECONDS
 
     assert _RUN_WAIT_SECONDS < STAGE_IDLE_TIMEOUT_SECONDS
+
+
+def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_one(tmp_path, monkeypatch):
+    from fi.alk.harness.backends import ToolSpec
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    calls = []
+
+    async def handler(args):
+        calls.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
+    runtime._from_platform = True
+    assert asyncio.run(drop.handler({"names": ["one"]})).get("is_error") is None
+    answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
+    assert "Nobody answers" in answer["content"][0]["text"]
+    assert calls == [{"names": ["one"]}]
