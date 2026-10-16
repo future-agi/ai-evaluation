@@ -105,7 +105,7 @@ def _select_repair_runtime(root: Path, runtime: Runtime):
     )
 
 
-def _dependency_root(root: Path, runtime: Runtime) -> Path:
+def _dependency_root(root: Path, runtime: Runtime) -> Path | None:
     from .bundle_author_v2 import (
         _discover_callback_entrypoint,
         _discovered_python_component,
@@ -129,7 +129,7 @@ def _dependency_root(root: Path, runtime: Runtime) -> Path:
         )
         build = selected.services.get(control, {}).get("build")
         if not build:
-            raise ValueError("runtime_repair_control_build_missing")
+            return None
         context = build.get("context") or "." if isinstance(build, dict) else build
         component = (selected.compose_file.parent / str(context)).resolve()
         if not component.is_relative_to(root):
@@ -829,6 +829,8 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_readiness_requires_material_change")
         if before < after or files_before < files_after:
             dependency_root = _dependency_root(root, runtime)
+            if dependency_root is None:
+                raise ValueError("runtime_repair_control_build_missing")
             select_python_requirements(
                 dependency_root,
                 runtime.requirements_files,
@@ -946,18 +948,20 @@ def validate_runtime_plan_patch(
                 ),
             )
     if original_claims or local_editable_install_operands(runtime.install):
-        validate_local_install_extras(
-            _dependency_root(root, runtime),
-            runtime.install,
-            runtime.extras,
-            original_claims=original_claims,
-            context_excludes=_context_excludes(
-                _dependency_root(root, runtime),
-                runtime,
-                "pyproject.toml",
-                runtime.command,
-            ),
-        )
+        dependency_root = _dependency_root(root, runtime)
+        if dependency_root is not None:
+            validate_local_install_extras(
+                dependency_root,
+                runtime.install,
+                runtime.extras,
+                original_claims=original_claims,
+                context_excludes=_context_excludes(
+                    dependency_root,
+                    runtime,
+                    "pyproject.toml",
+                    runtime.command,
+                ),
+            )
     updates = {"runtime": runtime}
     if patch.runtime_dependencies is not None:
         updates["runtime_dependencies"] = patch.runtime_dependencies

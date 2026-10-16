@@ -739,6 +739,63 @@ def test_runtime_patch_cannot_select_context_excluded_extra_owner(
         )
 
 
+@pytest.mark.parametrize("image_only", [False, True])
+def test_runtime_patch_preserves_install_evidence_when_selecting_compose_image(
+    tmp_path, monkeypatch, image_only
+):
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    (tmp_path / "app.py").write_text("print('source')\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="agent"\nversion="1"\n'
+        '[project.optional-dependencies]\napi=["client>=1"]\n'
+    )
+    (tmp_path / "compose.yaml").write_text(
+        'services:\n  app:\n    build: .\n    image: example/app:1\n'
+        '    ports: ["8080:8080"]\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"],
+        install="pip install -e .[api]", extras=["api"],
+        interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+    ))
+    path = tmp_path / "contract.json"
+    path.write_text(contract.model_dump_json())
+    runtime = contract.runtime.model_copy(update={
+        "execution": "compose", "compose_file": "compose.yaml", "service": "app",
+        "compose_image_services": ["app"] if image_only else [],
+        "extras": [],
+    })
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("compose.yaml", "pyproject.toml", "app.py"),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Use the source-declared deployment.",
+    )
+    if image_only:
+        repaired = apply_runtime_plan_patch(
+            tmp_path, path, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+        assert repaired.runtime.install == contract.runtime.install
+        assert repaired.runtime.compose_image_services == ["app"]
+        dependency_patch = patch.model_copy(update={
+            "base_contract_hash": _contract_hash(repaired),
+            "runtime": repaired.runtime.model_copy(update={"extras": ["api"]}),
+            "diagnostic_codes": ("chat_ingress_failed",),
+        })
+        with pytest.raises(ValueError, match="control_build_missing"):
+            validate_runtime_plan_patch(
+                tmp_path, repaired, dependency_patch,
+                allowed_diagnostic_codes={"chat_ingress_failed"},
+            )
+    else:
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match="extra_omitted"):
+            apply_runtime_plan_patch(
+                tmp_path, path, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+            )
+        assert path.read_bytes() == before
+
+
 def test_readiness_patch_adds_source_requirements_without_changing_extras(
     tmp_path, dependency_patch
 ):
