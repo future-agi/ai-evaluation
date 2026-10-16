@@ -1325,6 +1325,7 @@ async def validate_and_repair(
         budgets = repair_controller.budgets
         candidate_repairs = (
             budgets.compiler_candidates
+            + budgets.runtime_patches
             + budgets.environment_patches
             + budgets.scenario_patches
         )
@@ -1355,6 +1356,8 @@ async def validate_and_repair(
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
+                    else RepairPhase.RUNTIME
+                    if exc.phase == "runtime"
                     else RepairPhase.ENVIRONMENT
                 )
                 decision = repair_controller.decide(
