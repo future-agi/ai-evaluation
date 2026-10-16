@@ -38,6 +38,7 @@ from . import observability
 from . import outbound as ob
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
 from .call_runner import CallRunnerContext, CallRunnerImpl
+from .cast import SWITCH as SUB_ACTORS_SWITCH
 from .hosted_scheduler import (
     CallOutcome,
     CallRunner,
@@ -225,6 +226,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "SIMULATOR_STT_PROVIDER",
         "SIMULATOR_TTS_MODEL",
         "SIMULATOR_TTS_PROVIDER",
+        SUB_ACTORS_SWITCH,
     }
 )
 
