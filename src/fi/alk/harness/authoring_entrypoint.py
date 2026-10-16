@@ -122,6 +122,24 @@ def _load_provider_import_profile(
     return profile
 
 
+def agent_source_kind(job: HarnessJob, profile: dict[str, object] | None) -> str:
+    """How authoring reads the agent: `provider`, `repo` or `spec`.
+
+    Transport kinds such as ``archive`` and ``github`` describe how the platform acquired the
+    source. Once extracted, they are repositories. A source-free connect-only provider is the
+    exception: its fetched definition is the source of truth and must never be represented by
+    the intentionally empty /work/source directory.
+    """
+    if (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and profile is not None
+    ):
+        return "provider"
+    kind = str(job.metadata.get("source_kind") or "repo")
+    return kind if kind in {"repo", "spec"} else "repo"
+
+
 def _await_harness(output: Path) -> int:
     """Wait while the conversation's harness builds the environment in this sandbox."""
     finished = output / ".futureagi-build-finished.json"
@@ -239,22 +257,8 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
     profile = _load_provider_import_profile(
         job, args.target_secrets, args.provider_profile_cache
     )
-    # Transport kinds such as ``archive`` and ``github`` describe how the platform acquired the
-    # source. Once extracted, they are repositories. A source-free connect-only provider is the
-    # exception: its fetched definition is the source of truth and must never be represented by
-    # the intentionally empty /work/source directory.
-    source_free_provider = (
-        job.source.kind is SourceKind.PROVIDER
-        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and profile is not None
-    )
-    source_kind = (
-        "provider"
-        if source_free_provider
-        else str(job.metadata.get("source_kind") or "repo")
-    )
-    if source_kind not in {"repo", "spec", "provider"}:
-        source_kind = "repo"
+    source_kind = agent_source_kind(job, profile)
+    source_free_provider = source_kind == "provider"
     namespace = argparse.Namespace(
         path=str(args.source.resolve()),
         name=str(job.metadata.get("agent_name") or args.source.name),
