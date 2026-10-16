@@ -638,8 +638,9 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 
 ### When someone else is in the scene
 
-Only when `inspect_world` lists sub-actors in the cast. Bind one with `sub_actors` when the scenario is
-about how the agent copes with it, and say when it enters: `always`, `mid_journey` after the agent's
+Only when `inspect_world` lists sub-actors in the cast. A coordinate whose level is named for a
+sub-actor binds that sub-actor. Bind one with `sub_actors` when the scenario is about how the agent
+copes with it, and say when it enters: `always`, `mid_journey` after the agent's
 turn N, `on_tool` on the Nth call of a tool, `on_keyword` after a turn containing one of its words, or
 `on_escalation` when the agent hands over through its tool. Use `probability` only when the scenario
 is about the agent coping whether or not the sub-actor shows up, and only with a sub-goal whose

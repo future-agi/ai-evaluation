@@ -534,3 +534,23 @@ def test_the_world_summary_names_the_cast_only_with_the_switch_on(tmp_path, monk
     assert "subactor_bystander" in world_summary(root)
     monkeypatch.delenv("HARNESS_SUB_ACTORS")
     assert "subactor_bystander" not in world_summary(root)
+
+
+def test_declaring_a_grid_names_cast_members_no_level_brings_in(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, tools = _cast_tools(tmp_path, monkeypatch)
+    asyncio.run(tools["add_sub_actor"].handler(_voice().model_dump()))
+    _root, contract, _catalogue = _environment(tmp_path)
+    server, _kept = scenario_tools(contract, root, root, wanted=4)
+    aim = next(one for one in server.tools if one.name == "aim_for").handler
+    axes = {
+        "task": ["order"], "counterparty": ["guest"], "disposition": ["calm"],
+        "interface": ["quiet_line"], "interaction": ["single_request"], "overlay": ["none"],
+        "overlay_vector": ["none"], "overlay_intensity": ["absent"],
+    }
+    said = asyncio.run(aim({"count": 4, "axes": axes}))["content"][0]["text"]
+    assert "subactor_bystander" in said
+    axes["interface"] = ["quiet_line", "subactor_bystander_nearby"]
+    said = asyncio.run(aim({"count": 4, "axes": axes}))["content"][0]["text"]
+    assert "No level brings in" not in said
