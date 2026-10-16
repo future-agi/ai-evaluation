@@ -2815,6 +2815,8 @@ def resolve_environment_plan(
             | secret_names
             | configured_secret_names
         )
+        if process.local_auth:
+            bindings[process.name].add(process.local_auth.server_environment)
         normalized_processes.append(
             process.model_copy(update={"environment": environment})
         )
