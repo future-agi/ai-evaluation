@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 
 from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
@@ -742,6 +743,53 @@ def workflow_receipt(tmp_path):
     paths = list((tmp_path / "generic-harness/chat-readiness").glob("*/receipt.json"))
     assert len(paths) == 1
     return paths[0], json.loads(paths[0].read_text())
+
+
+@pytest.mark.parametrize("credential", ["known-value", '{"enabled": true}'])
+def test_private_tool_artifacts_preserve_json_lines_during_redaction(tmp_path, credential):
+    from fi.alk.harness.chat_readiness import _PrivateWorkflowArtifacts
+    from fi.alk.harness.outbound import ArtifactKind
+
+    rows = [
+        {"name": "lookup", "result": {"detail": "Client(api_key='unlisted-key', value='known-value')",
+                                     "password": "unlisted-password", "active": True}},
+        {"name": "finish", "arguments": ["known-value", {"access_token": "unlisted-token"}],
+         "result": False},
+    ]
+    artifacts = _PrivateWorkflowArtifacts(tmp_path, {"credential": credential})
+    path = asyncio.run(artifacts.upload_artifact(
+        "\n".join(json.dumps(row) for row in rows).encode(), kind=ArtifactKind.TOOL_TRACE,
+    ))
+    text = Path(path).read_text()
+    saved = [json.loads(line) for line in text.splitlines()]
+    assert [row["name"] for row in saved] == ["lookup", "finish"]
+    assert saved[0]["result"]["active"] == ("<redacted>" if "enabled" in credential else True)
+    assert saved[1]["result"] is False
+    assert saved[0]["result"]["password"] == "<redacted>"
+    assert saved[1]["arguments"][1]["access_token"] == "<redacted>"
+    assert all(value not in text for value in ("unlisted-key", "unlisted-password", "unlisted-token"))
+    if credential == "known-value":
+        assert "known-value" not in text
+    assert Path(path).stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("kind", ["trace", "transcript"])
+@pytest.mark.parametrize("redactions", [None, {"credential": "x" * (1024 * 1024 + 1)}])
+def test_private_json_artifacts_fail_closed_without_safe_credential_context(tmp_path, kind, redactions):
+    from fi.alk.harness.chat_readiness import _PrivateWorkflowArtifacts
+    from fi.alk.harness.outbound import ArtifactKind
+
+    artifacts = _PrivateWorkflowArtifacts(tmp_path, redactions)
+    path = asyncio.run(artifacts.upload_artifact(
+        json.dumps({"messages": [{"content": "unknown-secret", "credential": "other-secret"}],
+                    "success": True}, indent=2).encode(),
+        kind=ArtifactKind(kind),
+    ))
+    text = Path(path).read_text()
+    json.loads(text)
+    assert "unknown-secret" not in text
+    assert "other-secret" not in text
+    assert "credential context" in text
 
 
 @pytest.mark.parametrize("completed", [False, True])
