@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .backends import SessionSpec, tool, tool_server
 from .backends.base import ToolSpec
 from .backends.files import file_tools
-from .contract import AgentContract, Dependency, Runtime
+from .contract import AgentContract, Dependency, Runtime, generated_chat_interface_problem
 from .diagnostics import HarnessDiagnostic
 from .session import DONE, RESULT, TOOL, Event, Stage
 
@@ -689,7 +689,11 @@ def validate_runtime_plan_patch(
         updates["runtime_dependencies"] = patch.runtime_dependencies
     candidate = contract.model_copy(update=updates)
     # Revalidate the whole contract so nested updates cannot bypass canonical validators.
-    return AgentContract.model_validate(candidate.model_dump(mode="python"))
+    candidate = AgentContract.model_validate(candidate.model_dump(mode="python"))
+    if candidate.modality == "chat":
+        if problem := generated_chat_interface_problem(candidate.runtime):
+            raise ValueError(problem)
+    return candidate
 
 
 def apply_runtime_plan_patch(

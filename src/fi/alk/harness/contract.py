@@ -415,8 +415,20 @@ class RuntimeInterface(BaseModel):
     endpoint the repository does not already implement.
     """
 
-    kind: str = ""
-    protocol: str = "fi.alk"
+    kind: str = Field(
+        default="",
+        description="Generated chat supports http, callable, or command. Use callable only "
+        "for a source-exported agent_callback. Use command only for a noninteractive "
+        "entrypoint consuming JSON stdin, ALK_USER_MESSAGE, or ALK_MESSAGES_JSON and "
+        "returning the chat response on stdout. Interactive CLIs, startup commands, ACP, "
+        "and WebSocket are not supported generated chat ingress.",
+    )
+    protocol: str = Field(
+        default="fi.alk",
+        description="HTTP supports fi.alk, openai_chat, or json_template. Callable and "
+        "command bridges require fi.alk; they do not translate arbitrary stdin protocols. "
+        "Use json_template only for a source-owned HTTP JSON API, not ACP or WebSocket.",
+    )
     model: str | None = Field(
         default=None,
         description="Source-owned model or profile identifier accepted by the OpenAI-compatible "
@@ -866,6 +878,30 @@ class Runtime(BaseModel):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+
+def generated_chat_interface_problem(runtime: Runtime | None) -> str | None:
+    interface = runtime.interface if runtime else None
+    if interface and (
+        interface.kind == "http"
+        and interface.protocol in {"fi.alk", "openai_chat", "json_template"}
+        or interface.kind in {"callable", "command"} and interface.protocol == "fi.alk"
+    ):
+        return None
+    code = (
+        "missing-chat-interface"
+        if interface is None or not interface.kind
+        else "unsupported-chat-interface"
+    )
+    return (
+        f"{code}: inspect the source and declare runtime.interface.kind. Generated chat "
+        "supports http with fi.alk, openai_chat, or json_template, and callable or command "
+        "with fi.alk. Callable requires a source-exported agent_callback. Declare command "
+        "only for a proven noninteractive entrypoint consuming JSON stdin, ALK_USER_MESSAGE, "
+        "or ALK_MESSAGES_JSON and returning the chat response on stdout. An interactive CLI, "
+        "startup command, ACP, or WebSocket is not supported generated chat ingress. "
+        "The declared interface must still pass a real chat readiness check."
+    )
 
 
 class Dependency(BaseModel):

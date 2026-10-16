@@ -1331,7 +1331,8 @@ def test_generic_validation_applies_runtime_plan_patch_and_revalidates(tmp_path)
         calls.append("repair")
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(contract),
-            runtime=Runtime(language="python", command=["python", "server.py"]),
+            runtime=Runtime(language="python", command=["python", "server.py"],
+                            interface={"kind": "http", "port": 8080, "path": "/chat"}),
             evidence_paths=("pyproject.toml", "server.py"),
             diagnostic_codes=("generated_runtime_plan_invalid",),
             summary="Use the repository's server entrypoint.",
@@ -1379,7 +1380,8 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(current_contract),
-            runtime=Runtime(language="python", command=["python", "worker.py"]),
+            runtime=Runtime(language="python", command=["python", "worker.py"],
+                            interface={"kind": "command", "protocol": "fi.alk"}),
             evidence_paths=("pyproject.toml", "worker.py"),
             diagnostic_codes=("generated_runtime_plan_invalid",),
             summary="Use the discovered worker entrypoint.",

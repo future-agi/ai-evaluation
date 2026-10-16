@@ -59,6 +59,60 @@ def test_runtime_patch_changes_only_runtime_contract_metadata(tmp_path) -> None:
     assert (service / "app.py").read_text() == "# entrypoint\n"
 
 
+@pytest.mark.parametrize("interface", [
+    None,
+    {"kind": "", "protocol": "acp"},
+    {"kind": "acp", "protocol": "acp"},
+    {"kind": "websocket", "port": 8000, "path": "/ws"},
+    {"kind": "command", "protocol": "acp"},
+    {"kind": "callable", "protocol": "openai_chat"},
+])
+def test_runtime_patch_rejects_unsupported_chat_without_writing(tmp_path, interface):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("print('agent')\n")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    path = tmp_path / "contract.json"
+    path.write_text(contract.model_dump_json())
+    original = path.read_bytes()
+    patch = _patch(contract)
+    patch = patch.model_copy(update={"runtime": patch.runtime.model_copy(update={
+        "interface": RuntimeInterface.model_validate(interface) if interface is not None else None,
+    })})
+    with pytest.raises(ValueError, match="chat-interface"):
+        apply_runtime_plan_patch(
+            tmp_path, path, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("modality,interface", [
+    ("chat", {"kind": "http", "port": 8080, "path": "/chat", "protocol": "fi.alk"}),
+    ("chat", {"kind": "http", "port": 8080, "path": "/chat", "protocol": "openai_chat"}),
+    ("chat", {"kind": "http", "port": 8080, "path": "/chat", "protocol": "json_template",
+              "request_template": {"message": "{{new_message_content}}"}}),
+    ("chat", {"kind": "command", "protocol": "fi.alk"}),
+    ("chat", {"kind": "callable", "protocol": "fi.alk"}),
+    ("voice", None),
+    ("voice", {"kind": "websocket", "port": 8080, "path": "/ws"}),
+])
+def test_runtime_patch_preserves_supported_chat_and_voice(tmp_path, modality, interface):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("print('agent')\n")
+    contract = AgentContract(agent="agent", modality=modality)
+    patch = _patch(contract)
+    patch = patch.model_copy(update={"runtime": patch.runtime.model_copy(update={
+        "interface": RuntimeInterface.model_validate(interface) if interface is not None else None,
+    })})
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime == patch.runtime
+
+
 def test_runtime_patch_rejects_missing_or_outside_evidence(tmp_path) -> None:
     source = tmp_path / "source"
     (source / "service").mkdir(parents=True)
@@ -540,6 +594,7 @@ def test_explicit_install_hint_selects_only_validated_workspace_extra(
             execution="native",
             workdir="server",
             command=["python", "-m", "server"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
         ),
     )
     guidance = (
@@ -767,7 +822,8 @@ def test_bun_repair_validates_child_workdir_entrypoint(tmp_path, entry):
     patch = RuntimePlanPatch(
         base_contract_hash=_contract_hash(contract),
         runtime=Runtime(
-            language="bun", command=["bun", "run", "--cwd", "packages/chat", entry]
+            language="bun", command=["bun", "run", "--cwd", "packages/chat", entry],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
         ),
         evidence_paths=("package.json",),
         diagnostic_codes=("generated_runtime_plan_invalid",),
@@ -1049,6 +1105,7 @@ def test_setup_only_patch_does_not_require_python_build_component(tmp_path):
         compose_file="compose.yaml",
         service="agent",
         config_files={".env": RuntimeConfigFile(values={"REGION": "wrong"})},
+        interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
     )
     contract = AgentContract(agent="fixture", runtime=runtime)
     patch = RuntimePlanPatch(

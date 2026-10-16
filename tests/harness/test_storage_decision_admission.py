@@ -168,3 +168,53 @@ def test_setup_admission_returns_both_missing_decisions(tmp_path):
     assert "missing-storage-decision" in message
     assert "missing-chat-interface" in message
     assert not (tmp_path / "contract.json").exists()
+
+
+@pytest.mark.parametrize("interface", [
+    {"kind": "", "protocol": "acp"},
+    {"kind": "acp", "protocol": "acp"},
+    {"kind": "websocket", "port": 8000, "path": "/ws"},
+    {"kind": "command", "protocol": "acp"},
+    {"kind": "callable", "protocol": "openai_chat"},
+])
+def test_generated_chat_rejects_unsupported_transport(tmp_path, interface):
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime={"interface": interface}),
+        tmp_path,
+        require_setup_contract=True,
+    )
+    assert result["is_error"]
+    message = result["content"][0]["text"]
+    assert "http" in message and "callable" in message and "command" in message
+    assert "fi.alk" in message and "json_template" in message
+    assert not (tmp_path / "contract.json").exists()
+
+
+@pytest.mark.parametrize("modality,required", [("voice", True), ("chat", False)])
+def test_legacy_and_voice_websocket_admission_unchanged(tmp_path, modality, required):
+    result = accept_contract(
+        payload(modality=modality, runtime={"interface": {
+            "kind": "websocket", "port": 8000, "path": "/ws",
+        }}),
+        tmp_path,
+        require_setup_contract=required,
+    )
+    assert not result.get("is_error")
+
+
+@pytest.mark.parametrize("required", [False, True])
+def test_chat_interface_schema_teaches_the_supported_bridge(tmp_path, required):
+    from fi.alk.harness.contract import RuntimeInterface
+    from fi.alk.harness.tools import contract_tools
+
+    server = contract_tools(tmp_path, require_setup_contract=required)
+    schema = server.tools[0].input_schema
+    fields = schema["properties"]["runtime"]["properties"]["interface"]["properties"]
+    assert "command" in fields["kind"]["enum"]
+    assert "websocket" in fields["kind"]["enum"]
+    assert "Generated chat supports http, callable, or command" in fields["kind"]["description"]
+    assert "JSON stdin" in fields["kind"]["description"]
+    assert "require fi.alk" in fields["protocol"]["description"]
+    canonical = RuntimeInterface.model_json_schema()["properties"]
+    assert canonical["kind"]["description"] == fields["kind"]["description"]
+    assert canonical["protocol"]["description"] == fields["protocol"]["description"]
