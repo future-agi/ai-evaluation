@@ -744,6 +744,7 @@ class HTTPAgentWrapper(AgentWrapper):
 
     def _accumulate_tool_events(self, items, actions, observations):
         spec = self.completed_tool_events
+        failures = {failure.kind: failure for failure in spec.failure_events}
         for event in items:
             if not isinstance(event, Mapping):
                 raise ValueError("completed tool event must be an object")
@@ -754,9 +755,12 @@ class HTTPAgentWrapper(AgentWrapper):
             elif kind == spec.observation_kind:
                 key = _select_response_value(event, spec.observation_action_id_path)
                 target = observations
+            elif isinstance(kind, str) and kind in failures:
+                key = _select_response_value(event, failures[kind].action_id_path)
+                target = observations
             else:
                 continue
-            if not isinstance(key, str) or not key or len(key) > 1024 or key in target:
+            if not isinstance(key, str) or not key or len(key) > 8192 or key in target:
                 raise ValueError("invalid or duplicate tool event identity")
             if (
                 spec.status_path
@@ -861,6 +865,7 @@ class HTTPAgentWrapper(AgentWrapper):
                 self._response_status,
                 "tool events are missing a paired action or completion",
             )
+        failures = {failure.kind: failure for failure in spec.failure_events}
         completed = []
         identities = set()
         for key, action in actions.items():
@@ -871,9 +876,13 @@ class HTTPAgentWrapper(AgentWrapper):
             arguments = _select_response_value(action, spec.arguments_path)
             if isinstance(arguments, str):
                 arguments = json.loads(arguments)
-            result = _select_response_value(observations[key], spec.result_path)
-            error = (
-                _select_response_value(observations[key], spec.error_path)
+            observation = observations[key]
+            failure = failures.get(_select_response_value(observation, spec.kind_path))
+            result = _select_response_value(
+                observation, failure.result_path if failure else spec.result_path
+            )
+            error = True if failure else (
+                _select_response_value(observation, spec.error_path)
                 if spec.error_path
                 else False
             )
@@ -883,6 +892,7 @@ class HTTPAgentWrapper(AgentWrapper):
                 or len(name) > 256
                 or not isinstance(arguments, dict)
                 or type(error) is not bool
+                or (failure is not None and result is None)
             ):
                 raise _ResponseFailure(
                     "tool_events", self._response_status, "invalid completed tool data"

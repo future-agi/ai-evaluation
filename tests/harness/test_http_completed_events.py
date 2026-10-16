@@ -383,3 +383,104 @@ def test_native_validation_failure_and_retry_are_recorded_once():
         assert asyncio.run(target.say("thanks")) == "Edited."
         assert len(world.calls) == 3
         assert requests == [("POST", "/chat"), ("GET", "/events/conversation-1")] * 2
+
+
+FAILURE = {"kind": "rejected", "action_id_path": "action_id", "result_path": "message"}
+REJECTED = {"kind": "rejected", "action_id": "a", "message": "invalid arguments"}
+
+
+@pytest.mark.parametrize("events", [
+    [REJECTED],
+    [ACTION],
+    [ACTION, REJECTED, REJECTED],
+    [ACTION, DONE, REJECTED],
+    [ACTION, REJECTED, DONE],
+    [ACTION, {"kind": "rejected", "action_id": "a"}],
+    [ACTION, dict(REJECTED, message=None)],
+    [ACTION, dict(REJECTED, message=float("nan"))],
+    [dict(ACTION, arguments="bad json"), REJECTED],
+    [dict(ACTION, arguments="[]"), REJECTED],
+    [dict(ACTION, id="a" * 8193), dict(REJECTED, action_id="a" * 8193)],
+    [ACTION, dict(REJECTED, action_id="")],
+    [ACTION, dict(REJECTED, action_id=7)],
+])
+def test_failure_event_evidence_fails_closed(events):
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        response = invoke(wrapper(base, {**SPEC, "failure_events": [FAILURE]}))
+    assert response.metadata["external_agent"]["success"] is False
+    assert response.metadata["external_agent"]["failure_stage"] == "tool_events"
+    assert not response.metadata.get("native_completed_tools")
+    assert response.metadata["external_agent"]["response_excerpt"] == ""
+
+
+@pytest.mark.parametrize("length", [5887, 8192])
+@pytest.mark.parametrize("failed", [False, True])
+def test_opaque_event_join_keys_accept_bounded_long_values(length, failed):
+    key = "x" * length
+    outcome = REJECTED if failed else DONE
+    events = [dict(ACTION, id=key), dict(outcome, action_id=key)]
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        target = wrapper(base, {**SPEC, "failure_events": [FAILURE]})
+        response = invoke(target)
+        assert response.metadata["external_agent"]["success"] is True
+        assert response.metadata["native_completed_tools"][0]["ok"] is not failed
+        assert invoke(target).metadata["native_completed_tools"] == []
+
+
+def test_undeclared_failure_kind_does_not_infer_completion():
+    with server(pages=[{"items": [ACTION, REJECTED], "next": None}]) as (base, _):
+        response = invoke(wrapper(base))
+    assert response.metadata["external_agent"]["success"] is False
+    assert not response.metadata.get("native_completed_tools")
+
+
+@pytest.mark.parametrize("failures", [
+    [FAILURE, FAILURE],
+    [dict(FAILURE, kind="action")],
+    [dict(FAILURE, kind="completed")],
+    [dict(FAILURE, kind="")],
+    [dict(FAILURE, action_id_path="")],
+    [dict(FAILURE, result_path="")],
+    [dict(FAILURE, ok=True)],
+    [dict(FAILURE, kind=str(index)) for index in range(9)],
+])
+def test_contract_rejects_invalid_failure_event_mapping(failures):
+    with pytest.raises(ValidationError):
+        RuntimeInterface(
+            kind="http", port=8000, path="/chat",
+            completed_tool_events={**SPEC, "failure_events": failures},
+        )
+
+
+def test_distinct_failure_kinds_share_completion_identity_space():
+    events = [ACTION, REJECTED, dict(REJECTED, kind="execution_error")]
+    failures = [FAILURE, dict(FAILURE, kind="execution_error")]
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        response = invoke(wrapper(base, {**SPEC, "failure_events": failures}))
+    assert response.metadata["external_agent"]["success"] is False
+    assert not response.metadata.get("native_completed_tools")
+
+
+def test_long_event_keys_do_not_expand_correlation_or_cursor_limits():
+    for kwargs in (
+        {"correlation": "x" * 1025},
+        {"pages": [{"items": [ACTION, DONE], "next": "x" * 1025}]},
+    ):
+        with server(**kwargs) as (base, _):
+            response = invoke(wrapper(base))
+        assert response.metadata["external_agent"]["success"] is False
+        assert not response.metadata.get("native_completed_tools")
+
+
+def test_multiple_failure_kinds_use_declared_payloads_and_always_fail():
+    failures = [FAILURE, {"kind": "execution_error", "action_id_path": "call", "result_path": "error"}]
+    events = [
+        ACTION, dict(REJECTED, failed=False), dict(ACTION, id="b"),
+        {"kind": "execution_error", "call": "b", "error": {"reason": "tool unavailable"}},
+    ]
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        response = invoke(wrapper(base, {**SPEC, "failure_events": failures}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert [(call["result"], call["ok"]) for call in response.metadata["native_completed_tools"]] == [
+        ("invalid arguments", False), ({"reason": "tool unavailable"}, False),
+    ]

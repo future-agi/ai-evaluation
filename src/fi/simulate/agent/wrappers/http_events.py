@@ -9,6 +9,16 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+class CompletedToolFailureEvent(BaseModel):
+    """A source-declared failed terminal outcome for a tool action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(min_length=1, max_length=128)
+    action_id_path: str = Field(min_length=1, max_length=256)
+    result_path: str = Field(min_length=1, max_length=256)
+
+
 class CompletedToolEvents(BaseModel):
     """Paired completions; response IDs are stable and unique within a thread."""
 
@@ -32,6 +42,10 @@ class CompletedToolEvents(BaseModel):
     name_path: str = Field(min_length=1, max_length=256)
     arguments_path: str = Field(min_length=1, max_length=256)
     result_path: str = Field(min_length=1, max_length=256)
+    failure_events: list[CompletedToolFailureEvent] = Field(
+        default_factory=list, max_length=8,
+        description="Source-declared failure terminal kinds, paired by the same action identifier as observations. Each emits ok=false and requires a non-null error result.",
+    )
     error_path: str = Field(default="", max_length=256)
     status_path: str = Field(default="", max_length=256)
     completed_status: str = Field(default="", max_length=128)
@@ -60,7 +74,8 @@ class CompletedToolEvents(BaseModel):
 
     @model_validator(mode="after")
     def _endpoint(self) -> "CompletedToolEvents":
-        if self.action_kind == self.observation_kind:
+        kinds = [self.action_kind, self.observation_kind, *(event.kind for event in self.failure_events)]
+        if len(kinds) != len(set(kinds)):
             raise ValueError("completed events require distinct event kinds")
         if self.source == "response":
             if (

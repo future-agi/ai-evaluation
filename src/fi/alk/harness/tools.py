@@ -225,6 +225,10 @@ def contract_tools(
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
     """
+    events_schema = CompletedToolEvents.model_json_schema()
+    events_schema["properties"]["failure_events"]["items"] = (
+        events_schema.pop("$defs")["CompletedToolFailureEvent"]
+    )
     observation_schema = HttpObservation.model_json_schema()
     observation_schema["properties"]["parameters"]["additionalProperties"] = (
         observation_schema.pop("$defs")["ObservationParameter"]
@@ -829,7 +833,7 @@ def contract_tools(
                                     "description": RuntimeInterface.model_fields["response_path"].description,
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
-                                "completed_tool_events": CompletedToolEvents.model_json_schema(),
+                                "completed_tool_events": events_schema,
                                 "local_auth": LocalHttpAuth.model_json_schema(),
                                 "setup_secrets": {
                                     "type": "object",

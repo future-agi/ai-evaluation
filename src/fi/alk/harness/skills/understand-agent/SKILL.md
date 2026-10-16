@@ -101,7 +101,13 @@ Find, in roughly this order:
    or executes tools internally before replying. For internal execution, inspect the source response
    schema or correlated event API and declare `runtime.interface.completed_tools` or
    `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
-   actions and observations using source identifiers and preserve conversation correlation. Tool
+   actions and observations using source identifiers and preserve conversation correlation. Inspect
+   success, error and rejection event producers. Declare distinct failed terminal kinds with
+   `completed_tool_events.failure_events`, each containing `kind`, `action_id_path` and `result_path`.
+   Verify that all terminal kinds join the same action identifier; chronological parents are not
+   necessarily action references. Failure events always record `ok=false` and require an error
+   result. Select arguments present even when native validation fails, such as the raw tool-call
+   arguments JSON rather than a parsed action created only after validation. Tool
    declarations, registration/factory calls, and assistant text are not execution evidence.
    Importable tool bindings do not replace a completed-result observation mapping for internal
    execution. Never fabricate events or replay
