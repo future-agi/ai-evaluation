@@ -49,7 +49,7 @@ from .folder import (
     write_folder,
     write_index,
 )
-from .prove import native_runtime, native_source_problem, play_reference_step, prepared, prove
+from .prove import native_runtime, native_source_problem, play_reference_step, prepared, prove, workspace_bindings, workspace_fixture
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -802,7 +802,7 @@ def accept_scenario(
             place_for(scenario.name, scenario.fixture, scenario.instruction) or True
         )
 
-    native = native_runtime(world_root)
+    native = native_runtime(world_root) or workspace_fixture(scenario, catalogue)
     if native:
         problems = validate_scenario(
             scenario, catalogue, {}, simulator_prompt,
@@ -905,6 +905,8 @@ def accept_scenario(
     )
     proof_summary = (
         proof.why() if proof.deferred else
+        "Local checks passed with assumed tool results; the reference solution remains unverified."
+        if proof.assumed else
         "The fixture is ready and its behavioral sub-goals will be judged from the transcript; "
         "this target has no environment tool trajectory to replay."
         if proof.judged_only
@@ -1089,19 +1091,12 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
-        if native_runtime(world_root):
+        if native_runtime(world_root) or not args.get("table"):
             return _ok(world_summary(world_root))
         world = restore(world_root)
         try:
             state = world.state()
             table = str(args.get("table") or "")
-            if not table:
-                lines = [f"{n}: {len(r)} rows" for n, r in sorted(state.items())]
-                if catalogue.sub_goals:
-                    lines.append(
-                        "\nsub-goals available: " + ", ".join(sorted(catalogue.names()))
-                    )
-                return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
                 return _err(
                     f"no table {table!r}; this world has {', '.join(sorted(state))}"
@@ -1157,7 +1152,9 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
-        if native_runtime(world_root):
+        if native_runtime(world_root) or workspace_fixture(
+            Scenario(name="trial", setup_code=str(args.get("setup_code") or "")), Catalogue()
+        ):
             return _err("DEFERRED: native tools and fixtures run only in the live runtime; no local replay exists.")
         # A suite that already holds what was asked for has nothing left to explore.
         if cap() and len(kept) >= cap():
@@ -2071,8 +2068,8 @@ def scenario_tools(
             )
             + ". Written to coverage.json.\n"
             + _coverage_gaps(coverage)
-            + "Every one cleared all three gates: the world is ready for it, the reference "
-            "solution passes its checks, and those checks fail when nothing is done.\n"
+            + "Scenarios passed their applicable authoring checks. Deferred runtime checks and "
+            "assumed tool steps still require live execution; saving is not end-to-end proof.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
         if noted:
@@ -2177,6 +2174,21 @@ def world_summary(world_root: Path) -> str:
             "API accepts and verify them. Setup cannot change simulator fixture slots. "
             "Existing sub-goals: " + ", ".join(sorted(load_catalogue(world_root).names()))
         )
+    bindings = workspace_bindings(world_root)
+    workspace_context = (
+        "TARGET FILE WORKSPACES (relative to the target working directory): "
+        + json.dumps(bindings, sort_keys=True)
+        + ". Seed required existing files with world.write_file(name, relative_path, content) in "
+        "setup; ready must read back each file with world.read_file and verify its contents. "
+        "These operate on the actual target directory only at live "
+        "validation, so local file-fixture proof is DEFERRED. Do not seed a database files table.\n"
+        if bindings else
+        "NO TARGET FILE WORKSPACE IS DECLARED. Do not assume repository files, test suites, "
+        "symbols or documents exist in the agent's working directory. File tasks must be "
+        "self-contained: provide all input content in the conversation and ask the agent to "
+        "create it before using it. Otherwise select a task with no existing-file prerequisite. "
+        "The uploaded agent source is not the agent's task workspace.\n"
+    )
     world = restore(world_root)
     try:
         state = world.state()
@@ -2205,7 +2217,7 @@ def world_summary(world_root: Path) -> str:
                 "replay, or inspect provider-owned tools/state. Use solution: [] and judged "
                 "sub-goals; live conversation/tool events are the outcome evidence.\n"
             )
-        return prefix + "\n".join(lines)
+        return prefix + workspace_context + "\n".join(lines)
     finally:
         world.close()
 
@@ -2234,6 +2246,8 @@ def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]
     if native_runtime(world_root):
         return problems
     for scenario in scenarios:
+        if workspace_fixture(scenario, load_catalogue(world_root)):
+            continue
         claimed = _handed_to_the_caller(scenario.fixture)
         if not claimed:
             continue
@@ -2290,6 +2304,8 @@ def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[
         return problems
     base = None
     for scenario in scenarios:
+        if workspace_fixture(scenario, load_catalogue(world_root)):
+            continue
         pinned = [
             one.split("=", 1)[1]
             for one in _pinned_identity(scenario.fixture)

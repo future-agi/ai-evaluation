@@ -7,6 +7,10 @@ world is kept in, which is deliberate: the store varies more between agents than
 
 For a native file task, use a named workspace declared in `runtime.workspaces`.
 Each declaration maps a name to a directory relative to the target process's working directory.
+Use declared workspace names and relative paths in setup and ready. Read back every seeded file
+and compare its contents before chat. Local proof is deferred until the live target exists.
+Without a declared binding, give all content in the conversation and ask the agent to create
+files first; do not assume existing project files.
 The directory must come from the target's actual configuration. A database collection called
 `files` does not populate that directory.
 
