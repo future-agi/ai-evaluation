@@ -426,7 +426,7 @@ class UnfinishedTurnStage(ReviewStage):
         await self.tools["read_scenarios"]({"names": names})
 
 
-def test_an_unfinished_turn_counts_as_reviewed_as_an_unfinished_review_always_has(
+def test_scenarios_an_unfinished_turn_was_handed_are_reviewed_again_at_the_end(
     tmp_path, monkeypatch
 ):
     import threading
@@ -449,8 +449,8 @@ def test_an_unfinished_turn_counts_as_reviewed_as_an_unfinished_review_always_ha
     )
     checks = asyncio.run(subject.author_invariants(source, out, ReadWorld()))
 
-    assert ReviewStage.sessions == [[[], ["a", "b"]]]
-    assert [check["name"] for check in checks] == [declaration()["name"]]
+    assert ReviewStage.sessions == [[[], ["a", "b"]], [["a", "b"]]]
+    assert sorted(check["name"] for check in checks) == [declaration()["name"], "for a", "for b"]
 
 
 def test_a_changed_world_discards_what_was_reviewed_while_writing(tmp_path, monkeypatch):

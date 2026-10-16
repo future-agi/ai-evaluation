@@ -902,7 +902,7 @@ async def _review_session(
                 record(
                     {
                         "session": session,
-                        "scenarios": digests if saved or declared or checks or known else {},
+                        "scenarios": digests if saved else {},
                         "checks": [checks[name] for name in dict.fromkeys(declared) if name in checks],
                         "probes": probes[before:],
                     }

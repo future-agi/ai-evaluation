@@ -264,11 +264,14 @@ UNWANTED = (
 # Where credentials live in a sandbox or a checkout, and what reads them. A session never needs
 # any of them: the platform hands secrets to processes as files and environment, not to a model.
 _SECRET_PATHS = re.compile(
-    r"(^|/)(\.env[^/]*|\.claude|\.ssh|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc)(/|$)"
+    r"(^|/)(\.env[^/]*|\.claude|\.ssh|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc"
+    r"|\.authoring-credentials)(/|$)"
     r"|^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
     r"|(credential|secret|token|service[-_]?account)[^/]*\.json$|\.(pem|key|p12)$",
     re.IGNORECASE,
 )
+# A search rooted here would reach into where credentials live.
+_SECRET_ROOTS = re.compile(r"^/(proc|run/futureagi|run/secrets)/")
 _SECRET_COMMANDS = re.compile(
     r"\b(env|printenv|export\s+-p|declare\s+-[a-z]*x|set)\s*($|[|;&>])|/proc/"
     r"|\b(ps|pgrep|pkill|top|htop)\b"
@@ -330,7 +333,14 @@ def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
         if arguments.get(key)
     ]
     pattern = str(arguments.get("pattern") or "") if tool == "Glob" else ""
-    if any(_SECRET_PATHS.search(one) for one in [*paths, pattern] if one):
+    # Judged on where a path leads, not how it is written: `..` and symlinks are resolved.
+    resolved = [os.path.realpath(one) for one in [*paths, pattern] if one]
+    if any(_SECRET_PATHS.search(one) for one in [*paths, pattern, *resolved] if one):
+        return SECRET_REFUSAL
+    if tool in ("Grep", "Glob") and any(
+        _SECRET_ROOTS.match(root + "/") or root in ("/", "/run", os.path.expanduser("~"))
+        for root in resolved[: len(paths)]
+    ):
         return SECRET_REFUSAL
     return ""
 

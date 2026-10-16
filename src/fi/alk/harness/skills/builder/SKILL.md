@@ -152,10 +152,9 @@ what the gates check. Then:
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.
-- **Analysis or scratch work**: Bash, Write and Edit work in the sandbox, for reading files, counting,
-  comparing, running a script over the scenario folders. The proved files (scenarios, catalogue,
-  contract, world, bundle) and the agent's source only change through the checked tools above, never by
-  hand; the gate refuses a hand edit.
+- **Reading and searching**: Read, Grep and Glob, over the scenario folders and the agent's source. The
+  proved files (scenarios, catalogue, contract, world, bundle) and the agent's source only change
+  through the checked tools above; there is no shell and no hand editing.
 
 **Nothing you change is in the environment until `save_changes` says so.** Call it once the changes
 for a request are submitted. Report its result: what was added, removed and changed, by number and
@@ -168,7 +167,9 @@ This holds once the environment is built and published; while you are building i
 published yet and the person's request is your instruction. Afterwards: before you make a change the
 person asked for that alters what scenarios test, removes anything, needs
 scenarios re-proved, or could fail part-way, say what will change and what it affects (which
-scenarios, by number, and which sub-goals), then ask with `AskUserQuestion` and wait. A change of how
+scenarios, by number, and which sub-goals), then make the change: the person is asked to confirm
+that exact call, and it runs only on their yes. A no, or any other answer, leaves it undone; follow
+what they said. A change of how
 someone speaks or where they call from needs no confirmation. Never delete or rewrite in bulk without a
 yes. If a request could mean two different things and the difference changes what you would do, ask
 one short question with the options you see, and continue from the answer.
@@ -179,8 +180,8 @@ The suite must always be runnable and true to the agent, the world and the contr
 
 - **Before any change to the world, a tool, the contract or a sub-goal**: run `impact_of` on what is
   changing, then stop and tell the person the blast radius (the scenarios, setups and sub-goals that
-  depend on it, by number, and what you will do to each) and ask with `AskUserQuestion` before making
-  any change. This holds even when they told you to go ahead with the change itself: they asked for
+  depend on it, by number, and what you will do to each) before making any change; the change then
+  asks them to confirm it. This holds even when they told you to go ahead with the change itself: they asked for
   the change, not for its consequences, so they see those first. Repairs to restore a broken suite
   are the exception (see Health below).
 - **After the change**: re-prove every affected scenario (`prove_scenarios`), repair what the change

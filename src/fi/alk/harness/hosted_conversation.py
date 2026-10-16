@@ -268,8 +268,10 @@ class ConversationClient:
     async def start_run(
         self, numbers: list[int], ranges: list[dict[str, int]], trials: int
     ) -> dict[str, Any]:
+        # One id for every retry of this call, so a lost response never starts a second run.
         return await self._platform(
-            "run_start", {"numbers": numbers, "ranges": ranges, "trials": trials}
+            "run_start",
+            {"numbers": numbers, "ranges": ranges, "trials": trials, "operation_id": uuid.uuid4().hex},
         )
 
     async def overview(self) -> dict[str, Any]:

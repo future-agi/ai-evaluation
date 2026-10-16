@@ -17,6 +17,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+from contextlib import closing
 import sys
 import tempfile
 from dataclasses import dataclass, replace
@@ -2683,14 +2684,12 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
 def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> Seed:
     """The seed with a changed authoring world carried in, or the sealed seed unchanged.
 
-    Only a world kept as the authoring SQLite file can be carried this way; its rows are what the
-    runtime database is seeded from.
+    The authoring SQLite file is the world the chat changes. It reaches the runtime database
+    either as the sealed SQLite seed itself or through the World IR imported from it.
     """
-    world = authoring / "world.sqlite"
-    sealed = staging / "seed" / "world.sqlite"
-    if not world.is_file() or not sealed.is_file() or world.read_bytes() == sealed.read_bytes():
+    changed = _carried_world(authoring, staging)
+    if not changed:
         return manifest.seed
-    shutil.copy2(world, sealed)
     engines = {
         process.name: process
         for process in manifest.processes
@@ -2698,7 +2697,7 @@ def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> 
     }
     stores = []
     for store in manifest.seed.stores:
-        if "seed/world.sqlite" not in store.seed_files:
+        if not changed.intersection(store.seed_files):
             stores.append(store)
             continue
         managed = engines.get("world-db") or next(iter(engines.values()), None)
@@ -2715,6 +2714,38 @@ def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> 
             )
         )
     return manifest.seed.model_copy(update={"stores": stores})
+
+
+def _carried_world(authoring: Path, staging: Path) -> set[str]:
+    """Write a changed authoring world into the staged seed; the seed files it changed."""
+    world = authoring / "world.sqlite"
+    if not world.is_file():
+        return set()
+    sealed = staging / "seed" / "world.sqlite"
+    if sealed.is_file():
+        if world.read_bytes() == sealed.read_bytes():
+            return set()
+        shutil.copy2(world, sealed)
+        return {"seed/world.sqlite"}
+    ir = staging / "seed" / "world-ir.json"
+    source = staging / "seed" / "source-model.json"
+    if not ir.is_file() or not source.is_file():
+        return set()
+    from .source_model import SourceModel
+    from .world_import.sqlite import import_sqlite_world
+
+    with closing(sqlite3.connect(f"file:{world}?mode=ro", uri=True)) as connection:
+        imported = import_sqlite_world(
+            connection, SourceModel.model_validate_json(source.read_text(encoding="utf-8")), validate=False
+        ).world.model_dump(mode="json")
+    if imported == json.loads(ir.read_text(encoding="utf-8")):
+        return set()
+    body = json.dumps(imported, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+    ir.write_text(body, encoding="utf-8")
+    canonical = authoring / "generic-harness" / "world-ir.json"
+    if canonical.is_file():
+        canonical.write_text(body, encoding="utf-8")
+    return {"seed/world-ir.json"}
 
 
 def _recertify_scenarios(
