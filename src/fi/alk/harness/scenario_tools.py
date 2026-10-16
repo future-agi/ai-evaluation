@@ -2056,6 +2056,17 @@ def scenario_tools(
             )
             if wrong:
                 return _err(wrong)
+            cast = load_cast(world_root) if sub_actors_enabled() else None
+            levels = " ".join(
+                level.lower() for many in {**(target.get("axes") or {}), **grid}.values() for level in many
+            )
+            unplanned = [one.id for one in (cast.sub_actors if cast else []) if one.id.lower() not in levels]
+            if unplanned:
+                return _err(
+                    f"No level brings in {', '.join(unplanned)} from the cast, so no scenario would test "
+                    "the agent with them there. Give each a level named for it on interface or overlay, "
+                    "with a share like any other level, and declare the grid again"
+                )
             # Merged, never replaced: scenarios have already been counted against this grid.
             merged = {axis: list(levels) for axis, levels in (target.get("axes") or {}).items()}
             for axis, levels in grid.items():
@@ -2098,17 +2109,6 @@ def scenario_tools(
                         "scenario carrying one would assert only the plain task. Add a sub-goal "
                         "for each with add_sub_goal before you hand any of them out"
                     )
-            cast = load_cast(world_root) if sub_actors_enabled() else None
-            levels = " ".join(level.lower() for many in grid.values() for level in many)
-            unplanned = [
-                one.id for one in (cast.sub_actors if cast else []) if one.id.lower() not in levels
-            ]
-            if unplanned:
-                said += (
-                    f". No level brings in {', '.join(unplanned)} from the cast, so no scenario will "
-                    "test the agent with them there. Give each a level named for it on interface or "
-                    "overlay, and deal those levels in the briefs"
-                )
         if vocabulary:
             target["keywords"] = vocabulary
             said += (

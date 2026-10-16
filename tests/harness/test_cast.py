@@ -536,7 +536,7 @@ def test_the_world_summary_names_the_cast_only_with_the_switch_on(tmp_path, monk
     assert "subactor_bystander" not in world_summary(root)
 
 
-def test_declaring_a_grid_names_cast_members_no_level_brings_in(tmp_path, monkeypatch):
+def test_a_grid_that_brings_in_no_level_for_a_cast_member_is_refused(tmp_path, monkeypatch):
     from fi.alk.harness.scenario_tools import scenario_tools
 
     root, tools = _cast_tools(tmp_path, monkeypatch)
@@ -549,8 +549,7 @@ def test_declaring_a_grid_names_cast_members_no_level_brings_in(tmp_path, monkey
         "interface": ["quiet_line"], "interaction": ["single_request"], "overlay": ["none"],
         "overlay_vector": ["none"], "overlay_intensity": ["absent"],
     }
-    said = asyncio.run(aim({"count": 4, "axes": axes}))["content"][0]["text"]
-    assert "subactor_bystander" in said
+    refused = asyncio.run(aim({"count": 4, "axes": axes}))
+    assert refused["is_error"] and "subactor_bystander" in refused["content"][0]["text"]
     axes["interface"] = ["quiet_line", "subactor_bystander_nearby"]
-    said = asyncio.run(aim({"count": 4, "axes": axes}))["content"][0]["text"]
-    assert "No level brings in" not in said
+    assert not asyncio.run(aim({"count": 4, "axes": axes})).get("is_error")
