@@ -196,9 +196,20 @@ fields from it, in this order, each from the one before:
    each thing the situation needs, and nothing else.
 2. `solution` is what the agent does in that world under its rules, step by step, ending on the
    outcome this situation reaches.
-3. `instruction` gives the person what they know and want in that situation, and only that.
+3. `instruction` gives the person what they want and how they behave in that situation, and ends with
+   a `Your details:` block holding every value they can be asked for.
 4. `sub_goals` assert that outcome and the hard moment, against the solution's fixed values.
 5. `name`, `branch`, `tests`, `use_case` and the coordinate label that situation.
+
+The fields are linked, and each link holds:
+
+- every `caller:` value the solution fixes is a line in `Your details`, word for word;
+- every `record:` value is held by setup or the seed, and listed in `fixture`;
+- every record `Your details` names (an account, a booking, a card, an address) exists in the world as
+  stated, and `ready_code` checks it;
+- every sub-goal named compares values the solution fixes, or judges what that situation makes the
+  agent say;
+- `name`, `branch` and `tests` describe exactly what setup makes true and the solution reaches.
 
 Read it back once as the agent, the person and the world would meet it: each field must tell the same
 call. When you change one field, rewrite every field that follows from it; a scenario patched in one
