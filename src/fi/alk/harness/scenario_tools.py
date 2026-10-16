@@ -542,6 +542,8 @@ def _over_its_share(
             )
             + "Write one of these instead: "
             + ", ".join(sorted(thin)[:8])
+            + f". If the person asked for {mine!r}, call aim_for with it in asked_for under "
+            f"{axis!r} and submit again."
         )
     return ""
 

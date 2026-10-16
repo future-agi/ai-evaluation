@@ -2762,7 +2762,8 @@ def test_a_level_the_person_asked_for_is_not_held_to_its_share() -> None:
     grid = {"interface": ["noisy_line", "quiet_line", "accented"]}
     quiet = [Scenario(name=f"q{one}", coverage={"interface": "quiet_line"}) for one in range(5)]
 
-    assert "whole share" in _over_its_share({"interface": "quiet_line"}, grid, quiet, 25)
+    refused = _over_its_share({"interface": "quiet_line"}, grid, quiet, 25)
+    assert "whole share" in refused and "asked_for" in refused
     assert _over_its_share(
         {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["quiet_line"]}
     ) == ""
