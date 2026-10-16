@@ -8143,3 +8143,19 @@ def test_the_builder_proves_its_suite_with_the_real_prove(tmp_path):
     problems = suite_health(contract, root, kept, prove_all=True, sealed=False)
 
     assert not any("unexpected keyword" in one for one in problems)
+
+
+def test_the_contract_stage_can_brief_read_only_researchers_for_a_repository(tmp_path):
+    from fi.alk.harness.backends import DELEGATE_TOOL
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import READER, open_stage
+
+    (tmp_path / "agent.py").write_text("def book(): ...\n")
+    stage, _ = open_stage(resolve("repo", name="demo", root=str(tmp_path)), out=tmp_path / "out")
+    reader = stage.spec.workers[READER]
+
+    assert DELEGATE_TOOL in stage.spec.builtins
+    assert reader.granted(stage.spec) == ["Read", "Glob", "Grep"]
+
+    provider, _ = open_stage(resolve("provider", name="demo", profile={"tools": []}, scratch=str(tmp_path)), out=tmp_path / "p")
+    assert READER not in provider.spec.workers and DELEGATE_TOOL not in provider.spec.builtins

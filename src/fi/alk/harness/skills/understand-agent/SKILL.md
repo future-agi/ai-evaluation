@@ -41,6 +41,16 @@ Start from the entry point and follow the registrations, not the documentation. 
 docstrings describe intent; the contract records behaviour. Where they disagree, the code wins
 and the disagreement is worth mentioning.
 
+Every rule a tool enforces counts, wherever it lives: a guard in a helper it calls, a check in the
+service it forwards to, a constraint or default in the schema, the seed data or the environment.
+Scenario writers know the agent only from this contract, so a rule it leaves out fails a correct
+agent later. When there is a repository, find the tools and the prompt yourself, then brief
+`agent_reader` sub-agents in one message, one per tool or per few closely related tools, each
+naming the tools and where they are defined; they trace every call to the bottom and report with
+file and line. Write each tool's entry from what they report. Before `submit_contract`, brief one
+more reader with your draft's tools and rules to check against the source, and correct everything
+it finds.
+
 Find, in roughly this order:
 
 1. **The tools.** Wherever the agent declares what it can do: a decorator, a registration list, a
@@ -83,7 +93,12 @@ Find, in roughly this order:
    deviating risks a refusal it cannot predict. Every tool you mark as gated when it is not costs
    every future test of it a preamble it never needed.
 
-5. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
+5. **What each tool does to the rest of the call.** In the tool's description: what it reads,
+   creates and changes; what earlier state it clears (a changed choice that discards a quote or a
+   confirmation taken after it); an argument whose value must come from an earlier tool's output,
+   naming that tool; and a refusal returned as an ordinary value rather than an error.
+
+6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is
    told them and graded against them, and its prompt is where most of them live. Prompts are
    often kept away from the main agent file, so search the whole source for a long instructions
@@ -91,7 +106,7 @@ Find, in roughly this order:
    `system_prompt_from`, every part it is assembled from: it is copied into the contract as written,
    and every later stage decides what the agent should do from it.
 
-6. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
+7. **The modality.** How a person reaches this agent: a voice session, a text interface, or a
    browser it drives. This decides how it is later run, so getting it wrong reroutes every test.
    **Decide it from the source and always record it.** A run is unattended, so there is nobody to
    ask, and a modality left unsaid is read as chat: a voice agent then never places a call and the
@@ -106,7 +121,7 @@ Find, in roughly this order:
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
 
-7. **Which side places the call.** Voice only, and read from the agent's own instructions rather
+8. **Which side places the call.** Voice only, and read from the agent's own instructions rather
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent
    people dial into ("callers dial in", "thanks for calling") is `inbound`. Record it as
@@ -119,12 +134,12 @@ Find, in roughly this order:
    to raise tests nothing about how the agent opens a call it placed. Two builds of the same agent
    can differ only in this, so quote the line you read it from in `system_prompt_excerpt`.
 
-8. **What it depends on.** Everything the agent reaches for that has to exist before it can
+9. **What it depends on.** Everything the agent reaches for that has to exist before it can
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
    what it provides, and which tools cannot work without it. The environment stage builds these,
    so a dependency you do not record is a tool that will have nothing to answer it.
 
-9. **Whether its tools have code, and how to reach it.** This is the difference between testing
+10. **Whether its tools have code, and how to reach it.** This is the difference between testing
    the agent and testing somebody's reimplementation of it, so it is worth real effort.
 
    For each tool, find the function that actually runs and record where it lives and how it is
@@ -144,12 +159,12 @@ Find, in roughly this order:
    the environment stage must stop and tell the person which runnable seam the agent needs. It
    never writes a replacement implementation.
 
-10. **How its code says no.** Code written for production often reports failure by returning a
+11. **How its code says no.** Code written for production often reports failure by returning a
    value rather than raising, so a returned string can be a refusal. Read one or two of its tools
    and record the convention. Without it, every refusal is recorded as a success, which hides the
    behaviour most worth testing.
 
-11. **What it takes to run.** Its install command from its own lockfile or requirements, the
+12. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
    Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
@@ -168,12 +183,12 @@ Find, in roughly this order:
    proven in source. In particular, a source field named user ID is not itself a template
    variable: map it to an available identifier such as `{{thread_id}}` when appropriate.
 
-12. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
+13. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say
     so if it is hardcoded: that is the difference between substituting a store cleanly and having
     to change the agent's code, which is a decision for the person, not for you.
 
-13. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
+14. **The data.** Where it lives, its shape, and its contents. Record the **shape** completely:
     every field of every kind of record, and any values a field is constrained to.
 
     **Take the shape from the queries, not only from a sample row.** A field the code selects can be
@@ -204,7 +219,7 @@ Find, in roughly this order:
     keys cannot seed or verify the store. Read large scenario/test corpora selectively; start
     from executable code and the fixture/schema loader, then sample scenarios only as needed.
 
-14. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
+15. **Use cases.** What this agent is *for*, one plain sentence each. "Cancel an order that has
     not yet shipped." "Look up a customer by email." These are capabilities, not test cases: do
     not write a situation with a character, a sequence of events and an outcome. Those are
     scenarios and they are written later, from these sentences. Each one is something the
