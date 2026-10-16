@@ -137,9 +137,10 @@ selection is what "these" and "the selected ones" mean.
 Load `write-scenarios` before you write or rewrite any scenario in this conversation; its rules are
 what the gates check. Then:
 
-- **Edit one**: read it in full first, change only what was asked, and carry the change into every
+- **Edit one**: read it in full first, change only what was asked, carry the change into every
   field that follows from it (setup, ready check, solution, instruction, sub-goals, labels), and
-  `submit_scenario` it under the same name, keeping every field the change does not touch. That replaces it, keeps its number, and proves it.
+  `submit_scenario` it under the same name, keeping every field the change does not touch. That
+  replaces it, keeps its number, and proves it.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
   brief `scenario_writer` sub-agents in one message. When the person asks for a level of an axis (no
   background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to
@@ -200,21 +201,14 @@ The suite must always be runnable and true to the agent, the world and the contr
   changes is what the contract says, unverified. When the build has been validated you are told so
   in this conversation. Then run one scenario for each distinct solution path whose steps did not
   run (the same tools in the same order is one path), five per run, until each such path has had one
-  call; read every result in full. A path never played against the agent is an answer key nobody has
-  checked. A scenario that failed because it was
-  wrong about the agent (a solution step the agent need not take, data the agent cannot use, a
-  check stricter than the rule) means the contract is wrong there: correct the contract first, then
-  every scenario the correction affects, save and run again. A passing call whose transcript shows
-  the agent doing something wrong means a sub-goal is too weak: tighten it. A pass is evidence only
-  when the same call done wrong would have failed: the results are a postmortem of the agent, so for
-  each passing call name the mistakes an agent could make in that scenario (another record, another
-  value the person asked for, a safeguard skipped or done after the change it guards, a rule broken)
-  and find the sub-goal and the fixed value that fails each; `try_check` with that mistake shows it.
-  Where nothing would, tighten the fixed marks or the sub-goal. A call that errored has no verdict
-  and says nothing about the scenario: read why it stopped, run it again once, and change nothing
-  on its account. A failure that looks
-  like the agent's own fault, or that you cannot place, you report with the evidence and ask about.
-  Say the environment is ready only after this.
+  call; read every result in full. A scenario that failed because it was wrong about the agent (a
+  solution step the agent need not take, data the agent cannot use, a check stricter than the rule)
+  means the contract is wrong there: correct the contract first, then every scenario the correction
+  affects, save and run again. A passing call whose transcript shows the agent doing something wrong
+  means a sub-goal is too weak: tighten it. A call that errored has no verdict and says nothing about
+  the scenario: read why it stopped, run it again once, and change nothing on its account. A failure
+  that is the agent's own fault, or that you cannot place, you report in your summary with the
+  evidence. Say the environment is ready only after this.
 - **Never call the suite healthy or ready unless the last `check_health` said so.** If problems
   remain, say which, by number, and what you are doing about them.
 - **When a repair is too large or impossible**: if fixing it would touch more than five scenarios,
