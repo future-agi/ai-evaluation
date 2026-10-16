@@ -432,7 +432,13 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_tool_observation_evidence_required")
         before, after = original.interface, runtime.interface
         if any(getattr(before, field) != getattr(after, field) for field in transport_fields):
-            if not (after.completed_tools or after.completed_tool_events):
+            adds_failure_rule_only = (
+                before.failure_rule is None
+                and after.failure_rule is not None
+                and before.model_dump(exclude={"failure_rule"})
+                == after.model_dump(exclude={"failure_rule"})
+            )
+            if not (adds_failure_rule_only or after.completed_tools or after.completed_tool_events):
                 raise ValueError("runtime_repair_tool_observation_mapping_required")
             # Match create_chat_wrapper's joining before allowing a different source route.
             endpoint = urlsplit(urljoin("http://alk-runtime.invalid/", after.path.lstrip("/")))
@@ -916,6 +922,12 @@ The identical chat request and reset must pass after rebuilding before readiness
     if allowed == {"chat_tool_evidence_unverified"}:
         system_prompt += """ A private tool-workflow conversation captured no completed tool
 execution. This does not prove the target used tools: it may have refused or failed its task.
+First inspect the response and its source producer for structured application failure flags,
+including HTTP 200 responses. If failure_rule is absent, you may add only that source-backed
+rule without a completed-tool mapping. Every other runtime/interface field must stay identical.
+Reprobe before attempting any setup repair; a declared application failure is handled through
+chat_ingress_failed and its constrained setup repair. Do not combine configuration changes with
+this observation repair, and never infer failure from assistant prose alone.
 Inspect the selected source route to determine whether it executes tools internally. If it does,
 inspect its response or correlated event API and map the real completed results with
 interface.completed_tools or interface.completed_tool_events. These two fields are the ONLY
@@ -923,8 +935,9 @@ observation mappings. If this route discards completed results, inspect an exist
 HTTP route on the same running server. You may also change interface.path, protocol,
 request_template, response_path and failure_rule only when source evidence proves that both
 routes invoke the same agent with the same model/provider, tools and behavior. Cite the route
-handlers and their shared agent invocation. A transport change must include a completed-tool
-mapping. Preserve every other runtime/interface field, authentication, setup and model intent.
+handlers and their shared agent invocation. Apart from adding an absent failure rule alone,
+a transport change must include a completed-tool mapping. Preserve every other runtime/interface
+field, authentication, setup and model intent.
 For openai_chat to json_template, include a literal request_template.model equal to the existing
 interface.model, or "agent-learning-target" if that field is empty. The JSON template transport
 does not inject interface.model. For an existing JSON template, preserve its model field,
