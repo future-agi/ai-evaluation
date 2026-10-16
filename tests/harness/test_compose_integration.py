@@ -14,8 +14,9 @@ from fi.alk.harness.world.errors import WorldUsageError
 
 @pytest.mark.parametrize("included", [False, True])
 @pytest.mark.parametrize("additional", [False, True])
+@pytest.mark.parametrize("image_selected", [False, True])
 def test_native_compiler_keeps_dependency_paths_and_requires_optin(
-    tmp_path, monkeypatch, included, additional
+    tmp_path, monkeypatch, included, additional, image_selected
 ):
     source = tmp_path / "source"
     (source / "deploy").mkdir(parents=True)
@@ -23,6 +24,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     (source / "config").mkdir()
     (source / "deploy" / "compose.yaml").write_text("""services:
   app:
+    image: example/chat:1
     build:
       context: ..
       args: {LITERAL: "$$HOME"}
@@ -70,6 +72,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
                     "workdir": ".",
                     "service": "app",
                     "additional_services": ["unrelated"] if additional else [],
+                    "compose_image_services": ["app"] if image_selected else [],
                     "command": ["node", "server.js"],
                     "interface": {
                         "kind": "http",
@@ -107,8 +110,12 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     assert manifest.runtime.control_service == "app"
     if additional:
         assert "profiles" not in document["services"]["unrelated"]
-    assert document["services"]["app"]["build"]["context"] == "./."
-    assert document["services"]["app"]["build"]["args"] == {"LITERAL": "$$HOME"}
+    if image_selected:
+        assert "build" not in document["services"]["app"]
+        assert document["services"]["app"]["image"] == "example/chat:1"
+    else:
+        assert document["services"]["app"]["build"]["context"] == "./."
+        assert document["services"]["app"]["build"]["args"] == {"LITERAL": "$$HOME"}
     assert document["services"]["app"]["volumes"] == ["./config:/app/config"]
     assert "profiles" not in document["services"]["app"]
     if included:

@@ -253,7 +253,11 @@ and a way to run container commands from there:
 Some things worth knowing before you start:
 
 **Use the agent's own Dockerfile if it has one.** The contract records whether it does. Theirs is
-what its authors tested; yours is a guess at it.
+what its authors tested; yours is a guess at it. When source deployment instructions instead
+select a published Compose image, use `runtime.compose_image_services` for that already
+selected service. ALK retains its source-declared image and removes its build from the generated
+runtime only. Never write an image override or alter upstream files. The selection requires a
+container runtime and does not itself verify an immutable image identity.
 
 **Use its own install command**, from its lockfile or requirements, exactly as written. Do not
 substitute a different package manager or add dependencies it did not ask for.

@@ -730,6 +730,17 @@ def contract_tools(
                             "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
                         },
+                        "compose_image_services": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": Runtime.model_fields["compose_image_services"].description,
+                        },
                         "compose_overrides": {
                             "type": "array",
                             "maxItems": 8,

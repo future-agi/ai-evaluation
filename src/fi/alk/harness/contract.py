@@ -775,6 +775,11 @@ class Runtime(BaseModel):
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
     compose_overrides: list[str] = Field(default_factory=list, max_length=8)
+    compose_image_services: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Selected Compose services that use their source-declared image instead of build. Requires explicit compose_file and service. Never invent image references; retain source deployment evidence.",
+    )
     service: str = ""
     additional_services: list[str] = Field(default_factory=list, max_length=32)
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
@@ -836,6 +841,17 @@ class Runtime(BaseModel):
                 for path in self.compose_overrides
             ):
                 raise ValueError("runtime_compose_overrides_path_invalid")
+        if self.compose_image_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_images_require_compose_selection")
+            if (
+                len(set(self.compose_image_services)) != len(self.compose_image_services)
+                or any(
+                    not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name)
+                    for name in self.compose_image_services
+                )
+            ):
+                raise ValueError("runtime_compose_image_services_invalid")
         if self.additional_services:
             if self.execution == "native" or not (self.compose_file and self.service):
                 raise ValueError(
