@@ -1891,3 +1891,64 @@ def test_default_validator_is_resolved_at_call_time(tmp_path, monkeypatch, readi
         readiness_only=readiness_only,
     ))
     assert calls == ([{"readiness_only": True}] if readiness_only else [{}])
+
+
+@pytest.mark.parametrize("compile_failure", [False, True])
+def test_startup_failure_preserves_redacted_process_logs_for_repair(
+    tmp_path, monkeypatch, compile_failure
+):
+    from fi.alk.harness import bundle_author_v2, process_preflight, process_runtime
+
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text('{"KEY":"private-startup-token"}')
+    logs = authoring / "generic-harness" / "process-logs"
+    logs.mkdir(parents=True)
+    (logs / "previous.log").write_text("stale failure must not be reused")
+    started = []
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, **kwargs):
+            started.append(True)
+            raise process_runtime.ProcessRuntimeError(
+                "depends_on", "depends_on_timeout", "readiness probe timed out"
+            )
+
+        async def close(self, **kwargs):
+            if started:
+                (logs / ("worlds-w0-agent-" + "a" * 32 + ".log")).write_text(
+                    "API Server: aiohttp not installed\nprivate-startup-token\n"
+                )
+
+    def compile_bundle(**kwargs):
+        if compile_failure:
+            raise ValueError("compiler rejected candidate")
+        return SimpleNamespace(runtime=BundleRuntimeV2(
+            kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL,
+            control_service="agent",
+        ))
+
+    monkeypatch.setattr(process_runtime, "ProcessRuntimeProvider", Provider)
+    monkeypatch.setattr(bundle_author_v2, "author_bundle_v2", compile_bundle)
+    monkeypatch.setattr(process_preflight, "preflight_bundle", lambda *a, **k: None)
+    job = SimpleNamespace(agent=SimpleNamespace(secret_refs={}))
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(validate_once(
+            job, tmp_path, authoring, secrets_path=secrets, local_runtime=True,
+        ))
+    failure = caught.value
+    assert failure.phase == "runtime"
+    if compile_failure:
+        assert "compiler rejected candidate" in str(failure)
+        assert not failure.process_evidence
+        assert not failure.target_process_evidence
+    else:
+        assert "readiness probe timed out" in str(failure)
+        for evidence in (failure.process_evidence, failure.target_process_evidence):
+            assert "aiohttp not installed" in evidence
+            assert "private-startup-token" not in evidence
+            assert "stale failure" not in evidence
