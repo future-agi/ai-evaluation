@@ -503,3 +503,86 @@ def test_declared_result_errors_classify_completed_tools(native_app, paired):
     assert [call["arguments"] for call in tools] == arguments
     if paired:
         assert invoke(target).metadata["native_completed_tools"] == []
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_result_error_values_and_paths_are_strict(native_app, paired):
+    base, state = native_app
+    for body, expected in [
+        ({"error": None}, True), ({"error": False}, True), ({"error": ""}, True),
+        ({}, True), ({"error": True}, False), ({"error": "blocked"}, False),
+        ({"error": 0}, None), ({"error": 1}, None), ({"error": {}}, None),
+        ({"error": []}, None), ({"error": float("nan")}, None),
+        (None, None), ([], None), ("broken JSON", None),
+        (json.dumps(json.dumps({"error": "blocked"})), None),
+    ]:
+        for result in [body, json.dumps(body)]:
+            payload = copy.deepcopy(PAIR_PAYLOAD if paired else PAYLOAD)
+            if paired:
+                payload["output"][1]["output"] = result
+                config = interface(completed_tools=None, completed_tool_events={
+                    **EVENTS, "result_error_path": "error"})
+            else:
+                payload["tool_calls"][0]["tool_result"] = result
+                config = interface(completed_tools={**ROWS, "result_error_path": "error"},
+                                   failure_rule=None)
+            state["payload"] = payload
+            response = invoke(create_chat_wrapper(config, base, secret_values={}))
+            assert response.metadata["external_agent"]["success"] is (expected is not None), result
+            if expected is None:
+                assert not response.metadata.get("native_completed_tools")
+                assert response.metadata["external_agent"]["response_excerpt"] == ""
+            else:
+                assert response.metadata["native_completed_tools"][0]["ok"] is expected
+                assert response.metadata["native_completed_tools"][0]["result"] == result
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_result_errors_do_not_weaken_boolean_failure(native_app, paired):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD if paired else PAYLOAD)
+    if paired:
+        state["payload"]["output"][1].update(output='{"error":null}', failed=True)
+        config = interface(completed_tools=None, completed_tool_events={
+            **EVENTS, "error_path": "failed", "result_error_path": "error"})
+    else:
+        state["payload"]["tool_calls"][0].update(tool_result='{"error":null}', failed=True)
+        config = interface(completed_tools={
+            **ROWS, "error_path": "failed", "result_error_path": "error"}, failure_rule=None)
+    response = invoke(create_chat_wrapper(config, base, secret_values={}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+
+
+def test_result_error_paths_do_not_guess_nested_shapes_or_consume_bad_events(native_app):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    target = create_chat_wrapper(interface(completed_tools=None, completed_tool_events={
+        **EVENTS, "result_error_path": "outcome.error"}), base, secret_values={})
+    for body in [{"outcome": None}, {"outcome": []}, {"outcome": "nested JSON"}]:
+        state["payload"]["output"][1]["output"] = body
+        response = invoke(target)
+        assert response.metadata["external_agent"]["success"] is False
+        assert not response.metadata.get("native_completed_tools")
+    state["payload"]["output"][1]["output"] = {"outcome": {"error": "failed"}}
+    response = invoke(target)
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+    assert invoke(target).metadata["native_completed_tools"] == []
+
+
+def test_terminal_failure_bypasses_different_result_shape(native_app):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    state["payload"]["output"][1] = {
+        "type": "rejected", "call_id": "call-1", "message": "not JSON", "status": "completed",
+    }
+    config = interface(completed_tools=None, completed_tool_events={
+        **EVENTS, "result_error_path": "error", "failure_events": [
+            {"kind": "rejected", "action_id_path": "call_id", "result_path": "message"},
+        ],
+    })
+    response = invoke(create_chat_wrapper(config, base, secret_values={}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+    assert response.metadata["native_completed_tools"][0]["result"] == "not JSON"

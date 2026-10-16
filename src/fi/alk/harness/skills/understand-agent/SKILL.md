@@ -107,7 +107,14 @@ Find, in roughly this order:
    schema or correlated event API and declare `runtime.interface.completed_tools` or
    `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
    actions and observations using source identifiers and preserve conversation correlation. Inspect
-   success, error and rejection event producers. Declare distinct failed terminal kinds with
+   success, error and rejection event producers, including native tool result wrappers. Completion
+   status means execution ended, not that it succeeded. When source defines a nullable boolean or
+   string error field inside the result, declare `result_error_path` relative to `result_path`.
+   ALK decodes a JSON-text result once for classification and preserves the original result.
+   Missing, null, false or empty string reports no error; true or nonempty string reports failure.
+   Other values and incompatible traversal invalidate the evidence. Declare this convention only
+   when supported by the source, and retain any existing boolean `error_path`.
+   Declare distinct failed terminal kinds with
    `completed_tool_events.failure_events`, each containing `kind`, `action_id_path` and `result_path`.
    Verify that all terminal kinds join the same action identifier; chronological parents are not
    necessarily action references. Failure events always record `ok=false` and require an error

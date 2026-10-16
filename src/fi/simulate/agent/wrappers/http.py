@@ -205,6 +205,7 @@ class HTTPAgentWrapper(AgentWrapper):
         if (
             self.completed_tools
             and not self.completed_tools.error_path
+            and not self.completed_tools.result_error_path
             and not (
                 self.failure_rule
                 and self.failure_rule.get("success_values") is not None
@@ -731,13 +732,14 @@ class HTTPAgentWrapper(AgentWrapper):
                 or type(error) is not bool
             ):
                 raise ValueError("invalid completed tool row")
+            result_error = _tool_result_error(result, spec.result_error_path)
             json.dumps([arguments, result], allow_nan=False)
             completed.append(
                 {
                     "name": name,
                     "arguments": arguments,
                     "result": result,
-                    "ok": not error,
+                    "ok": not (error or result_error),
                 }
             )
         return completed
@@ -897,13 +899,16 @@ class HTTPAgentWrapper(AgentWrapper):
                 raise _ResponseFailure(
                     "tool_events", self._response_status, "invalid completed tool data"
                 )
+            result_error = (
+                False if failure else _tool_result_error(result, spec.result_error_path)
+            )
             json.dumps([arguments, result], allow_nan=False)
             completed.append(
                 {
                     "name": name,
                     "arguments": arguments,
                     "result": result,
-                    "ok": not error,
+                    "ok": not (error or result_error),
                 }
             )
             if correlation is not None:
@@ -1103,6 +1108,31 @@ def _decode_json_or_sse(text: str) -> Any:
         raise ValueError(
             "HTTP target returned neither JSON nor JSON server-sent events"
         )
+
+
+def _tool_result_error(result: Any, path: str) -> bool:
+    if not path:
+        return False
+    current = json.loads(result) if isinstance(result, str) else result
+    json.dumps(current, allow_nan=False)
+    segments = [part for part in path.removeprefix("$").strip(".").split(".") if part]
+    for segment in segments:
+        if isinstance(current, Mapping):
+            if segment not in current:
+                return False
+            current = current[segment]
+        elif isinstance(current, list) and segment.isdecimal():
+            try:
+                current = current[int(segment)]
+            except IndexError as exc:
+                raise ValueError("invalid tool result error path") from exc
+        else:
+            raise ValueError("invalid tool result error path")
+    if current is None:
+        return False
+    if type(current) is bool or isinstance(current, str):
+        return bool(current)
+    raise ValueError("tool result error must be null, boolean or string")
 
 
 def _select_response_value(payload: Any, path: str) -> Any:

@@ -600,6 +600,11 @@ Three things are refused outright, so write for them rather than discovering the
   It passes an agent that called the right tool with the wrong arguments, which is the failure this
   harness exists to catch: an agent that mishears a name and opens somebody else's account calls
   exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+  For a dispatcher that wraps subtools, establish success from its source-defined result contract
+  and the returned state. Child names and arguments show intent, not execution. A top-level
+  dispatcher name alone must neither prove nor disprove a subtool's successful effect. Inspect
+  the recorded outcome and verify the relevant returned state or source-declared child outcome. Do not
+  invent separate completed calls by flattening arguments.
 - **A judged sub-goal without its criteria.** `judged` needs the four labelled lines above, and its
   "If it does not arise" line has to say Pass or Fail. "Was it polite" is not criteria.
 - **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
