@@ -720,26 +720,27 @@ these the first time.
 
 Only when `add_sub_actor` is offered. The person the agent serves is the primary actor; a sub-actor is
 anyone or anything else in the world the agent has to cope with: someone speaking in the background of
-a call, or a service behind one of the agent's tools whose responses fail. Derive them from the
-contract, one per slot that really applies:
+a call, or a service behind one of the agent's tools whose responses fail. Real use has them, so a
+world without them tests only the easy case. Read the contract and give each slot below that this agent
+has one sub-actor:
 
-- a tool backed by a third-party service suggests a `system` sub-actor on `tool_response`, with one
+- a tool backed by a third-party service gets a `system` sub-actor on `tool_response`, with one
   fault per way that service can fail the call (a timeout, an error, a rate limit, a malformed or
   padded response, a slow one);
-- a voice agent can have a `behavioral` sub-actor on `audio_mix` (someone near the person) or on
-  `audio_handoff` (someone who takes the line from them);
-- a transfer or escalation tool suggests a `behavioral` sub-actor on `transfer_leg`: whoever answers
+- a voice agent gets a `behavioral` sub-actor on `audio_mix` (someone near the person), and one on
+  `audio_handoff` (someone who takes the line from them) where the person could hand the phone over;
+- a transfer or escalation tool gets a `behavioral` sub-actor on `transfer_leg`: whoever answers
   the handover;
-- an agent that places calls can meet an `ivr`: a menu that answers before the person does;
-- a conversation the agent shares with more than one person suggests a `thread_message` participant;
-- a record the agent reads that can change while it works suggests an `inbound_message`, whose
+- an agent that places calls gets an `ivr`: a menu that answers before the person does;
+- a conversation the agent shares with more than one person gets a `thread_message` participant;
+- a record the agent reads that can change while it works gets an `inbound_message`, whose
   `inbound` names the collection and the record that arrives.
 
 A behavioural sub-actor's prompt says who they are, what they want and what they know.
 
 The cast belongs to the world, so every scenario sees the same one, and a scenario binds the ones it
-needs. An agent with no such slot has an empty cast, which is a valid world; never add a sub-actor to
-fill a list. `add_sub_actor` refuses a channel this agent cannot be reached on and a fault on a tool
+needs. Only an agent with none of these slots has an empty cast; never add a sub-actor for a slot the
+agent does not have. `add_sub_actor` refuses a channel this agent cannot be reached on and a fault on a tool
 whose calls nothing in the run stands between.
 
 ## If the contract is wrong
