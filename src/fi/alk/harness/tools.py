@@ -1152,14 +1152,14 @@ def contract_tools(
             (
                 "data",
                 bool(payload.get("tools"))
+                and structured_seed_store
                 and not payload.get("data_schema")
                 and not payload.get("base_environment"),
-                "no data_schema and no base_environment, for an agent that has tools. The world "
-                "every test runs against is built from exactly these two, so without them the "
-                "next stage has no schema to create and no rows to seed, and every tool call it "
-                "makes will refuse. Record the shape of each kind of record the tools read or "
-                "write, and enough real rows to reach every branch those tools have — a "
-                "representative sample for a large dataset, the whole thing for a small one.",
+                "no data_schema and no base_environment, although data_store declares a "
+                "structured database. Record the source-owned schema and any existing records "
+                "the tools require, using real source identifiers and values. An initially "
+                "empty database may be correct; do not invent records or schema to satisfy "
+                "this warning.",
             ),
             (
                 "starting-data",
