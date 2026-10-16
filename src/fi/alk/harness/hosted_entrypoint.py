@@ -36,7 +36,10 @@ from typing import Any, Callable, Protocol, Sequence
 
 from . import observability
 from . import outbound as ob
-from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
+from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
+from .compose_broker import BrokerError, ComposeBrokerClient
+from .hosted_compose_bootstrap import initialize_hosted_compose
+from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
     CallOutcome,
@@ -2335,6 +2338,18 @@ async def run_job(
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
 
+        try:
+            broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
+        except BrokerError as exc:
+            return await _fail(
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                code="compose_bootstrap_failed",
+                message=str(exc),
+            )
+        if broker_socket is not None:
+            os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
+
         observability.begin(
             job.job_id, job.run_id, (job.metadata or {}).get("telemetry")
         )
@@ -2431,6 +2446,7 @@ async def run_job(
                 manifest,
                 parallelism=parallelism,
                 secret_refs=secret_purposes,
+                allow_compose=broker_socket is not None,
             )
         except PreflightError as exc:
             return await _fail(
@@ -2444,12 +2460,11 @@ async def run_job(
         if cancel_requested():
             return await _canceled()
 
-        # 4/5. Provision -- ProcessRuntimeProvider, hosted lane never passes
-        # require_declared_user=False (the provider defaults it True on its own; the local lane's
-        # opt-out is a construction-site concern, not this module's). §4.5b's provider mutex is
-        # `WorldPool`'s own `_provider_lock` now (mutation-verified: it serializes
-        # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
-        provider = deps.build_provider(capabilities, transport)
+        provider = (
+            ComposeBrokerClient(broker_socket)
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE and broker_socket is not None
+            else deps.build_provider(capabilities, transport)
+        )
         pool = WorldPool(
             provider,
             bundle=manifest,
@@ -2588,7 +2603,11 @@ async def run_job(
         # pre-allocation CLIENT (ScenariosClient) is.
         adapter.stage_changed(HarnessStage.VALIDATING_SCENARIOS)
         await adapter.aflush_events()
-        world_factory = deps.build_world_factory(work_directory, bundle_dir)
+        world_factory = (
+            ObservationWorldFactory(bundle_dir)
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE
+            else deps.build_world_factory(work_directory, bundle_dir)
+        )
         # An injected `ScenarioSource` (every test, every future caller) always wins -- the real
         # bundle-reading adapter (scenario_source.py) only steps in when the default
         # `NotWiredScenarioSource` is still in place AND the bundle actually carries a `scenarios/`
