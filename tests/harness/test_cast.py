@@ -238,13 +238,14 @@ def test_add_sub_actor_writes_the_cast_and_refuses_what_cannot_run(tmp_path, mon
     root, tools = _cast_tools(tmp_path, monkeypatch)
     add = tools["add_sub_actor"].handler
 
-    said = asyncio.run(add({**_voice().model_dump(), "primary_role": "someone ordering food"}))
+    said = asyncio.run(add({**_voice().model_dump(), "origin": "user-added", "primary_role": "someone ordering food"}))
     assert not said.get("is_error"), said
     said = asyncio.run(add(_service().model_dump()))
     assert not said.get("is_error"), said
     cast = load_cast(root)
     assert [one.id for one in cast.sub_actors] == ["subactor_bystander", "subactor_service"]
     assert cast.primary.role == "someone ordering food"
+    assert {one.origin for one in cast.sub_actors} == {"derived"}
 
     refused = asyncio.run(add({**_service().model_dump(), "id": "subactor_other", "depends_on": ["refund"]}))
     assert refused["is_error"] and "refund" in refused["content"][0]["text"]

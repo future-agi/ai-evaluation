@@ -585,7 +585,7 @@ def _tables_the_source_lacks(
 
 
 def cast_tools(
-    contract: AgentContract, destination: Path, *, source_root: str = "", world: Any = None
+    contract: AgentContract, destination: Path, *, source_root: str = "", world: Any = None, origin: str = "derived"
 ) -> list[Any]:
     """The tools that keep the world's cast: shared by the build stage and the builder session."""
 
@@ -610,7 +610,6 @@ def cast_tools(
                 "role": str,
                 "kind": {"type": "string", "enum": ["behavioral", "system", "hybrid"]},
                 "channel": {"type": "string", "enum": delivered_channels()},
-                "origin": {"type": "string", "enum": ["derived", "user-added"]},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
                 "behaviour": {
                     "type": "object",
@@ -647,7 +646,10 @@ def cast_tools(
     async def add_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
         try:
             actor = SubActor.model_validate(
-                {key: value for key, value in args.items() if key != "primary_role" and value is not None}
+                {
+                    **{key: value for key, value in args.items() if key not in ("primary_role", "origin") and value is not None},
+                    "origin": origin,
+                }
             )
         except Exception as invalid:  # noqa: BLE001 - the model is told what was wrong
             return _err(f"Not added. {invalid}"[:600])

@@ -318,7 +318,7 @@ def suite_server(
         # Which tools the agent runs itself decides where a fault can be applied.
         world = restore(out) if (out / MANIFEST).exists() else None
         try:
-            cast = cast_tools(contract, out, source_root=str(source_root or ""), world=world)
+            cast = cast_tools(contract, out, source_root=str(source_root or ""), world=world, origin="user-added")
         finally:
             if world is not None:
                 world.close()
