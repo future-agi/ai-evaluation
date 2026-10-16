@@ -639,8 +639,16 @@ contract, one per slot that really applies:
 - a tool backed by a third-party service suggests a `system` sub-actor on `tool_response`, with one
   fault per way that service can fail the call (a timeout, an error, a rate limit, a malformed or
   padded response, a slow one);
-- a voice agent can have a `behavioral` sub-actor on `audio_mix`: another person near the caller,
-  whose behaviour prompt says who they are, what they want and what they know.
+- a voice agent can have a `behavioral` sub-actor on `audio_mix` (someone near the person) or on
+  `audio_handoff` (someone who takes the line from them);
+- a transfer or escalation tool suggests a `behavioral` sub-actor on `transfer_leg`: whoever answers
+  the handover;
+- an agent that places calls can meet an `ivr`: a menu that answers before the person does;
+- a conversation the agent shares with more than one person suggests a `thread_message` participant;
+- a record the agent reads that can change while it works suggests an `inbound_message`, whose
+  `inbound` names the collection and the record that arrives.
+
+A behavioural sub-actor's prompt says who they are, what they want and what they know.
 
 The cast belongs to the world, so every scenario sees the same one, and a scenario binds the ones it
 needs. An agent with no such slot has an empty cast, which is a valid world; never add a sub-actor to

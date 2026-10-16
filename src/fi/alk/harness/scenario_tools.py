@@ -22,6 +22,8 @@ from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .background_noise import place_for, places
+from fi.simulate.simulation.sub_actors import TRIGGER_ABOUT, described
+
 from .cast import binding_problems, load_cast, sub_actors_enabled
 from .catalogue import (
     NO_OVERLAY,
@@ -775,13 +777,8 @@ def _sub_actor_field() -> dict[str, Any]:
     return {
         "sub_actors": {
             "type": "array",
-            "description": "Sub-actors from the world's cast this scenario uses, each with when "
-            "it enters: `always` (after the agent's first turn), `mid_journey` with `turn` "
-            "(after the agent's turn N), `on_tool` with `tool` and `on_call` (the Nth call of "
-            "that tool), `on_keyword` with `words` (one of them in the last turn), "
-            "`on_escalation` with `tool` (the agent hands over through that tool), or "
-            "`probability` with `p` (it may not enter at all, so a sub-goal about it must name "
-            "it). Leave it out for the person alone.",
+            "description": "Sub-actors from the world's cast this scenario uses, each with when it "
+            "enters as its `trigger`: " + described(TRIGGER_ABOUT) + ". Leave it out for the person alone.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -789,17 +786,7 @@ def _sub_actor_field() -> dict[str, Any]:
                     "trigger": {
                         "type": "object",
                         "properties": {
-                            "kind": {
-                                "type": "string",
-                                "enum": [
-                                    "always",
-                                    "mid_journey",
-                                    "on_tool",
-                                    "on_keyword",
-                                    "on_escalation",
-                                    "probability",
-                                ],
-                            },
+                            "kind": {"type": "string", "enum": list(TRIGGER_ABOUT)},
                             "turn": {"type": "integer"},
                             "tool": {"type": "string"},
                             "on_call": {"type": "integer"},

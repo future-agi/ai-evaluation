@@ -42,6 +42,9 @@ from ..catalogue import (
     weak_check_advisory,
     without_delivery_overlay,
 )
+from fi.simulate.simulation.sub_actors import CHANNELS as CHANNEL_REGISTRY
+from fi.simulate.simulation.sub_actors import delivered_channels, described
+
 from ..cast import (
     PrimaryActor,
     SubActor,
@@ -578,8 +581,9 @@ def cast_tools(
         "needs and says when each enters.\n\n"
         "`kind`: `behavioral` speaks (needs `behaviour.prompt`: who they are, what they want, "
         "what they know), `system` is a service whose responses fail (needs `faults`), `hybrid` "
-        "has both. `channel`: `audio_mix` is a second voice in a voice call; `tool_response` "
-        "applies `faults` to the agent's tool calls. Each fault names a `tool`, a `kind` "
+        "has both. `channel`, which this agent must be reachable on: "
+        + described({name: CHANNEL_REGISTRY[name]["about"] for name in delivered_channels()})
+        + ". Each fault names a `tool`, a `kind` "
         "(timeout, error, rate_limit, malformed, latency with `latency_ms`, content with "
         "`content` added to the result) and `on_call`, which call of that tool it hits (from "
         "1). `depends_on` lists the agent's tools the sub-actor is about. `primary_role` "
@@ -590,7 +594,7 @@ def cast_tools(
                 "name": str,
                 "role": str,
                 "kind": {"type": "string", "enum": ["behavioral", "system", "hybrid"]},
-                "channel": {"type": "string", "enum": ["audio_mix", "tool_response"]},
+                "channel": {"type": "string", "enum": delivered_channels()},
                 "origin": {"type": "string", "enum": ["derived", "user-added"]},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
                 "behaviour": {
@@ -615,6 +619,10 @@ def cast_tools(
                         },
                         "required": ["tool", "kind"],
                     },
+                },
+                "inbound": {
+                    "type": "object",
+                    "properties": {"collection": {"type": "string"}, "record": {"type": "object"}},
                 },
                 "primary_role": str,
             },

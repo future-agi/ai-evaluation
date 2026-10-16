@@ -488,8 +488,12 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 
 Only when `inspect_world` lists sub-actors in the cast. Bind one with `sub_actors` when the scenario is
 about how the agent copes with it, and say when it enters: `always`, `mid_journey` after the agent's
-turn N, or `on_tool` on the Nth call of a tool its faults name. Most scenarios bind none; presence is a
-condition on some scenarios, not on every one.
+turn N, `on_tool` on the Nth call of a tool, `on_keyword` after a turn containing one of its words, or
+`on_escalation` when the agent hands over through its tool. Use `probability` only when the scenario
+is about the agent coping whether or not the sub-actor shows up, and only with a sub-goal whose
+`sub_actor` names it, since a sub-goal about something that did not happen cannot be graded. A
+service that fails is set up before the call, so it enters `always`, `on_tool` or by `probability`.
+Most scenarios bind none; presence is a condition on some scenarios, not on every one.
 
 The answer key is the correct behaviour with the sub-actor present. A request from someone who is not
 the person being served is not that person's request: the agent ignores it or checks it with them, and

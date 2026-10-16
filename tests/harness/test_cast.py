@@ -224,7 +224,7 @@ def test_the_cast_tools_are_offered_only_with_the_switch_on(tmp_path, monkeypatc
 
 
 def test_add_sub_actor_writes_the_cast_and_refuses_what_cannot_run(tmp_path, monkeypatch):
-    root, tools = _cast_tools(tmp_path, monkeypatch)
+    _root, tools = _cast_tools(tmp_path, monkeypatch)
     add = tools["add_sub_actor"].handler
 
     said = asyncio.run(add({**_voice().model_dump(), "primary_role": "someone ordering food"}))
@@ -399,3 +399,43 @@ def test_the_answer_key_is_proved_with_the_bound_service_failing(tmp_path, monke
     )
     said = accept_scenario(retries, world_root=root, catalogue=catalogue, kept=[])
     assert not said.get("is_error"), said
+
+
+def test_every_delivered_channel_and_trigger_is_offered_accepted_and_taught(tmp_path, monkeypatch):
+    from fi.alk.harness.config import SKILLS_ROOT
+    from fi.alk.harness.scenario_tools import _sub_actor_field
+    from fi.simulate.simulation.sub_actors import CHANNELS, TRIGGERS, delivered_channels
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    skills = "\n".join(
+        (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
+        for name in ("build-environment", "write-scenarios", "plan-suite")
+    )
+    for channel in delivered_channels():
+        assert f"`{channel}`" in skills, f"no skill says when {channel} applies"
+    for trigger in TRIGGERS:
+        assert f"`{trigger}`" in skills, f"no skill says when {trigger} applies"
+
+    _root, tools = _cast_tools(tmp_path, monkeypatch)
+    add = tools["add_sub_actor"]
+    assert add.input_schema["properties"]["channel"]["enum"] == delivered_channels()
+    for channel in delivered_channels():
+        modality = "voice" if "voice" in CHANNELS[channel]["modalities"] else "chat"
+        actor = {
+            "id": f"sub_{channel}",
+            "name": channel,
+            "kind": "system" if channel == "tool_response" else "behavioral",
+            "channel": channel,
+            "behaviour": {"prompt": "who they are"},
+            "faults": [{"tool": "add", "kind": "error"}] if channel == "tool_response" else [],
+            "inbound": {"collection": "cart", "record": {"item_id": "big_mac"}},
+        }
+        from fi.alk.harness.cast import SubActor as Actor
+
+        problems = sub_actor_problems(
+            Actor.model_validate(actor), modality=modality, tools={"add", "lst"}, faults_reach=True
+        )
+        assert not problems, (channel, problems)
+
+    offered = _sub_actor_field()["sub_actors"]["items"]["properties"]["trigger"]["properties"]["kind"]["enum"]
+    assert offered == list(TRIGGERS)

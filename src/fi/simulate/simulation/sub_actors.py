@@ -11,19 +11,48 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-# Every channel, the agent modalities it reaches, and whether this runtime can deliver it yet.
+# Every channel, the agent modalities it reaches, whether this runtime can deliver it yet, and what
+# it is, in the words the build is shown.
 CHANNELS: dict[str, dict[str, Any]] = {
-    "audio_mix": {"modalities": {"voice"}, "delivered": True},
-    "audio_handoff": {"modalities": {"voice"}, "delivered": True},
-    "transfer_leg": {"modalities": {"voice"}, "delivered": True},
-    "ivr": {"modalities": {"voice"}, "delivered": True},
-    "tool_response": {"modalities": {"voice", "chat", "browser"}, "delivered": True},
-    "thread_message": {"modalities": {"chat"}, "delivered": True},
-    "inbound_message": {"modalities": {"voice", "chat"}, "delivered": True},
-    "ui_event": {"modalities": {"computer_use"}, "delivered": False},
-    "page_content": {"modalities": {"browser"}, "delivered": False},
-    "repo_change": {"modalities": {"coding"}, "delivered": False},
-    "peer_agent": {"modalities": {"multi_agent"}, "delivered": False},
+    "audio_mix": {
+        "modalities": {"voice"},
+        "delivered": True,
+        "about": "a voice near the person, mixed under them, that the agent may hear",
+    },
+    "audio_handoff": {
+        "modalities": {"voice"},
+        "delivered": True,
+        "about": "someone who takes the line from the person for up to `max_lines` turns",
+    },
+    "transfer_leg": {
+        "modalities": {"voice"},
+        "delivered": True,
+        "about": "whoever answers when the agent hands the call over",
+    },
+    "ivr": {
+        "modalities": {"voice"},
+        "delivered": True,
+        "about": "an automated menu that answers before the person does",
+    },
+    "tool_response": {
+        "modalities": {"voice", "chat", "browser"},
+        "delivered": True,
+        "about": "a service behind the agent's tools whose responses fail as its `faults` say",
+    },
+    "thread_message": {
+        "modalities": {"chat"},
+        "delivered": True,
+        "about": "a second participant in the conversation, seen by the agent and the person",
+    },
+    "inbound_message": {
+        "modalities": {"voice", "chat"},
+        "delivered": True,
+        "about": "a record that arrives in the world mid-task: `inbound.collection` and `inbound.record`",
+    },
+    "ui_event": {"modalities": {"computer_use"}, "delivered": False, "about": "an event on the screen"},
+    "page_content": {"modalities": {"browser"}, "delivered": False, "about": "content on a page"},
+    "repo_change": {"modalities": {"coding"}, "delivered": False, "about": "a change in the repository"},
+    "peer_agent": {"modalities": {"multi_agent"}, "delivered": False, "about": "another agent"},
 }
 
 # Channels that put words into the conversation, so the sub-actor needs a behaviour to speak from.
@@ -31,7 +60,24 @@ SPEAKING = frozenset(
     {"audio_mix", "audio_handoff", "transfer_leg", "ivr", "thread_message", "inbound_message"}
 )
 
-TRIGGERS = ("always", "mid_journey", "on_tool", "on_keyword", "on_escalation", "probability")
+# When a bound sub-actor enters, and what each trigger needs.
+TRIGGER_ABOUT: dict[str, str] = {
+    "always": "after the agent's first turn",
+    "mid_journey": "after the agent's turn `turn`",
+    "on_tool": "on call `on_call` of the agent's tool `tool`",
+    "on_keyword": "after a turn containing one of `words`",
+    "on_escalation": "when the agent hands over through its tool `tool`",
+    "probability": "with chance `p`, drawn once per run; only with a sub-goal whose `sub_actor` names it",
+}
+TRIGGERS = tuple(TRIGGER_ABOUT)
+
+
+def delivered_channels() -> list[str]:
+    return [name for name, entry in CHANNELS.items() if entry["delivered"]]
+
+
+def described(entries: dict[str, str]) -> str:
+    return "; ".join(f"`{name}`: {about}" for name, about in entries.items())
 
 
 @dataclass
