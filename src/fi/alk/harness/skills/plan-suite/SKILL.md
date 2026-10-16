@@ -31,7 +31,9 @@ These bind every plan, every brief and every suite you save.
    stated use case MUST get its own scenarios, covering both the outcome where it goes through and the
    ones where it cannot or is refused, with the variations real people bring to it. Every flow, rule, required question, disclosure, refusal, escalation and limit in
    the agent's instructions gets at least one scenario, and the risky ones several, before any
-   situation is dealt a second time. List the tasks before you deal anything and check the list again
+   situation is dealt a second time. All of this is within the number asked for, which is the
+   suite's size: when the agent has more of these than the suite has scenarios, deal the riskiest
+   first and name in the plan what is left out. List the tasks before you deal anything and check the list again
    before you save.
 4. **Every scenario is unique.** No two may pass or fail for the same reason. Within a family of
    scenarios on one task, vary the failure, the conflict or the pressure, NEVER only the decoration: a

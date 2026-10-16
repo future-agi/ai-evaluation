@@ -329,6 +329,10 @@ def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exis
     short = asyncio.run(finish.handler({}))
     assert short["is_error"] and "2 of the 3 scenarios" in short["content"][0]["text"]
     assert not (workspace / ".futureagi-build-finished.json").exists()
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: ["one", "two", "three", "four"])
+    over = asyncio.run(finish.handler({}))
+    assert over["is_error"] and "the build asked for 3" in over["content"][0]["text"]
+    assert not (workspace / ".futureagi-build-finished.json").exists()
 
 
     async def commands():
