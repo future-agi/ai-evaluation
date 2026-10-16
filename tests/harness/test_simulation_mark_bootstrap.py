@@ -1143,7 +1143,7 @@ print(json.dumps({
 """
 
 
-def test_processor_stamps_the_call_id_from_the_file(tmp_path: Path) -> None:
+def test_spans_are_stamped_with_the_call_id_from_the_file(tmp_path: Path) -> None:
     result = _run(
         CALL_SPANS_SCRIPT,
         path=[_world(tmp_path)],
@@ -1162,18 +1162,66 @@ def test_processor_stamps_the_call_id_from_the_file(tmp_path: Path) -> None:
     assert FAILED not in result.stderr
 
 
-def test_no_call_file_variable_adds_no_processor(tmp_path: Path) -> None:
-    script = """
-import json
-from opentelemetry.sdk.trace import TracerProvider
+TRACEAI_SHAPED_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+
+class TracerProvider(_TracerProvider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._default_processor = False
+        self.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        self._default_processor = True
+
+    def add_span_processor(self, *args, **kwargs):
+        if self._default_processor:
+            self._active_span_processor.shutdown()
+            self._active_span_processor._span_processors = tuple()
+            self._default_processor = False
+        return super().add_span_processor(*args, **kwargs)
+
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+with open(path, "w") as handle:
+    handle.write("call-1")
+exporter = InMemorySpanExporter()
 provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+with provider.get_tracer("agent").start_as_current_span("turn"):
+    pass
 print(json.dumps({
-    "processors": [
-        type(one).__name__ for one in provider._active_span_processor._span_processors
+    "calls": [
+        finished.attributes.get("fi.simulator.call_execution_id")
+        for finished in exporter.get_finished_spans()
     ],
 }))
 """
+
+
+def test_a_provider_that_drops_processors_still_stamps_the_call(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        TRACEAI_SHAPED_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    assert _reported(result)["calls"] == ["call-1"]
+    assert FAILED not in result.stderr
+
+
+def test_no_call_file_variable_leaves_the_tracer_alone(tmp_path: Path) -> None:
+    script = """
+import json
+from opentelemetry.sdk.trace import Tracer
+
+print(json.dumps({"patched": hasattr(Tracer.start_span, "_alk_simulation_mark")}))
+"""
     reported = _reported(_run(script, path=[_world(tmp_path)], cwd=tmp_path))
 
-    assert reported["processors"] == []
+    assert reported["patched"] is False

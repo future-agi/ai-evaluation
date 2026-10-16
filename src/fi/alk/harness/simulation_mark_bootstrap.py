@@ -17,8 +17,9 @@ instead of the customer's own ``FI_API_KEY``: only the Future AGI authentication
 replaced, only on exports to the collector, and the customer's key stays in the environment for
 the rest of their code.
 
-When the sandbox names a call file, every tracer provider the process builds also stamps each
-span it starts with the id of the call the sandbox is running at that moment.
+When the sandbox names a call file, every span the process starts is also stamped with the id of
+the call the sandbox is running at that moment. The stamp rides on the SDK tracer rather than a
+span processor, because a provider subclass such as traceAI's may drop processors it did not add.
 
 It never reads or writes the customer's files and never imports their modules on its own. It does
 run the next ``sitecustomize`` on the path, which is theirs, so a repository's own startup hook is
@@ -340,33 +341,27 @@ class _CallFile:
         return self._call
 
 
-def _patch_tracer_provider(module, path: str) -> None:
-    cls = module.TracerProvider
-    original = cls.__init__
+def _patch_tracer(module, path: str) -> None:
+    cls = module.Tracer
+    original = cls.start_span
     if getattr(original, _PATCHED, False):
         return
 
     call_file = _CallFile(path)
 
-    class CallStamp(module.SpanProcessor):
-        def on_start(self, span, parent_context=None) -> None:
-            try:
-                call = call_file.current()
-                if call:
-                    span.set_attribute(_CALL_KEY, call)
-            except Exception:
-                pass
-
     @functools.wraps(original)
     def wrapper(self, *args, **kwargs):
-        original(self, *args, **kwargs)
+        span = original(self, *args, **kwargs)
         try:
-            self.add_span_processor(CallStamp())
+            call = call_file.current()
+            if call and span.is_recording():
+                span.set_attribute(_CALL_KEY, call)
         except Exception:
-            _write("failed")
+            pass
+        return span
 
     setattr(wrapper, _PATCHED, True)
-    cls.__init__ = wrapper
+    cls.start_span = wrapper
     _write("applied")
 
 
@@ -440,7 +435,7 @@ def install() -> None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
         call_file = os.environ.get(_CALL_FILE)
         if call_file:
-            _PATCHES[_TRACE] = functools.partial(_patch_tracer_provider, path=call_file)
+            _PATCHES[_TRACE] = functools.partial(_patch_tracer, path=call_file)
         ingest = None
         try:
             ingest = _read_ingest()
