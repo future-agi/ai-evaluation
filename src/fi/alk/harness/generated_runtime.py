@@ -584,8 +584,11 @@ def python_workspace_members(root: Path) -> set[Path]:
     excluded: set[Path] = set()
     for key, paths in (("members", members), ("exclude", excluded)):
         for pattern in workspace.get(key, []):
-            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+            relative = Path(pattern)
+            if relative.is_absolute() or ".." in relative.parts:
                 raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+            if pattern and not relative.parts:
+                continue
             for path in root.glob(pattern):
                 resolved = path.resolve()
                 if not resolved.is_relative_to(root.resolve()):
