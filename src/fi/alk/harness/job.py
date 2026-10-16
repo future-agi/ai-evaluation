@@ -19,6 +19,7 @@ from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, Secr
 
 from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .github import parse_github_location
+from .secrets import process_secret_environment_names
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
 MAX_HOSTED_SCENARIO_COUNT = 5000
@@ -302,7 +303,9 @@ class HarnessJob(BaseModel):
                 + json.dumps(
                     {
                         "target_model": target_model,
-                        "available_environment_names": sorted(names),
+                        "available_environment_names": sorted(
+                            process_secret_environment_names(names)
+                        ),
                     },
                     sort_keys=True,
                 )
