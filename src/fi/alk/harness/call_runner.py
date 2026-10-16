@@ -53,6 +53,7 @@ from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
 from .background_noise import place_of, scenario_source
+from .cast import Binding, Cast, bound_faults, bound_voices, load_cast, sub_actors_enabled
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -156,6 +157,9 @@ _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 # constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
+_FAULTS_TABLE = "_alk_faults"
+# The speaking sub-actors one call carries, as JSON. Set per call and cleared otherwise.
+SUB_ACTOR_VOICES_ALIAS = "HARNESS_SUB_ACTOR_VOICES"
 
 _RESULT_TRUNCATE_CHARS = 2000
 
@@ -645,7 +649,7 @@ def _build_spec(
         scenario=caller_scenario(
             name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
             persona=doc.get("persona"),
-            situation=doc["instruction"],
+            situation=_with_sub_actors(doc["instruction"], environ),
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
@@ -720,6 +724,60 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         )
 
 
+def _arm_faults(dsn: str, rows: list[dict[str, Any]]) -> None:
+    """Replace the faults the tool proxy applies with this call's, so none leak into the next call.
+
+    Best-effort like the trace clear above: a bundle without the table runs with no faults."""
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
+            connection.execute(f'DELETE FROM "{_FAULTS_TABLE}"')  # noqa: S608 - fixed identifier
+            for row in rows:
+                connection.execute(
+                    f'INSERT INTO "{_FAULTS_TABLE}"(tool, kind, on_call, latency_ms, content, sub_actor) '  # noqa: S608
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        row["tool"],
+                        row["kind"],
+                        int(row["on_call"]),
+                        int(row["latency_ms"]),
+                        row["content"],
+                        row["sub_actor"],
+                    ),
+                )
+    except Exception as exc:  # noqa: BLE001 - never a call-blocking failure
+        logger.warning("sub-actor faults not armed: %s", type(exc).__name__)
+
+
+def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
+    if not sub_actors_enabled():
+        return []
+    bindings = []
+    for one in doc.get("sub_actors") or []:
+        try:
+            bindings.append(Binding.model_validate(one))
+        except ValueError:
+            continue
+    return bindings
+
+
+def _with_sub_actors(instruction: str, environ: Mapping[str, str]) -> str:
+    """The caller's situation, naming anyone else who will speak near them."""
+    try:
+        voices = json.loads(environ.get(SUB_ACTOR_VOICES_ALIAS) or "[]")
+    except ValueError:
+        return instruction
+    present = [
+        f"{one['name']} ({one['role']})" if one.get("role") else one["name"]
+        for one in voices
+        if isinstance(one, dict) and one.get("name")
+    ]
+    if not present:
+        return instruction
+    return f"{instruction}\n\nWith you, and may speak during the call: {', '.join(present)}."
+
+
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
     convention -- unpinned by any contract (the only harness-reserved table anywhere in this
@@ -772,6 +830,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             # world-handle-interface.md, only the STRING form is truncated at 2000 chars.
             result = raw_result
         error = _truncate(str(record.get("error") or ""))
+        fault, sub_actor = _fault_of(error)
         raw_at = record.get("at")
         at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
         calls.append(
@@ -781,11 +840,21 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 result=result,
                 ok=ok,
                 error=error,
-                refused=not ok,
+                refused=not ok and not fault,
                 at=at,
+                fault=fault,
+                sub_actor=sub_actor,
             )
         )
     return tuple(calls)
+
+
+def _fault_of(error: str) -> tuple[str, str]:
+    """The fault a sub-actor applied to a traced call, recorded by the tool proxy as `fault:<kind>:<id>`."""
+    if not error.startswith("fault:"):
+        return "", ""
+    _prefix, kind, sub_actor = (error.split(":", 2) + ["", ""])[:3]
+    return kind, sub_actor
 
 
 def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
@@ -1243,6 +1312,14 @@ class CallRunnerImpl:
             call_environ.pop("HARNESS_BACKGROUND_NOISE", None)
             call_environ.pop("HARNESS_BACKGROUND_PLACE", None)
 
+        bindings = _sub_actor_bindings(doc)
+        cast = load_cast(self._context.bundle_dir) if bindings else Cast()
+        voices = bound_voices(bindings, cast)
+        if voices:
+            call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)
+        else:
+            call_environ.pop(SUB_ACTOR_VOICES_ALIAS, None)
+
         # Read the same way and for the same reason as the noise source above: the simulator's
         # instructions are built deep inside simulator_definition, which sees the environment and
         # not this scenario. Set per scenario and cleared otherwise so one outbound scenario cannot
@@ -1356,6 +1433,8 @@ class CallRunnerImpl:
             endpoint = _find_postgres_endpoint(runtime)
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
+                if sub_actors_enabled():
+                    _arm_faults(endpoint.address, bound_faults(bindings, cast))
 
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS

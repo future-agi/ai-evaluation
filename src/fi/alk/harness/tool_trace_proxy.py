@@ -37,6 +37,45 @@ def _record(
         pass
 
 
+# How long a timed-out response holds the agent before it is told the upstream timed out.
+FAULT_TIMEOUT_SECONDS = float(os.environ.get("ALK_FAULT_TIMEOUT_SECONDS") or 10)
+
+
+def _fault_for(name: str) -> dict[str, object] | None:
+    """The fault a bound sub-actor applies to this call of this tool, counted from 1, or none."""
+    try:
+        with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+            faults = connection.execute(
+                "SELECT kind, on_call, latency_ms, content, sub_actor FROM _alk_faults WHERE tool = %s",
+                (name,),
+            ).fetchall()
+            if not faults:
+                return None
+            made = connection.execute(
+                "SELECT count(*) FROM _alk_tool_trace WHERE name = %s", (name,)
+            ).fetchone()[0]
+    except Exception:
+        return None
+    number = int(made) + 1
+    for kind, on_call, latency_ms, content, sub_actor in faults:
+        if int(on_call) == number:
+            return {
+                "kind": kind,
+                "latency_ms": int(latency_ms or 0),
+                "content": content or "",
+                "label": f"fault:{kind}:{sub_actor}",
+            }
+    return None
+
+
+def _with_content(result: object, content: str) -> object:
+    if isinstance(result, dict):
+        return {**result, "note": content}
+    if isinstance(result, list):
+        return [*result, content]
+    return f"{result} {content}".strip() if result is not None else content
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args: object) -> None:
         return
@@ -67,6 +106,17 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
         name = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
+        fault = _fault_for(name)
+        if fault and fault["kind"] in ("timeout", "error", "rate_limit"):
+            if fault["kind"] == "timeout":
+                time.sleep(FAULT_TIMEOUT_SECONDS)
+            status = {"timeout": 504, "error": 500, "rate_limit": 429}[fault["kind"]]
+            detail = {"timeout": "upstream timed out", "error": "upstream error", "rate_limit": "too many requests"}
+            _record(name, arguments, None, False, str(fault["label"]))
+            self._reply(status, json.dumps({"detail": detail[fault["kind"]]}).encode())
+            return
+        if fault and fault["kind"] == "latency":
+            time.sleep(int(fault["latency_ms"]) / 1000)
         try:
             with request.urlopen(outgoing, timeout=30) as response:
                 content = response.read()
@@ -76,7 +126,15 @@ class Handler(BaseHTTPRequestHandler):
                 result = json.loads(content) if content else None
             except ValueError:
                 result = content.decode("utf-8", errors="replace")
-            _record(name, arguments, result, status < 400)
+            if fault and fault["kind"] == "malformed":
+                _record(name, arguments, None, False, str(fault["label"]))
+                self._reply(status, content[: max(1, len(content) // 2)] or b"{", response_type)
+                return
+            if fault and fault["kind"] == "content":
+                result = _with_content(result, str(fault["content"]))
+                content = json.dumps(result).encode()
+                response_type = "application/json"
+            _record(name, arguments, result, status < 400, str(fault["label"]) if fault else "")
             self.send_response(status)
             self.send_header("content-type", response_type)
             self.send_header("content-length", str(len(content)))
@@ -98,6 +156,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+    def _reply(self, status: int, content: bytes, content_type: str = "application/json") -> None:
+        self.send_response(status)
+        self.send_header("content-type", content_type)
+        self.send_header("content-length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
 
 
 if __name__ == "__main__":

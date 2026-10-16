@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..cast import bound_faults, load_cast, sub_actors_enabled
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..world.runtime import Call
@@ -361,6 +362,8 @@ async def _run_one(
             )
         # The setup's own calls are not the agent's.
         world.calls = []
+        if sub_actors_enabled() and scenario.sub_actors:
+            world.faults = bound_faults(scenario.sub_actors, load_cast(world_root))
 
         if not spoken:
             # Typed, and driven by a model rather than by ALK's chat simulator.

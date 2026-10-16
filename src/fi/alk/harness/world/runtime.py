@@ -21,7 +21,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..environment import EnvironmentAdapter, EnvironmentSnapshot, ToolExecutionResult
 
@@ -152,6 +152,9 @@ class Call:
     # read as one thing: without it the UI can show what the agent did but not when, and "when"
     # is the whole question for a spoken run.
     at: float = 0.0
+    # A failure a system sub-actor applied to this call, and which sub-actor did it.
+    fault: str = ""
+    sub_actor: str = ""
 
 
 class GeneratedWorld(EnvironmentAdapter):
@@ -290,7 +293,53 @@ class GeneratedWorld(EnvironmentAdapter):
 
     # -- execution -------------------------------------------------------------------
 
+    # Failures bound system sub-actors apply to this scenario's calls, one row per tool profile.
+    faults: list[dict[str, Any]] = []
+
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+        return self._with_fault(name, arguments, self._execute)
+
+    def _with_fault(
+        self,
+        name: str,
+        arguments: Mapping[str, Any] | None,
+        execute: Callable[[str, Mapping[str, Any] | None], Call],
+    ) -> Call:
+        """Run one call, or fail it the way a bound sub-actor says this call of the tool fails."""
+        number = 1 + sum(1 for one in self.calls if one.name == name)
+        fault = next(
+            (one for one in self.faults if one["tool"] == name and int(one["on_call"]) == number),
+            None,
+        )
+        if fault is None:
+            return execute(name, arguments)
+        kind, label = fault["kind"], fault["sub_actor"]
+        if kind in ("timeout", "error", "rate_limit"):
+            said = {"timeout": "upstream timed out", "error": "upstream error", "rate_limit": "too many requests"}
+            return self._record(
+                Call(name=name, arguments=dict(arguments or {}), ok=False, error=said[kind], fault=kind, sub_actor=label)
+            )
+        if kind == "latency":
+            time.sleep(int(fault.get("latency_ms") or 0) / 1000)
+        made = execute(name, arguments)
+        made.fault, made.sub_actor = kind, label
+        if kind == "malformed":
+            made.result, made.ok, made.error = None, False, "malformed response"
+        elif kind == "content" and made.ok:
+            extra = str(fault.get("content") or "")
+            value = made.result
+            made.result = (
+                {**value, "note": extra}
+                if isinstance(value, dict)
+                else [*value, extra]
+                if isinstance(value, list)
+                else f"{value} {extra}".strip()
+                if value is not None
+                else extra
+            )
+        return made
+
+    def _execute(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         """Execute one call and record it. Never raises: a failure is an outcome, not an event.
 
         An unknown tool is a refusal rather than a silent success. An agent reaching for a tool
