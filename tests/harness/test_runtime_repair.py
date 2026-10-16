@@ -1497,3 +1497,73 @@ def test_failure_event_repair_preserves_mapping_through_chat_transport(
         validate_runtime_plan_patch(
             tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
         )
+
+
+@pytest.fixture
+def failure_rule_patch(tmp_path, observable_transport_patch):
+    from fi.alk.harness.contract import RuntimeHttpFailureRule
+
+    contract, patch = observable_transport_patch
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="choices.0.finish_reason", failure_values=["error"],
+        message_path="error.message",
+    )
+    return contract, patch.model_copy(update={"runtime": runtime})
+
+
+def test_tool_observation_repair_can_add_failure_rule_alone(tmp_path, failure_rule_patch):
+    contract, patch = failure_rule_patch
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    assert repaired.runtime.interface.failure_rule.failure_values == ["error"]
+    assert repaired.runtime.interface.completed_tools is None
+    assert repaired.runtime.interface.completed_tool_events is None
+    assert repaired.runtime.interface.model_dump(exclude={"failure_rule"}) == (
+        contract.runtime.interface.model_dump(exclude={"failure_rule"})
+    )
+
+
+@pytest.mark.parametrize("changes", [
+    {"path": "/observed"},
+    {"protocol": "fi.alk"},
+    {"request_template": {"input": "{{messages}}"}},
+    {"response_path": "answer"},
+    {"headers_template": {"Authorization": "other"}},
+    {"model": "other"},
+])
+def test_failure_rule_addition_does_not_allow_other_interface_changes(
+    tmp_path, failure_rule_patch, changes,
+):
+    contract, patch = failure_rule_patch
+    data = patch.runtime.model_dump()
+    data["interface"].update(changes)
+    patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
+    with pytest.raises(ValueError, match="runtime_repair_(tool_observation_mapping_required|only_tool_observation_allowed)"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+@pytest.mark.parametrize("change", ["config", "command", "evidence", "existing_rule"])
+def test_failure_rule_addition_preserves_runtime_and_evidence_boundaries(
+    tmp_path, failure_rule_patch, change,
+):
+    contract, patch = failure_rule_patch
+    if change == "config":
+        from fi.alk.harness.contract import RuntimeConfigFile
+        patch.runtime.config_files = {".env": RuntimeConfigFile(values={"REGION": "global"})}
+    elif change == "command":
+        patch.runtime.command = ["python", "other.py"]
+    elif change == "evidence":
+        patch = patch.model_copy(update={"evidence_paths": ()})
+    else:
+        contract.runtime.interface.failure_rule = patch.runtime.interface.failure_rule.model_copy(
+            update={"status_path": "status"},
+        )
+        patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    with pytest.raises(ValueError, match="runtime_repair_(only_tool_observation_allowed|tool_observation_evidence_required|tool_observation_mapping_required)"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
