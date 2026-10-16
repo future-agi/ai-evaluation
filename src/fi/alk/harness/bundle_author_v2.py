@@ -2506,7 +2506,7 @@ def resolve_environment_plan(
             and not is_callback
             and contract_modality == "chat"
             and runtime_command
-            and (contract_interface_kind or "") in {"", "command"}
+            and contract_interface_kind == "command"
         )
         is_http_runtime = bool(
             not is_livekit
@@ -3078,7 +3078,6 @@ def author_bundle_v2(
     contract_interface_kind: str | None = None
     contract_body: dict[str, Any] = {}
     runtime: dict[str, Any] = {}
-    command_adapter_contract = False
     contract_path = authoring_root / "contract.json"
     if contract_path.is_file():
         try:
@@ -3156,18 +3155,12 @@ def author_bundle_v2(
                 runtime["interface"] = adk_interface
                 contract_interface_kind = "http"
             else:
-                # A runnable one-shot command is a real source-owned execution boundary even when
-                # it is not a server. Compile the generic stdin/environment subprocess bridge
-                # below and expose that bridge to the chat runner as the callable protocol.
-                runtime["interface"] = {
-                    "kind": "command",
-                    "protocol": "fi.alk",
-                    "path": "",
-                    "health_path": "",
-                    "include_tools": False,
-                }
-                contract_interface_kind = "command"
-                command_adapter_contract = True
+                raise BundleAuthorError(
+                    "generated_runtime_entrypoint_ambiguous: runtime.command requires an "
+                    "explicit chat interface. Inspect the source and declare its native "
+                    "chat transport, or kind=command only if the command accepts a chat "
+                    "request and exits with the response."
+                )
             contract_body = {**contract_body, "runtime": runtime}
         if (
             contract_modality == "chat"
@@ -3175,22 +3168,13 @@ def author_bundle_v2(
             and runtime.get("command")
             and _discover_callback_entrypoint(source_root) is None
         ):
-            # Authoring models sometimes infer ``callable`` from an in-process agent object even
-            # though the repository exports no harness callback.  The executable command is the
-            # stronger, source-verifiable boundary in that case.  Compile it through the generic
-            # command bridge instead of starting a one-shot script and waiting for an HTTP port it
-            # can never open.  This rule is framework-neutral and does not modify submitted code.
-            runtime = dict(runtime)
-            runtime["interface"] = {
-                "kind": "command",
-                "protocol": "fi.alk",
-                "path": "",
-                "health_path": "",
-                "include_tools": False,
-            }
-            contract_body = {**contract_body, "runtime": runtime}
-            contract_interface_kind = "command"
-            command_adapter_contract = True
+            raise BundleAuthorError(
+                "generated_runtime_entrypoint_ambiguous: callable interface requires a "
+                "source-exported module-level agent_callback; runtime.command alone does "
+                "not establish a one-shot chat interface. Inspect the source and declare "
+                "its native chat transport, or kind=command only if the command accepts "
+                "a chat request and exits with the response."
+            )
     from .compose_integration import enabled as compose_enabled, compile_bundle
     if compose_enabled():
         composed = compile_bundle(source=source_root, job=job, authoring=authoring_root,
@@ -3238,16 +3222,6 @@ def author_bundle_v2(
                 for process in plan.processes
             ),
         )
-    if command_adapter_contract:
-        sealed_runtime = dict(contract_body["runtime"])
-        sealed_runtime["interface"] = {
-            "kind": "callable",
-            "protocol": "fi.alk",
-            "path": "",
-            "health_path": "",
-            "include_tools": False,
-        }
-        contract_body = {**contract_body, "runtime": sealed_runtime}
     provided_environment = {
         str(name).upper()
         for name in (job.metadata.get("environment_value_names", []) or [])
@@ -3336,8 +3310,7 @@ def author_bundle_v2(
                 contract=contract_body,
                 prefix=prefix,
                 allow_harness_owned_schema=(
-                    command_adapter_contract
-                    or job.agent.mode
+                    job.agent.mode
                     in {
                         ProviderExecutionMode.CONNECT_ONLY,
                         ProviderExecutionMode.ENVIRONMENT_BACKED,
