@@ -151,7 +151,7 @@ def test_scanner_checks_match_across_old_chunk_boundary(tmp_path):
 
 @pytest.mark.parametrize("fixture_only", [False, True])
 def test_compile_seal_load_and_provision_preserve_review(
-    tmp_path, monkeypatch, fixture_only
+    tmp_path, monkeypatch, fixture_only, resolved_compose_images
 ):
     from fi.alk.harness.bundle_author_v2 import author_bundle_v2
     from fi.alk.harness.bundle_v2 import load_bundle_v2, seal_bundle_v2
@@ -248,8 +248,8 @@ def test_compile_seal_load_and_provision_preserve_review(
     assert seal_bundle_v2(loaded) != manifest.digest
 
 
-@pytest.mark.parametrize("fixture_only", [False, True])
-def test_reset_rejects_changed_reviewed_source_before_copy(
+@pytest.mark.parametrize("fixture_only", [False, True, None])
+def test_reset_rejects_changed_source_before_copy(
     tmp_path, monkeypatch, fixture_only
 ):
     from types import SimpleNamespace
@@ -276,14 +276,16 @@ def test_reset_rejects_changed_reviewed_source_before_copy(
         provenance=BundleProvenanceV2(
             source_kind="local",
             source_digest=admission.source_digest,
-            **{field: [admission]},
-        )
+            **({field: [admission]} if fixture_only is not None else {}),
+        ),
+        capabilities={},
     )
     world_dir = tmp_path / "world"
     (world_dir / "source").mkdir(parents=True)
     runtime = SimpleNamespace(world_index=0)
     provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / "socket")
     provider._source = source
+    provider._document = {"services": {"app": {"image": "example/app:1"}}}
     provider._worlds[0] = runtime, world_dir, manifest
     monkeypatch.setattr(provider, "_stop", lambda *args: None)
     (source / "public.txt").write_bytes(TOKEN + b" changed")

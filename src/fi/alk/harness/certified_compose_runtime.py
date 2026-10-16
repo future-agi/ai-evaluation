@@ -519,11 +519,6 @@ def validate_source_tree(source: Path) -> None:
             raise ComposeRuntimeError("compose_source_special_file")
 
 
-def _copy_source(source: Path, destination: Path) -> None:
-    validate_source_tree(source)
-    shutil.copytree(source, destination, symlinks=True)
-
-
 def _own_directory(path: Path, uid: int, gid: int) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -747,11 +742,16 @@ class CertifiedComposeRuntimeProvider:
 
     def _provision(self, bundle, source, bundle_dir, work_directory, instances):
         from .compose_integration import validate_source
+        from .compose_source import source_inputs
 
+        document = yaml.safe_load(
+            _within(bundle_dir, bundle.runtime.document).read_text()
+        )
+        inputs = source_inputs(source, document, capabilities=bundle.capabilities)
         validate_source(
             source, bundle.provenance.public_material_admissions,
             fixtures=bundle.provenance.public_test_fixture_admissions,
-            source_digest=bundle.provenance.source_digest,
+            source_digest=bundle.provenance.source_digest, paths=inputs.files,
         )
         self._check_socket()
         if bundle.runtime.kind is not RuntimeKindV2.COMPOSE:
@@ -774,9 +774,7 @@ class CertifiedComposeRuntimeProvider:
                     self._start(runtime, directory, manifest)
             return [entry[0] for entry in self._worlds.values()]
         self._source = source
-        self._document = yaml.safe_load(
-            _within(bundle_dir, bundle.runtime.document).read_text()
-        )
+        self._document = document
         try:
             for index in range(instances):
                 directory = Path(
@@ -798,15 +796,16 @@ class CertifiedComposeRuntimeProvider:
         return [entry[0] for entry in self._worlds.values()]
 
     def _start(self, runtime, directory, bundle):
-        if bundle.provenance.public_material_admissions or bundle.provenance.public_test_fixture_admissions:
-            from .compose_integration import validate_source
+        from .compose_source import source_inputs
+        from .compose_integration import validate_source
 
-            validate_source(
-                self._source, bundle.provenance.public_material_admissions,
-                fixtures=bundle.provenance.public_test_fixture_admissions,
-                source_digest=bundle.provenance.source_digest,
-            )
-        _copy_source(self._source, directory / "source")
+        inputs = source_inputs(self._source, self._document, capabilities=bundle.capabilities)
+        validate_source(
+            self._source, bundle.provenance.public_material_admissions,
+            fixtures=bundle.provenance.public_test_fixture_admissions,
+            source_digest=bundle.provenance.source_digest, paths=inputs.files,
+        )
+        inputs.copy_to(directory / "source")
         document = normalize_compose(
             self._document, directory / "source", capabilities=bundle.capabilities
         )

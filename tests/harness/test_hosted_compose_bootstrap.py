@@ -110,7 +110,7 @@ def test_registration_freezes_source_and_only_target_values(setup):
     ],
 )
 def test_raw_source_content_is_admitted_at_provisioning_not_bootstrap(
-    setup, relative, content, error
+    setup, tmp_path, relative, content, error
 ):
     from fi.alk.harness.bundle import BundleError
     from fi.alk.harness.certified_compose_runtime import CertifiedComposeRuntimeProvider
@@ -130,7 +130,14 @@ def test_raw_source_content_is_admitted_at_provisioning_not_bootstrap(
     assert source_fingerprint(frozen) == request.source_digest
 
     provider = CertifiedComposeRuntimeProvider(socket_path=Path(profile.docker_socket))
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "compose.json").write_text(json.dumps({
+        "services": {"app": {"image": "example/app:1", "volumes": [f"./{relative}:/fixture"]}}
+    }))
     bundle = SimpleNamespace(
+        runtime=SimpleNamespace(document="compose.json"),
+        capabilities={},
         provenance=SimpleNamespace(
             source_digest=request.source_digest,
             public_material_admissions=job.public_material_admissions,
@@ -138,7 +145,7 @@ def test_raw_source_content_is_admitted_at_provisioning_not_bootstrap(
         )
     )
     with pytest.raises(BundleError, match=error):
-        provider._provision(bundle, frozen, frozen, frozen, 1)
+        provider._provision(bundle, frozen, bundle_dir, frozen, 1)
     assert provider._worlds == {}
 
 
