@@ -2722,6 +2722,65 @@ def resolve_environment_plan(
     )
 
 
+def _package_process_sources(
+    source: Path,
+    staging: Path,
+    plan: EnvironmentPlanV2,
+    runtime: Runtime,
+) -> EnvironmentPlanV2:
+    from .generated_runtime import _context_excludes, _copy_sanitized_context
+
+    processes = []
+    for process in plan.processes:
+        if not isinstance(process, SourceProcess) or process.source_origin == "bundle":
+            processes.append(process)
+            continue
+        component = (source / process.working_directory).resolve()
+        if not component.is_relative_to(source.resolve()) or not component.is_dir():
+            raise GeneratedRuntimeError(
+                f"generated_runtime_component_invalid: {process.working_directory}"
+            )
+        selected_runtime = runtime if process.name == plan.control_service else None
+        required = list(
+            selected_runtime.command if selected_runtime else process.run_command
+        )
+        if selected_runtime is not None:
+            required.extend(selected_runtime.requirements_files)
+        declared_component = component
+        if selected_runtime is not None and selected_runtime.workdir:
+            declared_component = (source / selected_runtime.workdir).resolve()
+            if not declared_component.is_relative_to(component):
+                raise GeneratedRuntimeError(
+                    "generated_runtime_context_component_mismatch"
+                )
+        exclusions = _context_excludes(
+            declared_component,
+            selected_runtime,
+            "requirements.txt",
+            required,
+        )
+        prefix = declared_component.relative_to(component)
+        exclusions = tuple((prefix / path).as_posix() for path in exclusions)
+        relative = Path("generated/source") / process.name
+        context = staging / relative
+        context.mkdir(parents=True)
+        try:
+            _copy_sanitized_context(component, context, exclusions)
+        except GeneratedRuntimeError as exc:
+            raise GeneratedRuntimeError(
+                f"{exc}; process={process.name}; component={process.working_directory}"
+            ) from exc
+        processes.append(
+            process.model_copy(
+                update={
+                    "source_origin": "bundle",
+                    "working_directory": relative.as_posix(),
+                }
+            )
+        )
+    return replace(plan, processes=tuple(processes))
+
+
 def _copy_scenarios(authoring: Path, staging: Path, *, count: int) -> None:
     source = authoring / "scenarios"
     if not source.is_dir():
@@ -2847,7 +2906,7 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
-        if path.is_dir() or path.name == BUNDLE_V2_MANIFEST:
+        if path.is_dir() or path == root / BUNDLE_V2_MANIFEST:
             continue
         if path.is_symlink():
             raise BundleAuthorError(
@@ -3087,6 +3146,9 @@ def author_bundle_v2(
         tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent)
     )
     try:
+        plan = _package_process_sources(
+            source_root, temporary, plan, Runtime.model_validate(runtime or {}),
+        )
         (temporary / "credentials.json").write_text(
             credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
@@ -3269,7 +3331,9 @@ def author_bundle_v2(
                 adopted_files=["scenarios/"]
                 + adopted_catalogue
                 + adopted_seed
-                + adopted_chat_files,
+                + adopted_chat_files
+                + [p.working_directory + "/" for p in plan.processes
+                   if isinstance(p, SourceProcess) and p.working_directory.startswith("generated/source/")],
                 generated_files=["manifest.json"]
                 + (
                     [*migrations, *seed_files]

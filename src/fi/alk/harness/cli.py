@@ -423,6 +423,12 @@ async def _build(args: argparse.Namespace) -> int:
         print(f"spent: ${stage.spent_usd:.4f}")
         return 0
 
+    if deferred_runtime:
+        print(f"\nworld: {destination}")
+        print("Runtime bundle validation follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
     from .bundle import BundleError
 
     try:
