@@ -556,6 +556,38 @@ def _needs_livekit_model_download(path: Path) -> bool:
     )
 
 
+def python_workspace_members(root: Path) -> set[Path]:
+    document = _pyproject_document(root / "pyproject.toml")
+    workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
+    members: set[Path] = set()
+    excluded: set[Path] = set()
+    for key, paths in (("members", members), ("exclude", excluded)):
+        for pattern in workspace.get(key, []):
+            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+                raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+            for path in root.glob(pattern):
+                resolved = path.resolve()
+                if not resolved.is_relative_to(root.resolve()):
+                    raise GeneratedRuntimeError(
+                        "generated_runtime_workspace_path_invalid"
+                    )
+                if resolved != root.resolve():
+                    paths.add(resolved)
+    return members - excluded
+
+
+def python_workspace_root(source: Path, component: Path) -> Path:
+    source, component = source.resolve(), component.resolve()
+    if not component.is_relative_to(source):
+        raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+    for ancestor in component.parents:
+        if not ancestor.is_relative_to(source):
+            break
+        if component in python_workspace_members(ancestor):
+            return ancestor
+    return component
+
+
 def select_python_extras(
     root: Path,
     requested: list[str],
@@ -581,23 +613,8 @@ def select_python_extras(
     root_names = declared(document)
     if required_owner is None and set(names) <= root_names:
         return PythonExtraSelection(names)
-    workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
-    members: set[Path] = set()
-    excluded: set[Path] = set()
-    for key, paths in (("members", members), ("exclude", excluded)):
-        for pattern in workspace.get(key, []):
-            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
-                raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
-            for path in root.glob(pattern):
-                resolved = path.resolve()
-                if not resolved.is_relative_to(root.resolve()):
-                    raise GeneratedRuntimeError(
-                        "generated_runtime_workspace_path_invalid"
-                    )
-                if resolved != root.resolve():
-                    paths.add(resolved)
     owners = {name: [root] if name in root_names else [] for name in names}
-    for member in sorted(members - excluded):
+    for member in sorted(python_workspace_members(root)):
         if _context_path_excluded(
             member.relative_to(root) / "pyproject.toml", context_excludes
         ):

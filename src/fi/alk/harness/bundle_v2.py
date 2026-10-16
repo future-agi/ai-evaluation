@@ -178,6 +178,8 @@ class SourceProcess(BaseModel):
     kind: Literal[ProcessKind.SOURCE] = ProcessKind.SOURCE
     working_directory: str
     source_origin: Literal["repository", "bundle"] = "repository"
+    # Compiler-only coordinate for packaging member-relative inputs after workspace promotion.
+    source_component: str = Field(default=".", exclude=True)
     build_commands: list[list[str]] = Field(default_factory=list)
     run_command: list[str] = Field(min_length=1)
     workspaces: dict[str, str] = Field(default_factory=dict)
@@ -207,6 +209,7 @@ class SourceProcess(BaseModel):
 
         validate_bindings(self.workspaces)
         _safe_relative(self.working_directory)
+        _safe_relative(self.source_component)
         for step in self.build_commands:
             if not step:
                 raise ValueError("build_command_step_empty")

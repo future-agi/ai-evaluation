@@ -466,3 +466,40 @@ def test_bun_repair_rejects_unsafe_child_workdir(tmp_path, arguments):
             patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
         )
+
+
+def test_readiness_patch_resolves_extra_in_sibling_workspace_package(tmp_path):
+    (tmp_path / "server").mkdir()
+    (tmp_path / "library").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server", "library"]\n'
+    )
+    (tmp_path / "server/pyproject.toml").write_text(
+        '[project]\nname="server"\nversion="1"\n'
+    )
+    (tmp_path / "server/app.py").write_text("print('source')")
+    (tmp_path / "library/pyproject.toml").write_text(
+        '[project]\nname="library"\nversion="1"\n[project.optional-dependencies]\ntransport=[]\n'
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            workdir="server",
+            command=["python", "app.py"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(update={"extras": ["transport"]}),
+        evidence_paths=("library/pyproject.toml",),
+        diagnostic_codes=("chat_ingress_failed",),
+        summary="Source-declared transport dependency is in the sibling package.",
+    )
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+    )
+    assert repaired.runtime.extras == ["transport"]
+    assert repaired.runtime.workdir == "server"

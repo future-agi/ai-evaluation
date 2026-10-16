@@ -3672,3 +3672,93 @@ def test_workspace_exclusions_stay_relative_to_declared_component(tmp_path):
     assert not (context / "apps/chat/fixtures").exists()
     assert (context / "apps/chat/server.ts").is_file()
     assert (context / "package.json").is_file()
+
+
+def test_python_workspace_packages_siblings_and_preserves_member_cwd(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    member = source / "apps" / "server"
+    sibling = source / "library"
+    member.mkdir(parents=True)
+    sibling.mkdir()
+    (source / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*", "library"]\n'
+    )
+    (source / "uv.lock").write_text("version = 1\n")
+    (member / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (sibling / "pyproject.toml").write_text(
+        '[project]\nname="chat-library"\nversion="1"\n[project.optional-dependencies]\ntransport=[]\n'
+    )
+    (sibling / "value.txt").write_text("local source")
+    (member / "app.py").write_text(
+        'from pathlib import Path\nprint(Path("../../library/value.txt").read_text())\n'
+    )
+    (member / "fixtures").mkdir()
+    (member / "fixtures" / "token.txt").write_text(
+        "sk-unreviewedFixtureValue1234567890"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/server",
+        command=[sys.executable, "app.py"],
+        context_excludes=["fixtures"],
+        workspaces={"files": "files"},
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    agent = next(p for p in plan.processes if p.name == plan.control_service)
+    assert agent.working_directory == "."
+    assert agent.workspaces == {"files": "apps/server/files"}
+    assert "--package chat-server" in agent.build_commands[0][-1]
+    assert "--locked" in agent.build_commands[0][-1]
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert (context / "uv.lock").is_file()
+    assert not (context / "apps/server/fixtures").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        agent.run_command, cwd=context, check=True, text=True, capture_output=True
+    )
+    assert result.stdout == "local source\n"
+
+
+def test_compose_workspace_member_exclusions_without_runtime_workdir(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    member = tmp_path / "server"
+    (member / "fixtures").mkdir(parents=True)
+    (member / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (member / "agent.py").write_text("print('ready')")
+    (member / "pyproject.toml").write_text('[project]\nname="server"\nversion="1"\n')
+    (member / "Dockerfile").write_text('FROM python:3.12\nCMD ["python", "agent.py"]\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server"]\n'
+    )
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ./server\n    command: [python, agent.py]\n"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="compose",
+        compose_file="compose.yaml",
+        service="agent",
+        context_excludes=["fixtures"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert not (output / agent.working_directory / "server/fixtures").exists()
+    assert (output / agent.working_directory / "server/agent.py").exists()
+    assert 'source_component' not in agent.model_dump()
