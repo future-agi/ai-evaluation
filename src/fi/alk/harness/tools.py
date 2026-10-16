@@ -813,9 +813,7 @@ def contract_tools(
                                 },
                                 "response_path": {
                                     "type": "string",
-                                    "description": "For json_template only: optional dotted path "
-                                    "to assistant text in the JSON response, including numeric "
-                                    "list indexes such as '-1.content.parts.0.text'.",
+                                    "description": RuntimeInterface.model_fields["response_path"].description,
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": CompletedToolEvents.model_json_schema(),
