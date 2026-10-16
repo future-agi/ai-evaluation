@@ -138,7 +138,7 @@ def accept_contract(
     destination: Path,
     *,
     source_root: Path | None = None,
-    require_storage_decision: bool = False,
+    require_setup_contract: bool = False,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -154,7 +154,7 @@ def accept_contract(
 
     problems = validate_contract(contract)
     if (
-        require_storage_decision
+        require_setup_contract
         and contract.modality != "voice"
         and (contract.data_store is None or not contract.data_store.kind.strip())
     ):
@@ -163,6 +163,23 @@ def accept_contract(
             "Use its actual storage engine, filesystem for file-backed state, in_process "
             "for memory-only state, or none when there is no state store. "
             "Omitting data_store does not declare a stateless agent."
+        )
+    if (
+        require_setup_contract
+        and contract.modality == "chat"
+        and (
+            contract.runtime is None
+            or contract.runtime.interface is None
+            or not contract.runtime.interface.kind
+        )
+    ):
+        problems.append(
+            "missing-chat-interface: inspect the source and declare runtime.interface.kind "
+            "for its existing HTTP endpoint or callable callback. Declare command only for "
+            "a proven noninteractive entrypoint that consumes the bridge's JSON stdin, "
+            "ALK_USER_MESSAGE, or ALK_MESSAGES_JSON. An interactive CLI or startup command "
+            "alone is not a chat interface. The declared interface must still pass a real "
+            "chat readiness check."
         )
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
@@ -211,7 +228,7 @@ def contract_tools(
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
-    require_storage_decision: bool = False,
+    require_setup_contract: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -1192,7 +1209,7 @@ def contract_tools(
             payload,
             destination,
             source_root=source_root,
-            require_storage_decision=require_storage_decision,
+            require_setup_contract=require_setup_contract,
         )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])

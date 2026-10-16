@@ -3846,3 +3846,55 @@ def test_native_plan_preserves_config_files_and_rejects_unknown_aliases(tmp_path
             contract_interface_kind="command",
             contract_runtime=runtime,
         )
+
+
+@pytest.mark.parametrize("version", ["3.11", "3.11.9"])
+def test_native_python_rejects_source_uv_environment_mismatch(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.14'\"]\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported") as caught:
+        _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                     needs_secrets=False, version=version)
+    assert "python_version >= '3.14'" in str(caught.value)
+    assert "source .python-version: 3.14" in str(caught.value)
+
+
+@pytest.mark.parametrize("version", ["3.13", "3.13.8", ">=3.11"])
+def test_native_python_selects_compatible_uv_environment_without_overriding_explicit_version(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.13'\"]\n"
+    )
+    plan = _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                        needs_secrets=False, version=version)
+    command = plan.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "python3.13.8" if version == "3.13.8" else
+        "python3.13" if version == ">=3.11" else "<3.15,==3.13.*,>=3.11"
+    )
+
+
+@pytest.mark.parametrize("environments", [
+    ["python_version == '3.11'", "python_version >= '3.14'"],
+    ["python_version == '3.11' or python_version >= '3.14'"],
+    ["python_version >= '3.14'", "sys_platform == 'linux'"],
+    ["python_full_version >= '3.11.8'"],
+])
+def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(tmp_path: Path, environments: list[str]) -> None:
+    from fi.alk.harness.generated_runtime import _python_language_version
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nrequires-python='>=3.11'\n[tool.uv]\n"
+        f"environments={json.dumps(environments)}\n"
+    )
+    assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"

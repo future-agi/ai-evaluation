@@ -18,9 +18,9 @@ def create_chat_wrapper(
     options = dict(
         endpoint=urljoin(
             base.rstrip("/") + "/",
-            ("/invoke" if interface.kind == "callable" else interface.path).lstrip("/"),
+            ("/invoke" if interface.kind in {"callable", "command"} else interface.path).lstrip("/"),
         ),
-        protocol="fi.alk" if interface.kind == "callable" else interface.protocol,
+        protocol="fi.alk" if interface.kind in {"callable", "command"} else interface.protocol,
         model=interface.model,
         include_tools=interface.include_tools,
         request_template=interface.request_template,

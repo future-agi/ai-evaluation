@@ -273,7 +273,7 @@ async def _understand(args: argparse.Namespace) -> int:
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
         available_evals=offered if isinstance(offered, list) else None,
-        require_storage_decision=generic and not args.interactive,
+        require_setup_contract=generic and not args.interactive,
     )
 
     print(f"agent: {source.name}  ({source.kind})")

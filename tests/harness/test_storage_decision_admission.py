@@ -17,7 +17,7 @@ def payload(**fields):
 @pytest.mark.parametrize("store", [None, {}, {"kind": " "}])
 def test_autonomous_discovery_requires_explicit_storage_decision(tmp_path, store):
     result = accept_contract(
-        payload(data_store=store), tmp_path, require_storage_decision=True
+        payload(data_store=store), tmp_path, require_setup_contract=True
     )
     assert result["is_error"]
     message = result["content"][0]["text"]
@@ -29,7 +29,9 @@ def test_autonomous_discovery_requires_explicit_storage_decision(tmp_path, store
 @pytest.mark.parametrize("kind", ["none", "filesystem", "in_process", "sqlite"])
 def test_explicit_storage_decision_is_saved(tmp_path, kind):
     result = accept_contract(
-        payload(data_store={"kind": kind}), tmp_path, require_storage_decision=True
+        payload(data_store={"kind": kind}, runtime={"interface": {"kind": "callable"}}),
+        tmp_path,
+        require_setup_contract=True,
     )
     assert not result.get("is_error")
     assert (
@@ -44,12 +46,12 @@ def test_legacy_contracts_keep_optional_storage(tmp_path):
 
 def test_voice_contracts_keep_optional_storage(tmp_path):
     assert not accept_contract(
-        payload(modality="voice"), tmp_path, require_storage_decision=True
+        payload(modality="voice"), tmp_path, require_setup_contract=True
     ).get("is_error")
 
 
 @pytest.mark.parametrize("source_kind,required", [("repo", True), ("provider", False)])
-def test_stage_scopes_storage_admission_to_repository_sources(
+def test_stage_scopes_setup_admission_to_repository_sources(
     tmp_path, monkeypatch, source_kind, required
 ):
     from types import SimpleNamespace
@@ -77,15 +79,15 @@ def test_stage_scopes_storage_admission_to_repository_sources(
         servers=lambda: {},
         builtin_tools=lambda: (),
     )
-    understand.open_stage(source, out=tmp_path, require_storage_decision=True)
-    assert captured["require_storage_decision"] is required
+    understand.open_stage(source, out=tmp_path, require_setup_contract=True)
+    assert captured["require_setup_contract"] is required
 
 
 @pytest.mark.parametrize(
     "generic,interactive,required",
     [(True, False, True), (False, False, False), (True, True, False)],
 )
-def test_cli_requires_storage_only_for_autonomous_generic_discovery(
+def test_cli_requires_setup_only_for_autonomous_generic_discovery(
     tmp_path, monkeypatch, generic, interactive, required
 ):
     import asyncio
@@ -117,4 +119,52 @@ def test_cli_requires_storage_only_for_autonomous_generic_discovery(
         job=SimpleNamespace(metadata={"generic_harness_v1": generic}),
     )
     assert asyncio.run(cli._understand(args)) == 1
-    assert captured["require_storage_decision"] is required
+    assert captured["require_setup_contract"] is required
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        None,
+        {},
+        {"command": ["python", "-m", "agent_cli"]},
+        {"interface": {}},
+        {"interface": {"kind": " "}},
+    ],
+)
+def test_autonomous_chat_requires_explicit_interface_before_saving(tmp_path, runtime):
+    result = accept_contract(
+        payload(data_store={"kind": "none"}, runtime=runtime),
+        tmp_path,
+        require_setup_contract=True,
+    )
+    assert result["is_error"]
+    message = result["content"][0]["text"]
+    assert "missing-chat-interface" in message
+    assert "ALK_USER_MESSAGE" in message
+    assert "interactive CLI" in message
+    assert not (tmp_path / "contract.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["http", "callable", "command"])
+def test_explicit_chat_interface_is_saved(tmp_path, kind):
+    result = accept_contract(
+        payload(
+            data_store={"kind": "none"},
+            runtime={"interface": {"kind": kind, "port": 8000, "path": "/chat"}},
+        ),
+        tmp_path,
+        require_setup_contract=True,
+    )
+    assert not result.get("is_error")
+    saved = json.loads((tmp_path / "contract.json").read_text())
+    assert saved["runtime"]["interface"]["kind"] == kind
+
+
+def test_setup_admission_returns_both_missing_decisions(tmp_path):
+    result = accept_contract(payload(), tmp_path, require_setup_contract=True)
+    assert result["is_error"]
+    message = result["content"][0]["text"]
+    assert "missing-storage-decision" in message
+    assert "missing-chat-interface" in message
+    assert not (tmp_path / "contract.json").exists()
