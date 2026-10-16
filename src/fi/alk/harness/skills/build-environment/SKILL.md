@@ -503,7 +503,8 @@ settles what only the conversation shows: what was said, read back, explained or
 anything compared by meaning. When one outcome has a part of each (the right record was changed, and
 the change was read back), write both and set `verifier` to `both`. A spoken behaviour is never
 settled by the call that usually goes with it: that passes an agent that made the call and said the
-wrong thing, and fails one that said the right thing another way.
+wrong thing, and fails one that said the right thing another way. A change, or a change that must
+not happen, always has a code part: a judge reading the call log alone can misread it.
 
 ### Write a code check in five steps
 
@@ -536,6 +537,9 @@ steps and a last call commits it, that call often carries none of its parts: the
 value the reference fixes on the steps that build it, against the committed record where the world
 keeps one, otherwise against those steps' successful calls. A check that reads only the committing
 call asserts that something was done, not that it was this person's thing.
+An argument the agent sets to say a step happened (a flag that the person agreed, a token it was
+handed back) is not evidence of that step: the agent can set it without the step. Whether the person
+agreed is settled by what was said; the check compares what was changed.
 
 **3. Compare only what something fixes.** Read each reference value with `.get()`: a scenario leaves
 out every argument nothing fixes for its caller, so an absent value means there is nothing to compare,
