@@ -381,7 +381,8 @@ def test_local_auth_repair_is_additive_and_requires_source_evidence(tmp_path):
         )
 
 
-def test_native_compiler_carries_only_auth_names_and_rejects_supplied_alias(tmp_path):
+@pytest.mark.parametrize("required", [False, True])
+def test_native_compiler_carries_only_auth_names_and_rejects_supplied_alias(tmp_path, required):
     from fi.alk.harness.bundle_author_v2 import (
         BundleAuthorError,
         resolve_environment_plan,
@@ -390,7 +391,8 @@ def test_native_compiler_carries_only_auth_names_and_rejects_supplied_alias(tmp_
 
     (tmp_path / "server.py").write_text(SERVER)
     runtime = Runtime(
-        language="python", command=["python", "server.py"], interface=interface()
+        language="python", command=["python", "server.py"], interface=interface(),
+        required_environment={"agent": ["LOCAL_SERVER_KEY"]} if required else {},
     ).model_dump()
     plan = resolve_environment_plan(
         tmp_path,
@@ -407,6 +409,12 @@ def test_native_compiler_carries_only_auth_names_and_rejects_supplied_alias(tmp_
     assert targets[0].local_auth.model_dump() == AUTH
     assert "LOCAL_SERVER_KEY" not in targets[0].environment
     assert "LOCAL_SERVER_KEY" not in (targets[0].build_environment or {})
+    with pytest.raises(BundleAuthorError, match="target_runtime_configuration_missing.*EXTERNAL_API_KEY"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="auto"), contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={**runtime, "required_environment": {"agent": ["EXTERNAL_API_KEY"]}},
+        )
     with pytest.raises(BundleAuthorError, match="name_collision"):
         resolve_environment_plan(
             tmp_path,
