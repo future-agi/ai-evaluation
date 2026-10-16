@@ -8131,3 +8131,15 @@ def test_try_check_runs_a_check_against_calls_the_harness_writes(tmp_path):
     right = asyncio.run(run({"check": check, "calls": [{"name": "add", "arguments": {"item_id": "big_mac"}}], "reference": reference}))
     wrong = asyncio.run(run({"check": check, "calls": [{"name": "add", "arguments": {"item_id": "fries"}}], "reference": reference}))
     assert "held" in str(right) and "failed" in str(wrong)
+
+
+def test_the_builder_proves_its_suite_with_the_real_prove(tmp_path):
+    from fi.alk.harness.builder import suite_health
+    from fi.alk.harness.scenario import Scenario
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    kept = [Scenario(**_delta(sub_goals=["item-added"]))]
+
+    problems = suite_health(contract, root, kept, prove_all=True, sealed=False)
+
+    assert not any("unexpected keyword" in one for one in problems)
