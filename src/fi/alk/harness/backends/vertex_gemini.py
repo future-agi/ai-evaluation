@@ -60,6 +60,7 @@ _TERMINAL_SAVE_TOOLS = frozenset(
         # immediately after accepting it instead of spending the remaining agent budget on
         # another model turn that can only restate or replace an already-valid patch.
         "mcp__repair__submit_world_ir_patch",
+        "mcp__runtime_repair__submit_runtime_plan_patch",
     }
 )
 

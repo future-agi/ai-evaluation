@@ -81,7 +81,7 @@ def validate_source(source: Path, admissions=(), *, fixtures=(), source_digest=N
         raise ValueError("public_material_admission_file_missing")
 
 
-def compile_bundle(*, source, job, authoring, output, contract):
+def compile_bundle(*, source, job, authoring, output, contract, include_scenarios=True):
     from .bundle_author_v2 import (
         _copy_scenarios,
         _copy_sub_goal_catalogue,
@@ -202,9 +202,10 @@ def compile_bundle(*, source, job, authoring, output, contract):
                 mount["source"] = relative(mount["source"])
     temporary = Path(tempfile.mkdtemp(prefix=".compose-", dir=output.parent))
     try:
-        _copy_scenarios(authoring, temporary, count=job.scenario_count)
-        _copy_sub_goal_catalogue(authoring, temporary)
-        _copy_chat_authoring(authoring, temporary)
+        if include_scenarios:
+            _copy_scenarios(authoring, temporary, count=job.scenario_count)
+            _copy_sub_goal_catalogue(authoring, temporary)
+        _copy_chat_authoring(authoring, temporary, include_simulator=include_scenarios)
         _compile_source_tool_handlers(contract, temporary)
         (temporary / "compose.json").write_text(json.dumps(document, indent=2))
         manifest = EnvironmentBundleV2(
@@ -239,7 +240,7 @@ def compile_bundle(*, source, job, authoring, output, contract):
                 source_digest=source_fingerprint(source),
                 generator="fi.alk.harness.compose_integration",
                 generator_version="1",
-                adopted_files=["scenarios/", "contract.json"],
+                adopted_files=(["scenarios/"] if include_scenarios else []) + ["contract.json"],
                 generated_files=["compose.json", "manifest.json"],
             ),
             metadata={"observation_mode": "native", "generic_harness": "v1"},
@@ -267,7 +268,8 @@ def compile_bundle(*, source, job, authoring, output, contract):
 
 
 async def validate_native(
-    *, job, source, authoring, bundle, manifest, work, values, redactions, executor
+    *, job, source, authoring, bundle, manifest, work, values, redactions, executor,
+    readiness_only=False,
 ):
     import random
     from .action_certification import certify_actions
@@ -301,8 +303,8 @@ async def validate_native(
         raise RuntimeValidationError(
             "environment", "native tool inventory contains unreachable declarations"
         )
-    scenarios = load_scenarios(bundle)
-    if not scenarios or len(scenarios) != job.scenario_count:
+    scenarios = [] if readiness_only else load_scenarios(bundle)
+    if not readiness_only and (not scenarios or len(scenarios) != job.scenario_count):
         raise RuntimeValidationError("environment", "native scenario count mismatch")
     owner = provider(values, authoring / "generic-harness" / "compose-logs")
     try:
@@ -314,6 +316,16 @@ async def validate_native(
             instances=job.runtime.parallelism,
         )
         factory = ObservationWorldFactory(bundle)
+        if readiness_only:
+            from .authoring_runtime_validation import _probe_runtime_readiness
+
+            await _probe_runtime_readiness(
+                job=job, source=source, authoring=authoring, manifest=manifest,
+                contract=contract, provider=owner, runtime=runtimes[0], factory=factory,
+                work=work, values=values, redactions=redactions,
+                compare_baseline=False,
+            )
+            return 0
         from .local_certified_runtime import LocalCertifiedSink
 
         phase_sink = LocalCertifiedSink(

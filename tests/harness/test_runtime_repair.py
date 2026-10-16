@@ -286,7 +286,7 @@ def test_dependency_investigation_may_decline_without_nudge(
         async def __aexit__(self, *_args):
             pass
 
-        async def say(self, briefing):
+        async def say(self, briefing, *, on_event=None):
             calls.append(briefing)
 
     monkeypatch.setattr(runtime_repair, "Stage", DecliningStage)
@@ -303,6 +303,170 @@ def test_dependency_investigation_may_decline_without_nudge(
         is None
     )
     assert len(calls) == 1
+
+
+def test_dependency_investigation_shows_sibling_optional_extras_without_manifest_values(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["agent-server", "agent-sdk"]\n'
+    )
+    server = tmp_path / "agent-server"
+    server.mkdir()
+    (server / "pyproject.toml").write_text(
+        '[project]\nname="agent-server"\nversion="1"\ndependencies=["agent-sdk"]\n'
+    )
+    sdk = tmp_path / "agent-sdk"
+    sdk.mkdir()
+    (sdk / "pyproject.toml").write_text(
+        '[project]\nname="agent-sdk"\nversion="1"\n'
+        "[project.optional-dependencies]\n"
+        'vertex=["google-cloud-aiplatform @ https://example.invalid/pkg?token=secret-value"]\n'
+    )
+    contract = AgentContract(
+        agent="test",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            workdir="agent-server",
+            command=["python", "-m", "agent_server"],
+        ),
+    )
+    briefings = []
+
+    class CapturingStage:
+        def __init__(self, spec, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, *, on_event=None):
+            briefings.append(briefing)
+
+    monkeypatch.setattr(runtime_repair, "Stage", CapturingStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="HTTP 500",
+    )
+    guidance = (
+        "<untrusted_current_attempt_process_logs>\n"
+        "build.log\ninstallation failed\n"
+        "worlds-w0-agent.log\nConversation run failed\n"
+        "Vertex models require an optional SDK. Install with:\n"
+        '"agent-sdk[vertex]"\n'
+        "</untrusted_current_attempt_process_logs>"
+    )
+    assert (
+        asyncio.run(
+            runtime_repair.request_runtime_plan_patch(
+                tmp_path, contract, (diagnostic,), guidance=guidance
+            )
+        )
+        is None
+    )
+    assert "agent-sdk/pyproject.toml: vertex -> google-cloud-aiplatform" in briefings[0]
+    assert "secret-value" not in briefings[0]
+    clues = (
+        briefings[0]
+        .split("<untrusted_error_clues>", 1)[1]
+        .split("</untrusted_error_clues>", 1)[0]
+    )
+    assert '"agent-sdk[vertex]"' in clues
+    assert "installation failed" not in clues
+
+
+def test_optional_extra_inventory_ignores_malformed_source_metadata(tmp_path):
+    from fi.alk.harness.runtime_repair import _optional_extra_inventory
+
+    (tmp_path / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["agent"]\n')
+    member = tmp_path / "agent"
+    member.mkdir()
+    (member / "pyproject.toml").write_text('project="malformed"\n')
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="agent",
+        command=["python", "-m", "agent"],
+    )
+    assert _optional_extra_inventory(tmp_path, runtime) == ""
+    (tmp_path / "pyproject.toml").write_text('[tool]\nuv="malformed"\n')
+    assert _optional_extra_inventory(tmp_path, runtime) == ""
+
+
+@pytest.mark.parametrize("location", ["root", "member"])
+def test_optional_extra_inventory_never_reads_external_manifest_symlinks(
+    tmp_path, monkeypatch, location
+):
+    from fi.alk.harness import generated_runtime
+    from fi.alk.harness.runtime_repair import _optional_extra_inventory
+
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside.toml"
+    outside.write_text(
+        '[project]\nname="outside"\n[project.optional-dependencies]\n'
+        'leaked=["private-package"]\n'
+    )
+    member = source / "agent"
+    member.mkdir()
+    if location == "root":
+        (source / "pyproject.toml").symlink_to(outside)
+        (member / "pyproject.toml").write_text('[project]\nname="agent"\n')
+    else:
+        (source / "pyproject.toml").write_text(
+            '[tool.uv.workspace]\nmembers=["agent"]\n'
+        )
+        (member / "pyproject.toml").symlink_to(outside)
+    original = generated_runtime._pyproject_document
+
+    def checked(path):
+        assert path.resolve().is_relative_to(source)
+        return original(path)
+
+    monkeypatch.setattr(generated_runtime, "_pyproject_document", checked)
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="agent",
+        command=["python", "-m", "agent"],
+    )
+    assert "leaked" not in _optional_extra_inventory(source, runtime)
+
+
+def test_runtime_repair_progress_reports_tools_and_rejection_codes_without_payload(
+    capsys,
+):
+    from fi.alk.harness.runtime_repair import _repair_progress
+    from fi.alk.harness.session import Event
+
+    _repair_progress(Event(kind="tool", tool="Read", detail={"target": "secret-file"}))
+    _repair_progress(
+        Event(
+            kind="result",
+            text="patch rejected: ValueError: runtime_repair_extra_unknown secret-value",
+            detail={"is_error": True},
+        )
+    )
+    _repair_progress(
+        Event(kind="done", detail={"outcome": "failed", "error": "secret-value"})
+    )
+    output = capsys.readouterr().out
+    assert "runtime repair: Read" in output
+    assert "runtime repair: rejected runtime_repair_extra_unknown" in output
+    assert "runtime repair: failed" in output
+    assert "secret-file" not in output
+    assert "secret-value" not in output
 
 
 @pytest.mark.parametrize(
@@ -388,26 +552,36 @@ def test_compose_repair_uses_same_native_selection_policy(
     )
     image = "${IMAGE}" if public_image else "example/app:1"
     (tmp_path / "compose.yaml").write_text(
-        f'services:\n  app:\n    build: service\n    image: {image}\n'
+        f"services:\n  app:\n    build: service\n    image: {image}\n"
         '    environment: ["OPTIONAL_URL=http://optional:8080"]\n'
-        '  optional:\n    image: example/optional:1\n'
+        "  optional:\n    image: example/optional:1\n"
     )
     contract = AgentContract(agent="fixture")
     patch = _patch(
-        contract, execution="compose", compose_file="compose.yaml", service="app",
-        config_files={".env": {"format": "dotenv", "values": {"IMAGE": "example/app:1"}}},
+        contract,
+        execution="compose",
+        compose_file="compose.yaml",
+        service="app",
+        config_files={
+            ".env": {"format": "dotenv", "values": {"IMAGE": "example/app:1"}}
+        },
     )
     if native:
         repaired = validate_runtime_plan_patch(
-            tmp_path, contract, patch,
+            tmp_path,
+            contract,
+            patch,
             allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
         )
         from fi.alk.harness.runtime_repair import _dependency_root
+
         assert _dependency_root(tmp_path, repaired.runtime) == tmp_path / "service"
     else:
         with pytest.raises(ValueError, match="compose_dependency_undeclared"):
             validate_runtime_plan_patch(
-                tmp_path, contract, patch,
+                tmp_path,
+                contract,
+                patch,
                 allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
             )
 

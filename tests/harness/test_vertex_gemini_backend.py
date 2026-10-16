@@ -1,6 +1,8 @@
 import asyncio
 from typing import Any
 
+import pytest
+
 from fi.alk.harness.backends.vertex_gemini import (
     _flattened,
     _forget_old_reads,
@@ -103,7 +105,8 @@ def test_provider_timeout_reaches_sdk_and_fails_without_retry(monkeypatch) -> No
     assert events[-1].errors == ["Provider request timed out"]
 
 
-def test_terminal_save_closes_adk_invocation_in_its_original_context(monkeypatch, caplog):
+@pytest.mark.parametrize("server,tool", [("world", "save_world"), ("runtime_repair", "submit_runtime_plan_patch")])
+def test_terminal_save_closes_adk_invocation_in_its_original_context(monkeypatch, caplog, server, tool):
     from google.adk.models.google_llm import Gemini
     from google.adk.models.llm_response import LlmResponse
     from google.adk.telemetry import _instrumentation, tracing
@@ -121,7 +124,7 @@ def test_terminal_save_closes_adk_invocation_in_its_original_context(monkeypatch
             content=types.Content(
                 role="model",
                 parts=[types.Part(function_call=types.FunctionCall(
-                    id="save", name="mcp__world__save_world", args={}
+                    id="save", name=f"mcp__{server}__{tool}", args={}
                 ))],
             )
         )
@@ -141,8 +144,8 @@ def test_terminal_save_closes_adk_invocation_in_its_original_context(monkeypatch
         async with Stage(
             SessionSpec(
                 system_prompt="Save the world",
-                servers={"world": ToolServer(
-                    name="world", tools=[ToolSpec("save_world", "Save", {}, save)]
+                servers={server: ToolServer(
+                    name=server, tools=[ToolSpec(tool, "Save", {}, save)]
                 )},
                 max_turns=2,
                 model="gemini-3.7-flash",

@@ -2873,7 +2873,9 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     return [CATALOGUE]
 
 
-def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
+def _copy_chat_authoring(
+    authoring: Path, staging: Path, *, include_simulator: bool = True
+) -> list[str]:
     """Adopt the frozen target/tool contract needed by response-carried HTTP tools.
 
     These are authoring outputs, not repository inference performed by the hosted consumer. The
@@ -2890,7 +2892,7 @@ def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
         shutil.copytree(handlers, staging / "handlers")
         adopted.append("handlers/")
     prompt = authoring / "simulator_prompt.md"
-    if prompt.is_file():
+    if include_simulator and prompt.is_file():
         shutil.copy2(prompt, staging / "simulator_prompt.md")
         adopted.append("simulator_prompt.md")
     return adopted
@@ -2978,12 +2980,13 @@ def author_bundle_v2(
     job: HarnessJob,
     authoring: str | Path,
     output: str | Path,
+    include_scenarios: bool = True,
 ) -> EnvironmentBundleV2:
     source_root = Path(source).resolve()
     authoring_root = Path(authoring).resolve()
     output_root = Path(output).resolve()
     output_root.parent.mkdir(parents=True, exist_ok=True)
-    if job.metadata.get("generic_harness_v1") is True:
+    if include_scenarios and job.metadata.get("generic_harness_v1") is True:
         certified = _reuse_certified_bundle(
             source=source_root,
             job=job,
@@ -3112,7 +3115,8 @@ def author_bundle_v2(
     from .compose_integration import enabled as compose_enabled, compile_bundle
     if compose_enabled():
         composed = compile_bundle(source=source_root, job=job, authoring=authoring_root,
-                                  output=output_root, contract=contract_body)
+                                  output=output_root, contract=contract_body,
+                                  include_scenarios=include_scenarios)
         if composed is not None:
             return composed
     if job.public_material_admissions or job.public_test_fixture_admissions:
@@ -3198,9 +3202,13 @@ def author_bundle_v2(
         (temporary / "credentials.json").write_text(
             credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
         )
-        _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
-        adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
-        adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)
+        adopted_catalogue = []
+        if include_scenarios:
+            _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
+            adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
+        adopted_chat_files = _copy_chat_authoring(
+            authoring_root, temporary, include_simulator=include_scenarios
+        )
         if "contract.json" in adopted_chat_files and contract_body:
             (temporary / "contract.json").write_text(
                 json.dumps(contract_body, indent=2, sort_keys=True) + "\n",
@@ -3374,7 +3382,7 @@ def author_bundle_v2(
                 source_digest=source_fingerprint(source_root),
                 generator="fi.alk.harness.bundle_author_v2",
                 generator_version="2",
-                adopted_files=["scenarios/"]
+                adopted_files=(["scenarios/"] if include_scenarios else [])
                 + adopted_catalogue
                 + adopted_seed
                 + adopted_chat_files

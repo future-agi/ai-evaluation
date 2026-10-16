@@ -3762,3 +3762,28 @@ def test_compose_workspace_member_exclusions_without_runtime_workdir(tmp_path):
     assert not (output / agent.working_directory / "server/fixtures").exists()
     assert (output / agent.working_directory / "server/agent.py").exists()
     assert 'source_component' not in agent.model_dump()
+
+
+def test_environment_bundle_omits_public_suite_and_simulator(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n")
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "agent.py"], interface={
+        "kind": "http", "port": 8080, "path": "/chat",
+    })
+    (authoring / "simulator_prompt.md").write_text("Public simulator prompt")
+    shutil.rmtree(authoring / "scenarios")
+    job = _job(connector="auto", with_secrets=False)
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output,
+        include_scenarios=False,
+    )
+    assert (output / "contract.json").is_file()
+    assert not (output / "scenarios").exists()
+    assert not (output / "simulator_prompt.md").exists()
+    assert "scenarios/" not in manifest.provenance.adopted_files
+    with pytest.raises(BundleAuthorError, match="scenario_artifacts_missing"):
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=tmp_path / "full")

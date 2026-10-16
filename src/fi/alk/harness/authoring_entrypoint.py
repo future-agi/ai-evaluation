@@ -259,6 +259,14 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
     )
     source_kind = agent_source_kind(job, profile)
     source_free_provider = source_kind == "provider"
+
+    async def runtime_readiness(candidate_job, source, authoring):
+        from .authoring_runtime_validation import validate_and_repair
+
+        await validate_and_repair(
+            candidate_job, source, authoring, readiness_only=True
+        )
+
     namespace = argparse.Namespace(
         path=str(args.source.resolve()),
         name=str(job.metadata.get("agent_name") or args.source.name),
@@ -275,6 +283,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
             else None
         ),
         authoring_only=True,
+        runtime_readiness=runtime_readiness if validate_runtime else None,
         run_model=None,
         job=job,
         provider_profile=profile if source_free_provider else None,

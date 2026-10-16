@@ -298,7 +298,7 @@ def test_submission_forwards_dependency_patch(repair_case, monkeypatch):
         async def __aexit__(self, *_args):
             pass
 
-        async def say(self, briefing):
+        async def say(self, briefing, *, on_event=None):
             submit = self.spec.servers["runtime_repair"].tools[0].handler
             result = await submit(
                 patch.model_dump(

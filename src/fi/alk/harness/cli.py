@@ -1022,6 +1022,33 @@ async def _auto(args: argparse.Namespace) -> int:
         )
     )
     authoring_only = bool(getattr(args, "authoring_only", False))
+    readiness = getattr(args, "runtime_readiness", None)
+
+    async def check_runtime_readiness(stage_args):
+        from .contract import AgentContract
+        from .job import SourceKind
+
+        contract = AgentContract.model_validate_json(
+            (destination / "contract.json").read_text(encoding="utf-8")
+        )
+        if contract.modality == "voice" or job.source.kind is SourceKind.PROVIDER:
+            print("internal chat readiness: not applicable to this target", flush=True)
+            return 0
+        from .authoring_runtime_validation import RuntimeValidationError
+
+        try:
+            await readiness(job, source, destination)
+        except RuntimeValidationError as exc:
+            emit(
+                "harness.stage.failed",
+                "runtime_readiness",
+                status=1,
+                code=f"generic_{exc.phase}_validation_failed",
+                detail=str(exc),
+            )
+            raise
+        return 0
+
     stages = [
         (
             "understand",
@@ -1071,6 +1098,11 @@ async def _auto(args: argparse.Namespace) -> int:
             ),
         ),
     ]
+    if readiness is not None and job.metadata.get("generic_harness_v1") is True:
+        stages.insert(
+            2,
+            ("runtime_readiness", check_runtime_readiness, argparse.Namespace()),
+        )
     if not authoring_only:
         stages.append(
             (

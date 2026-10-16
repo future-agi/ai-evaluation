@@ -117,6 +117,7 @@ def test_healthy_server_requires_profile_then_typed_runtime_patch_passes(
         assert response.status == 200
     with pytest.raises(RuntimeValidationError) as error:
         asyncio.run(probe(tmp_path, url))
+    assert error.value.diagnostics, str(error.value)
     assert error.value.diagnostics[0].code == "chat_ingress_configuration_invalid"
     assert receipts(tmp_path)[0]["trace"]["status_code"] == 404
     assert "secret123" not in json.dumps(receipts(tmp_path))
@@ -238,8 +239,9 @@ def test_setup_and_chat_share_deadline(tmp_path, profile_app):
     assert receipt["trace"]["timeout_error"] is True
 
 
+@pytest.mark.parametrize("readiness_only", [False, True])
 def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
-    tmp_path, monkeypatch, profile_app
+    tmp_path, monkeypatch, profile_app, readiness_only
 ):
     from fi.alk.harness import authoring_runtime_validation as validation
     from fi.alk.harness import (
@@ -309,7 +311,7 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
             artifacts.mkdir()
             (artifacts / "build.json").write_text('{"conformance":true}')
             return [
-                SimpleNamespace(endpoints={"target_http": SimpleNamespace(address=url)})
+                SimpleNamespace(world_index=0, endpoints={"target_http": SimpleNamespace(address=url)})
             ]
 
         async def reset(self, *args, **kwargs):
@@ -344,9 +346,12 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
 
     def bundle(**kwargs):
         target = kwargs["output"]
-        scenario = target / "scenarios/one"
-        scenario.mkdir(parents=True)
-        (scenario / "scenario.json").write_text(json.dumps({"scenario_key": "one"}))
+        assert kwargs["include_scenarios"] is not readiness_only
+        target.mkdir(parents=True)
+        if not readiness_only:
+            scenario = target / "scenarios/one"
+            scenario.mkdir(parents=True)
+            (scenario / "scenario.json").write_text(json.dumps({"scenario_key": "one"}))
         return SimpleNamespace(
             digest="bundle", provenance=SimpleNamespace(source_digest="source"),
             runtime=BundleRuntimeV2(kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL),
@@ -396,13 +401,16 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
 
     async def validate(*args):
         return await validation.validate_once(
-            job, source, authoring, secrets_path=secrets, local_runtime=True
+            job, source, authoring, secrets_path=secrets, local_runtime=True,
+            readiness_only=readiness_only,
         )
 
     with pytest.raises(RuntimeValidationError) as error:
         asyncio.run(validate())
+    assert error.value.diagnostics, str(error.value)
     assert error.value.diagnostics[0].code == "chat_ingress_configuration_invalid"
-    assert calls == ["provision", "reset", "setup", "close"]
+    assert calls == (["provision", "reset", "close"] if readiness_only
+                     else ["provision", "reset", "setup", "close"])
     assert "current attempt detail" in error.value.process_evidence
     assert "secret123" not in error.value.process_evidence
     assert "unrelated old attempt" not in error.value.process_evidence
@@ -429,10 +437,23 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
 
     monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", request_patch)
     asyncio.run(
-        validation.validate_and_repair(job, source, authoring, validate=validate)
+        validation.validate_and_repair(
+            job, source, authoring, validate=validate, readiness_only=readiness_only
+        )
     )
     assert repairs == [("chat_ingress_configuration_invalid",)]
-    assert calls[-2:] == ["freeze", "close"]
+    if readiness_only:
+        assert calls[-2:] == ["reset", "close"]
+        assert "setup" not in calls and "invariants" not in calls and "freeze" not in calls
+        assert evidence == {}
+        assert not (authoring / "runtime-validation.json").exists()
+        assert not (authoring / "generic-harness/certification.json").exists()
+        assert not (authoring / "scenarios").exists()
+        assert all("scenario_key" not in item for item in receipts(authoring))
+        assert json.loads((authoring / "generic-harness/runtime-readiness.json").read_text())["reset"] == "equivalent"
+        assert (authoring / "generic-harness/readiness-repair-history.json").exists()
+    else:
+        assert calls[-2:] == ["freeze", "close"]
     assert sorted(item["status"] for item in receipts(authoring)) == [
         "failed",
         "failed",
@@ -612,3 +633,57 @@ def test_ingress_classifies_timeout_type_not_message(tmp_path, monkeypatch, kind
     receipt = receipts(tmp_path)[0]
     assert receipt["timeout_seconds"] == 1
     assert receipt["trace"]["timeout_error"] is (code == "chat_ingress_timeout")
+
+
+@pytest.mark.parametrize("reset_mode", ["restore", "leave_mutated", "error"])
+def test_internal_readiness_initializes_real_chat_and_requires_reset(tmp_path, profile_app, reset_mode):
+    from fi.alk.harness.authoring_runtime_validation import _probe_runtime_readiness
+
+    url, state = profile_app
+    source = tmp_path / "source"
+    source.mkdir()
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=interface(setup_requests=[{"path": "/profiles"}]),
+    ))
+
+    class World:
+        def read_only(self):
+            return self
+
+        def state(self):
+            return {"profiles": [{"present": state["profile"]}]}
+
+    class Factory:
+        async def create(self, *args, **kwargs):
+            return World()
+
+    class Provider:
+        async def reset(self, *args, **kwargs):
+            if reset_mode == "error":
+                raise RuntimeError("cannot reset")
+            if reset_mode == "restore":
+                state["profile"] = False
+
+    async def run():
+        await _probe_runtime_readiness(
+            job=SimpleNamespace(seed=0), source=source, authoring=authoring,
+            manifest=SimpleNamespace(digest="bundle"), contract=contract,
+            provider=Provider(), runtime=SimpleNamespace(
+                endpoints={"target_http": SimpleNamespace(address=url)}
+            ), factory=Factory(), work=tmp_path, values={}, redactions={},
+        )
+
+    if reset_mode == "restore":
+        asyncio.run(run())
+    else:
+        with pytest.raises(RuntimeValidationError, match="reset"):
+            asyncio.run(run())
+    assert [path for path, _ in state["calls"]] == ["/profiles", "/chat"]
+    assert all("scenario_key" not in item for item in receipts(authoring))
+    receipt = json.loads((authoring / "generic-harness/runtime-readiness.json").read_text())
+    assert receipt["status"] == ("passed" if reset_mode == "restore" else "failed")
+    assert not (authoring / "scenarios").exists()
+    assert not (authoring / "runtime-validation.json").exists()
