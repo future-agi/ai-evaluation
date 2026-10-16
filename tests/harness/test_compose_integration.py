@@ -16,7 +16,7 @@ from fi.alk.harness.world.errors import WorldUsageError
 @pytest.mark.parametrize("additional", [False, True])
 @pytest.mark.parametrize("image_selected", [False, True])
 def test_native_compiler_keeps_dependency_paths_and_requires_optin(
-    tmp_path, monkeypatch, included, additional, image_selected
+    tmp_path, monkeypatch, included, additional, image_selected, resolved_compose_images
 ):
     source = tmp_path / "source"
     (source / "deploy").mkdir(parents=True)
@@ -101,6 +101,9 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     manifest = author_bundle_v2(
         source=source, job=job, authoring=authoring, output=output
     )
+    assert len(resolved_compose_images) == 1
+    assert (output / "image-lock.json").is_file()
+    assert "image-lock.json" in manifest.provenance.generated_files
     assert manifest.seed is None
     assert manifest.runtime.kind.value == "compose"
     document = json.loads((output / "compose.json").read_text())
@@ -112,7 +115,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
         assert "profiles" not in document["services"]["unrelated"]
     if image_selected:
         assert "build" not in document["services"]["app"]
-        assert document["services"]["app"]["image"] == "example/chat:1"
+        assert document["services"]["app"]["image"].startswith("docker.io/example/chat@sha256:")
     else:
         assert document["services"]["app"]["build"]["context"] == "./."
         assert document["services"]["app"]["build"]["args"] == {"LITERAL": "$$HOME"}

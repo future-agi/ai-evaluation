@@ -34,6 +34,7 @@ class ComposeRuntimeError(RuntimeError):
 
 _SERVICE_KEYS = {
     "image",
+    "platform",
     "build",
     "command",
     "entrypoint",
@@ -220,6 +221,10 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
             raise ComposeRuntimeError(
                 f"compose_service_fields_forbidden: {name}: {','.join(sorted(set(service) - _SERVICE_KEYS))}"
             )
+        if "platform" in service:
+            from .compose_image_lock import validate_image_platform
+
+            validate_image_platform(service["platform"])
         dropped = service.get("cap_drop", [])
         if not isinstance(dropped, list) or any(
             not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", value)
@@ -622,6 +627,12 @@ class CertifiedComposeRuntimeProvider:
             str(directory / "compose.json"),
             *args,
         ]
+        return self._run_command(
+            command, environment, project, args[0], timeout=timeout,
+            private_output=private_output,
+        )
+
+    def _run_command(self, command, environment, project, operation, *, timeout, private_output):
         timed_out = False
         with tempfile.TemporaryFile() as output:
             process = subprocess.Popen(
@@ -651,17 +662,74 @@ class CertifiedComposeRuntimeProvider:
                     self.artifact_root.mkdir(parents=True, exist_ok=True)
                     with (self.artifact_root / f"{project}.log").open("a") as log:
                         log.write(
-                            f"\ncompose {args[0]} exit={process.returncode} timeout={timed_out}\n{redacted}\n"
+                            f"\ncompose {operation} exit={process.returncode} timeout={timed_out}\n{redacted}\n"
                         )
         if timed_out:
-            raise ComposeRuntimeError(f"compose_command_timeout: {args[0]}")
+            raise ComposeRuntimeError(f"compose_command_timeout: {operation}")
         if process.returncode:
             raise ComposeRuntimeError(
-                f"compose_command_failed: {args[0]} exit={process.returncode}"
+                f"compose_command_failed: {operation} exit={process.returncode}"
             )
         if private_output and size > 2 * 1024 * 1024:
             raise ComposeRuntimeError("compose_configuration_output_too_large")
         return text
+
+    def resolve_images(self, *, manifest, document, runtime, source):
+        from .compose_image_lock import image_identity, selected_images, validate_image_platform
+
+        self._check_socket()
+        images = selected_images(source, runtime, json.loads(document), control_service=manifest.runtime.control_service)
+        from .runtime_selection import select_runtime, ComposeSelection
+
+        try:
+            source_defaults = select_runtime(
+                source, runtime, public_environment={}, validate_environment_dependencies=False,
+            )
+        except ValueError:
+            source_defaults = None
+        result = []
+        deadline = time.monotonic() + 600
+        with tempfile.TemporaryDirectory(prefix="alk-image-resolution-") as scratch:
+            environment = {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "DOCKER_HOST": f"unix://{self.socket_path}",
+                "DOCKER_CONFIG": scratch,
+            }
+
+            def docker(*args):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ComposeRuntimeError("compose_image_resolution_timeout")
+                return self._run_command(
+                    ["docker", *args], environment, "image-resolution", args[0],
+                    timeout=remaining, private_output=True,
+                )
+
+            host = json.loads(docker("info", "--format", "{{json .}}"))
+            architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
+                host.get("Architecture"), host.get("Architecture")
+            )
+            host_platform = validate_image_platform(f"{host.get('OSType')}/{architecture}")
+            for name, service in images.items():
+                platform = service.get("platform") or host_platform
+                if platform.split("/")[:2] != host_platform.split("/")[:2]:
+                    raise ComposeRuntimeError("compose_image_host_platform_mismatch")
+                reference = service["image"]
+                docker("image", "pull", "--platform", platform, reference)
+                inspected = json.loads(docker("image", "inspect", reference))
+                if not isinstance(inspected, list) or len(inspected) != 1 or not isinstance(inspected[0], dict):
+                    raise ComposeRuntimeError("compose_image_inspection_invalid")
+                item = image_identity(
+                    service=name, reference=reference, platform=platform, inspected=inspected[0],
+                    repository=manifest.provenance.repository, revision=manifest.provenance.commit,
+                    application=name == manifest.runtime.control_service,
+                    source_declared_digest=(
+                        isinstance(source_defaults, ComposeSelection)
+                        and source_defaults.services.get(name, {}).get("image") == reference
+                    ),
+                )
+                result.append(item)
+        return result
 
     async def provision(
         self,

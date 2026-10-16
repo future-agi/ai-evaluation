@@ -21,6 +21,8 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
+from .contract import Runtime
+from .compose_image_lock import ResolvedComposeImage, selected_images, source_repository
 from .bundle_v2 import EnvironmentBundleV2, RuntimeKindV2, seal_bundle_v2
 from .certified_compose_runtime import (
     CertifiedComposeRuntimeProvider,
@@ -39,6 +41,8 @@ class BrokerError(RuntimeError):
 class BrokerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     source: str
+    source_repository: str | None = Field(default=None, max_length=2048)
+    source_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{40}$")
     scratch: str
     artifacts: str
     socket: str
@@ -64,6 +68,14 @@ class ProvisionRequest(BaseModel):
     instances: int = Field(ge=1, le=4)
 
 
+class ResolveImagesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["resolve_images"]
+    manifest: EnvironmentBundleV2
+    document: str = Field(max_length=1024 * 1024)
+    runtime: Runtime
+
+
 class SessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     operation: Literal["reset", "healthy", "close"]
@@ -72,7 +84,7 @@ class SessionRequest(BaseModel):
 
 
 REQUEST = TypeAdapter(
-    Annotated[ProvisionRequest | SessionRequest, Field(discriminator="operation")]
+    Annotated[ProvisionRequest | ResolveImagesRequest | SessionRequest, Field(discriminator="operation")]
 )
 
 
@@ -162,11 +174,14 @@ class ComposeBroker:
         self.source_digest = source_fingerprint(self.source)
         self.sessions: dict[str, Session] = {}
         self.created = 0
+        self.image_resolutions = 0
 
     async def dispatch(self, payload: bytes):
         if len(payload) > MAX_MESSAGE:
             raise BrokerError("compose_broker_message_size")
         request = REQUEST.validate_json(payload)
+        if isinstance(request, ResolveImagesRequest):
+            return await self._resolve_images(request)
         if isinstance(request, ProvisionRequest):
             return await self._provision(request)
         session = self.sessions.get(request.session)
@@ -187,7 +202,7 @@ class ComposeBroker:
         )
         return {"healthy": healthy, "runtime": runtime.model_dump(mode="json")}
 
-    async def _provision(self, request):
+    def _validated_document(self, request):
         manifest = request.manifest
         if (
             manifest.provenance.public_material_admissions
@@ -225,6 +240,32 @@ class ComposeBroker:
         normalized = normalize_compose(
             document, self.source, capabilities=manifest.capabilities
         )
+        return raw, normalized
+
+    async def _resolve_images(self, request):
+        self._validated_document(request)
+        expected_repository = self.config.source_repository
+        supplied_repository = request.manifest.provenance.repository
+        if (
+            (source_repository(expected_repository) if expected_repository else None)
+            != (source_repository(supplied_repository) if supplied_repository else None)
+            or self.config.source_revision != request.manifest.provenance.commit
+        ):
+            raise BrokerError("compose_broker_source_provenance_mismatch")
+        selected_images(self.source, request.runtime, json.loads(request.document), control_service=request.manifest.runtime.control_service)
+        if self.image_resolutions >= 32:
+            raise BrokerError("compose_broker_image_resolution_limit")
+        self.image_resolutions += 1
+        provider = CertifiedComposeRuntimeProvider(socket_path=Path(self.config.docker_socket))
+        identities = await asyncio.to_thread(
+            provider.resolve_images, manifest=request.manifest, document=request.document,
+            runtime=request.runtime, source=self.source,
+        )
+        return {"images": [item.model_dump(mode="json") for item in identities]}
+
+    async def _provision(self, request):
+        manifest = request.manifest
+        raw, normalized = self._validated_document(request)
         for resource in normalized.get("x-alk-config-files", {}).values():
             if any(
                 alias not in self.config.target_configuration
@@ -432,6 +473,15 @@ class ComposeBrokerClient:
         if "error" in response:
             raise BrokerError(response["error"])
         return response["result"]
+
+    def resolve_images(self, *, manifest, document, runtime, source):
+        result = self._request({
+            "operation": "resolve_images", "manifest": manifest.model_dump(mode="json"),
+            "document": document, "runtime": Runtime.model_validate(runtime).model_dump(mode="json"),
+        })
+        if not isinstance(result.get("images"), list) or len(result["images"]) > 64:
+            raise BrokerError("compose_broker_image_limit")
+        return [ResolvedComposeImage.model_validate(item) for item in result["images"]]
 
     async def provision(
         self, bundle, *, source, bundle_dir, work_directory, contract=None, instances=1
