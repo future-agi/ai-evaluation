@@ -298,7 +298,7 @@ def _sandbox_command(
     return stdout
 
 
-def _base_checks(catalog: dict[str, Any]) -> list[tuple[str, str]]:
+def _base_checks(catalog: dict[str, Any], *, compose_profile: bool = False) -> list[tuple[str, str]]:
     checks: list[tuple[str, str]] = [
         (
             "control-layout",
@@ -395,6 +395,25 @@ PY""",
             raise SystemExit(f"invalid binary catalog entry: {binary!r}")
         version_flag = "-version" if name == "ffmpeg" else "--version"
         checks.append((f"binary-{name}", f"command -v {name} && {name} {version_flag}"))
+    if compose_profile:
+        checks = [(label, command) for label, command in checks if label != "no-container-runtime"]
+        checks.append(("hosted-compose-profile", """python - <<'PY_CHECK'
+import os, socket, stat
+from pathlib import Path
+from fi.alk.harness.hosted_compose_bootstrap import _load_profile
+profile = _load_profile()
+assert profile is not None
+assert os.getuid() == profile.client_uid
+assert stat.S_ISSOCK(Path(profile.initialize_socket).stat().st_mode)
+try:
+    connection = socket.socket(socket.AF_UNIX)
+    connection.connect(profile.docker_socket)
+except PermissionError:
+    pass
+else:
+    raise AssertionError("controller reached private Docker socket")
+assert not Path('/var/run/docker.sock').exists()
+PY_CHECK"""))
     return checks
 
 
@@ -493,6 +512,7 @@ def certify_template(
     api_key: str,
     ttl_seconds: int,
     required_disk_gb: int,
+    compose_profile: bool = False,
 ) -> CertificationResult:
     from e2b import Sandbox
 
@@ -542,7 +562,7 @@ def certify_template(
         )
         checks.append("binary-uv")
 
-        for label, command in _base_checks(catalog):
+        for label, command in _base_checks(catalog, compose_profile=compose_profile):
             _sandbox_command(sandbox, command, label=label)
             checks.append(label)
 

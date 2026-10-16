@@ -21,6 +21,7 @@ import tempfile
 
 from .cli import _auto
 from .job import HarnessJob, ProviderExecutionMode, SourceKind
+from .hosted_compose_bootstrap import initialize_hosted_compose
 from .provider_import import inspect_provider_target
 from .scenarios import load as load_written
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
@@ -254,6 +255,9 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
     args = parser.parse_args(argv)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
+    broker_socket = initialize_hosted_compose(job, args.source.resolve())
+    if broker_socket is not None:
+        os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
     profile = _load_provider_import_profile(
         job, args.target_secrets, args.provider_profile_cache
     )

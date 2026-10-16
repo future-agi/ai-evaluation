@@ -599,6 +599,7 @@ async def validate_once(
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
     from .compose_integration import enabled as compose_enabled
+    from .hosted_compose_bootstrap import initialize_hosted_compose
     from .contract import AgentContract
     from .hosted_entrypoint import (
         ProcessWorldFactory,
@@ -616,6 +617,12 @@ async def validate_once(
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
+
+    broker_socket = None
+    if not local_runtime:
+        broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
+        if broker_socket is not None:
+            os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
 
     if getattr(job, "require_tool_workflow", False):
         from .contract import validate_tool_workflow
@@ -772,7 +779,7 @@ async def validate_once(
                 manifest,
                 parallelism=validation_parallelism,
                 secret_refs=job_secret_purposes(job),
-                allow_compose=local_runtime and compose_enabled(),
+                allow_compose=(local_runtime and compose_enabled()) or broker_socket is not None,
             )
             from .bundle_v2 import RuntimeKindV2
             if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
