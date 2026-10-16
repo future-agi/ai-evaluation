@@ -57,7 +57,7 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import Runtime, ToolEntry
+from .contract import Runtime, ToolEntry, runtime_public_environment
 from .generated_runtime import (
     GeneratedRuntimeError,
     _python_language_version,
@@ -1172,6 +1172,11 @@ def _plan_python(
     member = component.relative_to(root)
     workspace_excludes = tuple((member / path).as_posix() for path in context_excludes)
     relative = root.relative_to(source).as_posix() or "."
+    version_file = root / ".python-version"
+    if not version and version_file.is_file() and version_file.resolve().is_relative_to(source):
+        declared = version_file.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"3\.\d+(?:\.\d+)?", declared):
+            version = declared
     process = _python_process(
         name=name,
         working_directory=relative,
@@ -2088,6 +2093,9 @@ def resolve_environment_plan(
                 if key != "interface"
             }
         )
+        declared_runtime_environment.update(
+            runtime_public_environment(contract_runtime or {})
+        )
         selected = select_runtime(
             root,
             contract_runtime or {},
@@ -2632,7 +2640,41 @@ def resolve_environment_plan(
             )
             process = process.model_copy(update=update)
         if not is_bun_runtime:
-            process = _python_component_command(source=root, component=root if is_callback else component, process=process)
+            process = _python_component_command(
+                source=root,
+                component=root if is_callback else component,
+                process=process,
+            )
+        resources = {}
+        directories = []
+        target_names = process_secret_environment_names(
+            alias
+            for alias, reference in job.agent.secret_refs.items()
+            if reference.purpose == "target_provider"
+        )
+        for path, resource in runtime_model.config_files.items():
+            try:
+                relative = Path(path).relative_to(process.working_directory).as_posix()
+            except ValueError as exc:
+                raise BundleAuthorError(
+                    "runtime_config_outside_process_source"
+                ) from exc
+            for alias in resource.secret_aliases.values():
+                if alias not in target_names:
+                    raise BundleAuthorError("runtime_config_target_reference_required")
+            resources[relative] = resource
+        for path in runtime_model.directories:
+            try:
+                directories.append(
+                    Path(path).relative_to(process.working_directory).as_posix()
+                )
+            except ValueError as exc:
+                raise BundleAuthorError(
+                    "runtime_directory_outside_process_source"
+                ) from exc
+        process = process.model_copy(
+            update={"config_files": resources, "directories": directories}
+        )
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(
@@ -2655,7 +2697,9 @@ def resolve_environment_plan(
         packaging = (
             "dockerfile"
             if (root / "Dockerfile").is_file()
-            else "generated_bun" if is_bun_runtime else "generated_python"
+            else "generated_bun"
+            if is_bun_runtime
+            else "generated_python"
         )
 
     toolbox = _mcp_toolbox_definition(root)
@@ -2735,9 +2779,17 @@ def resolve_environment_plan(
                     environment[name] = declared_runtime_environment[variable]
                 continue
             environment[name] = default if operator in {"-", ":-"} else ""
-        bindings[process.name] = {
-            name for name, value in environment.items() if value
-        } | secret_names
+        configured_secret_names = {
+            name
+            for resource in process.config_files.values()
+            for name, alias in resource.secret_aliases.items()
+            if alias in secret_names
+        }
+        bindings[process.name] = (
+            {name for name, value in environment.items() if value}
+            | secret_names
+            | configured_secret_names
+        )
         normalized_processes.append(
             process.model_copy(update={"environment": environment})
         )

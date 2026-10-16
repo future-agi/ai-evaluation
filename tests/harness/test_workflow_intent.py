@@ -293,6 +293,10 @@ def test_authoring_context_does_not_expose_arbitrary_config_or_simulator_names(
     restored = HarnessJob.model_validate_json(job.model_dump_json())
     briefing = "\n".join(restored.authoring_guidance())
     assert "LOCAL_MODEL_PROJECT" in briefing
+    assert "LOCAL_MODEL_PROJECT" in restored.available_target_environment_names()
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in restored.available_target_environment_names()
+    assert "SIMULATOR_OPENAI_API_KEY" not in restored.available_target_environment_names()
+    assert "invalid=value" not in restored.available_target_environment_names()
     assert "GOOGLE_APPLICATION_CREDENTIALS" in briefing
     assert "vertex_ai/gemini-3.7-flash" in briefing
     for excluded in (

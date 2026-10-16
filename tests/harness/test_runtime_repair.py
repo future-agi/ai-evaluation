@@ -233,7 +233,7 @@ def test_readiness_patch_locks_runtime_fields(tmp_path, dependency_patch, change
     patch = patch.model_copy(
         update={"runtime": patch.runtime.model_copy(update=changes)}
     )
-    with pytest.raises(ValueError, match="only_extras_allowed"):
+    with pytest.raises(ValueError, match="runtime_repair_readiness_(only_setup_allowed|interface_changed)"):
         validate_runtime_plan_patch(
             tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
         )
@@ -265,7 +265,7 @@ def test_readiness_patch_rejects_unselectable_workspace_groups(
         )
 
 
-def test_dependency_investigation_may_decline_without_nudge(
+def test_setup_investigation_may_decline_after_bounded_decision(
     tmp_path, dependency_patch, monkeypatch
 ):
     import asyncio
@@ -275,10 +275,11 @@ def test_dependency_investigation_may_decline_without_nudge(
 
     contract, _patch_value = dependency_patch
     calls = []
+    budgets = []
 
     class DecliningStage:
         def __init__(self, spec, **kwargs):
-            assert spec.max_turns == 12
+            budgets.append(spec.max_turns)
 
         async def __aenter__(self):
             return self
@@ -302,7 +303,8 @@ def test_dependency_investigation_may_decline_without_nudge(
         )
         is None
     )
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert budgets == [12, 4]
 
 
 def test_dependency_investigation_shows_sibling_optional_extras_without_manifest_values(
@@ -844,3 +846,222 @@ def test_readiness_patch_resolves_extra_in_sibling_workspace_package(tmp_path):
     )
     assert repaired.runtime.extras == ["transport"]
     assert repaired.runtime.workdir == "server"
+
+
+@pytest.fixture
+def setup_patch(tmp_path, dependency_patch):
+    from fi.alk.harness.contract import RuntimeConfigFile, RuntimeHttpSetupRequest
+
+    contract, patch = dependency_patch
+    runtime = contract.runtime.model_copy(
+        update={
+            "config_files": {
+                ".env": RuntimeConfigFile(
+                    values={"REGION": "wrong"}, secret_aliases={"TOKEN": "TARGET_TOKEN"}
+                )
+            },
+            "interface": contract.runtime.interface.model_copy(
+                update={
+                    "setup_secrets": {"token": "TARGET_TOKEN"},
+                    "setup_requests": [
+                        RuntimeHttpSetupRequest(
+                            path="/profiles",
+                            body_template={"region": "wrong", "token": "{{token}}"},
+                        )
+                    ],
+                }
+            ),
+        }
+    )
+    contract = contract.model_copy(update={"runtime": runtime})
+    replacement = runtime.model_copy(
+        update={
+            "config_files": {
+                ".env": RuntimeConfigFile(
+                    values={"REGION": "global"},
+                    secret_aliases={
+                        "TOKEN": "TARGET_TOKEN",
+                        "PROJECT": "TARGET_PROJECT",
+                    },
+                )
+            },
+            "interface": runtime.interface.model_copy(
+                update={
+                    "setup_secrets": {
+                        "token": "TARGET_TOKEN",
+                        "project": "TARGET_PROJECT",
+                    },
+                    "setup_requests": [
+                        runtime.interface.setup_requests[0].model_copy(
+                            update={
+                                "body_template": {
+                                    "region": "global",
+                                    "token": "{{token}}",
+                                    "project": "{{project}}",
+                                }
+                            }
+                        )
+                    ],
+                }
+            ),
+        }
+    )
+    return contract, patch.model_copy(
+        update={"base_contract_hash": _contract_hash(contract), "runtime": replacement}
+    )
+
+
+def test_readiness_patch_corrects_setup_using_supplied_target_aliases(
+    tmp_path, setup_patch
+):
+    contract, patch = setup_patch
+    repaired = validate_runtime_plan_patch(
+        tmp_path,
+        contract,
+        patch,
+        allowed_diagnostic_codes={"chat_ingress_failed"},
+        available_secret_aliases=frozenset({"TARGET_TOKEN", "TARGET_PROJECT"}),
+    )
+    assert repaired.runtime.config_files[".env"].values == {"REGION": "global"}
+    assert (
+        repaired.runtime.interface.setup_requests[0].body_template["project"]
+        == "{{project}}"
+    )
+    assert repaired.runtime.command == contract.runtime.command
+
+
+def test_readiness_patch_rejects_unsupplied_alias(tmp_path, setup_patch):
+    contract, patch = setup_patch
+    with pytest.raises(ValueError, match="secret_binding_changed"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+            available_secret_aliases=frozenset({"TARGET_TOKEN"}),
+        )
+
+
+@pytest.mark.parametrize("surface", ["config", "setup"])
+def test_readiness_patch_cannot_rebind_existing_secret(tmp_path, setup_patch, surface):
+    contract, patch = setup_patch
+    if surface == "config":
+        patch.runtime.config_files[".env"].secret_aliases["TOKEN"] = "TARGET_PROJECT"
+    else:
+        patch.runtime.interface.setup_secrets["token"] = "TARGET_PROJECT"
+    with pytest.raises(ValueError, match="secret_binding_changed"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+            available_secret_aliases=frozenset({"TARGET_TOKEN", "TARGET_PROJECT"}),
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"accepted_statuses": [200, 500]},
+        {"path": "/other"},
+        {"capture": {"text": "error"}},
+        {"method": "GET"},
+        {"encoding": "form"},
+        {"headers_template": {"X-Test": "new"}},
+    ],
+)
+def test_readiness_patch_cannot_change_setup_protocol(tmp_path, setup_patch, changes):
+    contract, patch = setup_patch
+    patch.runtime.interface.setup_requests[0] = patch.runtime.interface.setup_requests[
+        0
+    ].model_copy(update=changes)
+    with pytest.raises(ValueError, match="setup_protocol_changed"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+            available_secret_aliases=frozenset({"TARGET_TOKEN", "TARGET_PROJECT"}),
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"model": "different"},
+        {"response_path": "error"},
+        {"request_template": {"fake": True}},
+        {"failure_rule": None},
+    ],
+)
+def test_readiness_patch_cannot_change_ingress(tmp_path, setup_patch, changes):
+    from fi.alk.harness.contract import RuntimeHttpFailureRule
+
+    contract, patch = setup_patch
+    if "failure_rule" in changes:
+        rule = RuntimeHttpFailureRule.model_validate({"status_path": "error", "failure_values": [True]})
+        contract.runtime.interface.failure_rule = rule
+        patch = patch.model_copy(
+            update={"base_contract_hash": _contract_hash(contract)}
+        )
+    patch.runtime.interface = patch.runtime.interface.model_copy(update=changes)
+    with pytest.raises(ValueError, match="interface_changed"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+            available_secret_aliases=frozenset({"TARGET_TOKEN", "TARGET_PROJECT"}),
+        )
+
+
+def test_setup_patch_apply_revalidates_aliases_and_persists_only_valid_candidate(tmp_path, setup_patch):
+    contract, patch = setup_patch
+    path = tmp_path / "contract.json"
+    path.write_text(contract.model_dump_json())
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="secret_binding_changed"):
+        apply_runtime_plan_patch(
+            tmp_path, path, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+        )
+    assert path.read_bytes() == before
+    apply_runtime_plan_patch(
+        tmp_path,
+        path,
+        patch,
+        allowed_diagnostic_codes={"chat_ingress_failed"},
+        available_secret_aliases=frozenset({"TARGET_PROJECT"}),
+    )
+    persisted = AgentContract.model_validate_json(path.read_text())
+    assert persisted.runtime.interface.setup_secrets["project"] == "TARGET_PROJECT"
+    assert persisted.runtime.config_files[".env"].values["REGION"] == "global"
+
+
+def test_setup_only_patch_does_not_require_python_build_component(tmp_path):
+    from fi.alk.harness.contract import RuntimeConfigFile
+
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    image: example/agent:1\n"
+    )
+    runtime = Runtime(
+        execution="compose",
+        compose_file="compose.yaml",
+        service="agent",
+        config_files={".env": RuntimeConfigFile(values={"REGION": "wrong"})},
+    )
+    contract = AgentContract(agent="fixture", runtime=runtime)
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(
+            update={
+                "config_files": {".env": RuntimeConfigFile(values={"REGION": "global"})}
+            }
+        ),
+        evidence_paths=("compose.yaml",),
+        diagnostic_codes=("chat_ingress_failed",),
+        summary="Correct the source-owned region setting.",
+    )
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+    )
+    assert repaired.runtime.config_files[".env"].values["REGION"] == "global"

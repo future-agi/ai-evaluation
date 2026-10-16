@@ -11,12 +11,10 @@ from .diagnostics import HarnessDiagnostic, RepairOwner
 from .job import HarnessStage
 
 
-DEPENDENCY_INVESTIGATION = (
-    "investigate source-declared dependency selection; cause unproven"
-)
+SETUP_INVESTIGATION = "investigate source-declared runtime setup; cause unproven"
 
 
-def is_chat_dependency_investigation(diagnostics) -> bool:
+def is_chat_setup_investigation(diagnostics) -> bool:
     return bool(diagnostics) and all(
         item.code == "chat_ingress_failed"
         and item.component == "chat_ingress"
@@ -223,11 +221,13 @@ class RepairController:
 
         if (
             observation.phase is RepairPhase.ENVIRONMENT
-            and is_chat_dependency_investigation(diagnostics)
+            and is_chat_setup_investigation(diagnostics)
             and self._environment_patches < self.budgets.environment_patches
-            and not any(
-                item.reason == DEPENDENCY_INVESTIGATION for item in self._history
+            and (
+                observation.candidate_hash,
+                tuple(sorted({d.fingerprint for d in diagnostics})),
             )
+            not in self._repair_signatures
         ):
             self._environment_patches += 1
             self._repair_signatures.add(
@@ -239,7 +239,7 @@ class RepairController:
             return self._decision(
                 observation,
                 RepairAction.PATCH_ENVIRONMENT,
-                DEPENDENCY_INVESTIGATION,
+                SETUP_INVESTIGATION,
                 diagnostics,
             )
 

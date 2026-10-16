@@ -133,7 +133,11 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def accept_contract(
-    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+    payload: dict[str, Any],
+    destination: Path,
+    *,
+    source_root: Path | None = None,
+    require_storage_decision: bool = False,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -148,6 +152,17 @@ def accept_contract(
         return _problems([f"schema:{invalid}"[:600]], arrived)
 
     problems = validate_contract(contract)
+    if (
+        require_storage_decision
+        and contract.modality != "voice"
+        and (contract.data_store is None or not contract.data_store.kind.strip())
+    ):
+        problems.append(
+            "missing-storage-decision: inspect the source and declare data_store.kind. "
+            "Use its actual storage engine, filesystem for file-backed state, in_process "
+            "for memory-only state, or none when there is no state store. "
+            "Omitting data_store does not declare a stateless agent."
+        )
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -192,6 +207,7 @@ def contract_tools(
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    require_storage_decision: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
@@ -543,12 +559,13 @@ def contract_tools(
                 "data_store": {
                     "type": "object",
                     "description": "What the agent's tools read and write, and how to point them "
-                    "at a different one.",
+                    "at a different one. Explicitly declare kind, including none for a stateless "
+                    "agent, during autonomous source setup.",
                     "properties": {
                         "kind": {
                             "type": "string",
                             "description": "postgres, clickhouse, mysql, sqlite, in_process for "
-                            "state held in memory, or none.",
+                            "state held in memory, filesystem for file-backed state, or none.",
                         },
                         "configured_by": {
                             "type": "string",
@@ -1159,7 +1176,12 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination, source_root=source_root)
+        return accept_contract(
+            payload,
+            destination,
+            source_root=source_root,
+            require_storage_decision=require_storage_decision,
+        )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 

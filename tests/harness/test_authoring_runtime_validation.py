@@ -1373,7 +1373,7 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     )
     inspected = []
 
-    async def inspect(source_root, current_contract, diagnostics, *, guidance=""):
+    async def inspect(source_root, current_contract, diagnostics, *, guidance="", available_secret_aliases=frozenset()):
         assert "Preserve the submitted identifiers." in guidance
         assert "require_tool_workflow" in guidance
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))

@@ -1552,3 +1552,24 @@ def test_setup_secret_purpose_checked_on_sealed_bundle(tmp_path, purpose, compos
                 secret_refs=refs,
                 allow_compose=compose,
             )
+
+
+@pytest.mark.parametrize(
+    "alias", ["LIVEKIT_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "UNKNOWN"]
+)
+def test_config_file_alias_is_admitted_only_for_declared_target_secret(tmp_path, alias):
+    def configure(body):
+        process = next(p for p in body["processes"] if p["kind"] == "source")
+        process["config_files"] = {".env": {"secret_aliases": {"API_KEY": alias}}}
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=configure)
+    refs = {
+        **TARGET_PROVIDER_REFS,
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider",
+    }
+    if alias == "UNKNOWN":
+        with pytest.raises(PreflightError, match="runtime config requires declared"):
+            preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)
+    else:
+        preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)

@@ -267,15 +267,7 @@ class HarnessJob(BaseModel):
     platform_run_id: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
-    def authoring_guidance(self) -> list[str]:
-        instructions = list(self.guidance)
-        if self.metadata.get("generic_harness_v1") is True:
-            instructions.append(
-                "A standalone Dockerfile cannot be built or run in this job's runtime. Inspect it "
-                "as source evidence for dependencies and startup, then select a supported "
-                "native source command when the repository provides one. Do not invent a replacement agent "
-                "when its required runtime is unsupported."
-            )
+    def available_target_environment_names(self) -> frozenset[str]:
         names = {
             alias
             for alias, reference in self.agent.secret_refs.items()
@@ -292,6 +284,18 @@ class HarnessJob(BaseModel):
         names = {
             name for name in names if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
         }
+        return frozenset(process_secret_environment_names(names))
+
+    def authoring_guidance(self) -> list[str]:
+        instructions = list(self.guidance)
+        if self.metadata.get("generic_harness_v1") is True:
+            instructions.append(
+                "A standalone Dockerfile cannot be built or run in this job's runtime. Inspect it "
+                "as source evidence for dependencies and startup, then select a supported "
+                "native source command when the repository provides one. Do not invent a replacement agent "
+                "when its required runtime is unsupported."
+            )
+        names = self.available_target_environment_names()
         target_model = self.agent.config.get("target_model")
         if target_model is not None and (
             not isinstance(target_model, str) or not target_model.strip()
@@ -303,9 +307,7 @@ class HarnessJob(BaseModel):
                 + json.dumps(
                     {
                         "target_model": target_model,
-                        "available_environment_names": sorted(
-                            process_secret_environment_names(names)
-                        ),
+                        "available_environment_names": sorted(names),
                     },
                     sort_keys=True,
                 )
