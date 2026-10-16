@@ -936,3 +936,58 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     assert call["arguments"] == {"account_id": "A-1"}
     assert call["result"]["active"] is True
     assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
+
+
+def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, profile_app):
+    from fi.alk.harness.contract import RuntimeConfigFile, RuntimeHttpFailureRule
+    from fi.alk.harness.runtime_repair import validate_runtime_plan_patch
+
+    url, state = profile_app
+    state.update(profile=True, body={
+        "choices": [{"message": {"role": "assistant", "content": "Configuration failed"},
+                     "finish_reason": "error"}],
+        "error": {"message": "Wrong region secret123"},
+    })
+    (tmp_path / "app.py").write_text(
+        'REGION = "global"\n'
+        'FAILED_RESPONSE = {"choices": [{"finish_reason": "error"}], '
+        '"error": {"message": "Wrong region"}}\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        config_files={".env": RuntimeConfigFile(values={"REGION": "wrong"})},
+        interface=interface(protocol="openai_chat", model="existing-profile"),
+    ))
+    asyncio.run(probe(tmp_path, url, interface=contract.runtime.interface))
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="choices.0.finish_reason", failure_values=["error"],
+        message_path="error.message",
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("app.py",), diagnostic_codes=("chat_tool_evidence_unverified",),
+        summary="Recognize the source-defined failure response before repairing setup.",
+    )
+    observed = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    with pytest.raises(RuntimeValidationError) as error:
+        asyncio.run(probe(tmp_path, url, interface=observed.runtime.interface))
+    assert error.value.diagnostics[0].code == "chat_ingress_failed"
+    assert state["calls"][0][1] == state["calls"][1][1]
+    runtime = observed.runtime.model_copy(deep=True)
+    runtime.config_files[".env"].values["REGION"] = "global"
+    patch = patch.model_copy(update={
+        "base_contract_hash": _contract_hash(observed), "runtime": runtime,
+        "diagnostic_codes": (error.value.diagnostics[0].code,),
+        "summary": "Correct the source-defined region without changing the agent.",
+    })
+    repaired = validate_runtime_plan_patch(
+        tmp_path, observed, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+    )
+    assert repaired.runtime.config_files[".env"].values == {"REGION": "global"}
+    assert repaired.runtime.interface == observed.runtime.interface
+    assert repaired.runtime.command == contract.runtime.command
+    assert "secret123" not in json.dumps(receipts(tmp_path))
+    assert sorted(item["status"] for item in receipts(tmp_path)) == ["failed", "passed"]
