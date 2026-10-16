@@ -48,7 +48,7 @@ class RepairBudgets(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     compiler_candidates: int = Field(default=3, ge=0, le=10)
-    runtime_patches: int = Field(default=4, ge=0, le=10)
+    runtime_patches: int = Field(default=8, ge=0, le=10)
     environment_patches: int = Field(default=4, ge=0, le=10)
     scenario_patches: int = Field(default=2, ge=0, le=10)
     infrastructure_retries_per_candidate: int = Field(default=2, ge=0, le=5)
