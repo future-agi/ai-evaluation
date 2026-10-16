@@ -487,8 +487,9 @@ def validate_runtime_plan_patch(
             if path.stat().st_size <= 1_000_000
         ):
             raise ValueError("runtime_repair_local_auth_source_evidence_required")
+    repair_setup_auth = allowed_diagnostic_codes == {"credential_missing"} and bool(original_auth)
     if allowed_diagnostic_codes == {"credential_missing"}:
-        if not auth or original_auth:
+        if not auth:
             raise ValueError("runtime_repair_local_auth_addition_required")
         if runtime.model_dump(exclude={"interface"}) != contract.runtime.model_dump(
             exclude={"interface"}
@@ -530,13 +531,26 @@ def validate_runtime_plan_patch(
             if len(runtime.interface.setup_requests) != len(
                 original.interface.setup_requests
             ) or any(
-                before.model_dump(exclude={"body_template"})
-                != after.model_dump(exclude={"body_template"})
+                before.model_dump(exclude={"headers_template"} if repair_setup_auth else {"body_template"})
+                != after.model_dump(exclude={"headers_template"} if repair_setup_auth else {"body_template"})
                 for before, after in zip(
                     original.interface.setup_requests, runtime.interface.setup_requests
                 )
             ):
                 raise ValueError("runtime_repair_readiness_setup_protocol_changed")
+            if repair_setup_auth:
+                for before, after in zip(
+                    original.interface.setup_requests, runtime.interface.setup_requests, strict=True
+                ):
+                    if any(
+                        after.headers_template.get(key) != value
+                        for key, value in before.headers_template.items()
+                    ) or any(
+                        _runtime_template_names(value) != {auth.template_variable}
+                        for key, value in after.headers_template.items()
+                        if key not in before.headers_template
+                    ):
+                        raise ValueError("runtime_repair_readiness_header_binding_changed")
             old_headers = original.interface.headers_template
             new_headers = runtime.interface.headers_template
             if any(new_headers.get(key) != value for key, value in old_headers.items()):
@@ -553,7 +567,7 @@ def validate_runtime_plan_patch(
             ):
                 raise ValueError("runtime_repair_readiness_header_binding_changed")
             if allowed_diagnostic_codes == {"credential_missing"} and (
-                runtime.interface.setup_requests != original.interface.setup_requests
+                (not repair_setup_auth and runtime.interface.setup_requests != original.interface.setup_requests)
                 or runtime.interface.setup_secrets != original.interface.setup_secrets
             ):
                 raise ValueError("runtime_repair_credential_only_local_auth_allowed")
@@ -885,7 +899,12 @@ local HTTP server token only, you may add interface.local_auth with server_envir
  template_variable names and add its source-required headers_template binding. Inspect and cite the
 server auth guard. ALK supplies a private random token; never write a value, disable auth, or use
 this for external account credentials. Preserve existing auth and header bindings. On
-credential_missing this local_auth plus header addition is the ONLY permitted correction.
+credential_missing, add local_auth plus its chat header binding only when local_auth is absent.
+If local_auth is already declared, you may instead add missing headers_template entries to
+existing setup_requests, using only that same local_auth.template_variable. Cite the setup
+route's auth guard. Preserve every existing header and every other setup field, including bodies.
+Chat headers_template applies after setup completes and is not inherited by setup requests.
+Keep existing local_auth, top-level headers, setup_secrets and all other runtime fields unchanged.
 On chat_ingress_failed for an existing HTTP json_template interface, you may also correct
 response_path when the source response shape proves the selector wrong. Cite the response code.
 Use dot-separated keys and numeric list indexes, including negative indexes, not bracket indexing.

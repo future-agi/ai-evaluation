@@ -28,6 +28,7 @@ from .contract import (
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
+    RuntimeHttpSetupRequest,
     LocalHttpAuth,
     known_modalities,
     generated_chat_interface_problem,
@@ -887,7 +888,7 @@ def contract_tools(
                                     "type": "object",
                                     "additionalProperties": {"type": "string"},
                                     "maxProperties": 32,
-                                    "description": "Chat request headers using prior setup captures. Session cookies are preserved automatically in an isolated cookie jar.",
+                                    "description": RuntimeInterface.model_fields["headers_template"].description,
                                 },
                                 "setup_requests": {
                                     "type": "array",
@@ -913,6 +914,7 @@ def contract_tools(
                                             },
                                             "headers_template": {
                                                 "type": "object",
+                                                "description": RuntimeHttpSetupRequest.model_fields["headers_template"].description,
                                                 "additionalProperties": {
                                                     "type": "string"
                                                 },
