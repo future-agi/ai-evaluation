@@ -404,6 +404,17 @@ from fi.alk.harness.hosted_compose_bootstrap import _load_profile
 profile = _load_profile()
 assert profile is not None
 assert os.getuid() == profile.client_uid
+for raw in (
+    "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/usr/sbin", "/bin", "/sbin",
+    "/opt/alk-venv/bin/python", "/usr/bin/docker", "/usr/bin/dockerd",
+    "/usr/bin/containerd", "/usr/bin/runc", "/usr/bin/timeout",
+    "/usr/libexec/docker/cli-plugins/docker-compose",
+):
+    lexical = Path(raw)
+    resolved = lexical.resolve(strict=True)
+    for path in {lexical, resolved, *lexical.parents, *resolved.parents}:
+        info = path.stat()
+        assert info.st_uid == 0 and not info.st_mode & 0o022, str(path)
 assert stat.S_ISSOCK(Path(profile.initialize_socket).stat().st_mode)
 try:
     connection = socket.socket(socket.AF_UNIX)

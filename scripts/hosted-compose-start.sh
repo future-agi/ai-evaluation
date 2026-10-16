@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 umask 077
+/bin/chmod 0755 /usr/local
 install -d -m 0700 /run/alk-docker /var/lib/alk-docker /var/lib/alk-compose
 install -d -m 0750 -o root -g 2000 /run/alk-compose
 dockerd --host unix:///run/alk-docker/docker.sock --group root \
