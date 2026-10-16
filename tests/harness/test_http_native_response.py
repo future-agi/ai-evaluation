@@ -32,6 +32,7 @@ EVENTS = {
     "name_path": "name",
     "arguments_path": "arguments",
     "result_path": "output",
+    "error_path": "failed",
     "status_path": "status",
     "completed_status": "completed",
 }
@@ -61,6 +62,7 @@ PAIR_PAYLOAD = {
             "type": "function_call_output",
             "call_id": "call-1",
             "output": "fixture 84",
+            "failed": False,
             "status": "completed",
         },
         {"type": "message", "content": [{"text": "The fixture contains 84."}]},
@@ -444,7 +446,7 @@ def test_response_failure_events_preserve_status_and_dedup_guards(native_app, st
     state["payload"]["output"][1] = {
         "type": "rejected", "call_id": "call-1", "message": "invalid path", "status": status,
     }
-    events = {**EVENTS, "failure_events": [
+    events = {**EVENTS, "error_path": "", "failure_events": [
         {"kind": "rejected", "action_id_path": "call_id", "result_path": "message"},
     ]}
     wrapper = create_chat_wrapper(
@@ -488,7 +490,7 @@ def test_declared_result_errors_classify_completed_tools(native_app, paired):
             ]
         ]
         config = interface(completed_tools=None,
-                           completed_tool_events={**EVENTS, "result_error_path": "error"})
+                           completed_tool_events={**EVENTS, "error_path": "", "result_error_path": "error"})
     else:
         state["payload"]["tool_calls"] = [
             {"tool_name": name, "tool_arguments": args, "tool_result": body}
@@ -523,7 +525,7 @@ def test_result_error_values_and_paths_are_strict(native_app, paired):
             if paired:
                 payload["output"][1]["output"] = result
                 config = interface(completed_tools=None, completed_tool_events={
-                    **EVENTS, "result_error_path": "error"})
+                    **EVENTS, "error_path": "", "result_error_path": "error"})
             else:
                 payload["tool_calls"][0]["tool_result"] = result
                 config = interface(completed_tools={**ROWS, "result_error_path": "error"},
@@ -560,7 +562,7 @@ def test_result_error_paths_do_not_guess_nested_shapes_or_consume_bad_events(nat
     base, state = native_app
     state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
     target = create_chat_wrapper(interface(completed_tools=None, completed_tool_events={
-        **EVENTS, "result_error_path": "outcome.error"}), base, secret_values={})
+        **EVENTS, "error_path": "", "result_error_path": "outcome.error"}), base, secret_values={})
     for body in [{"outcome": None}, {"outcome": []}, {"outcome": "nested JSON"}]:
         state["payload"]["output"][1]["output"] = body
         response = invoke(target)
@@ -580,7 +582,7 @@ def test_terminal_failure_bypasses_different_result_shape(native_app):
         "type": "rejected", "call_id": "call-1", "message": "not JSON", "status": "completed",
     }
     config = interface(completed_tools=None, completed_tool_events={
-        **EVENTS, "result_error_path": "error", "failure_events": [
+        **EVENTS, "error_path": "", "result_error_path": "error", "failure_events": [
             {"kind": "rejected", "action_id_path": "call_id", "result_path": "message"},
         ],
     })
@@ -627,7 +629,7 @@ def test_result_error_selector_preserves_keys_and_numeric_indices(native_app, pa
     if paired:
         state["payload"]["output"][1]["output"] = result
         config = interface(completed_tools=None, completed_tool_events={
-            **EVENTS, "result_error_path": path})
+            **EVENTS, "error_path": "", "result_error_path": path})
     else:
         state["payload"]["tool_calls"][0]["tool_result"] = result
         config = interface(completed_tools={**ROWS, "result_error_path": path}, failure_rule=None)
