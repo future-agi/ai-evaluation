@@ -82,7 +82,7 @@ Find, in roughly this order:
      precondition, and that step goes in `requires`.
    - A guard that depends on an argument's value (one option refused until a step in the
      conversation, or something outside it, has happened) cannot be said in `requires`. Write it
-     in the tool's description: each value, and what it waits for.
+     in the tool's `refuses`: each value, and what it waits for.
 
    Read a guard's whole condition. One the code skips under a test or harness mode does not hold
    when the agent is tested, so it is not a precondition.
@@ -93,10 +93,13 @@ Find, in roughly this order:
    deviating risks a refusal it cannot predict. Every tool you mark as gated when it is not costs
    every future test of it a preamble it never needed.
 
-5. **What each tool does to the rest of the call.** In the tool's description: what it reads,
-   creates and changes; what earlier state it clears (a changed choice that discards a quote or a
-   confirmation taken after it); an argument whose value must come from an earlier tool's output,
-   naming that tool; and a refusal returned as an ordinary value rather than an error.
+5. **What each tool does to the rest of the call.** The tool's `description` is the agent's own
+   wording for it; what you found goes in its own fields. `effects`: what it reads, creates and
+   changes, and what earlier state it clears (a changed choice that discards a quote or a
+   confirmation taken after it). `refuses`: every refusal by value or by something outside the
+   call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
+   argument whose value must come from an earlier tool's output, and that tool. Fill these for
+   every tool that has them; a writer sees nothing else.
 
 6. **The rules.** Hard constraints the agent is instructed or coded to obey. Prefer the exact
    wording from its system prompt or its validation code. These matter: the agent under test is

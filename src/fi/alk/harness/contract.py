@@ -151,6 +151,11 @@ class ToolSpec(BaseModel):
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
     # costs every future test of it a preamble it never needed.
     requires: list[str] = Field(default_factory=list)
+    # What a scenario writer cannot see from the signature: refusals by value or outside the call,
+    # what a call changes or clears, and arguments taken from an earlier tool's output.
+    refuses: str = ""
+    effects: str = ""
+    inputs_from: dict[str, str] = Field(default_factory=dict)
 
 
 class ToolEntry(BaseModel):
@@ -673,6 +678,15 @@ class AgentContract(BaseModel):
             needs = f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
             lines.append(
                 f"  - {tool.name}({signature}){values}{needs} : {tool.description}"
+                + "".join(
+                    f"\n      {label}: {text}"
+                    for label, text in (
+                        ("refuses", tool.refuses),
+                        ("effects", tool.effects),
+                        ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
+                    )
+                    if text
+                )
             )
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",

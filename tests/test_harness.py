@@ -8159,3 +8159,30 @@ def test_the_contract_stage_can_brief_read_only_researchers_for_a_repository(tmp
 
     provider, _ = open_stage(resolve("provider", name="demo", profile={"tools": []}, scratch=str(tmp_path)), out=tmp_path / "p")
     assert READER not in provider.spec.workers and DELEGATE_TOOL not in provider.spec.builtins
+
+
+def test_a_writer_sees_what_each_tool_refuses_changes_and_takes_from_earlier_calls():
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract.model_validate(
+        {
+            "agent": "rides",
+            "tools": [
+                {
+                    "name": "book_ride",
+                    "args": ["token"],
+                    "description": "Book the ride.",
+                    "refuses": "returns status rejected for a blocked account",
+                    "effects": "creates one booking; clears the token",
+                    "inputs_from": {"token": "prepare_booking_confirmation"},
+                }
+            ],
+        }
+    )
+
+    brief = contract.brief()
+
+    assert "refuses: returns status rejected for a blocked account" in brief
+    assert "effects: creates one booking; clears the token" in brief
+    assert "token <- prepare_booking_confirmation" in brief
+    assert AgentContract.model_validate({"agent": "old", "tools": [{"name": "t"}]}).tools[0].effects == ""

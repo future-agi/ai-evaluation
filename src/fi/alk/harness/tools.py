@@ -349,6 +349,26 @@ def contract_tools(
                                 "thing, and naming a tool that is not gated makes every future "
                                 "test of it replay a preamble it never needed.",
                             },
+                            "refuses": {
+                                "type": "string",
+                                "description": "Every refusal that depends on an argument's value "
+                                "or on something outside the call, each with what it waits for, and "
+                                "every refusal the code returns as an ordinary value rather than an "
+                                "error. Read from the tool, the helpers it calls and the service "
+                                "behind it.",
+                            },
+                            "effects": {
+                                "type": "string",
+                                "description": "What a successful call reads, creates and changes, "
+                                "and what earlier state it clears, such as a quote or confirmation "
+                                "a later step then has to take again.",
+                            },
+                            "inputs_from": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"},
+                                "description": "Arguments whose value must come from an earlier "
+                                "tool's output, as argument name to that tool's name.",
+                            },
                         },
                         # Nothing required: a tool genuinely taking no arguments is ordinary,
                         # and requiring args here rejects the whole contract because of one.
