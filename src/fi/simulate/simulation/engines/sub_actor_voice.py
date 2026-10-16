@@ -8,13 +8,9 @@ import logging
 import time
 from typing import Any
 
-from fi.simulate.simulation.sub_actors import Moment, due
+from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Moment, due, enters
 
 logger = logging.getLogger(__name__)
-
-# Channels whose lines are heard as the call's main speaker rather than mixed under it.
-FOREGROUND = frozenset({"audio_handoff", "transfer_leg", "ivr"})
-_NEEDS_TOOLS = frozenset({"on_tool", "on_escalation"})
 
 _BACKGROUND = (
     "You are {name}{role}, near someone who is on a phone call with an automated agent. You are not on "
@@ -63,7 +59,8 @@ class SubActorVoice:
         self.tts = tts
         # Plays frames under the caller at a volume, returning when they have been heard.
         self.play = play
-        # Speaks frames as the call's main speaker, returning when they have been heard.
+        # Speaks frames as the call's main speaker, returning when they have been heard, and leaves
+        # the line in the person's own context so they know what was said.
         self.say = say
         # The names of the tools the agent has called so far, read from the run's live trace.
         self.tools_called = tools_called
@@ -135,35 +132,48 @@ class SubActorVoice:
         moment = Moment(agent_turns=agent_turns, last_text=last_text, tools_called=list(tools_called or []))
         return due(self.trigger, moment, seed=self.seed, sub_actor_id=str(self.actor.get("id") or ""))
 
-    def agent_turn_ended(self, agent_turns: int, last_text: str = "") -> None:
-        self._tasks.append(asyncio.create_task(self._consider(agent_turns, last_text)))
+    @property
+    def answers_first(self) -> bool:
+        """A menu bound to enter `always` answers the call before the person can."""
+        return bool((CHANNELS.get(self.channel) or {}).get("first")) and self.kind == "always"
 
-    async def _consider(self, agent_turns: int, last_text: str) -> None:
+    async def enter_first(self) -> None:
+        self._delivered = True
+        self._turns_left = self.max_lines - 1
+        await self._speak_next("(the call has just been answered)")
+
+    async def on_agent_turn(self, agent_turns: int, last_text: str = "") -> bool:
+        """React to one committed agent turn. True while this sub-actor holds the line."""
         try:
             if self._turns_left > 0:
                 self._turns_left -= 1
                 await self._speak_next(last_text)
-                return
+                return True
+            if self.answers_first:
+                return False
             tools: list[str] = []
-            if self.kind in _NEEDS_TOOLS and self.tools_called is not None:
+            if self.kind in NEEDS_TOOLS and self.tools_called is not None:
                 tools = list(await asyncio.to_thread(self.tools_called))
             if not self.due(agent_turns, last_text, tools):
-                return
+                return False
             self._delivered = True
-            await self.deliver(last_text)
+            return await self.deliver(last_text)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning("sub-actor %s not delivered: %s", self.actor.get("id"), type(exc).__name__)
+            return False
 
-    async def deliver(self, last_text: str = "") -> None:
-        if self.channel == "inbound_message":
+    async def deliver(self, last_text: str = "") -> bool:
+        way = enters(self.channel)
+        if way == "world":
             await self._arrive()
-        elif self.channel in FOREGROUND:
+            return False
+        if way == "line":
             self._turns_left = self.max_lines - 1
-            await self._speak_next(last_text)
-        else:
-            await self._play_prepared()
+            return await self._speak_next(last_text)
+        self._tasks.append(asyncio.create_task(self._play_prepared()))
+        return False
 
     async def _play_prepared(self) -> None:
         if self._preparation is not None:
@@ -177,22 +187,23 @@ class SubActorVoice:
                 continue
             self._record("spoke", text, started)
 
-    async def _speak_next(self, last_text: str) -> None:
+    async def _speak_next(self, last_text: str) -> bool:
         if self.say is None:
-            return
+            return False
         behaviour = self.actor.get("behaviour") or {}
         opening = _FOREGROUND[self.channel].format(**_who(self.actor), prompt=behaviour.get("prompt") or "")
         heard = " | ".join(event["text"] for event in self._events[-3:])
         prompt = opening + (f"\n\nWhat you have said so far: {heard}" if heard else "")
         lines = await self._write_lines(prompt + _NEXT_LINE.format(said=last_text or "(nothing yet)"))
         if not lines:
-            return
+            return False
         frames = await self._voiced(lines[0])
         if not frames:
-            return
+            return False
         started = self.clock()
-        await self.say(frames, lines[0])
+        await self.say(frames, lines[0], str(self.actor.get("name") or "someone"))
         self._record("spoke", lines[0], started)
+        return True
 
     async def _arrive(self) -> None:
         inbound = self.actor.get("inbound") or {}
@@ -226,6 +237,40 @@ class SubActorVoice:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
+
+
+class SubActorsOnCall:
+    """Every sub-actor on one call, told about each committed agent turn exactly once."""
+
+    def __init__(self, voices: list[SubActorVoice]) -> None:
+        self.voices = voices
+        self.agent_turns = 0
+
+    def __bool__(self) -> bool:
+        return bool(self.voices)
+
+    def answers_first(self) -> bool:
+        return any(voice.answers_first for voice in self.voices)
+
+    async def open_line(self) -> None:
+        for voice in self.voices:
+            if voice.answers_first:
+                await voice.enter_first()
+
+    async def agent_turn(self, text: str) -> bool:
+        """One committed agent turn. True when a sub-actor holds the line, so the person stays silent."""
+        self.agent_turns += 1
+        holding = False
+        for voice in self.voices:
+            holding = await voice.on_agent_turn(self.agent_turns, text) or holding
+        return holding
+
+    def events(self) -> list[dict[str, Any]]:
+        return [event for voice in self.voices for event in voice.events()]
+
+    async def close(self) -> None:
+        for voice in self.voices:
+            await voice.close()
 
 
 def sub_actor_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

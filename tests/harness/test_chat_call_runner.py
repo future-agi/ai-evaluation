@@ -731,3 +731,57 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
 
     assert result is not None
     assert result.result == {"account_id": "ACC-2048", "status": "active"}
+
+
+def test_hosted_chat_arms_the_faults_its_scenario_binds(tmp_path: Path, monkeypatch: Any) -> None:
+    from fi.alk.harness.cast import Cast, FaultProfile, SubActor, save_cast
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    armed: list = []
+    monkeypatch.setattr(chat, "_arm_faults", lambda dsn, rows: armed.append((dsn, rows)))
+    seen: dict = {}
+
+    async def remember(target: Any, scenario: Any, _contract: Any, _bundle_dir: Path) -> Transcript:
+        seen["faults"] = list(target.world.faults)
+        seen["seed"] = target.seed
+        return Transcript()
+
+    monkeypatch.setattr(chat, "_drive_conversation", remember)
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", lambda **_kwargs: None)
+    context = _context(tmp_path)
+    save_cast(
+        context.bundle_dir,
+        Cast(
+            sub_actors=[
+                SubActor(
+                    id="subactor_service",
+                    name="Service",
+                    kind="system",
+                    channel="tool_response",
+                    faults=[FaultProfile(tool="lookup_account", kind="error")],
+                )
+            ]
+        ),
+    )
+    document = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["sub_actors"] = [{"id": "subactor_service", "trigger": {"kind": "always"}}]
+    document.write_text(json.dumps(body))
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+            "world_db": RuntimeEndpoint(capability="world_db", protocol="postgres", address="postgresql://u:p@localhost/w"),
+        },
+    )
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+
+    wanted = [{"tool": "lookup_account", "kind": "error", "on_call": 1, "latency_ms": 0, "content": "", "sub_actor": "subactor_service"}]
+    assert seen["faults"] == wanted
+    assert armed == [("postgresql://u:p@localhost/w", wanted)]
+    assert seen["seed"]

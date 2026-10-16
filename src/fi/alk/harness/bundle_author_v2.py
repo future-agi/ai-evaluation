@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from .bundle import CapabilityProtocol
-from .cast import CAST_FILE
+from .cast import CAST_FILE, sub_actors_enabled
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -2059,6 +2059,10 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     sub-goal's claim and `_deterministic_names` all come back empty, each silently. A warning
     rather than an error, since failing the run is worse than the degraded reporting.
     """
+    adopted = []
+    if (authoring / CAST_FILE).is_file():
+        shutil.copy2(authoring / CAST_FILE, staging / CAST_FILE)
+        adopted.append(CAST_FILE)
     catalogue = authoring / CATALOGUE
     if not catalogue.is_file():
         logger.warning(
@@ -2066,12 +2070,9 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
             CATALOGUE,
             authoring,
         )
-        return []
+        return adopted
     shutil.copy2(catalogue, staging / CATALOGUE)
-    if (authoring / CAST_FILE).is_file():
-        shutil.copy2(authoring / CAST_FILE, staging / CAST_FILE)
-        return [CATALOGUE, CAST_FILE]
-    return [CATALOGUE]
+    return [CATALOGUE, *adopted]
 
 
 def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
@@ -2171,6 +2172,26 @@ def _files(root: Path) -> list[BundleFileV2]:
             )
         )
     return records
+
+
+def _seed_prefix() -> str:
+    """The harness's own tables, created before the world's seed: the tool trace, and where
+    sub-actors are on, the faults a run arms for the proxy."""
+    prefix = (
+        "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
+        "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+        "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+        "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+        "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+    )
+    if sub_actors_enabled():
+        prefix += (
+            "CREATE TABLE IF NOT EXISTS _alk_faults ("
+            "tool text NOT NULL, kind text NOT NULL, on_call int NOT NULL DEFAULT 1, "
+            "latency_ms int NOT NULL DEFAULT 0, content text NOT NULL DEFAULT '', "
+            "sub_actor text NOT NULL DEFAULT '');\n"
+        )
+    return prefix
 
 
 def author_bundle_v2(
@@ -2397,17 +2418,7 @@ def author_bundle_v2(
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
-        prefix = (
-            "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
-            "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
-            "CREATE TABLE IF NOT EXISTS _alk_faults ("
-            "tool text NOT NULL, kind text NOT NULL, on_call int NOT NULL DEFAULT 1, "
-            "latency_ms int NOT NULL DEFAULT 0, content text NOT NULL DEFAULT '', "
-            "sub_actor text NOT NULL DEFAULT '');\n"
-        )
+        prefix = _seed_prefix()
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
             migrations, seed_files, adopted_seed = _generic_postgres_seed_artifacts(

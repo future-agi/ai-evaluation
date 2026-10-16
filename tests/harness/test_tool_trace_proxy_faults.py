@@ -17,6 +17,8 @@ class _Store:
     def __init__(self) -> None:
         self.faults: list[tuple] = []
         self.trace: list[dict] = []
+        self.sealed = True
+        self.asked: list[str] = []
 
 
 class _Connection:
@@ -42,6 +44,9 @@ class _Connection:
             def fetchone(self):
                 return self.rows[0]
 
+        store.asked.append(sql.split()[1])
+        if sql.startswith("SELECT to_regclass"):
+            return _Cursor([(store.sealed,)])
         if sql.startswith("SELECT kind"):
             return _Cursor([row[1:] for row in store.faults if row[0] == params[0]])
         if sql.startswith("SELECT count"):
@@ -150,3 +155,12 @@ def test_latency_still_forwards(proxy):
     store.faults.append(("book", "latency", 1, 5, "", "subactor_service"))
     assert post("book")[0] == 200
     assert store.trace[0]["ok"] is True and store.trace[0]["error"] == "fault:latency:subactor_service"
+
+
+def test_a_world_sealed_without_faults_is_never_asked_for_them(proxy):
+    store, post = proxy
+    store.sealed = False
+    for _ in range(3):
+        assert post("book")[0] == 200
+    assert store.asked.count("to_regclass('_alk_faults')") == 1
+    assert "kind," not in store.asked

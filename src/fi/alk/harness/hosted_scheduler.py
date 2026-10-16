@@ -43,6 +43,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
+from .cast import absent
 from . import observability
 from .job import FailureDomain, HarnessStage
 from .judge import judge as _judge
@@ -234,27 +235,6 @@ class CallOutcome:
     # The agent under test's own provider-reported usage, cost and latency; `None` when its
     # provider reports none (a black-box LiveKit or phone target).
     target_metrics: dict[str, Any] | None = None
-
-
-def _sub_actor_absent(goal: Any, call_outcome: CallOutcome) -> str:
-    """Why a sub-goal about a sub-actor does not apply to this call, or nothing.
-
-    A sub-actor that was never heard, or whose faulted tool was never called, never entered the
-    call, so nothing the agent did could have been a response to it.
-    """
-    wanted = str(getattr(goal, "sub_actor", "") or "")
-    if not wanted:
-        return ""
-    heard = any(
-        isinstance(message, dict)
-        and message.get("role") == "sub_actor"
-        and message.get("sub_actor") == wanted
-        for message in call_outcome.messages
-    )
-    faulted = any(getattr(call, "sub_actor", "") == wanted for call in call_outcome.calls)
-    if heard or faulted:
-        return ""
-    return f"Not applicable: {wanted} did not enter this call, so there was nothing to respond to."
 
 
 class CallAborted(RuntimeError):
@@ -2156,11 +2136,11 @@ class HostedScheduler:
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
-            absent = _sub_actor_absent(goal, call_outcome)
-            if absent:
+            missing = absent(str(getattr(goal, "sub_actor", "") or ""), call_outcome.messages, call_outcome.calls)
+            if missing:
                 sub_goal_results.append(
                     SubGoalResult(
-                        name=goal.name, held=True, reason=absent, judged=goal.judged != ""
+                        name=goal.name, held=True, reason=missing, judged=goal.judged != ""
                     )
                 )
                 continue

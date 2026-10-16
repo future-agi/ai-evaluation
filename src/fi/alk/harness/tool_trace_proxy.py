@@ -41,8 +41,25 @@ def _record(
 FAULT_TIMEOUT_SECONDS = float(os.environ.get("ALK_FAULT_TIMEOUT_SECONDS") or 10)
 
 
+# Whether this world was sealed with sub-actor faults at all, asked once rather than per call.
+_FAULTS: list[bool] = []
+
+
+def _faults_sealed() -> bool:
+    if not _FAULTS:
+        try:
+            with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+                found = connection.execute("SELECT to_regclass('_alk_faults') IS NOT NULL").fetchone()
+            _FAULTS.append(bool(found and found[0]))
+        except Exception:
+            return False
+    return _FAULTS[0]
+
+
 def _fault_for(name: str) -> dict[str, object] | None:
     """The fault a bound sub-actor applies to this call of this tool, counted from 1, or none."""
+    if not _faults_sealed():
+        return None
     try:
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
             faults = connection.execute(
@@ -126,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = json.loads(content) if content else None
             except ValueError:
                 result = content.decode("utf-8", errors="replace")
+            if fault and status >= 400 and fault["kind"] != "latency":
+                fault = None
             if fault and fault["kind"] == "malformed":
                 _record(name, arguments, None, False, str(fault["label"]))
                 self._reply(status, content[: max(1, len(content) // 2)] or b"{", response_type)
@@ -143,6 +162,9 @@ class Handler(BaseHTTPRequestHandler):
         except error.HTTPError as exc:
             content = exc.read()
             failure = content.decode("utf-8", errors="replace")[:2000]
+            # A response that already failed has nothing left to corrupt; only a delay still applied.
+            if fault and fault["kind"] == "latency":
+                failure = str(fault["label"])
             _record(name, arguments, None, False, failure)
             self.send_response(exc.code)
             self.send_header("content-length", str(len(content)))

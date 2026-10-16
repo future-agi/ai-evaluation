@@ -294,7 +294,7 @@ class GeneratedWorld(EnvironmentAdapter):
     # -- execution -------------------------------------------------------------------
 
     # Failures bound system sub-actors apply to this scenario's calls, one row per tool profile.
-    faults: list[dict[str, Any]] = []
+    faults: Sequence[dict[str, Any]] = ()
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         return self._with_fault(name, arguments, self._execute)
@@ -322,10 +322,13 @@ class GeneratedWorld(EnvironmentAdapter):
         if kind == "latency":
             time.sleep(int(fault.get("latency_ms") or 0) / 1000)
         made = execute(name, arguments)
+        if not made.ok and kind != "latency":
+            # A response that already failed has nothing left to corrupt or add to.
+            return made
         made.fault, made.sub_actor = kind, label
         if kind == "malformed":
             made.result, made.ok, made.error = None, False, "malformed response"
-        elif kind == "content" and made.ok:
+        elif kind == "content":
             extra = str(fault.get("content") or "")
             value = made.result
             made.result = (

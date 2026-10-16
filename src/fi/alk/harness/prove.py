@@ -322,6 +322,35 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
+def branches_disagree(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> list[str]:
+    """Sub-goals not about any sub-actor whose verdict on the answer key changes with whether a
+    sub-actor bound by probability entered: such a sub-goal grades the draw, not the agent."""
+    if not sub_actors_enabled() or not any(
+        binding.trigger.kind == "probability" for binding in scenario.sub_actors
+    ):
+        return []
+    cast = load_cast(world_root)
+    certain = [binding for binding in scenario.sub_actors if binding.trigger.kind != "probability"]
+    untagged = [
+        (name, goal)
+        for name in scenario.sub_goals
+        if (goal := catalogue.named(name)) is not None and goal.deterministic() and not goal.sub_actor
+    ]
+    verdicts = []
+    for faults in (bound_faults(certain, cast), bound_faults(scenario.sub_actors, cast)):
+        world, _applied, _ready = prepared(scenario, world_root)
+        try:
+            world.faults = faults
+            for step in scenario.solution:
+                play_reference_step(world, step)
+            verdicts.append(
+                {name: run_check(goal.check, world, list(world.calls), name=name).held for name, goal in untagged}
+            )
+        finally:
+            world.close()
+    return [name for name, held in verdicts[0].items() if held != verdicts[1][name]]
+
+
 def prove(
     scenario: Scenario,
     catalogue: Catalogue,

@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
-
 from fi.alk.harness.catalogue import Catalogue, SubGoal, load_catalogue, save_catalogue
-from fi.alk.harness.hosted_scheduler import CallOutcome, _sub_actor_absent
+from fi.alk.harness.cast import absent
 from fi.alk.harness.judge import _call, _others_present, _transcript
 from fi.alk.harness.world.runtime import Call
 
 
-def _outcome(messages=(), calls=()):
-    return CallOutcome(
-        calls=tuple(calls), turns=4, started_at=None, ended_at=None, duration_ms=0, messages=tuple(messages)
-    )
 
 
 def test_a_sub_actor_turn_is_named_and_marked_as_not_the_customer():
@@ -37,17 +31,15 @@ def test_the_judge_sees_a_fault_a_sub_actor_put_on_a_call():
 
 
 def test_a_sub_goal_about_a_sub_actor_that_never_entered_holds_with_the_reason():
-    goal = SimpleNamespace(name="ignored_the_bystander", judged="x", sub_actor="subactor_bystander")
-    said = _sub_actor_absent(goal, _outcome(messages=[{"role": "user", "content": "hi"}]))
+    said = absent("subactor_bystander", [{"role": "user", "content": "hi"}], [])
     assert said.startswith("Not applicable") and "subactor_bystander" in said
 
     heard = [{"role": "sub_actor", "sub_actor": "subactor_bystander", "content": "Add one."}]
-    assert _sub_actor_absent(goal, _outcome(messages=heard)) == ""
+    assert absent("subactor_bystander", heard, []) == ""
 
-    service = SimpleNamespace(name="recovered", judged="x", sub_actor="subactor_service")
     faulted = [Call(name="book", arguments={}, ok=False, fault="timeout", sub_actor="subactor_service")]
-    assert _sub_actor_absent(service, _outcome(calls=faulted)) == ""
-    assert _sub_actor_absent(SimpleNamespace(name="plain", judged=""), _outcome()) == ""
+    assert absent("subactor_service", [], faulted) == ""
+    assert absent("", [], []) == ""
 
 
 def test_the_catalogue_names_a_sub_actor_only_when_one_is_named(tmp_path):
@@ -80,3 +72,27 @@ def test_the_hosted_sub_goal_carries_its_sub_actor_from_the_catalogue(tmp_path):
     )
     restored = _with_claims(scenario, _load_catalogue_claims(tmp_path))
     assert restored.sub_goals[0].sub_actor == "subactor_bystander"
+
+
+def test_local_grading_lets_a_sub_goal_about_an_absent_sub_actor_stand_aside(tmp_path):
+    from fi.alk.harness.run.grade import grade_sub_goals
+    from fi.alk.harness.scenario import Scenario
+
+    catalogue = Catalogue(
+        sub_goals=[
+            SubGoal(name="about", what="w", check="def check(world, calls):\n    return 'never reached'\n", sub_actor="subactor_service")
+        ]
+    )
+    scenario = Scenario(name="s", instruction="x", sub_goals=["about"])
+    outcome = grade_sub_goals(None, scenario, catalogue, [], [])[0]
+    assert outcome.held and outcome.said.startswith("Not applicable")
+
+    faulted = [Call(name="book", arguments={}, ok=False, fault="error", sub_actor="subactor_service")]
+    assert not grade_sub_goals(None, scenario, catalogue, faulted, [])[0].held
+
+
+def test_a_sub_actor_turn_keeps_its_name_in_the_spoken_transcript():
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    transcript = Transcript(exchanges=[Exchange("sub_actor", "add one", name="Friend", sub_actor="s")])
+    assert transcript.spoken() == "Friend (not the customer): add one"

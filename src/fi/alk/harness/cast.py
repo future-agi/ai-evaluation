@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from fi.simulate.simulation.sub_actors import CHANNELS as REGISTRY
-from fi.simulate.simulation.sub_actors import SPEAKING, TRIGGERS
+from fi.simulate.simulation.sub_actors import TRIGGERS, drawn, enters
 
 CAST_FILE = "cast.json"
 SWITCH = "HARNESS_SUB_ACTORS"
@@ -143,7 +143,7 @@ def sub_actor_problems(
     *,
     modality: str,
     tools: set[str],
-    faults_reach: bool,
+    reachable: set[str],
 ) -> list[str]:
     """Why this sub-actor cannot be part of this agent's world, or nothing."""
     problems = []
@@ -173,7 +173,7 @@ def sub_actor_problems(
         problems.append(f"a {actor.kind} sub-actor needs a behaviour with a prompt")
     if fails and not actor.faults:
         problems.append(f"a {actor.kind} sub-actor needs at least one fault")
-    if actor.channel in SPEAKING and actor.channel != "inbound_message" and not speaks:
+    if enters(actor.channel) in ("mixed", "line", "thread") and not speaks:
         problems.append(f"{actor.channel} carries what the sub-actor says, so it must have a behaviour")
     if actor.channel == "inbound_message" and not (
         str(actor.inbound.get("collection") or "").strip() and isinstance(actor.inbound.get("record"), dict)
@@ -193,10 +193,11 @@ def sub_actor_problems(
             problems.append(f"a latency fault on {fault.tool} needs latency_ms")
         if fault.kind == "content" and not fault.content.strip():
             problems.append(f"a content fault on {fault.tool} needs the content to add")
-    if actor.faults and not faults_reach:
+    unreachable = sorted({fault.tool for fault in actor.faults} - reachable - set(unknown))
+    if unreachable:
         problems.append(
-            "this agent's tool calls do not pass through anything the run controls, so a "
-            "fault could never be applied"
+            "these tools run inside the agent's own process, where nothing the run controls "
+            "stands between, so a fault could never be applied: " + ", ".join(unreachable)
         )
     return problems
 
@@ -231,12 +232,12 @@ def binding_problems(
                 f"{binding.id}: mid_journey turn {trigger.turn} is outside 1..{max_turns}"
             )
         if trigger.kind in ("on_tool", "on_escalation"):
-            known_tools = {fault.tool for fault in actor.faults} if actor.faults else set(tools or ())
-            if trigger.tool not in known_tools and (actor.faults or tools is not None):
-                problems.append(
-                    f"{binding.id}: {trigger.kind} names {trigger.tool!r}, which "
-                    + ("it has no fault for" if actor.faults else "is not one of the agent's tools")
-                )
+            if not trigger.tool.strip():
+                problems.append(f"{binding.id}: {trigger.kind} needs the `tool` it waits for")
+            elif actor.faults and trigger.tool not in {fault.tool for fault in actor.faults}:
+                problems.append(f"{binding.id}: {trigger.kind} names {trigger.tool!r}, which it has no fault for")
+            elif tools is not None and trigger.tool not in tools:
+                problems.append(f"{binding.id}: {trigger.kind} names {trigger.tool!r}, which is not one of the agent's tools")
         if trigger.kind == "on_keyword" and not [one for one in trigger.words if one.strip()]:
             problems.append(f"{binding.id}: on_keyword needs the words that bring it in")
         if trigger.kind == "probability" and not 0 < trigger.p < 1:
@@ -280,7 +281,7 @@ def bound_participants(bindings: list[Binding], cast: Cast) -> list[dict[str, An
     entering = []
     for binding in bindings:
         actor = cast.get(binding.id)
-        if actor is None or actor.channel not in SPEAKING:
+        if actor is None or enters(actor.channel) not in ("mixed", "line", "thread", "world"):
             continue
         entering.append(
             {
@@ -299,3 +300,44 @@ def bound_participants(bindings: list[Binding], cast: Cast) -> list[dict[str, An
 def bound_voices(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
     """The entering sub-actors a voice call carries."""
     return [one for one in bound_participants(bindings, cast) if "voice" in CHANNELS[one["channel"]]]
+
+
+def entering_faults(bindings: list[Binding], cast: Cast, seed: str) -> list[dict[str, Any]]:
+    """The faults one run applies: a probability binding is drawn once, from the run's own seed."""
+    skipped = {
+        binding.id
+        for binding in bindings
+        if binding.trigger.kind == "probability" and not drawn(seed, binding.id, binding.trigger.p)
+    }
+    return [row for row in bound_faults(bindings, cast) if row["sub_actor"] not in skipped]
+
+
+def absent(sub_actor_id: str, messages: Any, calls: Any) -> str:
+    """Why a sub-goal about this sub-actor does not apply to a call it never entered, or nothing.
+
+    A sub-actor that was never heard, never wrote and failed no tool call never entered, so nothing
+    the agent did could have been a response to it.
+    """
+    if not sub_actor_id:
+        return ""
+    heard = any(
+        isinstance(message, dict)
+        and message.get("role") == "sub_actor"
+        and message.get("sub_actor") == sub_actor_id
+        for message in messages or ()
+    )
+    faulted = any(getattr(call, "sub_actor", "") == sub_actor_id for call in calls or ())
+    if heard or faulted:
+        return ""
+    return f"Not applicable: {sub_actor_id} did not enter this call, so there was nothing to respond to."
+
+
+def sub_goal_subject_problems(sub_actor_id: str, root: Path) -> list[str]:
+    """Why a sub-goal cannot be about this sub-actor, or nothing."""
+    if not sub_actor_id:
+        return []
+    cast = load_cast(root)
+    if cast.get(sub_actor_id) is None:
+        known = ", ".join(one.id for one in cast.sub_actors) or "none"
+        return [f"sub_actor {sub_actor_id!r} is not in the cast (it has: {known})"]
+    return []

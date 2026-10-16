@@ -24,7 +24,7 @@ from .amend import add_rule, drop_rule, fix_tool, widen
 from .background_noise import place_for, places
 from fi.simulate.simulation.sub_actors import TRIGGER_ABOUT, described
 
-from .cast import binding_problems, load_cast, sub_actors_enabled
+from .cast import binding_problems, load_cast, sub_actors_enabled, sub_goal_subject_problems
 from .catalogue import (
     NO_OVERLAY,
     CRITERIA_RULES,
@@ -52,7 +52,7 @@ from .folder import (
     write_folder,
     write_index,
 )
-from .prove import play_reference_step, prepared, prove
+from .prove import branches_disagree, play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -802,31 +802,45 @@ def _sub_actor_field() -> dict[str, Any]:
 
 
 def _bindings_that_cannot_run(
-    scenario: Scenario, world_root: Path, catalogue: Catalogue, *, spoken: bool
+    scenario: Scenario,
+    world_root: Path,
+    catalogue: Catalogue,
+    *,
+    spoken: bool,
+    tools: set[str] | None = None,
 ) -> list[str]:
-    """Sub-actor bindings that name no sub-actor in the cast, or say when it enters in a way no run can."""
-    if not scenario.sub_actors:
-        return []
-    if not sub_actors_enabled():
-        return ["sub_actors: this environment has no sub-actors, so leave sub_actors empty"]
-    problems = binding_problems(
-        scenario.sub_actors,
-        load_cast(world_root),
-        modality="voice" if spoken else "chat",
-        max_turns=scenario.max_turns,
-    )
-    # A sub-actor that may not enter needs every sub-goal about it to stand aside when it did not.
+    """Sub-actor bindings no run can honour, and sub-goals about a sub-actor the scenario never brings in."""
     about = {
-        goal.sub_actor
-        for goal in (catalogue.named(name) for name in scenario.sub_goals)
-        if goal is not None and goal.sub_actor
+        name: goal.sub_actor
+        for name in scenario.sub_goals
+        if (goal := catalogue.named(name)) is not None and goal.sub_actor
     }
-    problems.extend(
-        f"{binding.id}: by probability it may not enter, so name a sub-goal whose sub_actor is "
-        f"{binding.id}; a sub-goal about something that did not happen cannot be graded"
-        for binding in scenario.sub_actors
-        if binding.trigger.kind == "probability" and binding.id not in about
-    )
+    bound = {binding.id for binding in scenario.sub_actors}
+    # Unbound, it never enters, so such a sub-goal would hold on every call whatever the agent did.
+    problems = [
+        f"{name} is about {sub_actor}, which this scenario does not bind; bind it or name another sub-goal"
+        for name, sub_actor in about.items()
+        if sub_actor not in bound
+    ]
+    if scenario.sub_actors and not sub_actors_enabled():
+        problems.append("this environment has no sub-actors, so leave sub_actors empty")
+    elif scenario.sub_actors:
+        problems.extend(
+            binding_problems(
+                scenario.sub_actors,
+                load_cast(world_root),
+                modality="voice" if spoken else "chat",
+                max_turns=scenario.max_turns,
+                tools=tools,
+            )
+        )
+        # A sub-actor that may not enter needs every sub-goal about it to stand aside when it did not.
+        problems.extend(
+            f"{binding.id}: by probability it may not enter, so name a sub-goal whose sub_actor is "
+            f"{binding.id}; a sub-goal about something that did not happen cannot be graded"
+            for binding in scenario.sub_actors
+            if binding.trigger.kind == "probability" and binding.id not in about.values()
+        )
     return ["sub_actors: " + problem for problem in problems]
 
 
@@ -843,6 +857,7 @@ def accept_scenario(
     rename_on_collision: bool = False,
     vocabulary: list[str] | None = None,
     spoken: bool = True,
+    tools: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -881,7 +896,9 @@ def accept_scenario(
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-        problems.extend(_bindings_that_cannot_run(scenario, world_root, catalogue, spoken=spoken))
+        problems.extend(
+            _bindings_that_cannot_run(scenario, world_root, catalogue, spoken=spoken, tools=tools)
+        )
     finally:
         trial.close()
 
@@ -908,6 +925,15 @@ def accept_scenario(
             finally:
                 world.close()
         return _err(said)
+
+    drawn_differently = branches_disagree(scenario, catalogue, world_root)
+    if drawn_differently:
+        return _err(
+            "Not kept. These sub-goals pass or fail depending on whether a sub-actor bound by "
+            "probability entered, so they would grade the draw rather than the agent: "
+            + ", ".join(drawn_differently)
+            + ". Give each the `sub_actor` it depends on, or bind that sub-actor without probability."
+        )
 
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:
@@ -1306,7 +1332,7 @@ def scenario_tools(
             overlay=str(args.get("overlay") or ""),
             sub_actor=str(args.get("sub_actor") or ""),
         )
-        problems = validate_sub_goal(sub_goal)
+        problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(sub_goal.sub_actor, world_root)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1650,6 +1676,7 @@ def scenario_tools(
             rename_on_collision=rename_on_collision,
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
+            tools=set(contract.tool_names()),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0

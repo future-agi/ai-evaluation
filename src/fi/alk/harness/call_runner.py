@@ -53,9 +53,9 @@ from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
 from .background_noise import place_of, scenario_source
-from fi.simulate.simulation.sub_actors import drawn
+from fi.simulate.simulation.sub_actors import tells_person
 
-from .cast import Binding, Cast, bound_faults, bound_voices, load_cast, sub_actors_enabled
+from .cast import Binding, Cast, bound_voices, entering_faults, load_cast, sub_actors_enabled
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
@@ -754,16 +754,6 @@ def _arm_faults(dsn: str, rows: list[dict[str, Any]]) -> None:
         logger.warning("sub-actor faults not armed: %s", type(exc).__name__)
 
 
-def _entering_faults(bindings: list[Binding], cast: Cast, seed: str) -> list[dict[str, Any]]:
-    """The faults this call applies: a probability binding is drawn once, from the call's own seed."""
-    skipped = {
-        binding.id
-        for binding in bindings
-        if binding.trigger.kind == "probability" and not drawn(seed, binding.id, binding.trigger.p)
-    }
-    return [row for row in bound_faults(bindings, cast) if row["sub_actor"] not in skipped]
-
-
 def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
     if not sub_actors_enabled():
         return []
@@ -777,31 +767,21 @@ def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
 
 
 def _with_sub_actors(instruction: str, environ: Mapping[str, str]) -> str:
-    """The caller's situation, saying who else is part of the call and what the caller does then."""
+    """The person's situation, saying who else is part of the call and what the person does then."""
     try:
         voices = json.loads(environ.get(SUB_ACTOR_VOICES_ALIAS) or "[]")
     except ValueError:
         return instruction
-    lines = []
-    for one in voices:
-        if not isinstance(one, dict) or not one.get("name"):
-            continue
-        who = f"{one['name']} ({one['role']})" if one.get("role") else one["name"]
-        channel = one.get("channel") or "audio_mix"
-        if channel == "audio_mix":
-            lines.append(f"With you, and may speak during the call: {who}.")
-        elif channel == "audio_handoff":
-            lines.append(
-                f"{who} may take the phone from you for a few turns. While they have it, say "
-                "nothing; carry on once they hand it back."
-            )
-        elif channel == "ivr":
-            lines.append(
-                f"{who} answers first. Say nothing until it has put the call through to you."
-            )
-    if not lines:
-        return instruction
-    return instruction + "\n\n" + "\n".join(lines)
+    lines = [
+        tells_person(
+            str(one.get("channel") or ""),
+            f"{one['name']} ({one['role']})" if one.get("role") else str(one["name"]),
+        )
+        for one in voices
+        if isinstance(one, dict) and one.get("name")
+    ]
+    lines = [line for line in lines if line]
+    return instruction + "\n\n" + "\n".join(lines) if lines else instruction
 
 
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -1461,7 +1441,7 @@ class CallRunnerImpl:
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
                 if sub_actors_enabled():
-                    _arm_faults(endpoint.address, _entering_faults(bindings, cast, run_id))
+                    _arm_faults(endpoint.address, entering_faults(bindings, cast, run_id))
                 if voices:
                     # The engine reads the live trace for on_tool and on_escalation triggers, and
                     # writes what an inbound_message brings into the world.
@@ -1550,8 +1530,13 @@ class CallRunnerImpl:
             if case is not None and case.ended_at is not None
             else datetime.now(timezone.utc)
         )
+        # The person's and the agent's turns; a sub-actor's lines are not turns of the conversation.
         turns = (
-            len(case.result.messages)
+            sum(
+                1
+                for message in case.result.messages
+                if not (isinstance(message, Mapping) and message.get("role") == "sub_actor")
+            )
             if case is not None and case.result is not None
             else 0
         )

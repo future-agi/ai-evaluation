@@ -64,7 +64,9 @@ from .caller_barge_in import (
     selected_call_indices,
 )
 from .opening import PromptOpeningGate
-from .sub_actor_voice import FOREGROUND, SubActorVoice, with_sub_actor_turns, world_access
+from fi.simulate.simulation.sub_actors import enters
+
+from .sub_actor_voice import SubActorsOnCall, SubActorVoice, with_sub_actor_turns, world_access
 from fi.simulate.agent.definition import (
     AgentDefinition,
     LiveKitSimulatorRuntime,
@@ -713,6 +715,8 @@ class _TestRunnerAgent(Agent):
         self._usage_collector = metrics.ModelUsageCollector()
         self._prompt_opening: PromptOpeningGate | None = None
         self._caller_barge_in: CallerBargeIn | None = None
+        # Told about each committed agent turn; True while a sub-actor holds the line.
+        self._sub_actor_turn: Any = None
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         if self._call_over:
@@ -722,6 +726,12 @@ class _TestRunnerAgent(Agent):
         gate = self._prompt_opening
         if gate is not None and not gate.accepts(new_message.text_content):
             logger.info("prompt opening gate: waiting after non-interactive disclosure")
+            raise StopResponse()
+        if self._sub_actor_turn is not None and await self._sub_actor_turn(new_message.text_content or ""):
+            # Someone else holds the line and has answered this turn; the person stays silent.
+            if self._session is not None:
+                self._session.history.insert(new_message)
+            await _remember_answered_turn(self, new_message)
             raise StopResponse()
         if self._caller_barge_in is not None:
             self._caller_barge_in.target_ended()
@@ -1947,8 +1957,7 @@ class LiveKitEngine(BaseEngine):
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
         caller_barge_in: CallerBargeIn | None = None
-        sub_actor_voices: list[SubActorVoice] = []
-        agent_turns_ended = 0
+        sub_actors = SubActorsOnCall([])
         # Set the moment the conversation ends. A target transcription stream
         # still in flight at that point is the target's final utterance; it must
         # be recorded into the transcript, but WITHOUT triggering another
@@ -2349,7 +2358,10 @@ class LiveKitEngine(BaseEngine):
 
                 session.on("agent_state_changed", on_simulator_state_changed)
 
-            sub_actor_voices = self._sub_actor_voices(customer_agent, models, session, seed=run_id)
+            sub_actors = SubActorsOnCall(
+                self._sub_actor_voices(customer_agent, models, session, seed=run_id)
+            )
+            customer_agent._sub_actor_turn = sub_actors.agent_turn if sub_actors else None
 
             # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
             # silence after the target finishes. Register before dispatch/readiness so even an
@@ -2373,12 +2385,6 @@ class LiveKitEngine(BaseEngine):
                         target_after_preamble_started.set()
                     opening_preamble_audio_finished.clear()
                 elif new_state == "listening":
-                    nonlocal agent_turns_ended
-                    agent_turns_ended += 1
-                    for voice in sub_actor_voices:
-                        voice.agent_turn_ended(
-                            agent_turns_ended, target_stt_finals[-1] if target_stt_finals else ""
-                        )
                     if caller_barge_in is not None and not target_transcription_mode:
                         caller_barge_in.target_ended()
                     if prompt_opening is not None:
@@ -2805,6 +2811,7 @@ class LiveKitEngine(BaseEngine):
                         opening_followup_started=target_after_preamble_started,
                         prompt_opening=prompt_opening,
                         caller_barge_in=caller_barge_in,
+                        sub_actor_turn=sub_actors.agent_turn if sub_actors else None,
                     )
                 )
                 target_transcription_tasks.add(task)
@@ -2825,7 +2832,10 @@ class LiveKitEngine(BaseEngine):
 
             opener: asyncio.Task[None] | None = None
             preamble_opener: asyncio.Task[None] | None = None
-            if conversation_direction == "simulator_first" or _answered_by_voicemail():
+            if sub_actors.answers_first():
+                # A menu answers the call; the person comes on only once it puts the agent through.
+                await sub_actors.open_line()
+            elif conversation_direction == "simulator_first" or _answered_by_voicemail():
                 # A mailbox speaks first and needs no watchdog to break a mutual silence.
                 customer_agent.open_conversation()
             elif prompt_opening is not None:
@@ -2881,8 +2891,7 @@ class LiveKitEngine(BaseEngine):
             customer_agent.end_of_call()
             if caller_barge_in is not None:
                 await caller_barge_in.close()
-            for voice in sub_actor_voices:
-                await voice.close()
+            await sub_actors.close()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -3021,8 +3030,7 @@ class LiveKitEngine(BaseEngine):
             )
             if caller_barge_in is not None:
                 await caller_barge_in.close()
-            for voice in sub_actor_voices:
-                await voice.close()
+            await sub_actors.close()
             if customer_agent is not None:
                 customer_agent.end_of_call()
             # Stop the media source before flushing its final transcription.
@@ -3259,7 +3267,7 @@ class LiveKitEngine(BaseEngine):
                     "livekit_outcome_missing",
                     "LiveKit test case ended without an outcome",
                 )
-        sub_actor_events = [event for voice in sub_actor_voices for event in voice.events()]
+        sub_actor_events = sub_actors.events()
         messages = with_sub_actor_turns(messages, sub_actor_events)
         # Failed calls keep their evidence and original failure, too.
         outcome.messages = messages
@@ -3394,15 +3402,19 @@ class LiveKitEngine(BaseEngine):
             return []
         tools_called, write = world_access(os.environ.get("HARNESS_SUB_ACTOR_WORLD", ""))
 
-        async def say(frames: list[Any], text: str) -> None:
+        async def say(frames: list[Any], text: str, name: str) -> None:
             async def stream() -> Any:
                 for frame in frames:
                     yield frame
 
+            # Spoken as its own turn, never as the person's, and noted in the person's context.
             handle = session.say(text, audio=stream(), allow_interruptions=False, add_to_chat_ctx=False)
             waiter = getattr(handle, "wait_for_playout", None)
             if callable(waiter):
                 await waiter()
+            context = customer_agent.chat_ctx.copy()
+            context.add_message(role="system", content=f"{name} said on the line: {text}")
+            await customer_agent.update_chat_ctx(context)
         base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
 
         async def play(frames: list[Any], volume: float) -> None:
@@ -3439,7 +3451,7 @@ class LiveKitEngine(BaseEngine):
                 model=models.llm,
                 tts=tts,
                 play=play,
-                say=say if actor.get("channel") in FOREGROUND else None,
+                say=say if enters(str(actor.get("channel") or "")) == "line" else None,
                 tools_called=tools_called,
                 write=write,
                 seed=seed,
@@ -3623,6 +3635,7 @@ async def _forward_target_transcription(
     opening_followup_started: asyncio.Event | None = None,
     prompt_opening: PromptOpeningGate | None = None,
     caller_barge_in: CallerBargeIn | None = None,
+    sub_actor_turn: Any = None,
 ) -> None:
     # Receiver-side wall clock — same clock domain as the simulator's
     # ChatMessage.metrics, and the target's transcript IO is playback-synced
@@ -3708,6 +3721,11 @@ async def _forward_target_transcription(
                     getattr(session, "current_agent", None), message
                 )
                 return
+        if sub_actor_turn is not None and await sub_actor_turn(transcript):
+            # Someone else holds the line and has answered this turn; the person stays silent.
+            message = session.history.add_message(role="user", content=transcript)
+            await _remember_answered_turn(getattr(session, "current_agent", None), message)
+            return
         # Only elicit a simulator response while the conversation is live; once
         # it has ended the target's turn is recorded but the simulator stays
         # silent. The turn MUST travel through ``generate_reply(user_input=...)``:

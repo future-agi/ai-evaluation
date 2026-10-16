@@ -48,7 +48,7 @@ def _setup(tmp_path, monkeypatch, actor, trigger):
     monkeypatch.setattr(conversation, "Stage", _Stage)
     save_cast(tmp_path, Cast(sub_actors=[actor]))
     scenario = Scenario(name="s", instruction="Order one item.", sub_actors=[Binding(id=actor.id, trigger=trigger)])
-    return _ChatSubActors(scenario, tmp_path, model=None)
+    return _ChatSubActors(scenario, tmp_path, model=None, seed="run-1")
 
 
 def test_a_second_participant_writes_after_the_agent_turn_its_trigger_names(tmp_path, monkeypatch):
@@ -100,7 +100,7 @@ def test_with_the_switch_off_nobody_else_enters(tmp_path, monkeypatch):
     others = _setup(tmp_path, monkeypatch, actor, Trigger())
     monkeypatch.delenv("HARNESS_SUB_ACTORS")
     scenario = Scenario(name="s", instruction="x", sub_actors=[Binding(id="subactor_friend")])
-    assert _ChatSubActors(scenario, tmp_path, model=None).entering == []
+    assert _ChatSubActors(scenario, tmp_path, model=None, seed="run-1").entering == []
     assert others.entering
 
 

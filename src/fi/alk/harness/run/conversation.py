@@ -12,6 +12,7 @@ All three are recorded, because how a conversation ended is often the finding.
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -66,7 +67,12 @@ class Transcript:
     simulator_output_tokens: int = 0
 
     def spoken(self) -> str:
-        return "\n".join(f"{turn.speaker}: {turn.text}" for turn in self.exchanges)
+        return "\n".join(
+            f"{turn.name} (not the customer): {turn.text}"
+            if turn.speaker == "sub_actor"
+            else f"{turn.speaker}: {turn.text}"
+            for turn in self.exchanges
+        )
 
     def canonical_messages(self) -> list[dict[str, str]]:
         """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
@@ -185,15 +191,11 @@ def customer_prompt(
     )
 
 
-_IN_CHAT = frozenset({"thread_message", "inbound_message"})
-_NEEDS_TOOLS = frozenset({"on_tool", "on_escalation"})
-
-
 class _ChatSubActors:
     """The scenario's sub-actors that enter a chat: a second participant, or something that arrives."""
 
-    def __init__(self, scenario: Scenario, world_root: Any, model: str | None) -> None:
-        import secrets
+    def __init__(self, scenario: Scenario, world_root: Any, model: str | None, seed: str) -> None:
+        from fi.simulate.simulation.sub_actors import enters
 
         from ..cast import bound_participants, load_cast, sub_actors_enabled
 
@@ -202,11 +204,11 @@ class _ChatSubActors:
             self.entering = [
                 one
                 for one in bound_participants(scenario.sub_actors, load_cast(world_root))
-                if one["channel"] in _IN_CHAT
+                if enters(one["channel"]) in ("thread", "world")
             ]
         self.model = model
-        # Drawn once per conversation, so a probability trigger varies across runs, not within one.
-        self.seed = secrets.token_hex(8)
+        # The run's own seed, shared with its fault arming, so one draw decides a probability binding.
+        self.seed = seed
         self.fired: set[str] = set()
         self.turns_left: dict[str, int] = {}
 
@@ -283,6 +285,7 @@ async def converse(
     world_root: Any = None,
     model: str | None = None,
     on_exchange: Callable[[Exchange], Any] | None = None,
+    seed: str = "",
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened."""
     transcript = Transcript()
@@ -310,7 +313,7 @@ async def converse(
         if on_exchange:
             on_exchange(exchange)
 
-    others = _ChatSubActors(scenario, world_root, model)
+    others = _ChatSubActors(scenario, world_root, model, seed or secrets.token_hex(8))
     await target.open()
     await customer.__aenter__()
     try:

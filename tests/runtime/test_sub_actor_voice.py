@@ -72,7 +72,7 @@ def _voice(
         model=_Model(lines),
         tts=_Tts(),
         play=play,
-        say=lambda frames, text: _said(played, frames, text),
+        say=lambda frames, text, name: _said(played, frames, text),
         tools_called=lambda: ["lookup", "transfer"],
         write=lambda collection, record: played.append(("wrote", collection, record)),
         seed="run-1",
@@ -89,12 +89,12 @@ def test_it_enters_after_the_agent_turn_its_trigger_names_and_only_once():
     async def scenario():
         voice, played = _voice(turn=2)
         voice.start()
-        voice.agent_turn_ended(1)
+        await voice.on_agent_turn(1)
         await asyncio.gather(*voice._tasks)
         assert played == []
-        voice.agent_turn_ended(2)
-        voice.agent_turn_ended(2)
-        voice.agent_turn_ended(3)
+        await voice.on_agent_turn(2)
+        await voice.on_agent_turn(2)
+        await voice.on_agent_turn(3)
         await asyncio.gather(*voice._tasks)
         return voice, played
 
@@ -120,7 +120,7 @@ def test_a_failed_preparation_leaves_it_silent_without_failing_the_call():
 
         voice.model = Broken()
         voice.start()
-        voice.agent_turn_ended(2)
+        await voice.on_agent_turn(2)
         await asyncio.gather(*voice._tasks)
         await voice.close()
         return voice, played
@@ -143,20 +143,24 @@ def test_what_it_said_is_placed_in_the_transcript_where_it_was_heard():
 
 
 def _run(voice, *turns):
+    held = []
+
     async def scenario():
         voice.start()
         for number, text in turns:
-            voice.agent_turn_ended(number, text)
+            held.append(await voice.on_agent_turn(number, text))
             await asyncio.gather(*voice._tasks)
         await voice.close()
 
     asyncio.run(scenario())
+    return held
 
 
 def test_someone_who_takes_the_line_speaks_one_line_per_agent_turn_for_its_turns():
     voice, played = _voice(kind="mid_journey", turn=1, channel="audio_handoff", lines="Let me talk to them.", max_lines=2)
-    _run(voice, (1, "How can I help?"), (2, "Sure."), (3, "Anything else?"))
+    held = _run(voice, (1, "How can I help?"), (2, "Sure."), (3, "Anything else?"))
     assert played == [("said", "Let me talk to them."), ("said", "Let me talk to them.")]
+    assert held == [True, True, False]
     assert [event["kind"] for event in voice.events()] == ["spoke", "spoke"]
 
 
@@ -193,3 +197,81 @@ def test_an_inbound_message_arrives_in_the_world_when_due():
     _run(voice, (1, "One moment."))
     assert played == [("wrote", "messages", {"body": "a new message"})]
     assert voice.events()[0]["kind"] == "arrived"
+
+
+def test_each_committed_agent_turn_is_counted_once_across_the_call():
+    from fi.simulate.simulation.engines.sub_actor_voice import SubActorsOnCall
+
+    voice, played = _voice(kind="mid_journey", turn=2, channel="audio_handoff", lines="Mine now.", max_lines=1)
+    call = SubActorsOnCall([voice])
+
+    async def scenario():
+        return [await call.agent_turn("one"), await call.agent_turn("two"), await call.agent_turn("three")]
+
+    assert asyncio.run(scenario()) == [False, True, False]
+    assert played == [("said", "Mine now.")]
+
+
+def test_a_menu_bound_always_answers_before_anyone_speaks():
+    from fi.simulate.simulation.engines.sub_actor_voice import SubActorsOnCall
+
+    voice, played = _voice(kind="always", channel="ivr", lines="Press one for sales.", max_lines=2)
+    call = SubActorsOnCall([voice])
+    assert call.answers_first()
+
+    async def scenario():
+        await call.open_line()
+        return [await call.agent_turn("one"), await call.agent_turn("two")]
+
+    assert asyncio.run(scenario()) == [True, False]
+    assert played == [("said", "Press one for sales."), ("said", "Press one for sales.")]
+
+
+def test_a_forwarded_agent_turn_reaches_the_sub_actors_and_the_person_stays_silent_while_they_hold_the_line():
+    from test_livekit_engine import _FakeReplySession, _FakeTranscriptionReader
+
+    from fi.simulate.simulation.engines import livekit
+
+    heard = []
+
+    async def holds(text):
+        heard.append(text)
+        return text.startswith("transfer")
+
+    async def exercise():
+        session = _FakeReplySession()
+        await livekit._forward_target_transcription(
+            _FakeTranscriptionReader("Let me check."), session, sub_actor_turn=holds
+        )
+        await livekit._forward_target_transcription(
+            _FakeTranscriptionReader("transfer you now"), session, sub_actor_turn=holds
+        )
+        return session
+
+    session = asyncio.run(exercise())
+    assert heard == ["Let me check.", "transfer you now"]
+    assert session.reply_inputs == ["Let me check."]
+    assert ("user", "transfer you now") in session.history_adds
+
+
+def test_a_heard_agent_turn_reaches_the_sub_actors_once_and_silences_the_person_while_they_hold_the_line():
+    from livekit.agents.llm import ChatMessage
+    from test_livekit_engine import _scenario
+
+    from fi.simulate.simulation.engines import livekit
+
+    heard = []
+
+    async def holds(text):
+        heard.append(text)
+        return text == "hold"
+
+    async def exercise():
+        agent = livekit._TestRunnerAgent(persona=_scenario().dataset[0], instructions="Be a customer.")
+        agent._sub_actor_turn = holds
+        await agent.on_user_turn_completed(None, SimpleNamespace(text_content="pass"))
+        with pytest.raises(livekit.StopResponse):
+            await agent.on_user_turn_completed(None, ChatMessage(role="user", content=["hold"]))
+
+    asyncio.run(exercise())
+    assert heard == ["pass", "hold"]

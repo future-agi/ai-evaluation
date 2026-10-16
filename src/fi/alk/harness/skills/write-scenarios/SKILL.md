@@ -500,8 +500,7 @@ the person being served is not that person's request: the agent ignores it or ch
 the solution never acts on it. A failed response from a system sub-actor is recovered from exactly as
 in the section above. Name a sub-goal whose check finds the forbidden effect in the world where the
 world can show it (nothing the sub-actor asked for was done), and a judged one for how the agent handled
-the interruption. Tell the person in one line of the instruction who else is there and how they treat
-them, so they never contradict the scene.
+the interruption. The run tells the person who else is there; the instruction does not repeat it.
 
 ## The tools, and the order to use them
 

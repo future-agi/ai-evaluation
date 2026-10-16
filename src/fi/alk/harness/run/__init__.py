@@ -204,7 +204,7 @@ async def run_scenario(
             )
         # Settled by code first. The judge is only handed the sub-goals whose catalogue entry
         # says nothing observable decides them.
-        settled = grade_sub_goals(world, scenario, catalogue, transcript.calls)
+        settled = grade_sub_goals(world, scenario, catalogue, transcript.calls, transcript.canonical_messages())
         ending = ", ".join(
             f"{name}: {len(rows)} rows"
             for name, rows in sorted(world.observe().state.items())

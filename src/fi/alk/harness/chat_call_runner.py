@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,10 +20,13 @@ from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
+    _arm_faults,
     _clear_file_tool_calls,
     _collect_file_tool_calls,
+    _sub_actor_bindings,
     _with_scenario_edits,
 )
+from .cast import entering_faults, load_cast
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
@@ -298,8 +302,11 @@ class _HostedChatTarget:
         world: GeneratedWorld,
         scenario_key: str,
         scenario_id: str,
+        seed: str = "",
     ) -> None:
         self._wrapper = wrapper
+        # The call's own seed: one draw decides a probability binding for faults and participants.
+        self.seed = seed
         self._contract = contract
         self.world = world
         self._scenario_key = scenario_key
@@ -443,6 +450,7 @@ async def _drive_conversation(
         scenario,
         contract,
         world_root=bundle_dir,
+        seed=target.seed,
     )
 
 
@@ -537,6 +545,15 @@ class HostedChatCallRunner:
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        # Drawn once per call, so a probability binding varies across runs and agrees within one.
+        seed = secrets.token_hex(8)
+        bindings = _sub_actor_bindings(document)
+        if bindings:
+            faults = entering_faults(bindings, load_cast(self._context.bundle_dir), seed)
+            target_world.faults = faults
+            world_db = runtime.endpoints.get("world_db")
+            if world_db is not None:
+                _arm_faults(world_db.address, faults)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -545,6 +562,7 @@ class HostedChatCallRunner:
                     world=target_world,
                     scenario_key=scenario.scenario_key,
                     scenario_id=scenario.scenario_id,
+                    seed=seed,
                 ),
                 conversation_scenario,
                 self._contract,
@@ -611,7 +629,7 @@ class HostedChatCallRunner:
             )
         return CallOutcome(
             calls=calls,
-            turns=len(transcript.exchanges),
+            turns=sum(1 for turn in transcript.exchanges if turn.speaker != "sub_actor"),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

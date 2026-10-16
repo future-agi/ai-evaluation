@@ -13,7 +13,7 @@ from test_call_runner import FakeAdapter, _FakeScenario, _context, _postgres_end
 from fi.alk.harness.bundle_v2 import EvidenceSeam
 
 from fi.alk.harness import call_runner as cr
-from fi.alk.harness.cast import Behaviour, Cast, FaultProfile, SubActor, save_cast
+from fi.alk.harness.cast import Behaviour, Cast, FaultProfile, SubActor, entering_faults, save_cast
 from fi.alk.harness.world import GeneratedWorld
 
 _CAST = Cast(
@@ -91,7 +91,11 @@ def test_with_the_switch_off_nothing_is_carried(tmp_path, monkeypatch):
 
 
 def test_the_caller_is_told_who_else_is_there():
-    environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Bystander", "role": "someone near the caller"}])}
+    environ = {
+        cr.SUB_ACTOR_VOICES_ALIAS: json.dumps(
+            [{"name": "Bystander", "role": "someone near the caller", "channel": "audio_mix"}]
+        )
+    }
     assert "Bystander (someone near the caller)" in cr._with_sub_actors("Book it.", environ)
     assert cr._with_sub_actors("Book it.", {}) == "Book it."
 
@@ -149,7 +153,7 @@ def test_a_service_bound_by_probability_is_armed_only_when_its_draw_says():
 
     bindings = [Binding(id="subactor_service", trigger=Trigger(kind="probability", p=0.5))]
     seeds = [f"run-{n}" for n in range(40)]
-    armed = [bool(cr._entering_faults(bindings, _CAST, seed)) for seed in seeds]
+    armed = [bool(entering_faults(bindings, _CAST, seed)) for seed in seeds]
     assert armed == [drawn(seed, "subactor_service", 0.5) for seed in seeds]
     assert any(armed) and not all(armed)
 
@@ -158,4 +162,25 @@ def test_the_caller_is_told_what_to_do_when_someone_takes_the_line():
     environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Partner", "channel": "audio_handoff"}])}
     assert "say nothing" in cr._with_sub_actors("Book it.", environ)
     environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Supervisor", "channel": "transfer_leg"}])}
-    assert cr._with_sub_actors("Book it.", environ) == "Book it."
+    assert "If the agent transfers you, Supervisor answers" in cr._with_sub_actors("Book it.", environ)
+
+
+def test_a_fault_leaves_a_call_that_already_failed_as_it_was():
+    class Refusing(GeneratedWorld):
+        name = "w"
+        tools = [{"name": "book"}]
+        handlers = {"book": "def handle(args, db):\n    raise ToolError('no seats')\n"}
+
+    world = Refusing(":memory:")
+    world.faults = [{"tool": "book", "kind": "content", "on_call": 1, "latency_ms": 0, "content": "x", "sub_actor": "s"}]
+    made = world.call("book", {})
+    assert not made.ok and made.fault == "" and made.result is None
+
+
+def test_turns_count_only_the_person_and_the_agent():
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    transcript = Transcript(
+        exchanges=[Exchange("customer", "hi"), Exchange("sub_actor", "add one", name="F", sub_actor="s"), Exchange("agent", "ok")]
+    )
+    assert sum(1 for turn in transcript.exchanges if turn.speaker != "sub_actor") == 2

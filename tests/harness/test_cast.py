@@ -159,20 +159,21 @@ def test_a_binding_can_be_written_as_a_bare_id():
 )
 def test_a_system_sub_actor_is_refused_for_each_way_it_cannot_run(change, said):
     actor = _service().model_copy(update=change)
-    problems = sub_actor_problems(actor, modality="voice", tools={"add", "lst"}, faults_reach=True)
+    problems = sub_actor_problems(actor, modality="voice", tools={"add", "lst"}, reachable={"add", "lst"})
     assert any(said in one for one in problems), problems
 
 
 def test_a_voice_sub_actor_needs_a_voice_agent_and_a_behaviour():
-    assert not sub_actor_problems(_voice(), modality="voice", tools=set(), faults_reach=False)
-    assert sub_actor_problems(_voice(), modality="chat", tools=set(), faults_reach=False)
+    assert not sub_actor_problems(_voice(), modality="voice", tools=set(), reachable=set())
+    assert sub_actor_problems(_voice(), modality="chat", tools=set(), reachable=set())
     silent = _voice().model_copy(update={"behaviour": None})
-    assert sub_actor_problems(silent, modality="voice", tools=set(), faults_reach=False)
+    assert sub_actor_problems(silent, modality="voice", tools=set(), reachable=set())
 
 
-def test_a_fault_on_tools_nothing_in_the_run_stands_between_is_refused():
-    problems = sub_actor_problems(_service(), modality="voice", tools={"add"}, faults_reach=False)
-    assert any("could never be applied" in one for one in problems)
+def test_a_fault_on_a_tool_the_agent_runs_in_its_own_process_is_refused():
+    problems = sub_actor_problems(_service(), modality="voice", tools={"add", "lst"}, reachable={"lst"})
+    assert any("could never be applied: add" in one for one in problems)
+    assert not sub_actor_problems(_service(), modality="voice", tools={"add", "lst"}, reachable={"add"})
 
 
 def test_bindings_are_refused_when_they_cannot_run():
@@ -343,14 +344,14 @@ def test_every_trigger_kind_is_checked_before_a_run():
 
 def test_a_channel_is_refused_where_no_run_can_carry_it():
     speaker = _voice().model_copy(update={"channel": "thread_message"})
-    assert not sub_actor_problems(speaker, modality="chat", tools=set(), faults_reach=False)
-    assert sub_actor_problems(speaker, modality="voice", tools=set(), faults_reach=False)
+    assert not sub_actor_problems(speaker, modality="chat", tools=set(), reachable=set())
+    assert sub_actor_problems(speaker, modality="voice", tools=set(), reachable=set())
     page = _voice().model_copy(update={"channel": "page_content"})
-    assert any("no run" in one for one in sub_actor_problems(page, modality="browser", tools=set(), faults_reach=False))
+    assert any("no run" in one for one in sub_actor_problems(page, modality="browser", tools=set(), reachable=set()))
     arrives = SubActor(id="s", name="Inbox", kind="behavioral", channel="inbound_message", behaviour=Behaviour(prompt="x"))
-    assert sub_actor_problems(arrives, modality="chat", tools=set(), faults_reach=False)
+    assert sub_actor_problems(arrives, modality="chat", tools=set(), reachable=set())
     arrives = arrives.model_copy(update={"inbound": {"collection": "messages", "record": {"body": "hi"}}})
-    assert not sub_actor_problems(arrives, modality="chat", tools=set(), faults_reach=False)
+    assert not sub_actor_problems(arrives, modality="chat", tools=set(), reachable=set())
 
 
 def test_a_sub_actor_that_may_not_enter_needs_a_sub_goal_about_it(tmp_path, monkeypatch):
@@ -433,9 +434,106 @@ def test_every_delivered_channel_and_trigger_is_offered_accepted_and_taught(tmp_
         from fi.alk.harness.cast import SubActor as Actor
 
         problems = sub_actor_problems(
-            Actor.model_validate(actor), modality=modality, tools={"add", "lst"}, faults_reach=True
+            Actor.model_validate(actor), modality=modality, tools={"add", "lst"}, reachable={"add", "lst"}
         )
         assert not problems, (channel, problems)
 
     offered = _sub_actor_field()["sub_actors"]["items"]["properties"]["trigger"]["properties"]["kind"]["enum"]
     assert offered == list(TRIGGERS)
+
+
+def test_a_sub_goal_cannot_be_about_a_sub_actor_outside_the_cast(tmp_path, monkeypatch):
+    root, tools = _cast_tools(tmp_path, monkeypatch)
+    save_cast(root, Cast(sub_actors=[_voice()]))
+    refused = asyncio.run(
+        tools["add_sub_goal"].handler(
+            {"name": "ignored-stranger", "what": "w", "judged": "Applies when: x\nPass when: y\nFail when: z\nIf it does not arise: Pass", "sub_actor": "nobody"}
+        )
+    )
+    assert refused["is_error"] and "not in the cast" in refused["content"][0]["text"]
+
+
+def test_a_sub_goal_about_a_sub_actor_the_scenario_never_brings_in_is_refused(tmp_path, monkeypatch):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    root, _contract, catalogue = _environment(tmp_path)
+    save_cast(root, Cast(sub_actors=[_voice()]))
+    catalogue.sub_goals.append(
+        SubGoal(name="ignored-bystander", what="w", judged="Applies when: x\nPass when: y\nFail when: z\nIf it does not arise: Pass", sub_actor="subactor_bystander")
+    )
+    save_catalogue(catalogue, root)
+    refused = accept_scenario(
+        _scenario(sub_goals=["item-added", "right-item", "ignored-bystander"]), world_root=root, catalogue=catalogue, kept=[]
+    )
+    assert refused["is_error"] and "does not bind" in refused["content"][0]["text"]
+
+
+def test_a_trigger_tool_must_be_named_and_be_one_of_the_agents(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    root, _contract, catalogue = _environment(tmp_path)
+    save_cast(root, Cast(sub_actors=[_voice()]))
+    for trigger, said in (
+        ({"kind": "on_escalation"}, "needs the `tool`"),
+        ({"kind": "on_escalation", "tool": "transfr"}, "not one of the agent's tools"),
+    ):
+        refused = accept_scenario(
+            _scenario(sub_actors=[{"id": "subactor_bystander", "trigger": trigger}]),
+            world_root=root,
+            catalogue=catalogue,
+            kept=[],
+            tools={"add", "lst"},
+        )
+        assert refused["is_error"] and said in refused["content"][0]["text"]
+
+
+def test_a_sub_goal_whose_verdict_depends_on_the_draw_is_refused(tmp_path, monkeypatch):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import branches_disagree
+    from fi.alk.harness.scenario import Scenario
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    root, _contract, catalogue = _environment(tmp_path)
+    failing = _service().model_copy(update={"faults": [FaultProfile(tool="add", kind="error", on_call=1)]})
+    save_cast(root, Cast(sub_actors=[failing]))
+    catalogue.sub_goals.append(
+        SubGoal(name="recovered", what="w", judged="Applies when: x\nPass when: y\nFail when: z\nIf it does not arise: Pass", sub_actor="subactor_service")
+    )
+    save_catalogue(catalogue, root)
+    scenario = Scenario.model_validate(
+        _scenario(
+            sub_actors=[{"id": "subactor_service", "trigger": {"kind": "probability", "p": 0.5}}],
+            sub_goals=["item-added", "right-item", "recovered"],
+        )
+    )
+    assert set(branches_disagree(scenario, catalogue, root)) == {"item-added", "right-item"}
+
+    retries = scenario.model_copy(
+        update={
+            "solution": scenario.solution
+            + [scenario.solution[-1].model_copy()],
+        }
+    )
+    assert branches_disagree(retries, catalogue, root) == ["item-added"]
+
+
+def test_the_cast_is_sealed_even_without_a_catalogue(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _copy_sub_goal_catalogue
+
+    authoring, staging = tmp_path / "authoring", tmp_path / "staging"
+    authoring.mkdir()
+    staging.mkdir()
+    save_cast(authoring, Cast(sub_actors=[_service()]))
+    assert _copy_sub_goal_catalogue(authoring, staging) == ["cast.json"]
+
+
+def test_the_faults_table_exists_only_where_sub_actors_are_on(monkeypatch):
+    from fi.alk.harness.bundle_author_v2 import _seed_prefix
+
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    assert "_alk_faults" not in _seed_prefix() and "_alk_tool_trace" in _seed_prefix()
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    assert "_alk_faults" in _seed_prefix()

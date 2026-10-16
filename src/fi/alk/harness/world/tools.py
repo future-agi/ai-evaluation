@@ -51,6 +51,7 @@ from ..cast import (
     load_cast,
     save_cast,
     sub_actor_problems,
+    sub_goal_subject_problems,
     sub_actors_enabled,
 )
 from ..checks import run_check, run_world_check
@@ -365,27 +366,38 @@ def _binding(
     )
 
 
-def _faults_reach(source_root: str, world: Any, tools: set[str]) -> bool:
-    """Whether a run can stand between this agent and its tools, so a fault can be applied there.
+def _faults_reach(contract: AgentContract, source_root: str, world: Any) -> set[str]:
+    """The agent's tools a run can stand in front of, so a fault can be applied to their calls.
 
-    A source agent whose tools are served over HTTP by a `tools-api` service is reached through
-    the bundle's tool proxy; tools the world itself executes are reached in its own `call`.
-    Tools that run inside the agent's own process are reached by nothing the run controls.
+    A tool the world executes itself is reached in its own `call`. A tool the agent's code runs is
+    reached only when it is a service tool served by a `tools-api` service, whose calls pass through
+    the bundle's tool proxy; one running inside the agent's own process is reached by nothing.
     """
-    root = Path(source_root) if source_root else None
-    if root and root.is_dir():
-        for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
-            compose = root / name
-            if not compose.is_file():
-                continue
-            try:
-                services = (yaml.safe_load(compose.read_text(encoding="utf-8")) or {}).get("services")
-            except (OSError, yaml.YAMLError):
-                continue
-            if isinstance(services, dict) and "tools-api" in services:
-                return True
     owned_elsewhere = set(getattr(world, "runtime_tools", set()) or set())
-    return bool(tools - owned_elsewhere)
+    proxied = _serves_tools_api(source_root)
+    reachable = set()
+    for name in contract.tool_names():
+        entry = contract.entry_for(name)
+        if name not in owned_elsewhere or (proxied and entry is not None and entry.mode == "service"):
+            reachable.add(name)
+    return reachable
+
+
+def _serves_tools_api(source_root: str) -> bool:
+    root = Path(source_root) if source_root else None
+    if not root or not root.is_dir():
+        return False
+    for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+        compose = root / name
+        if not compose.is_file():
+            continue
+        try:
+            services = (yaml.safe_load(compose.read_text(encoding="utf-8")) or {}).get("services")
+        except (OSError, yaml.YAMLError):
+            continue
+        if isinstance(services, dict) and "tools-api" in services:
+            return True
+    return False
 
 
 def _bound_anywhere(destination: Path, sub_actor_id: str) -> list[str]:
@@ -636,12 +648,11 @@ def cast_tools(
             )
         except Exception as invalid:  # noqa: BLE001 - the model is told what was wrong
             return _err(f"Not added. {invalid}"[:600])
-        tools = set(contract.tool_names())
         problems = sub_actor_problems(
             actor,
             modality=str(contract.modality or ""),
-            tools=tools,
-            faults_reach=_faults_reach(source_root, world, tools),
+            tools=set(contract.tool_names()),
+            reachable=_faults_reach(contract, source_root, world),
         )
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
@@ -1446,7 +1457,7 @@ def world_tools(
             overlay=str(args.get("overlay") or ""),
             sub_actor=str(args.get("sub_actor") or ""),
         )
-        problems = validate_sub_goal(sub_goal)
+        problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(sub_goal.sub_actor, destination)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1899,5 +1910,8 @@ TOOL_NAMES = (
     "save_world",
 )
 CAST_TOOL_NAMES = ("add_sub_actor", "drop_sub_actor")
-if sub_actors_enabled():
-    TOOL_NAMES += CAST_TOOL_NAMES
+
+
+def tool_names() -> tuple[str, ...]:
+    """What the world stage publishes in this environment: the cast tools only where sub-actors are on."""
+    return TOOL_NAMES + (CAST_TOOL_NAMES if sub_actors_enabled() else ())
