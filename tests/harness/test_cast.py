@@ -224,7 +224,7 @@ def test_the_cast_tools_are_offered_only_with_the_switch_on(tmp_path, monkeypatc
 
 
 def test_add_sub_actor_writes_the_cast_and_refuses_what_cannot_run(tmp_path, monkeypatch):
-    _root, tools = _cast_tools(tmp_path, monkeypatch)
+    root, tools = _cast_tools(tmp_path, monkeypatch)
     add = tools["add_sub_actor"].handler
 
     said = asyncio.run(add({**_voice().model_dump(), "primary_role": "someone ordering food"}))
