@@ -632,7 +632,7 @@ def open_builder(
     if platform is not None:
         servers[platform.name] = platform
     servers.update(more_servers or {})
-    health = suite_health(contract, out, kept, prove_all=len(kept) <= 200, sealed=sealed) if kept else []
+    health = suite_health(contract, out, kept, sealed=sealed) if kept else []
     health_note = (
         "\n\n## Health when this conversation opened\n\n"
         + (

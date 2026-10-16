@@ -535,8 +535,8 @@ class HostedChatRuntime:
             "contract, a world, the scenarios, every one proved against the world and its "
             "sub-goals) and lists what is still missing; only when nothing is does it hand the "
             "environment on to be validated against the running agent and sealed. `note` says "
-            "anything the person should know, including why the number of scenarios differs "
-            "from the number the build was asked for, if it does.",
+            "anything the person should know. The build finishes with exactly the number of "
+            "scenarios it was asked for.",
             schema({"note": str}, []),
         )
         async def finish_build(args: dict[str, Any]) -> dict[str, Any]:
@@ -558,6 +558,11 @@ class HostedChatRuntime:
                 missing = [
                     f"{len(kept)} of the {asked} scenarios the build asked for are saved; "
                     "write and prove the rest"
+                ]
+            if not missing and asked and len(kept) > asked:
+                missing = [
+                    f"{len(kept)} scenarios are saved but the build asked for {asked}; drop the "
+                    "extra ones, keeping the spread, then finish"
                 ]
             if missing:
                 return text("Not finished:\n- " + "\n- ".join(missing[:60]), error=True)

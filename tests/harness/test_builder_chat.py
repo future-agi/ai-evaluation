@@ -329,6 +329,10 @@ def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exis
     short = asyncio.run(finish.handler({}))
     assert short["is_error"] and "2 of the 3 scenarios" in short["content"][0]["text"]
     assert not (workspace / ".futureagi-build-finished.json").exists()
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: ["one", "two", "three", "four"])
+    over = asyncio.run(finish.handler({}))
+    assert over["is_error"] and "the build asked for 3" in over["content"][0]["text"]
+    assert not (workspace / ".futureagi-build-finished.json").exists()
 
 
     async def commands():
@@ -356,3 +360,27 @@ def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exis
     # Answered next as its own turn, so it is not acknowledged here.
     assert runtime._turn_acknowledged_through == 0
 
+
+
+def test_opening_a_chat_on_a_built_environment_does_not_reprove_the_whole_suite(tmp_path, monkeypatch):
+    import pytest
+
+    from fi.alk.harness import builder
+    from fi.alk.harness.backends import ToolServer
+    from fi.alk.harness.contract import AgentContract
+
+    class Opened(Exception):
+        pass
+
+    def health(*args, **kwargs):
+        raise Opened(kwargs)
+
+    empty = ToolServer(name="stub", version="1", tools=[])
+    monkeypatch.setattr(builder, "load_scenarios", lambda out: ["saved"])
+    monkeypatch.setattr(builder, "scenario_tools", lambda *args, **kwargs: (empty, ["saved"]))
+    monkeypatch.setattr(builder, "knowledge_server", lambda *args, **kwargs: empty)
+    monkeypatch.setattr(builder, "suite_server", lambda *args, **kwargs: empty)
+    monkeypatch.setattr(builder, "suite_health", health)
+    with pytest.raises(Opened) as opened:
+        builder.open_builder(AgentContract(agent_name="demo"), out=tmp_path, source_root=None)
+    assert not opened.value.args[0].get("prove_all")
