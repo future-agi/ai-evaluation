@@ -90,6 +90,13 @@ Find, in roughly this order:
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
 
+   For a native HTTP server that requires a locally chosen shared token, inspect its auth guard.
+   Declare `runtime.interface.local_auth` with `server_environment` and `template_variable`
+   names, then use `{{template_variable}}` in the source-required `headers_template` header.
+   ALK generates the token privately per world and supplies it to that server and chat client.
+   Never declare token values, disable authentication, override supplied credentials, or use this
+   for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
+
 7. **Which side places the call.** Voice only, and read from the agent's own instructions rather
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent

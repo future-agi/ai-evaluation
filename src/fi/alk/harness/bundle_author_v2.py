@@ -2104,6 +2104,23 @@ def resolve_environment_plan(
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
     compose = selected.compose_file if isinstance(selected, ComposeSelection) else None
+    from .contract import RuntimeInterface
+
+    raw_interface = (contract_runtime or {}).get("interface") or {}
+    local_auth = (
+        RuntimeInterface.model_validate(raw_interface).local_auth
+        if raw_interface.get("local_auth")
+        else None
+    )
+    if local_auth:
+        if compose:
+            raise BundleAuthorError("runtime_local_auth_requires_native_process")
+        try:
+            local_auth.reject_collisions(
+                job.available_target_environment_names() | set(job.agent.secret_refs)
+            )
+        except ValueError as exc:
+            raise BundleAuthorError(str(exc)) from exc
     if not compose and runtime_model.dockerfile:
         raise BundleAuthorError(
             "runtime_dockerfile_unsupported: process lane cannot execute a selected Dockerfile"
@@ -2673,8 +2690,16 @@ def resolve_environment_plan(
                     "runtime_directory_outside_process_source"
                 ) from exc
         process = process.model_copy(
-            update={"config_files": resources, "directories": directories}
+            update={
+                "config_files": resources,
+                "directories": directories,
+                "local_auth": local_auth,
+            }
         )
+        if local_auth:
+            local_auth.reject_collisions(
+                set(process.environment) | set(process.build_environment or {})
+            )
         processes.append(process)
         if port:
             capabilities["target_http"] = CapabilityV2(

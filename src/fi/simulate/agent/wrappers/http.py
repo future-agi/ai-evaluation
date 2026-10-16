@@ -160,6 +160,7 @@ class HTTPAgentWrapper(AgentWrapper):
         setup_requests: Optional[Sequence[Mapping[str, Any]]] = None,
         failure_rule: Optional[Mapping[str, Any]] = None,
         secret_values: Optional[Mapping[str, str]] = None,
+        private_response_values: Optional[Mapping[str, str]] = None,
         completed_tool_events: Optional[Mapping[str, Any]] = None,
         completed_tools: Optional[Mapping[str, Any]] = None,
         setup_secrets: Optional[Mapping[str, str]] = None,
@@ -184,6 +185,7 @@ class HTTPAgentWrapper(AgentWrapper):
         self.setup_requests = [dict(item) for item in (setup_requests or [])]
         self.failure_rule = dict(failure_rule) if failure_rule else None
         self.secret_values = dict(secret_values) if secret_values is not None else None
+        self._private_response_values = dict(private_response_values or {})
         self.completed_tool_events = (
             CompletedToolEvents.model_validate(completed_tool_events)
             if completed_tool_events is not None
@@ -427,6 +429,12 @@ class HTTPAgentWrapper(AgentWrapper):
         metadata["external_agent"] = trace
         metadata["external_agent_trace"] = trace
         response.metadata = metadata
+        if self._private_response_values:
+            body = response.model_dump_json()
+            for value in self._private_response_values.values():
+                if value:
+                    body = body.replace(json.dumps(value)[1:-1], "<redacted>")
+            response = AgentResponse.model_validate_json(body)
         return response
 
     async def _run_request(self, function, *args, **kwargs):

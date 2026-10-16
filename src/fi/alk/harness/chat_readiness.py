@@ -54,9 +54,11 @@ async def probe_chat_ingress(
     scenario_id=None,
     scenario_key=None,
     timeout=120.0,
+    local_auth_values=None,
 ):
     from .authoring_runtime_validation import RuntimeValidationError
 
+    redaction_values = {**(redaction_values or {}), **(local_auth_values or {})}
     attempt = uuid4().hex
     key = scenario_key or (document or {}).get("scenario_key") or attempt
     persona = (document or {}).get("persona") or {}
@@ -81,6 +83,7 @@ async def probe_chat_ingress(
             timeout=timeout,
             total_timeout=timeout,
             secret_values=secret_values,
+            local_auth_values=local_auth_values,
         )
         response = await wrapper.call(
             AgentInput(

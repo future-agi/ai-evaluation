@@ -251,6 +251,8 @@ class RepositoryChatTarget:
                 "Record its existing HTTP port, path and protocol during understanding; the "
                 "harness will not reconstruct the repository agent from its prompt."
             )
+        if interface.local_auth:
+            raise ValueError("runtime_local_auth_requires_native_process")
         if interface.kind not in {"http", "websocket"}:
             raise RuntimeError(
                 f"submitted chat interface {interface.kind!r} is not wired for hosted repository "
