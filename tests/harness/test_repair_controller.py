@@ -283,3 +283,17 @@ def test_runtime_budget_is_bounded_and_independent_of_chat_repairs(code):
     assert controller.decide(_observation("chat-b", code)).action is RepairAction.REJECT
     assert controller.history.runtime_patches_used == 1
     assert controller.history.environment_patches_used == 1
+
+
+def test_default_runtime_budget_allows_eight_changed_candidates_but_not_repeats():
+    controller = RepairController()
+    for attempt in range(8):
+        observation = _observation(
+            f"candidate-{attempt}", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
+        )
+        assert controller.decide(observation).action is RepairAction.PATCH_ENVIRONMENT
+        assert controller.decide(observation).action is RepairAction.REJECT
+    assert controller.history.runtime_patches_used == 8
+    assert controller.decide(_observation(
+        "candidate-8", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
+    )).action is RepairAction.REJECT
