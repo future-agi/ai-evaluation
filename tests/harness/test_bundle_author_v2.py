@@ -700,7 +700,10 @@ def test_repository_runtime_environment_rejects_secrets(tmp_path: Path) -> None:
         )
 
 
-def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command", [None, ["python", "-m", "app.agent"]])
+def test_callable_contract_compiles_repository_callback_adapter(
+    tmp_path: Path, command: list[str] | None,
+) -> None:
     source = tmp_path / "ava"
     app = source / "app"
     app.mkdir(parents=True)
@@ -715,6 +718,11 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_callable_contract(authoring)
+    if command:
+        contract_path = authoring / "contract.json"
+        contract = json.loads(contract_path.read_text())
+        contract["runtime"]["command"] = command
+        contract_path.write_text(json.dumps(contract))
 
     bundle = author_bundle_v2(
         source=source,
@@ -2483,11 +2491,8 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
     (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["python", "main.py"])
-    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
-    contract.pop("data_store")
-    contract.pop("tools")
-    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    interface = {"kind": "command", "protocol": "fi.alk"}
+    _write_chat_contract(authoring, command=["python", "main.py"], interface=interface)
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
@@ -2511,62 +2516,64 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     assert manifest.capabilities["target_http"].service == "agent"
     sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert sealed_contract["runtime"]["interface"] == interface
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
-def test_chat_callable_without_exported_callback_falls_back_to_command_bridge(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "source_text",
+    [
+        "print('target')\n",
+        "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+        "HTTPServer(('127.0.0.1', 9119), BaseHTTPRequestHandler).serve_forever()\n",
+    ],
+)
+@pytest.mark.parametrize("interface_kind", [None, "callable"])
+def test_chat_command_without_supported_interface_requires_runtime_repair(
+    tmp_path: Path, source_text: str, interface_kind: str | None,
 ) -> None:
+    from fi.alk.harness.authoring_runtime_validation import (
+        RuntimeValidationError,
+        _fallback_diagnostic,
+        _needs_runtime_plan_repair,
+    )
+
     source = tmp_path / "source"
     source.mkdir()
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
-    (source / "main.py").write_text(
-        "async def main():\n    print('target')\n",
-        encoding="utf-8",
-    )
+    (source / "main.py").write_text(source_text, encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_chat_contract(
         authoring,
         command=["python", "main.py"],
         interface={
-            "kind": "callable",
+            "kind": interface_kind,
             "protocol": "fi.alk",
             "path": "",
             "health_path": "",
             "include_tools": True,
-        },
+        } if interface_kind else None,
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
     output = tmp_path / "bundle"
-    manifest = author_bundle_v2(
-        source=source,
-        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
-        authoring=authoring,
-        output=output,
+    with pytest.raises(
+        BundleAuthorError, match="generated_runtime_entrypoint_ambiguous"
+    ) as failure:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=output,
+        )
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError("environment", str(failure.value))
     )
-
-    agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
-        [".venv/bin/python", "main.py"]
-    )
-    assert "ThreadingHTTPServer" in agent.run_command[-1]
-    sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert "chat" in diagnostic.redacted_message
+    assert _needs_runtime_plan_repair((diagnostic,))
+    assert not (output / "contract.json").exists()
 
 
 def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) -> None:
@@ -3123,14 +3130,18 @@ def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> 
     assert definition["tools"]["get-ticket"]["statement"].endswith("$1;")
 
 
-def test_non_server_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
+def test_explicit_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "pyproject.toml").write_text(
         "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
     )
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["uv", "run", "adk", "run", "app"])
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "run", "app"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
@@ -3457,7 +3468,11 @@ def test_native_process_runs_from_scanned_bundle_context(tmp_path):
     (source / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
     (source / "manifest.json").write_text('{"application": "fixture"}')
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["python", "agent.py"])
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
     document = json.loads((authoring / "contract.json").read_text())
     document["runtime"]["execution"] = "native"
     (authoring / "contract.json").write_text(json.dumps(document))
