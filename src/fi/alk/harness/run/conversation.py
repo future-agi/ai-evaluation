@@ -12,6 +12,7 @@ All three are recorded, because how a conversation ended is often the finding.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -24,6 +25,8 @@ from ..scenario import Scenario
 from ..session import Stage
 from ..world.runtime import Call
 from .targets import Target
+
+logger = logging.getLogger(__name__)
 
 DONE = "[DONE]"
 STUCK = "[STUCK]"
@@ -229,7 +232,12 @@ class _ChatSubActors:
                 self.fired.add(ident)
                 self.turns_left[ident] = max(1, int((one.get("behaviour") or {}).get("max_lines") or 1))
             self.turns_left[ident] -= 1
-            exchange = await self._enter(one, reply, target)
+            try:
+                exchange = await self._enter(one, reply, target)
+            except Exception as exc:  # noqa: BLE001 - a quiet sub-actor is a weaker test, never a failed call
+                logger.warning("sub-actor %s could not enter: %s: %s", ident, type(exc).__name__, exc)
+                self.turns_left[ident] = 0
+                continue
             if exchange is not None:
                 entered.append(exchange)
         return entered
@@ -250,7 +258,7 @@ class _ChatSubActors:
             )
         behaviour = one.get("behaviour") or {}
         role = f", {one['role']}" if one.get("role") else ""
-        stage = Stage(
+        async with Stage(
             SessionSpec(
                 system_prompt=(
                     f"You are {one['name']}{role}, a second person in a chat between someone and an "
@@ -263,12 +271,8 @@ class _ChatSubActors:
                 gated=False,
             ),
             name="sub-actor",
-        )
-        await stage.__aenter__()
-        try:
+        ) as stage:
             said = (await stage.say(f"The agent just wrote: {reply}")).text.strip()
-        finally:
-            await stage.__aexit__(None, None, None)
         if not said:
             return None
         interject = getattr(target, "interject", None)

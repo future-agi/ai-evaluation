@@ -95,6 +95,18 @@ def test_a_record_arrives_in_the_world_when_its_trigger_fires(tmp_path, monkeypa
     assert after[0].speaker == "sub_actor" and after[0].sub_actor == "subactor_inbox"
 
 
+def test_a_sub_actor_that_cannot_speak_is_skipped_and_the_call_goes_on(tmp_path, monkeypatch):
+    actor = SubActor(id="subactor_friend", name="Friend", kind="behavioral", channel="thread_message", behaviour=Behaviour(prompt="x"))
+    others = _setup(tmp_path, monkeypatch, actor, Trigger(kind="mid_journey", turn=1))
+
+    async def refused(self, _text):
+        raise RuntimeError("model refused")
+
+    monkeypatch.setattr(_Stage, "say", refused)
+    target = _Target()
+    assert asyncio.run(others.after_agent(1, "Hello.", target)) == [] and target.heard == []
+
+
 def test_with_the_switch_off_nobody_else_enters(tmp_path, monkeypatch):
     actor = SubActor(id="subactor_friend", name="Friend", kind="behavioral", channel="thread_message", behaviour=Behaviour(prompt="x"))
     others = _setup(tmp_path, monkeypatch, actor, Trigger())
