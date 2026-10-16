@@ -26,6 +26,8 @@ from fi.simulate.simulation.sub_actors import TRIGGER_ABOUT, described
 
 from .cast import binding_problems, load_cast, sub_actors_enabled, sub_goal_subject_problems
 from .catalogue import (
+    CONTRACT_FIELDS,
+    CONTRACT_SCHEMA,
     NO_OVERLAY,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
@@ -52,7 +54,8 @@ from .folder import (
     write_folder,
     write_index,
 )
-from .prove import branches_disagree, play_reference_step, prepared, prove
+from .checks import reference_of, run_check
+from .prove import branches_disagree, executes, play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -237,7 +240,14 @@ def persona_field(name: str) -> dict[str, Any]:
     from .persona_guides import offered
 
     allowed = offered(name)
-    return {"type": "string", "enum": allowed} if allowed else {"type": "string"}
+    if not allowed:
+        return {"type": "string"}
+    return {
+        "type": "string",
+        "enum": allowed,
+        "description": "Exactly one listed value: the closest one when the person's own is not "
+        "listed. The precise detail goes in metadata.",
+    }
 
 
 def persona_vocabulary_note() -> str:
@@ -551,6 +561,20 @@ def _over_its_share(
     return ""
 
 
+def _full_levels(grid: dict[str, list[str]] | None, kept: list[Scenario], wanted: int) -> list[str]:
+    """Coverage levels that already hold their share, as `axis level`, for the writer to avoid."""
+    if not grid or wanted < 12:
+        return []
+    share = max(1, (wanted + 2) // 3)
+    full: list[str] = []
+    for axis, levels in grid.items():
+        if level_name(axis) in _NOT_SHARED or len(levels) < 3:
+            continue
+        counted = Counter(level_name((one.coverage or {}).get(axis, "")) for one in kept)
+        full.extend(f"{axis} {level}" for level, held in sorted(counted.items()) if level and held >= share)
+    return full
+
+
 # Fixed for every agent; what each level contains lives in `plan-suite/SKILL.md`.
 CANONICAL_AXES = (
     "task",
@@ -746,6 +770,88 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
+    """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    tools = {spec.get("name"): spec for spec in contract.get("tools") or [] if isinstance(spec, dict)}
+    if not tools:
+        return []
+    wrong = []
+    for step in scenario.solution:
+        spec = tools.get(step.tool)
+        if spec is None:
+            wrong.append(f"{step.tool} is not one of the agent's tools")
+            continue
+        names = set(spec.get("args") or [])
+        declared = spec.get("arg_values") or {}
+        for name, value in step.arguments.items():
+            if names and name not in names:
+                wrong.append(f"{step.tool} takes no argument {name!r}")
+            allowed = declared.get(name)
+            chained = isinstance(value, str) and value.startswith("$call")
+            if allowed and isinstance(value, (str, int, float, bool)) and not chained and value not in allowed:
+                wrong.append(f"{step.tool} {name}={value!r} is not one of {allowed}")
+    if not wrong:
+        return []
+    return [
+        "these solution steps do not match the agent's contract (its tools, their arguments and "
+        "declared values): " + "; ".join(wrong)
+    ]
+
+
+def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
+    """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
+
+    def plain(text: Any) -> str:
+        return " ".join(re.sub(r"[_-]", " ", str(text).lower()).split())
+
+    def values(node: Any) -> list[str]:
+        if isinstance(node, dict):
+            return [one for child in node.values() for one in values(child)]
+        if isinstance(node, (list, tuple)):
+            return [one for child in node for one in values(child)]
+        return [plain(node)]
+
+    try:
+        state = trial.state()
+        held = plain(json.dumps(state, default=str))
+        stored = set(values(state))
+    except Exception:  # noqa: BLE001 - a world that cannot be read is not the scenario's fault
+        held, stored = "", set()
+    said = plain(f"{scenario.instruction} {json.dumps(scenario.fixture, default=str)}")
+    known = plain(instructions)
+    wrong = []
+    for step in scenario.solution:
+        for name, source in (step.fixed.items() if isinstance(step.fixed, dict) else ()):
+            value = step.arguments.get(name)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            kind = next((one for one in ("caller", "record", "rule") if plain(source).startswith(one)), "")
+            quoted = re.findall(r'"([^"]+)"', str(source))
+            holds = {
+                "caller": plain(value) in said,
+                # A tool can take a record's value wrapped in a format it names (`kind:id`, `a/b`).
+                "record": plain(value) in held
+                or any(plain(part) in stored for part in re.split(r"[:/|#=]", value)),
+                "rule": any(plain(one) in known and plain(value) in plain(one) for one in quoted),
+            }.get(kind)
+            if not holds:
+                wrong.append(f"{step.tool} {name}={value!r} (source: {source})")
+    if not wrong:
+        return []
+    return [
+        "these fixed values are not where their source says: "
+        + "; ".join(wrong)
+        + '. Write each source as `caller: ...` (the value is in what the caller says), `record: ...` '
+        '(the world holds it) or `rule: "<the rule\'s own words>"` (quoted from the agent\'s '
+        "instructions and containing the value). A value none of these gives is the agent's choice; "
+        "take it out of `fixed`"
+    ]
+
+
 def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     """Values handed to the caller, used by the solution, and absent from the world after setup."""
     claimed = _handed_to_the_caller(scenario.fixture)
@@ -858,6 +964,7 @@ def accept_scenario(
     vocabulary: list[str] | None = None,
     spoken: bool = True,
     tools: set[str] | None = None,
+    instructions: str = "",
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
 
@@ -894,6 +1001,8 @@ def accept_scenario(
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
         problems.extend(_credentials_the_world_lacks(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+        problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+        problems.extend(_steps_the_contract_refuses(scenario, world_root))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
         problems.extend(
@@ -907,12 +1016,7 @@ def accept_scenario(
             "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
         )
 
-    proof = prove(
-        scenario,
-        catalogue,
-        world_root,
-        allow_judged_only_with_state=allow_empty_solution,
-    )
+    proof = prove(scenario, catalogue, world_root)
     if not proof.holds:
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
@@ -983,8 +1087,8 @@ def accept_scenario(
         else ""
     )
     proof_summary = (
-        "The fixture is ready and its behavioral sub-goals will be judged from the transcript; "
-        "this target has no environment tool trajectory to replay."
+        "The world is ready for it, and its sub-goals will be judged from the call: the "
+        "recording, the transcript, every action with its arguments and the records left."
         if proof.judged_only
         else "All three gates pass: the world is ready for it, the reference solution passes "
         "its checks, and those checks fail when nothing is done."
@@ -1174,9 +1278,10 @@ def scenario_tools(
             if not table:
                 lines = [f"{n}: {len(r)} rows" for n, r in sorted(state.items())]
                 if catalogue.sub_goals:
-                    lines.append(
-                        "\nsub-goals available: " + ", ".join(sorted(catalogue.names()))
-                    )
+                    lines.append("\nsub-goals available:")
+                    for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
+                        compares = f" Its check compares {goal.reference.strip()}" if goal.reference.strip() else ""
+                        lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
                 cast = load_cast(world_root) if sub_actors_enabled() else None
                 if cast and cast.sub_actors:
                     lines.append("\nsub-actors in the cast:\n" + cast.summary())
@@ -1269,7 +1374,12 @@ def scenario_tools(
                 except Exception as invalid:
                     return _err(f"invalid reference call: {invalid}"[:600])
                 call = play_reference_step(world, reference_step)
-                if call.refused:
+                if not executes(world, call.name):
+                    lines.append(
+                        f"{call.name}: NOT RUN, it runs only inside the agent, so what it "
+                        "returns and changes is unknown until a real call"
+                    )
+                elif call.refused:
                     lines.append(f"{call.name}: refused — {call.error}")
                 elif not call.ok:
                     lines.append(f"{call.name}: CRASHED — {call.error}")
@@ -1286,6 +1396,53 @@ def scenario_tools(
             world.close()
 
     @tool(
+        "try_check",
+        "Run a check against a situation you write, before you trust it. Give the check (its "
+        "Python, or the name of a sub-goal in the catalogue), the calls an agent makes in that "
+        "situation (played through a throwaway copy of the world, as in try_calls), and the "
+        "reference a scenario would hand it (steps with `tool`, `arguments` and `fixed`). You see "
+        "whether the check held and what it said. Try each sub-goal once, when you write it or first "
+        "name it: "
+        "an agent that does it right another way its instructions allow must pass, and an agent "
+        "that gets a fixed value wrong must fail. Nothing is saved.",
+        schema({"check": str, "calls": list, "reference": list, "setup_code": str}, ["check", "calls"]),
+    )
+    async def try_check(args: dict[str, Any]) -> dict[str, Any]:
+        source = str(args.get("check") or "")
+        named = catalogue.named(source.strip())
+        if named is not None:
+            source = named.check
+        if "def check(" not in source:
+            return _err("give a check's Python, or the name of a sub-goal that has a check")
+        try:
+            reference = [Step.model_validate(step) for step in args.get("reference") or []]
+            steps = [
+                Step.model_validate({**step, "tool": step.get("tool") or step.get("name")})
+                for step in args.get("calls") or []
+                if isinstance(step, dict)
+            ]
+        except Exception as invalid:
+            return _err(f"invalid step: {invalid}"[:600])
+        world = restore(world_root)
+        try:
+            world.reset()
+            applied = apply_setup(Scenario(name="trial", setup_code=str(args.get("setup_code") or "")), world)
+            if not applied.ok:
+                return _err(f"the setup did not run: {applied.said}")
+            world.calls = []
+            for step in steps:
+                play_reference_step(world, step)
+            outcome = run_check(source, world, list(world.calls), name="trial", reference=reference_of(reference))
+        finally:
+            world.close()
+        verdict = "broken" if outcome.broken else ("held" if outcome.held else "failed")
+        unrun = sorted({step.tool for step in steps if not executes(world, step.tool)})
+        return _ok(
+            f"{verdict}: {outcome.said or 'nothing wrong'}"
+            + (f"\nNOT RUN: {', '.join(unrun)} (they run only inside the agent)" if unrun else "")
+        )
+
+    @tool(
         "add_sub_goal",
         "Add a named thing this agent can be checked on, shared by every scenario that needs it. "
         "`check` is Python: define check(world, calls) returning a sentence when something is "
@@ -1296,13 +1453,33 @@ def scenario_tools(
         "calls when a later successful state-changing call already proves the outcome; valid "
         "agents may reach the same result through different safe trajectories.\n\n"
         + SUB_GOAL_RULES
-        + "Use `judged` only where nothing observable settles it; it holds the criteria. `output` is "
-        "pass_fail.\n"
+        + "Use `check` only for a change the call must leave in the records, made as it should be, "
+        "reading the world and the call that made it, never only a "
+        "call's name. Whether a forbidden thing happened is judged from the records: a check that "
+        "holds on an untouched world grades nothing and is refused. A check that a step comes before something "
+        "fails only when that something happened without it, and accepts every tool for the step. "
+        "A call's `ok` only means the tool ran without an error or refusal; what it decided (verified or not, found or not) is in its `result` or the records, so read those. Whether a step was right for "
+        "this caller (the right record, the right values) is checked in code against the "
+        "scenario's reference solution: write `check(world, calls, reference)`, where `reference` "
+        "is that scenario's solution steps (`tool`, and only the `arguments` the scenario marks "
+        "fixed for its caller, so read them with .get()), take only what this sub-goal "
+        "settles and compare it with the call's arguments or result and what the world holds in "
+        "world.state(), returning 'not done: ...' or 'done wrong: <field> expected X, got Y'. A "
+        "tool can be called more than once and one call can be reported twice with fewer "
+        "arguments, so match each reference step to any successful call carrying its fields, "
+        "never to the last call; when the reference sets a thing twice the later value counts. "
+        "Compare only what something fixes for this caller: what they said, their record in the world, "
+        "or a rule of the agent that names the value; a value the reference holds only because a step "
+        "needed one (a category or destination the agent picks, a free-text note) is the agent\'s "
+        "choice and is never compared. Check the outcome, not the route: where the outcome leaves a "
+        "record, check the record, and otherwise accept every call that achieves it. "
+        "Use `judged` for what was said and what nothing observable settles; it holds the "
+        "criteria. `output` is pass_fail.\n"
         + CRITERIA_RULES
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an overlay "
         "is refused until it names a sub-goal that fails when that overlay is mishandled, so this "
-        "is what makes one available. Leave it empty for an ordinary task sub-goal."
+        "is what makes one available. Leave it empty for an ordinary task sub-goal. If the caller never makes the attack, that is the caller's miss, not the agent's: its \"If it does not arise\" line says Pass."
         + (
             " `sub_actor` names the sub-actor this sub-goal is about; a call that sub-actor never "
             "entered cannot fail it."
@@ -1317,6 +1494,7 @@ def scenario_tools(
                 "judged": str,
                 "output": str,
                 "overlay": str,
+                **CONTRACT_SCHEMA,
                 **({"sub_actor": str} if sub_actors_enabled() else {}),
             },
             ["name", "what"],
@@ -1331,6 +1509,7 @@ def scenario_tools(
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
             sub_actor=str(args.get("sub_actor") or ""),
+            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(sub_goal.sub_actor, world_root)
         if problems:
@@ -1568,9 +1747,27 @@ def scenario_tools(
                                 "`$call.book_ride.booking_ref` resolves that field from the "
                                 "most recent successful earlier reference call.",
                             },
+                            "fixed": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"},
+                                "description": "Each argument whose value something fixes for "
+                                "this caller, mapped to where it comes from: what the caller says, "
+                                "what the world holds for them (and where), or the rule in the agent's "
+                                "instructions that names it, quoted. Checks and the judge are shown "
+                                "only these. Leave out any value you picked because the step needed "
+                                "one. Empty when none is fixed.",
+                            },
                         },
-                        "required": ["tool", "arguments"],
+                        "required": ["tool", "arguments", "fixed"],
                     },
+                },
+                "alternatives": {
+                    "type": "array",
+                    "description": "Other ways the agent's instructions allow to reach the same "
+                    "outcome, each a full list of steps like `solution` (another tool for a step, "
+                    "or a tool that does a step itself). The proof plays each one and every check "
+                    "must still pass. Empty when the instructions allow only one way.",
+                    "items": {"type": "array", "items": {"type": "object"}},
                 },
                 "sub_goals": {
                     "type": "array",
@@ -1677,12 +1874,20 @@ def scenario_tools(
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
             tools=set(contract.tool_names()),
+            instructions="\n".join([contract.system_prompt_excerpt, *contract.hard_constraints]),
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
             name = str(args.get("name") or "")
             for key in [key for key in refused if key[0] == name]:
                 refused.pop(key, None)
+            full = _full_levels(target.get("axes"), kept, cap())
+            if full:
+                # Said on the way in, so the next scenario avoids a refusal rather than meeting one.
+                result["content"][0]["text"] += (
+                    "\nAt their share of the suite now, so place the next scenarios elsewhere: "
+                    + ", ".join(full)
+                )
             return result
         said = str((result.get("content") or [{}])[0].get("text") or "")
         if said.startswith("Not kept"):
@@ -1748,6 +1953,9 @@ def scenario_tools(
                 "args": list,
                 "arg_types": dict,
                 "description": str,
+                "refuses": str,
+                "effects": str,
+                "inputs_from": dict,
                 "remove": bool,
                 "why": str,
             },
@@ -1765,6 +1973,9 @@ def scenario_tools(
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
             description=str(args.get("description") or ""),
+            refuses=str(args.get("refuses") or ""),
+            effects=str(args.get("effects") or ""),
+            inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
             remove=bool(args.get("remove")),
         )
         return _ok(said) if done else _err(said)
@@ -2197,6 +2408,7 @@ def scenario_tools(
             inspect_world,
             inspect_scenario,
             try_calls,
+            try_check,
             add_sub_goal,
             submit_scenario,
             amend_contract,
@@ -2217,6 +2429,7 @@ _ALWAYS = (
     "inspect_world",
     "inspect_scenario",
     "try_calls",
+    "try_check",
     "add_sub_goal",
     "submit_scenario",
     "amend_contract",

@@ -1543,6 +1543,7 @@ class CallRunnerImpl:
 
         transcript_artifact: str | None = None
         recording_artifacts: list[str] = []
+        recording: str | None = None
         # Evidence belongs to the call attempt, not only to successful calls.  Collect it before
         # interpreting the simulator status so a timeout/agent failure still carries the exact
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
@@ -1581,6 +1582,8 @@ class CallRunnerImpl:
             )
         if case is not None and case.result is not None:
             result = case.result
+            combined = result.audio_combined_path
+            recording = combined if combined and Path(combined).is_file() else None
             if result.transcript:
                 transcript_document = {
                     "schema_version": "futureagi.call-transcript.v1",
@@ -1629,6 +1632,7 @@ class CallRunnerImpl:
             duration_ms=_duration_ms(case_started_at, ended_at),
             transcript_artifact=transcript_artifact,
             recording_artifacts=tuple(recording_artifacts),
+            recording=recording,
             messages=tuple(
                 case.result.messages or ()
                 if case is not None and case.result is not None

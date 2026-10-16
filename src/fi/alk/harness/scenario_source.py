@@ -27,8 +27,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
+from pydantic import ValidationError
+
 from . import outbound as ob
-from .catalogue import CATALOGUE
+from .catalogue import CATALOGUE, SubGoal
 from .job import FailureDomain
 
 if TYPE_CHECKING:
@@ -246,9 +248,11 @@ class _CompiledSubGoal:
 
     name: str
     judged: str
-    check: Callable[[Any, Any], object]
+    check: Callable[..., object]
     what: str = ""
     sub_actor: str = ""
+    both: bool = False
+    compares: str = ""
 
 
 @dataclass(frozen=True)
@@ -270,6 +274,8 @@ class _CompiledScenario:
     # scenario file beside it. Presentation only: nothing in the scheduler looks at it.
     presented: dict[str, Any] = field(default_factory=dict)
     source_scenario_key: str | None = None
+    # One correct way through the call: handed to reference checks and shown to the judge.
+    solution: tuple[dict[str, Any], ...] = ()
 
 
 def _read_text(path: Path, *, label: str) -> str:
@@ -413,10 +419,17 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             continue
+        try:
+            goal = SubGoal.model_validate(entry)
+        except ValidationError as exc:
+            logger.warning("sub-goal %s has an invalid check contract: %s", entry["name"], exc)
+            goal = SubGoal(name=entry["name"])
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
             "sub_actor": str(entry.get("sub_actor") or ""),
+            "contract": goal.contract(),
+            "both": "yes" if goal.both else "",
         }
     return claims
 
@@ -542,6 +555,7 @@ def _load_one(
         setup=setup,
         ready=ready,
         presented=_presented(body, scenario_key=scenario_key),
+        solution=tuple(solution),
     )
 
 
@@ -562,14 +576,21 @@ def _with_claims(
     """
     if not claims:
         return scenario
+
+    def combined(goal: _CompiledSubGoal) -> bool:
+        claim = claims[goal.name]
+        return bool(claim.get("both")) and not goal.judged and bool(claim.get("judged"))
+
     restored = tuple(
         replace(
             goal,
             judged=(claims[goal.name].get("judged") or goal.judged)
-            if goal.judged
+            if goal.judged or combined(goal)
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
             sub_actor=claims[goal.name].get("sub_actor", "") or goal.sub_actor,
+            both=combined(goal),
+            compares=claims[goal.name].get("contract", "") or goal.compares,
         )
         if goal.name in claims
         else goal

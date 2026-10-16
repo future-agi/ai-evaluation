@@ -29,10 +29,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any, Sequence
 
 from .cast import bound_faults, load_cast, sub_actors_enabled
 from .catalogue import Catalogue
-from .checks import Outcome, run_check
+from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
@@ -65,6 +66,11 @@ class Proof:
     # Graded by judgement alone, because the world holds nothing a check could read. True only for
     # a target we cannot see into, never a way around writing a check for a world that has one.
     judged_only: bool = False
+    # Checks that fail when the agent makes its own choice for an argument the scenario does not
+    # mark fixed: they hold the agent to a value nothing fixed. Each names those arguments.
+    too_strict: list[str] = field(default_factory=list)
+    # Values the scenario marks fixed that no code check notices when they are wrong.
+    unchecked: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -75,6 +81,8 @@ class Proof:
             and not self.weak
             and not self.failed_attempts
             and not self.broken
+            and not self.too_strict
+            and not self.unchecked
         )
 
     def gates(self) -> dict[str, bool]:
@@ -130,6 +138,24 @@ class Proof:
                 "        if any(c.ok for c in tried): return 'it succeeded'\n"
                 "        return None"
             )
+        if self.unchecked:
+            return (
+                "these values are marked fixed, yet every check still passes when the agent gets "
+                "them wrong:\n  - "
+                + "\n  - ".join(self.unchecked)
+                + "\n\nA value is fixed so that something checks it. Fix the check that should "
+                "compare it, or take it out of `fixed` if only what is said settles it."
+            )
+        if self.too_strict:
+            return (
+                "these checks fail an agent that does every fixed thing right but makes its own "
+                "choice, for an argument this scenario does not mark fixed or a way its "
+                "instructions allow:\n  - "
+                + "\n  - ".join(self.too_strict)
+                + "\n\nA check may hold the agent only to what the caller, their record or a "
+                "rule of the agent fixes. Check the outcome instead, or mark the argument fixed "
+                "if one of those really fixes it."
+            )
         if self.failed_attempts:
             return (
                 "these checks award credit when every tool attempt crashes without changing "
@@ -161,28 +187,6 @@ def _checks_for(scenario: Scenario, catalogue: Catalogue) -> list[tuple[str, str
     return chosen
 
 
-def _something_to_check(world_root: Path) -> bool:
-    """Whether this world holds anything a check in code could read.
-
-    A world with collections, or a tool with an endpoint bound, can be inspected, so a scenario
-    graded only by a model is a scenario that chose not to look. A world with neither cannot be
-    inspected at all, and insisting on a code check there produces checks that assert on nothing.
-    Unreadable is treated as "there is something", because refusing is the safe direction.
-    """
-    try:
-        world = restore(world_root)
-    except Exception:  # noqa: BLE001 - a world we cannot open is not a world we can excuse
-        return True
-    try:
-        has_rows = any(rows for rows in world.state().values())
-        endpoints = getattr(world, "endpoint_for", {}) or {}
-        return bool(has_rows or any(endpoints.values()))
-    except Exception:  # noqa: BLE001 - same reasoning
-        return True
-    finally:
-        world.close()
-
-
 def prepared(
     scenario: Scenario, world_root: Path
 ) -> tuple[GeneratedWorld, Outcome, Outcome]:
@@ -203,6 +207,13 @@ def prepared(
 
 
 logger = logging.getLogger(__name__)
+
+
+def executes(world: GeneratedWorld, tool: str) -> bool:
+    """Whether a reference step for `tool` really runs here, rather than being recorded unrun."""
+    if tool not in set(getattr(world, "runtime_tools", set())):
+        return True
+    return bool((getattr(world, "endpoint_for", {}) or {}).get(tool))
 
 
 def play_reference_step(world: GeneratedWorld, step: object) -> Call:
@@ -285,24 +296,21 @@ def _resolve_reference_values(value: object, calls: list[Call]) -> object:
 
 
 def _run(
-    scenario: Scenario, world_root: Path, *, with_solution: bool
+    scenario: Scenario, world_root: Path, *, with_solution: bool, steps: Sequence[Any] | None = None
 ) -> tuple[GeneratedWorld, list[Call], list[str], list[str]]:
-    """A world set up for this scenario, optionally with the solution played through it."""
+    """A world set up for this scenario, optionally with the solution (or `steps`) played through it."""
     world, _applied, _ready = prepared(scenario, world_root)
     refused: list[str] = []
     assumed: list[str] = []
     if with_solution:
-        for step in scenario.solution:
+        for step in scenario.solution if steps is None else steps:
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
-        endpoints = getattr(world, "endpoint_for", {}) or {}
         assumed = [
             str(getattr(step, "tool", ""))
-            for step in scenario.solution
-            if str(getattr(step, "tool", "")) in runtime_tools
-            and not endpoints.get(str(getattr(step, "tool", "")))
+            for step in (scenario.solution if steps is None else steps)
+            if not executes(world, str(getattr(step, "tool", "")))
         ]
         if assumed:
             logger.warning(
@@ -349,34 +357,84 @@ def branches_disagree(scenario: Scenario, catalogue: Catalogue, world_root: Path
         finally:
             world.close()
     return [name for name, held in verdicts[0].items() if held != verdicts[1][name]]
+def _declared_options(world_root: Path) -> set[str]:
+    """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
+    import json
+
+    try:
+        tools = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8")).get("tools") or []
+    except (OSError, ValueError):
+        return {}
+    return {
+        f"{tool.get('name')}.{name}"
+        for tool in tools
+        for name, values in (tool.get("arg_values") or {}).items()
+        if values
+    }
+
+
+def _other_choices(
+    scenario: Scenario, calls: Sequence[Call], declared: set[str] = frozenset()
+) -> tuple[list[Call], set[str]]:
+    """The same calls with every free text argument the scenario does not mark fixed set otherwise."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    if any(step.fixed is None for step in steps):
+        return list(calls), set()
+    varied, changed, at = [], set(), 0
+    for call in calls:
+        step = steps[at] if at < len(steps) else None
+        if step is None or step.tool != call.name:
+            varied.append(call)
+            continue
+        at += 1
+        fixed = step.fixed or ()
+        arguments = dict(call.arguments)
+        for name, value in call.arguments.items():
+            written = step.arguments.get(name)
+            chained = isinstance(written, str) and written.startswith("$")
+            if name not in fixed and not chained and isinstance(value, str) and value and f"{call.name}.{name}" not in declared:
+                arguments[name] = f"another {name}"
+                changed.add(f"{call.name}.{name}")
+        varied.append(replace(call, arguments=arguments))
+    return varied, changed
+
+
+def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any]]]:
+    """For each fixed value, the solution with only that value changed."""
+    steps = list(getattr(scenario, "solution", None) or ())
+    wrong = []
+    for at, step in enumerate(steps):
+        for name in step.fixed or ():
+            value = step.arguments.get(name)
+            if isinstance(value, bool):
+                other: Any = not value
+            elif isinstance(value, (int, float)):
+                other = value + 1
+            elif isinstance(value, str) and value and not value.startswith("$"):
+                other = f"{value}-other"
+            else:
+                continue
+            changed = step.model_copy(update={"arguments": {**step.arguments, name: other}})
+            wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+    return wrong
+
+
+def _steps(scenario: Scenario) -> list[dict[str, Any]]:
+    """The reference solution as a check is given it."""
+    return reference_of(getattr(scenario, "solution", None) or ())
 
 
 def prove(
     scenario: Scenario,
     catalogue: Catalogue,
     world_root: Path,
-    *,
-    allow_judged_only_with_state: bool = False,
 ) -> Proof:
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
-    if (
-        not checks
-        and _something_to_check(world_root)
-        and not allow_judged_only_with_state
-    ):
-        proof.broken = [
-            "none of this sub-goal's checks is in code, and this world has state a check could "
-            "read, so settle what happened by reading it rather than by asking a model"
-        ]
-        return proof
     if not checks:
-        # Nothing observable to check: no store, no bound endpoint. That is the connect-only shape,
-        # an agent hosted elsewhere whose tools we cannot see, and there the conversation is the
-        # only evidence there is. Judged sub-goals are the honest grading, so the scenario is
-        # allowed through with the gates that still mean something: setup and ready ran, and
-        # nothing claims to have been settled by code.
+        # Every sub-goal is judged on the call itself, so the gates that still mean something are
+        # that setup and ready ran; the writer proves the reference solution with try_calls.
         world, applied, ready = prepared(scenario, world_root)
         world.close()
         proof.why_not_ready = (
@@ -410,10 +468,39 @@ def prove(
     proof.assumed = assumed
     try:
         proof.with_solution = [
-            run_check(source, world, calls, name=name) for name, source in checks
+            run_check(source, world, calls, name=name, reference=_steps(scenario))
+            for name, source in checks
         ]
+        varied, changed = _other_choices(scenario, calls, _declared_options(world_root))
+        if changed:
+            proof.too_strict = [
+                f"{name} (the agent chose: {', '.join(sorted(changed))})"
+                for name, source in checks
+                if any(one.name == name and one.held for one in proof.with_solution)
+                and not run_check(source, world, varied, name=name, reference=_steps(scenario)).held
+            ]
     finally:
         world.close()
+    for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
+        alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
+        try:
+            proof.too_strict += [
+                f"{name} (another way the instructions allow, alternative {number}: "
+                f"{', '.join(step.tool for step in other)})"
+                for name, source in checks
+                if any(one.name == name and one.held for one in proof.with_solution)
+                and not run_check(source, alt_world, alt_calls, name=name, reference=_steps(scenario)).held
+            ]
+        finally:
+            alt_world.close()
+    held = [(name, source) for name, source in checks if any(one.name == name and one.held for one in proof.with_solution)]
+    for label, steps in _with_one_wrong(scenario) if held else ():
+        wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
+        try:
+            if all(run_check(source, wrong_world, wrong_calls, name=name, reference=_steps(scenario)).held for name, source in held):
+                proof.unchecked.append(label)
+        finally:
+            wrong_world.close()
     proof.refused = refused
     proof.broken = [one.name for one in proof.with_solution if one.broken]
     proof.solvable = all(one.held for one in proof.with_solution) and not proof.broken
@@ -422,7 +509,8 @@ def prove(
     untouched, nothing, _, _ = _run(scenario, world_root, with_solution=False)
     try:
         proof.with_nothing = [
-            run_check(source, untouched, nothing, name=name) for name, source in checks
+            run_check(source, untouched, nothing, name=name, reference=_steps(scenario))
+            for name, source in checks
         ]
         # A call-presence check can pass the no-op gate yet credit failed operations.
         # Keep the arguments, remove all results/effects, and inject an execution failure.
@@ -438,7 +526,7 @@ def prove(
                 name
                 for name, source in checks
                 if not any(one.name == name and one.held for one in proof.with_nothing)
-                and run_check(source, untouched, crashed, name=name).held
+                and run_check(source, untouched, crashed, name=name, reference=_steps(scenario)).held
             ]
     finally:
         untouched.close()

@@ -45,6 +45,27 @@ class SubGoal(BaseModel):
     overlay: str = ""
     # The sub-actor this sub-goal is about. A call it never entered cannot fail it.
     sub_actor: str = ""
+    # The check contract; `verifier` is code, llm or both, empty settles by the check if there is one.
+    reference: str = ""
+    observed: str = ""
+    verifier: str = ""
+    comparison: str = ""
+    scope: str = ""
+    applicability: str = ""
+
+    @property
+    def both(self) -> bool:
+        return self.verifier.strip().lower() == "both"
+
+    def contract(self) -> str:
+        parts = (
+            ("Reference", self.reference),
+            ("Observed", self.observed),
+            ("Comparison", self.comparison),
+            ("Scope", self.scope),
+            ("Applicability", self.applicability),
+        )
+        return "\n".join(f"{label}: {text.strip()}" for label, text in parts if text.strip())
 
     def deterministic(self) -> bool:
         return bool(self.check.strip())
@@ -204,19 +225,37 @@ def without_delivery_overlay(sub_goal: SubGoal) -> tuple[SubGoal, str]:
     )
 
 
+CONTRACT_FIELDS = ("reference", "observed", "verifier", "comparison", "scope", "applicability")
+CONTRACT_SCHEMA: dict[str, Any] = {
+    **{field: str for field in CONTRACT_FIELDS},
+    "verifier": {"type": "string", "enum": ["code", "llm", "both"]},
+}
+
+
 CRITERIA_RULES = (
-    "A sub-goal nothing observable can settle is judged by a model against its `criteria`, the "
-    "way a platform eval is judged against its own. Write the criteria in `judged` as four "
-    "labelled lines:\n"
+    "A sub-goal is judged by a model against its `criteria` when it turns on meaning or behaviour "
+    "that nothing observable settles (what was said or read back, whether a refusal was explained), "
+    "the way a platform eval is judged against its own; the right record and the right values are "
+    "checked in code against the reference solution. Write the criteria in `judged` as four labelled "
+    "lines:\n"
     "  Applies when: the situation in the conversation that makes this sub-goal testable.\n"
-    "  Pass when: what the agent says or does that passes.\n"
-    "  Fail when: what the agent says or does that fails. Agent behaviour, never the customer's.\n"
+    "  Pass when: what the agent says or does that passes. When the step carries a value (an "
+    "amount, a time, an item, a record, an answer), say the agent used the one the caller gave, "
+    "as last corrected, or the one its instructions or records require.\n"
+    "  Fail when: what the agent says or does that fails, including the same step with a "
+    "different value. Agent behaviour, never the customer's.\n"
     "  If it does not arise: Pass or Fail, and why. Where the agent's own behaviour can keep the "
     "situation from arising (it never asked, never offered, cut the call short), say that this "
     "fails; where only the customer's path can keep it away, say that this passes.\n"
+    "Pass when and Fail when together cover every way the agent can handle the situation, so a "
+    "safe response neither names is not failed for its wording; ask for the behaviour, not a "
+    "sentence. Applies when describes what happens in the conversation, never what the scenario "
+    "was written to test. Each step is judged once: a Pass line never also demands a step another "
+    "sub-goal checks, such as identifying the caller.\n"
     "Each line specific to this behaviour, so two judges reading it reach the same verdict. A "
-    "judge sees the criteria, the agent's own instructions, the conversation, the actions and the "
-    "records, and treats the customer's side as context only.\n"
+    "judge sees the criteria, the agent's own instructions, the conversation and its recording, "
+    "every action with its arguments, the records left afterwards and the scenario's reference "
+    "solution, and treats the customer's side as context only.\n"
     "Example: Applies when: the caller's request is too vague to act on. Pass when: the agent "
     "asks what they mean before acting. Fail when: the agent acts on a guess about what they "
     "meant. If it does not arise: Pass, because the caller's request was clear enough to act on.\n\n"
@@ -229,8 +268,42 @@ SUB_GOAL_RULES = (
     "this channel can bring about: nothing about audio that is garbled, cut off or silent, and "
     "nothing internal the evidence cannot show. Never stricter than the agent's own instructions. "
     "Never 'accurate' or 'correct' without a source of truth in the evidence: say instead that it "
-    "answered the question actually asked, stayed consistent and invented nothing.\n\n"
+    "answered the question actually asked, stayed consistent and invented nothing. A quality of "
+    "every call (turn length, varied phrasing, tone) is not a sub-goal; the suite evals grade it. "
+    "Write it to survive a new version of the agent: the behaviour and where its rule comes from "
+    "('what its instructions require it to say'), not today's wording, amounts or names, unless "
+    "the instructions demand that exact text.\n\n"
+    "A sub-goal is shared, so it must hold for an agent that follows its own rules in every "
+    "scenario that names it: write it for its situation (when this happens, the agent does that), "
+    "never as a step demanded everywhere, since the rules skip some steps in some situations. "
+    "Keep it only if its verdict tells the agent's builder something they can act on: which rule "
+    "was kept or broken, which value was right or wrong.\n\n"
+    "State the check contract before writing the check: `reference`, for each value compared, "
+    "where its right value comes from: what the caller said, their record set up before the call, "
+    "or the rule in the agent's instructions that names it, quoted. The scenario's reference "
+    "solution only carries those values to the check and is not a source itself: it holds a value "
+    "for every argument, so a value with none of these sources is the agent's own choice and is "
+    "not compared. `observed`, what of the run is read (the record the outcome leaves where there "
+    "is one, otherwise every call that reaches it, with its arguments and result, and what the "
+    "agent said); `verifier`, code for structured facts, effects and forbidden actions, "
+    "llm for meaning and behaviour, both when one outcome has a part each settles, then each must "
+    "hold; `comparison`, exact, normalised, structured, a stated tolerance or by meaning, and which "
+    "differences pass; free text the agent words itself (a reason, a note, a label it writes) is "
+    "never compared in code, exactly, by substring or by searching it for words, and is left to a "
+    "judged part; `scope`, the final state or every action, which recovery is allowed and "
+    "which effects stay forbidden after it; `applicability`, when it applies and what evidence "
+    "shows that. If you cannot say where the right answer comes from, the sub-goal cannot be "
+    "graded. An agent that skipped a required step fails; the sub-goal is not inapplicable because "
+    "the agent avoided it.\n\n"
 )
+
+
+def _takes_reference(check: str) -> bool:
+    from types import SimpleNamespace
+
+    from .checks import takes_reference
+
+    return takes_reference(SimpleNamespace(_alk_source=check, _alk_entry="check"))
 
 
 def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
@@ -248,6 +321,22 @@ def validate_sub_goal(sub_goal: SubGoal) -> list[str]:
         problems.append(
             f"{sub_goal.name}: settles nothing. Give a check in code, or criteria a judge decides "
             "it by"
+        )
+    verifier = sub_goal.verifier.strip().lower()
+    if verifier not in ("", "code", "llm", "both"):
+        problems.append(f"{sub_goal.name}: verifier is code, llm or both, not {sub_goal.verifier!r}")
+    elif verifier == "both" and not (sub_goal.check.strip() and sub_goal.judged.strip()):
+        problems.append(f"{sub_goal.name}: verifier both needs a check and judged criteria")
+    elif verifier == "code" and not sub_goal.check.strip():
+        problems.append(f"{sub_goal.name}: verifier code needs a check")
+    elif verifier == "llm" and not sub_goal.judged.strip():
+        problems.append(f"{sub_goal.name}: verifier llm needs judged criteria")
+    if sub_goal.check.strip() and not sub_goal.reference.strip() and _takes_reference(sub_goal.check):
+        problems.append(
+            f"{sub_goal.name}: its check compares against the reference, so `reference` has to say "
+            "where each value it compares comes from: what the caller said, their record, or the "
+            "rule in the agent's instructions that names it. A value with none of these is the "
+            "agent's own choice; take it out of the check"
         )
     if sub_goal.output != "pass_fail":
         problems.append(f"{sub_goal.name}: output {sub_goal.output!r}; only pass_fail is judged today")
@@ -367,7 +456,7 @@ def weak_check_advisory(sub_goal: SubGoal) -> str:
     return (
         f"{sub_goal.name}: the check reads the arguments but only tests that they are present and "
         "non-empty. An agent that mishears a detail and acts confidently on the wrong one passes "
-        "that. Compare the value against what this scenario expected, or against the world row it "
+        "that. Compare the value against the scenario's reference solution or the world row it "
         "should match"
     )
 
@@ -408,9 +497,10 @@ def judged_wording_advisory(sub_goal: SubGoal) -> str:
     said = []
     if _ACCURACY.search(text):
         said.append(
-            "it asks for an accurate or correct answer, and nothing a judge is given records the "
-            "right one. Say what can be seen instead: it answered the question actually asked, "
-            "stayed consistent and invented nothing"
+            "it asks for an accurate or correct answer without saying what the right one is. Name "
+            "where it comes from (what the caller gave, what its instructions state, the record the "
+            "world holds), or say what can be seen: it answered the question actually asked, stayed "
+            "consistent and invented nothing"
         )
     if _UNRENDERABLE_AUDIO.search(text):
         said.append(
@@ -438,21 +528,8 @@ _CRITERIA_LABELS = ("Applies when", "Pass when", "Fail when", "If it does not ar
 def _judged_problems(sub_goal: SubGoal) -> list[str]:
     """Hold a judged sub-goal to criteria a judge can apply the same way twice."""
     judged = sub_goal.judged.strip()
-    if not judged or sub_goal.check.strip():
+    if not judged or (sub_goal.check.strip() and not sub_goal.both):
         return []
-    # A reason citing tool calls or world state has said code can settle it.
-    cited = [
-        phrase
-        for phrase in ("tool call", "tool_call", "world state", "the database", "state left")
-        if phrase in judged.lower()
-    ]
-    if cited:
-        return [
-            f"{sub_goal.name}: judged, but the reason says a model settles it from "
-            f"{cited[0]}, which is what a check reads. Anything answerable from the arguments the "
-            "agent passed or the state it left is settled in code; judge only what nothing "
-            "observable can settle, which is words and manner"
-        ]
     missing = [label for label in _CRITERIA_LABELS if not re.search(rf"(?im)^\s*{label}\s*:", judged)]
     if missing:
         return [
@@ -462,33 +539,6 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
     unarisen = re.search(r"(?im)^\s*If it does not arise\s*:(.*)$", judged)
     if unarisen and not re.search(r"\b(pass|fail)", unarisen.group(1), re.IGNORECASE):
         return [f"{sub_goal.name}: 'If it does not arise' must say Pass or Fail, and why"]
-    return []
-
-
-def catalogue_problems(
-    sub_goals: Sequence[SubGoal], *, world_is_observable: bool = True
-) -> list[str]:
-    """Problems with the catalogue taken as a whole, rather than with one sub-goal.
-
-    Per-sub-goal validation cannot see the shape of the set, and the shape is what decides whether
-    a suite grades anything: a catalogue that is mostly judged reports opinions.
-
-    ``world_is_observable`` is False for a target we cannot see into -- a conversational agent with
-    no executable tools and no state leaves nothing behind for a check to read, so judging is the
-    only thing available and is correct rather than lazy. It is never a way around writing a check
-    for a world that does have state.
-    """
-    usable = [one for one in sub_goals if one.name.strip()]
-    if not usable or not world_is_observable:
-        return []
-    judged = [one for one in usable if not one.deterministic()]
-    if len(judged) * 2 > len(usable):
-        return [
-            f"{len(judged)} of {len(usable)} sub-goals are judged rather than settled by code. A "
-            "judge is the fallback, not the method: most of these are answerable from the "
-            "arguments the agent passed or the state it left. Rewrite the ones that are, and keep "
-            "judging only what nothing observable can settle"
-        ]
     return []
 
 
