@@ -629,6 +629,24 @@ if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
 test will pass it while doing the wrong thing, and that is the failure the whole suite exists to
 catch.
 
+## The cast
+
+Only when `add_sub_actor` is offered. The person the agent serves is the primary actor; a sub-actor is
+anyone or anything else in the world the agent has to cope with: someone speaking in the background of
+a call, or a service behind one of the agent's tools whose responses fail. Derive them from the
+contract, one per slot that really applies:
+
+- a tool backed by a third-party service suggests a `system` sub-actor on `tool_response`, with one
+  fault per way that service can fail the call (a timeout, an error, a rate limit, a malformed or
+  padded response, a slow one);
+- a voice agent can have a `behavioral` sub-actor on `audio_mix`: another person near the caller,
+  whose behaviour prompt says who they are, what they want and what they know.
+
+The cast belongs to the world, so every scenario sees the same one, and a scenario binds the ones it
+needs. An agent with no such slot has an empty cast, which is a valid world; never add a sub-actor to
+fill a list. `add_sub_actor` refuses a channel this agent cannot be reached on and a fault on a tool
+whose calls nothing in the run stands between.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong
@@ -655,7 +673,8 @@ Never work around a contract you believe is wrong. Everything after you inherits
 6. `declare_sequence` for at least one flow where state has to carry across calls. Every sequence
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
-8. `add_sub_goal` for each thing worth checking, with its check in code.
+8. `add_sub_goal` for each thing worth checking, with its check in code. Where `add_sub_actor` is
+   offered, add the cast too.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

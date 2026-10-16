@@ -390,6 +390,14 @@ timing - long pauses on a call, bursts and send-before-finish in a chat. The kin
 levels it can really deliver and how often each should appear; some are rare by design. Follow its
 proportions rather than spreading every level evenly.
 
+### Someone else in the scene is a level, not a seventh axis
+
+When the world has a cast of sub-actors, their presence is a condition on some scenarios, so it is
+planned as levels on the axes that already hold conditions: a second voice near the person is a
+competing signal on `interface`, a service whose responses fail is how reliable the channel is, also on
+`interface`, and a sub-actor pushing the agent to act for someone who is not the person it serves is an `overlay`. Give
+those levels a share like any other, so presence is covered without appearing in every scenario.
+
 ### Overlay carries three things, and they are three axes
 
 The type is the closed list above. Two more travel with it, and each is **its own axis** rather than

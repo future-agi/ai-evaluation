@@ -426,6 +426,7 @@ def export_session_bundle(
         for artifact in (
             "contract.json",
             "sub_goals.json",
+            "cast.json",
             "simulator_prompt.md",
             "world.json",
             "world.py",

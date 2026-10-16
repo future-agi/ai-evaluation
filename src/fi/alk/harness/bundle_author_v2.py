@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from .bundle import CapabilityProtocol
+from .cast import CAST_FILE
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -2067,6 +2068,9 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
         )
         return []
     shutil.copy2(catalogue, staging / CATALOGUE)
+    if (authoring / CAST_FILE).is_file():
+        shutil.copy2(authoring / CAST_FILE, staging / CAST_FILE)
+        return [CATALOGUE, CAST_FILE]
     return [CATALOGUE]
 
 
@@ -2653,8 +2657,9 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         (staging / BUNDLE_V2_MANIFEST).unlink()
         shutil.rmtree(staging / "scenarios", ignore_errors=True)
         _copy_scenarios(authoring_root, staging, count=count)
-        if (authoring_root / CATALOGUE).is_file():
-            shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
+        for document in (CATALOGUE, CAST_FILE):
+            if (authoring_root / document).is_file():
+                shutil.copy2(authoring_root / document, staging / document)
         if (staging / "contract.json").is_file() and (authoring_root / "contract.json").is_file():
             shutil.copy2(authoring_root / "contract.json", staging / "contract.json")
         seed = _reseeded(manifest, authoring_root, staging)

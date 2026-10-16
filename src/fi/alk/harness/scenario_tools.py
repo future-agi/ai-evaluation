@@ -22,6 +22,7 @@ from .backends import tool, tool_server
 
 from .amend import add_rule, drop_rule, fix_tool, widen
 from .background_noise import place_for, places
+from .cast import binding_problems, load_cast, sub_actors_enabled
 from .catalogue import (
     NO_OVERLAY,
     CRITERIA_RULES,
@@ -767,6 +768,54 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def _sub_actor_field() -> dict[str, Any]:
+    """The bindings a writer may give, offered only where the environment has sub-actors."""
+    if not sub_actors_enabled():
+        return {}
+    return {
+        "sub_actors": {
+            "type": "array",
+            "description": "Sub-actors from the world's cast this scenario uses, each with when "
+            "it enters: `always` (after the agent's first turn), `mid_journey` with `turn` "
+            "(after the agent's turn N), or `on_tool` with `tool` and `on_call` (the Nth call of "
+            "that tool, for a sub-actor whose faults name it). Leave it out for the person alone.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "trigger": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["always", "mid_journey", "on_tool"]},
+                            "turn": {"type": "integer"},
+                            "tool": {"type": "string"},
+                            "on_call": {"type": "integer"},
+                        },
+                    },
+                },
+                "required": ["id"],
+            },
+        }
+    }
+
+
+def _bindings_that_cannot_run(scenario: Scenario, world_root: Path, *, spoken: bool) -> list[str]:
+    """Sub-actor bindings that name no sub-actor in the cast, or say when it enters in a way no run can."""
+    if not scenario.sub_actors:
+        return []
+    if not sub_actors_enabled():
+        return ["sub_actors: this environment has no sub-actors, so leave sub_actors empty"]
+    return [
+        "sub_actors: " + problem
+        for problem in binding_problems(
+            scenario.sub_actors,
+            load_cast(world_root),
+            modality="voice" if spoken else "chat",
+            max_turns=scenario.max_turns,
+        )
+    ]
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -818,6 +867,7 @@ def accept_scenario(
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+        problems.extend(_bindings_that_cannot_run(scenario, world_root, spoken=spoken))
     finally:
         trial.close()
 
@@ -1087,6 +1137,9 @@ def scenario_tools(
                     lines.append(
                         "\nsub-goals available: " + ", ".join(sorted(catalogue.names()))
                     )
+                cast = load_cast(world_root) if sub_actors_enabled() else None
+                if cast and cast.sub_actors:
+                    lines.append("\nsub-actors in the cast:\n" + cast.summary())
                 return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
                 return _err(
@@ -1334,6 +1387,7 @@ def scenario_tools(
                     "which the agent has to work hardest for.",
                 },
                 **_mailbox_fields(),
+                **_sub_actor_field(),
                 "instruction": {
                     "type": "string",
                     "description": "What this person is trying to achieve, written to them. "

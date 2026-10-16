@@ -23,6 +23,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
@@ -39,6 +41,14 @@ from ..catalogue import (
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
+)
+from ..cast import (
+    PrimaryActor,
+    SubActor,
+    load_cast,
+    save_cast,
+    sub_actor_problems,
+    sub_actors_enabled,
 )
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -350,6 +360,46 @@ def _binding(
         "def handle(args, db):\n"
         f"    return settled({called}({state}**args))\n"
     )
+
+
+def _faults_reach(source_root: str, world: Any, tools: set[str]) -> bool:
+    """Whether a run can stand between this agent and its tools, so a fault can be applied there.
+
+    A source agent whose tools are served over HTTP by a `tools-api` service is reached through
+    the bundle's tool proxy; tools the world itself executes are reached in its own `call`.
+    Tools that run inside the agent's own process are reached by nothing the run controls.
+    """
+    root = Path(source_root) if source_root else None
+    if root and root.is_dir():
+        for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+            compose = root / name
+            if not compose.is_file():
+                continue
+            try:
+                services = (yaml.safe_load(compose.read_text(encoding="utf-8")) or {}).get("services")
+            except (OSError, yaml.YAMLError):
+                continue
+            if isinstance(services, dict) and "tools-api" in services:
+                return True
+    owned_elsewhere = set(getattr(world, "runtime_tools", set()) or set())
+    return bool(tools - owned_elsewhere)
+
+
+def _bound_anywhere(destination: Path, sub_actor_id: str) -> list[str]:
+    """The scenarios already written that bind this sub-actor."""
+    found = []
+    for document in sorted((destination / "scenarios").glob("*/scenario.json")):
+        try:
+            body = json.loads(document.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        ids = [
+            one if isinstance(one, str) else (one or {}).get("id")
+            for one in body.get("sub_actors") or []
+        ]
+        if sub_actor_id in ids:
+            found.append(document.parent.name)
+    return found
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -1312,6 +1362,103 @@ def world_tools(
         )
 
     @tool(
+        "add_sub_actor",
+        "Add or replace a participant in this agent's world that is neither the agent nor the "
+        "person it serves. The cast is shared by every scenario; a scenario binds the ones it "
+        "needs and says when each enters.\n\n"
+        "`kind`: `behavioral` speaks (needs `behaviour.prompt`: who they are, what they want, "
+        "what they know), `system` is a service whose responses fail (needs `faults`), `hybrid` "
+        "has both. `channel`: `audio_mix` is a second voice in a voice call; `tool_response` "
+        "applies `faults` to the agent's tool calls. Each fault names a `tool`, a `kind` "
+        "(timeout, error, rate_limit, malformed, latency with `latency_ms`, content with "
+        "`content` added to the result) and `on_call`, which call of that tool it hits (from "
+        "1). `depends_on` lists the agent's tools the sub-actor is about. `primary_role` "
+        "describes the person the agent serves, once.",
+        schema(
+            {
+                "id": str,
+                "name": str,
+                "role": str,
+                "kind": {"type": "string", "enum": ["behavioral", "system", "hybrid"]},
+                "channel": {"type": "string", "enum": ["audio_mix", "tool_response"]},
+                "origin": {"type": "string", "enum": ["derived", "user-added"]},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+                "behaviour": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "voice": {"type": "string"},
+                        "loudness_db": {"type": "number"},
+                        "max_lines": {"type": "integer"},
+                    },
+                },
+                "faults": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "kind": {"type": "string"},
+                            "on_call": {"type": "integer"},
+                            "latency_ms": {"type": "integer"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["tool", "kind"],
+                    },
+                },
+                "primary_role": str,
+            },
+            ["id", "name", "kind", "channel"],
+        ),
+    )
+    async def add_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            actor = SubActor.model_validate(
+                {key: value for key, value in args.items() if key != "primary_role" and value is not None}
+            )
+        except Exception as invalid:  # noqa: BLE001 - the model is told what was wrong
+            return _err(f"Not added. {invalid}"[:600])
+        tools = set(contract.tool_names())
+        problems = sub_actor_problems(
+            actor,
+            modality=str(contract.modality or ""),
+            tools=tools,
+            faults_reach=_faults_reach(source_root, world, tools),
+        )
+        if problems:
+            return _err("Not added:\n  - " + "\n  - ".join(problems))
+        cast = load_cast(destination)
+        cast.sub_actors = [one for one in cast.sub_actors if one.id != actor.id] + [actor]
+        if args.get("primary_role"):
+            cast.primary = PrimaryActor(
+                role=str(args["primary_role"]),
+                description=cast.primary.description or "the person the agent serves",
+            )
+        save_cast(destination, cast)
+        return _ok(
+            f"{actor.id} added. The cast has {len(cast.sub_actors)}:\n{cast.summary()}"
+        )
+
+    @tool(
+        "drop_sub_actor",
+        "Remove a sub-actor from the cast. Refused while any scenario binds it.",
+        schema({"id": str}, ["id"]),
+    )
+    async def drop_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
+        sub_actor_id = str(args.get("id") or "")
+        cast = load_cast(destination)
+        if cast.get(sub_actor_id) is None:
+            return _err(f"Not dropped. {sub_actor_id!r} is not in the cast.")
+        bound = _bound_anywhere(destination, sub_actor_id)
+        if bound:
+            return _err(
+                f"Not dropped. These scenarios bind {sub_actor_id}: " + ", ".join(bound)
+            )
+        cast.sub_actors = [one for one in cast.sub_actors if one.id != sub_actor_id]
+        save_cast(destination, cast)
+        return _ok(f"{sub_actor_id} dropped. The cast has {len(cast.sub_actors)}.")
+
+    @tool(
         "write_env_file",
         "Write one file the environment is built from: a Dockerfile, a compose file, a schema, an "
         "entrypoint, whatever this agent needs. Paths are relative and stay inside the "
@@ -1685,7 +1832,8 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-        ],
+        ]
+        + ([add_sub_actor, drop_sub_actor] if sub_actors_enabled() else []),
     )
     return server, world
 
@@ -1715,3 +1863,6 @@ TOOL_NAMES = (
     "check_world",
     "save_world",
 )
+CAST_TOOL_NAMES = ("add_sub_actor", "drop_sub_actor")
+if sub_actors_enabled():
+    TOOL_NAMES += CAST_TOOL_NAMES
