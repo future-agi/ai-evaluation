@@ -2730,6 +2730,21 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     assert "lookup_rider_by_phone" in caplog.text
 
 
+def test_a_reference_step_runs_unless_it_belongs_to_the_agent_with_nothing_bound():
+    from fi.alk.harness.prove import executes
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld()
+    world.runtime_tools = {"book_ride", "lookup_rider_by_phone"}
+    world.endpoint_for = {"book_ride": "bookings"}
+    try:
+        assert executes(world, "book_ride")
+        assert not executes(world, "lookup_rider_by_phone")
+        assert executes(world, "add_item")
+    finally:
+        world.close()
+
+
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
     """Proof may drive the real backend, but must only credit what the agent could call."""
     from fi.alk.harness.prove import play_reference_step

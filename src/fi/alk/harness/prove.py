@@ -203,6 +203,13 @@ def prepared(
 logger = logging.getLogger(__name__)
 
 
+def executes(world: GeneratedWorld, tool: str) -> bool:
+    """Whether a reference step for `tool` really runs here, rather than being recorded unrun."""
+    if tool not in set(getattr(world, "runtime_tools", set())):
+        return True
+    return bool((getattr(world, "endpoint_for", {}) or {}).get(tool))
+
+
 def play_reference_step(world: GeneratedWorld, step: object) -> Call:
     """Play one correct-agent step without confusing its API with its dependency's API.
 
@@ -294,13 +301,10 @@ def _run(
             call = play_reference_step(world, step)
             if not call.ok:
                 refused.append(f"{call.name}({step.arguments}): {call.error}")
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
-        endpoints = getattr(world, "endpoint_for", {}) or {}
         assumed = [
             str(getattr(step, "tool", ""))
-            for step in scenario.solution
-            if str(getattr(step, "tool", "")) in runtime_tools
-            and not endpoints.get(str(getattr(step, "tool", "")))
+            for step in (scenario.solution if steps is None else steps)
+            if not executes(world, str(getattr(step, "tool", "")))
         ]
         if assumed:
             logger.warning(

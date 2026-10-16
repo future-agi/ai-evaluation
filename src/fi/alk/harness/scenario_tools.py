@@ -52,7 +52,7 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .prove import play_reference_step, prepared, prove
+from .prove import executes, play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -1270,7 +1270,12 @@ def scenario_tools(
                 except Exception as invalid:
                     return _err(f"invalid reference call: {invalid}"[:600])
                 call = play_reference_step(world, reference_step)
-                if call.refused:
+                if not executes(world, call.name):
+                    lines.append(
+                        f"{call.name}: NOT RUN, it runs only inside the agent, so what it "
+                        "returns and changes is unknown until a real call"
+                    )
+                elif call.refused:
                     lines.append(f"{call.name}: refused — {call.error}")
                 elif not call.ok:
                     lines.append(f"{call.name}: CRASHED — {call.error}")
@@ -1327,7 +1332,11 @@ def scenario_tools(
         finally:
             world.close()
         verdict = "broken" if outcome.broken else ("held" if outcome.held else "failed")
-        return _ok(f"{verdict}: {outcome.said or 'nothing wrong'}")
+        unrun = sorted({step.tool for step in steps if not executes(world, step.tool)})
+        return _ok(
+            f"{verdict}: {outcome.said or 'nothing wrong'}"
+            + (f"\nNOT RUN: {', '.join(unrun)} (they run only inside the agent)" if unrun else "")
+        )
 
     @tool(
         "add_sub_goal",
