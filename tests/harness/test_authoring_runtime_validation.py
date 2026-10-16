@@ -1609,3 +1609,39 @@ def test_dependency_investigation_rejects_untyped_repair_results(tmp_path, repai
     with pytest.raises(RuntimeValidationError, match="application failed"):
         asyncio.run(validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring, validate=validate, repair=repair))
     assert calls == ["validate", "repair"]
+
+
+def test_runtime_repairs_leave_budget_for_real_chat_setup(tmp_path):
+    source, authoring = tmp_path / "source", tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    controller = RepairController(RepairBudgets(
+        compiler_candidates=0, environment_patches=1, scenario_patches=0,
+        infrastructure_retries_per_candidate=0,
+    ))
+    attempts = []
+
+    async def validate(*args):
+        attempts.append(len(attempts))
+        if len(attempts) <= 5:
+            phase = "runtime" if len(attempts) <= 4 else "environment"
+            raise RuntimeValidationError(phase, "setup incomplete", diagnostics=[
+                HarnessDiagnostic.create(
+                    stage=HarnessStage.VALIDATING_ENVIRONMENT, component="test",
+                    code="ready_condition_invalid", message="setup incomplete",
+                ),
+            ])
+        return 1
+
+    async def repair(*args):
+        (authoring / "contract.json").write_text(json.dumps({"attempt": len(attempts)}))
+        return 0
+
+    asyncio.run(validate_and_repair(
+        SimpleNamespace(metadata={"generic_harness_v1": True}),
+        source, authoring, validate=validate, repair=repair, controller=controller,
+    ))
+    assert len(attempts) == 6
+    assert controller.history.runtime_patches_used == 4
+    assert controller.history.environment_patches_used == 1
+    assert controller.history.decisions[-1].action is RepairAction.CERTIFY
