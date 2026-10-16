@@ -45,6 +45,20 @@ def _response_text(stdout: str, stderr: str) -> str:
     raise RuntimeError("submitted command produced no response")
 
 
+def _failure_output(output: str, *, limit: int) -> str:
+    # Keep whole lines so the HTTP boundary can redact complete credential values.
+    remaining = limit
+    tail = []
+    for line in reversed(_ANSI.sub("", output).splitlines(keepends=True)):
+        if len(line) > limit:
+            line = "[overlong output line omitted]\n"
+        if len(line) > remaining:
+            break
+        tail.append(line)
+        remaining -= len(line)
+    return "".join(reversed(tail))
+
+
 def _invoke(payload: dict[str, Any]) -> dict[str, Any]:
     messages = payload.get("messages")
     messages = messages if isinstance(messages, list) else []
@@ -69,9 +83,17 @@ def _invoke(payload: dict[str, Any]) -> dict[str, Any]:
         check=False,
     )
     if completed.returncode:
-        detail = _ANSI.sub("", completed.stderr).strip()
+        streams = [
+            (name, output)
+            for name, output in (("stdout", completed.stdout), ("stderr", completed.stderr))
+            if output
+        ]
+        detail = "\n".join(
+            f"{name}: {_failure_output(output, limit=2000 // len(streams))}"
+            for name, output in streams
+        ) or "no stdout or stderr"
         raise RuntimeError(
-            f"submitted command exited {completed.returncode}: {detail[-2000:]}"
+            f"submitted command exited {completed.returncode}: {detail}"
         )
     return {"content": _response_text(completed.stdout, completed.stderr)}
 
