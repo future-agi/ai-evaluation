@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from .backends import (
+    ASK_TOOL,
     ConversationSession,
+    SessionSpec,
     resolve,
     tool,
     tool_server,
@@ -136,6 +138,35 @@ observable artifact proves that the requested change has taken effect.
 """
 
 
+class CoordinatorConversation:
+    """One foreground model that owns the user conversation and delegates stage work."""
+
+    def __init__(self, stage: Stage) -> None:
+        self.stage = stage
+        self.stage_name = "reception"
+        self.opened = False
+
+    async def say(self, message: str, on_event: Any | None = None) -> Any:
+        if not self.opened:
+            await self.stage.__aenter__()
+            self.opened = True
+        return await self.stage.say(message, on_event=on_event)
+
+    async def resume(self, invocation_id: str, on_event: Any | None = None) -> Any:
+        if not self.opened:
+            await self.stage.__aenter__()
+            self.opened = True
+        return await self.stage.resume_turn(invocation_id, on_event=on_event)
+
+    async def interrupt_response(self) -> bool:
+        return await self.stage.interrupt_response()
+
+    async def close(self) -> None:
+        if self.opened:
+            await self.stage.__aexit__()
+            self.opened = False
+
+
 class BuilderConversation:
     """The one builder session, opened on the first message and kept for the conversation."""
 
@@ -236,7 +267,9 @@ class HostedChatRuntime:
             # sandbox of this conversation already recorded otherwise.
             self._published_fingerprint()
 
-    def _conversation(self) -> BuilderConversation:
+    def _conversation(self) -> BuilderConversation | CoordinatorConversation:
+        if self._side_chat():
+            return self._coordinator()
         # One harness for the environment's whole life: it builds, talks, changes and repairs.
         builder = BuilderConversation(self._open_builder)
         builder.on_health = self._note_health
@@ -751,6 +784,93 @@ class HostedChatRuntime:
         capabilities = self.client.turn_context.get("capabilities") or {}
         return bool(capabilities.get("control_only"))
 
+    def _side_chat(self) -> bool:
+        capabilities = self.client.turn_context.get("capabilities") or {}
+        return self._control_only() and capabilities.get("builder_session") is False
+
+    def _coordinator(self) -> CoordinatorConversation:
+        # Without the builder session, the build sandbox keeps the side chat it has on dev.
+        identity = self.client.capabilities.identity
+        spec = SessionSpec(
+            system_prompt=(
+                "You are the foreground harness coordinator. The authoring stages run as "
+                "background workers in this same sandbox. Answer the user immediately from "
+                "run status and observable progress; do not reconstruct or execute Understand, "
+                "Build, Scenarios, or Run yourself. Use get_run_status for progress. Supported "
+                "authoring changes can be queued through request_adjustment for the worker to "
+                "apply at a safe boundary. AskUserQuestion is available only when the worker "
+                "reports a genuine missing requirement; never invent a question."
+                + _HOSTED_CHAT_CAPABILITIES
+            ),
+            servers={"platform-control": self._control_server()},
+            builtins=("Read", "Glob", "Grep", ASK_TOOL),
+            max_turns=12,
+            ask=self._ask,
+            conversation=ConversationSession(
+                app_name=identity.app_name,
+                user_id=identity.user_id,
+                session_id=f"{identity.app_name}-{self.client.capabilities.conversation_id}-coordinator",
+                transcript_store=self.transcript_store,
+                event_store=self.event_store,
+                resume_session_id=self._provider_sessions().get(
+                    f"{self.backend_name}:reception"
+                ),
+                config_dir=str(self.workspace / ".claude-coordinator"),
+                turn_context=dict(self.client.turn_context),
+            ),
+        )
+        configured = apply_chat_policy(spec, stage="reception", policy=self.policy)
+        return CoordinatorConversation(Stage(configured, name="coordinator"))
+
+    def _control_server(self):
+        @tool(
+            "get_run_status",
+            "Read the current authoring or simulation run status.",
+            schema({}, []),
+        )
+        async def get_run_status(_args: dict[str, Any]) -> dict[str, Any]:
+            status = await self.client.run_status()
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(status, sort_keys=True),
+                    }
+                ]
+            }
+
+        @tool(
+            "request_adjustment",
+            "Queue a supported authoring change to environment fixtures, scenarios, or the "
+            "contract's interpretation of existing agent behavior. This does not change the "
+            "target phone number, saved connection settings, target agent prompt, source code, "
+            "or provider configuration. Refuse those requests directly without this tool. "
+            "Answer questions directly. A pending response means queued, not applied.",
+            schema({"instruction": str}, ["instruction"]),
+        )
+        async def request_adjustment(args: dict[str, Any]) -> dict[str, Any]:
+            instruction = str(args.get("instruction") or "").strip()
+            if not instruction:
+                return {
+                    "content": [{"type": "text", "text": "instruction is required"}],
+                    "is_error": True,
+                }
+            result = await self.client.adjust(instruction)
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(result, sort_keys=True),
+                    }
+                ]
+            }
+
+        return tool_server(
+            name="platform-control",
+            version="0.1.0",
+            tools=[get_run_status, request_adjustment],
+        )
+
     async def _pump_authoring_activity(self) -> None:
         """Forward the active harness's safe observable events through this same lease."""
         path = self.workspace / "harness-events.jsonl"
@@ -827,7 +947,7 @@ class HostedChatRuntime:
         finish_build: when it has saved something that opens more tools, it is reopened with
         them and resumes; otherwise it is told the build is not finished. Waits on the person
         while a question is open, and gives up after a few turns that change nothing."""
-        if not self._control_only() or (self.workspace / _BUILD_FINISHED).is_file():
+        if not self._control_only() or self._side_chat() or (self.workspace / _BUILD_FINISHED).is_file():
             return False
         if (self.workspace / _PENDING_QUESTION).is_file():
             return False
