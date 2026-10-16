@@ -5,7 +5,9 @@ import asyncio
 import hashlib
 import traceback
 import json
+import os
 import signal
+import time
 import uuid
 from collections.abc import Awaitable
 from contextlib import suppress
@@ -21,6 +23,8 @@ from .backends import (
     tool,
     tool_server,
 )
+from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
+from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
     ConversationClient,
@@ -44,6 +48,7 @@ _RANGES = {
 _NOT_MESSAGES = {"interrupt", "cancel_operation", "user_response", "approval"}
 _PENDING_QUESTION = ".futureagi-pending-question.json"
 _BUILD_FINISHED = ".futureagi-build-finished.json"
+_PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
 _AUTHORING_BASIS = ".futureagi-authoring-basis.json"
@@ -62,8 +67,10 @@ _NEEDS_CONFIRMATION = frozenset(
         "amend_contract",
         "add_rule",
         "drop_rule",
+        "add_sub_goal",
     }
 )
+_CONFIRM = "Yes, make this change"
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -71,6 +78,7 @@ _PUBLISHED_PARTS = (
     "sub_goals.json",
     "contract.json",
     "simulator_prompt.md",
+    "world.sqlite",
 )
 # Only these change the workspace, so only these are worth a checkpoint before they run.
 _WRITING_TOOLS = frozenset(
@@ -257,7 +265,7 @@ class HostedChatRuntime:
         self._last_health = ""
         # Set when the person answered a question in this turn, or when the opening health check
         # asked for a small repair: then consequential writes are allowed.
-        self._approved = False
+        self._repairing = False
         self._opened_with: tuple[bool, bool] | None = None
         self._last_progress: Any = None
         self._idle_turns = 0
@@ -374,11 +382,15 @@ class HostedChatRuntime:
         metadata = self.job.get("metadata") or {}
         name = str(metadata.get("agent_name") or self.job.get("name") or "agent")
         kind = str(metadata.get("source_kind") or "repo")
-        source = resolve(kind if kind in {"repo", "spec"} else "repo", name=name, root=str(self.source))
         try:
             job = HarnessJob.model_validate(self.job)
         except Exception:  # noqa: BLE001 - the evals offered are optional context
             job = None
+        profile = self._provider_profile(job) if job is not None else None
+        if job is not None and agent_source_kind(job, profile) == "provider":
+            source = resolve("provider", name=name, profile=profile or {}, scratch=str(self.source))
+        else:
+            source = resolve(kind if kind in {"repo", "spec"} else "repo", name=name, root=str(self.source))
         return open_for_building(
             contract,
             out=self.workspace,
@@ -389,6 +401,27 @@ class HostedChatRuntime:
             hosted_prompt=self._hosted_prompt(),
         )
 
+    def _provider_profile(self, job: Any) -> dict[str, Any] | None:
+        """The provider's definition the build process fetched, shared with this one through its cache.
+
+        The fetch needs the provider credential, which only the build process holds, so this
+        waits briefly for its cache rather than opening without the agent's definition.
+        """
+        cache = self.source.parent / _PROVIDER_PROFILE
+        for _ in range(60):
+            try:
+                profile = _load_provider_import_profile(job, None, cache)
+                break
+            except RuntimeError:
+                time.sleep(1)
+        else:
+            raise RuntimeError("the provider's definition was not fetched by the build process")
+        if profile is not None:
+            if not cache.is_file():
+                cache.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = str(cache)
+        return profile
+
     def _what_exists(self) -> tuple[bool, bool]:
         """Whether the workspace has a contract, and a world: what the harness's tools follow."""
         from .understand import load as load_contract
@@ -397,37 +430,53 @@ class HostedChatRuntime:
         return load_contract(self.workspace) is not None, bool(world_saved(self.workspace))
 
     def _confirmed(self, spec: Any) -> Any:
-        """A consequential tool that refuses until the person has said yes in this turn.
+        """A consequential tool that runs only once the person has said yes to this very call.
 
-        Asking first is a rule the model is told, and this is where it is held: a change to what
-        a scenario tests, a removal, or a change to the world or contract does not run on the
-        strength of the request alone. Adding scenarios, surface edits and repairs do.
+        A change to what a scenario tests, a removal, a replaced sub-goal, or a change to the world
+        or contract does not run on the strength of the request alone: the person is asked to
+        confirm the exact call, and only that answer runs it. Adding scenarios, surface edits and
+        repairs of a broken suite do not ask.
         """
         if spec.name not in _NEEDS_CONFIRMATION:
             return spec
         handler = spec.handler
 
         async def guarded(args: dict[str, Any]) -> Any:
-            if self._approved or (
-                spec.name == "submit_scenario" and not self._changes_meaning(args)
-            ):
+            if spec.name == "submit_scenario" and (self._repairing or not self._changes_meaning(args)):
+                return await handler(args)
+            if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
+                return await handler(args)
+            answer = await self._ask(
+                spec.name,
+                {
+                    "question": f"Confirm this change: {spec.name} "
+                    + json.dumps(args, sort_keys=True, default=str)[:600],
+                    "options": [_CONFIRM, "No"],
+                },
+                None,
+            )
+            said = " ".join(
+                str(part.get("text") or "") for part in (answer.get("content") or [])
+            ).strip() if isinstance(answer, dict) else ""
+            if said == _CONFIRM:
                 return await handler(args)
             return {
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            "Not done yet: this changes what the suite tests or removes something, "
-                            "so the person confirms first. Say exactly what will change and which "
-                            "scenarios (by number) and sub-goals it affects, ask with "
-                            "AskUserQuestion, and make the change once they say yes."
-                        ),
+                        "text": f"Not done: the person did not confirm this change (they said: "
+                        f"{said or 'nothing'}). Leave it undone and follow what they said.",
                     }
                 ],
                 "is_error": True,
             }
 
         return replace(spec, handler=guarded)
+
+    def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
+        from .catalogue import load_catalogue
+
+        return any(one.name == args.get("name") for one in load_catalogue(self.workspace).sub_goals)
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
@@ -617,10 +666,10 @@ class HostedChatRuntime:
         return tool_server(name="platform", version="0.1.0", tools=tools)
 
     def _note_health(self, problems: str) -> None:
-        # Restoring a broken suite changes nothing the person decided; how much to repair
-        # unasked is the harness's call, made by its instructions.
+        # Restoring a broken suite changes nothing the person decided, so its scenarios are
+        # rewritten unasked; removals and world or contract changes still wait for a yes.
         self._last_health = problems
-        self._approved = True
+        self._repairing = True
 
     def _ledger(self) -> dict[str, Any]:
         try:
@@ -1077,7 +1126,7 @@ class HostedChatRuntime:
         assistant_message_id = str(uuid.uuid4())
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
-        self._approved = kind in {"user_response", "approval"}
+        self._repairing = False
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,
@@ -1485,7 +1534,6 @@ class HostedChatRuntime:
                 await self._checkpoint()
                 answer_sequence = int(command["sequence"])
                 answered = answer
-                self._approved = bool(answer)
                 if not any(
                     self._turn_acknowledged_through
                     < int(queued["sequence"])

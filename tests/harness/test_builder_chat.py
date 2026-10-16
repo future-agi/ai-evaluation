@@ -161,6 +161,20 @@ def test_unsaved_changes_are_published_and_reported_by_number(tmp_path, monkeypa
     assert asyncio.run(runtime._save_changes())["unchanged"] is True
 
 
+def test_a_change_to_the_world_data_alone_is_saved(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    (tmp_path / "world.sqlite").write_bytes(b"before")
+    runtime._published_fingerprint()
+    monkeypatch.setattr("fi.alk.harness.bundle_author_v2.reseal_scenarios", lambda root: None)
+
+    (tmp_path / "world.sqlite").write_bytes(b"after")
+    result = asyncio.run(runtime._save_changes())
+
+    assert result.get("unchanged") is not True
+    assert len(client.published) == 1
+
+
 def test_a_rejected_publish_is_never_reported_as_done(tmp_path, monkeypatch):
     client = BuilderClient(applied=False)
     runtime = _runtime(tmp_path, client, monkeypatch)
@@ -221,12 +235,17 @@ def test_the_secret_guard_refuses_env_reads_and_scrubs_the_shell():
         ("Read", {"file_path": "/work/authoring/.env"}),
         ("Read", {"file_path": "/run/futureagi/conversation.json"}),
         ("Write", {"file_path": "/work/authoring/scenarios/a/scenario.json"}),
+        ("Read", {"file_path": "/work/authoring/../../run/futureagi/simulator-secrets.json"}),
+        ("Read", {"file_path": "/work/.authoring-credentials/google.json"}),
+        ("Grep", {"pattern": "KEY", "path": "/run"}),
+        ("Grep", {"pattern": "KEY", "path": "/"}),
     ):
         assert secret_refusal(tool, arguments), (tool, arguments)
     for tool, arguments in (
         ("Bash", {"command": "ls scenarios | wc -l"}),
         ("Read", {"file_path": "/work/authoring/contract.json"}),
         ("Write", {"file_path": "/tmp/analysis.py"}),
+        ("Grep", {"pattern": "refund", "path": "/work/authoring/scenarios"}),
     ):
         assert not secret_refusal(tool, arguments), (tool, arguments)
     assert scrubbed_command("ls").startswith("env -i ")
@@ -251,33 +270,52 @@ def test_world_change_is_all_or_nothing_and_reports_counts(tmp_path):
     assert "a: 2, b: 1" in world_change(tmp_path, "UPDATE b SET id = '2'")
 
 
-def test_meaning_changes_wait_for_a_yes_but_surface_edits_do_not(tmp_path, monkeypatch):
+def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tmp_path, monkeypatch):
     from fi.alk.harness.backends import ToolSpec
+    from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
 
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
         json.dumps({"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana"}})
     )
-    calls = []
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
+    calls, asked, answers = [], [], []
 
     async def handler(args):
         calls.append(args)
         return {"content": [{"type": "text", "text": "kept"}]}
 
+    async def ask(tool, payload, context):
+        asked.append(payload["question"])
+        return {"content": [{"type": "text", "text": answers.pop(0)}]}
+
+    runtime._ask = ask
     submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
     drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
+    goal = runtime._confirmed(ToolSpec("add_sub_goal", "", {}, handler))
 
     surface = {"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana", "accent": "Indian"}}
     meaning = {"name": "one", "instruction": "ask for a cancellation", "persona": {"name": "Ana"}}
-    added = {"name": "two", "instruction": "anything"}
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
-    assert asyncio.run(submit.handler(added)).get("is_error") is None
-    assert asyncio.run(submit.handler(meaning))["is_error"] is True
+    assert asyncio.run(submit.handler({"name": "two", "instruction": "anything"})).get("is_error") is None
+    assert asyncio.run(goal.handler({"name": "new-goal"})).get("is_error") is None
+    assert asked == []
+
+    answers.extend(["No, keep it", "Which scenarios use it?"])
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
-    runtime._approved = True
+    assert asyncio.run(submit.handler(meaning))["is_error"] is True
+    answers.append(_CONFIRM)
+    assert asyncio.run(goal.handler({"name": "refunded"})).get("is_error") is None
+    answers.append("No")
+    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
+    assert "drop_scenarios" in asked[0] and "add_sub_goal" in asked[2]
+
+    runtime._note_health("one is broken")
     assert asyncio.run(submit.handler(meaning)).get("is_error") is None
-    assert len(calls) == 3
+    answers.append("No")
+    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
+    assert len(calls) == 5
 
 
 def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exists(tmp_path, monkeypatch):
@@ -384,3 +422,113 @@ def test_opening_a_chat_on_a_built_environment_does_not_reprove_the_whole_suite(
     with pytest.raises(Opened) as opened:
         builder.open_builder(AgentContract(agent_name="demo"), out=tmp_path, source_root=None)
     assert not opened.value.args[0].get("prove_all")
+
+
+def _job(source_kind: str, connector: str, mode: str, config: dict) -> dict:
+    return {
+        "job_id": "job-1",
+        "run_id": "run-1",
+        "execution": "hosted",
+        "source": {"kind": source_kind, "visibility": "public"}
+        if source_kind == "provider"
+        else {"kind": "archive", "archive_artifact_id": "source-1"},
+        "agent": {
+            "connector": connector,
+            "mode": mode,
+            "config": config,
+            "secret_refs": {
+                "VAPI_API_KEY": {"manager": "platform-vault", "key": "vapi-key", "purpose": "target_provider"}
+            }
+            if mode == "provider_import"
+            else {},
+        },
+        "scenario_count": 1,
+        "runtime": {"isolation": "dedicated_vm", "cpu_units": 2, "memory_mb": 4096, "parallelism": 1},
+        "metadata": {"agent_name": "demo"},
+    }
+
+
+def _opened_source(tmp_path: Path, monkeypatch, job: dict):
+    opened = {}
+    monkeypatch.setattr(
+        "fi.alk.harness.builder.open_for_building",
+        lambda contract, **kwargs: opened.update(kwargs),
+    )
+    source = tmp_path / "source"
+    source.mkdir(exist_ok=True)
+    runtime = _runtime(tmp_path / "authoring", BuilderClient(), monkeypatch)
+    runtime.source = source
+    runtime.job = job
+    runtime._open_for_building(None)
+    return opened["source"]
+
+
+def test_a_phone_target_opens_the_builder_on_its_supplied_prompt(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_PROVIDER_IMPORT_PROFILE_PATH", "")
+    monkeypatch.delenv("ALK_PROVIDER_IMPORT_PROFILE_PATH")
+    job = _job(
+        "provider",
+        "phone",
+        "connect_only",
+        {"phone_number": "+14155551234", "target_system_prompt": "Answer ride questions."},
+    )
+
+    source = _opened_source(tmp_path, monkeypatch, job)
+
+    assert source.kind == "provider"
+    assert "Answer ride questions." in source.briefing()
+
+
+def test_an_imported_provider_reaches_the_builder_from_the_build_process_cache(
+    tmp_path, monkeypatch
+):
+    import os
+
+    from fi.alk.harness.understand import _provider_import_briefing
+
+    monkeypatch.setenv("ALK_PROVIDER_IMPORT_PROFILE_PATH", "")
+    monkeypatch.delenv("ALK_PROVIDER_IMPORT_PROFILE_PATH")
+    (tmp_path / "provider-import-profile.json").write_text(
+        json.dumps({"provider": "vapi", "system_prompt": "Imported assistant prompt."})
+    )
+    job = _job("archive", "vapi", "provider_import", {"assistant_id": "asst-1"})
+
+    source = _opened_source(tmp_path, monkeypatch, job)
+
+    assert source.kind == "repo"
+    assert os.environ["ALK_PROVIDER_IMPORT_PROFILE_PATH"] == str(tmp_path / "provider-import-profile.json")
+    assert "Imported assistant prompt." in _provider_import_briefing()
+
+
+def test_a_repository_opens_the_builder_on_its_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALK_PROVIDER_IMPORT_PROFILE_PATH", "")
+    monkeypatch.delenv("ALK_PROVIDER_IMPORT_PROFILE_PATH")
+    job = _job("archive", "livekit", "connect_only", {})
+
+    source = _opened_source(tmp_path, monkeypatch, job)
+
+    assert source.kind == "repo"
+    assert "ALK_PROVIDER_IMPORT_PROFILE_PATH" not in __import__("os").environ
+
+
+def test_a_retried_run_start_sends_the_same_operation_id(monkeypatch):
+    from types import SimpleNamespace
+
+    body = _capabilities().model_dump(mode="json")
+    body["endpoints"]["run_start"] = body["endpoints"]["run_status"].replace("run-status", "run-start")
+    sent = []
+
+    class Transport:
+        def request(self, method, url, **kwargs):
+            sent.append(kwargs.get("json_body"))
+            return SimpleNamespace(status_code=503 if len(sent) == 1 else 200, body={"run_id": "r-1"})
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    client = ConversationClient(ConversationCapabilities.model_validate(body), transport=Transport())
+
+    asyncio.run(client.start_run([1], [], 1))
+
+    assert len(sent) == 2 and sent[0]["operation_id"] == sent[1]["operation_id"]

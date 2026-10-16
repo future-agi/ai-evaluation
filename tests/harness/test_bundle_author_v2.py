@@ -2657,3 +2657,50 @@ def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path)
 
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
+
+
+def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> None:
+    from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceTable
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (source / "db" / "schema.sql").write_text(
+        "CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT);\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    artifact_root = authoring / "generic-harness"
+    artifact_root.mkdir()
+    columns = tuple(
+        SourceColumn(name=name, logical_type=LogicalType.STRING, native_type="text", nullable=name != "id", has_default=False)
+        for name in ("id", "label")
+    )
+    source_model = SourceModel.create(
+        source_digest="sha256:" + source_fingerprint(source),
+        engine="postgres",
+        tables=(SourceTable(name="places", columns=columns, primary_key=("id",)),),
+    )
+    (artifact_root / "source-model.json").write_text(source_model.model_dump_json(), encoding="utf-8")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT)")
+        database.execute("INSERT INTO places VALUES ('home', 'home')")
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        world = import_sqlite_world(database, source_model, validate=False).world
+    (artifact_root / "world-ir.json").write_text(world.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    bundle = authoring / "environment-bundle"
+    sealed = author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=bundle,
+    )
+
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    digest = reseal_scenarios(authoring)
+
+    assert digest is not None and digest != sealed.digest
+    assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
+    assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
+    assert reseal_scenarios(authoring) == digest

@@ -18,7 +18,6 @@ from .backends import (
     ASK_TOOL,
     DELEGATE_TOOL,
     FILE_TOOLS,
-    OPERATOR_TOOLS,
     SessionSpec,
     ToolServer,
     tool,
@@ -590,7 +589,7 @@ def open_for_building(
             + hosted_prompt
         ),
         servers=servers,
-        builtins=tuple(dict.fromkeys((*work.spec.builtins, *FILE_TOOLS, *OPERATOR_TOOLS, ASK_TOOL))),
+        builtins=tuple(dict.fromkeys((*work.spec.builtins, *FILE_TOOLS, ASK_TOOL))),
         workers=dict(work.spec.workers),
         cwd=str(out),
         max_turns=BUILDER_TURNS,
@@ -662,7 +661,7 @@ def open_builder(
             + hosted_prompt
         ),
         servers=servers,
-        builtins=(*FILE_TOOLS, *OPERATOR_TOOLS, ASK_TOOL, DELEGATE_TOOL),
+        builtins=(*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL),
         workers=writer_worker(contract, out, server, BUILDER_TURNS),
         cwd=str(out),
         max_turns=BUILDER_TURNS,
