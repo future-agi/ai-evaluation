@@ -648,6 +648,11 @@ is about the agent coping whether or not the sub-actor shows up, and only with a
 service that fails is set up before the call, so it enters `always`, `on_tool` or by `probability`.
 Most scenarios bind none; presence is a condition on some scenarios, not on every one.
 
+A sub-actor speaks from its behaviour in the cast; a scenario binds it and says when it enters, and
+cannot script its words. So nothing the person needs, and nothing in the answer key, depends on what
+the sub-actor says: the person keeps their own goal and every value they give, and the sub-actor is
+something the agent has to cope with whatever it says.
+
 The answer key is the correct behaviour with the sub-actor present. A request from someone who is not
 the person being served is not that person's request: the agent ignores it or checks it with them, and
 the solution never acts on it. A failed response from a system sub-actor is recovered from exactly as
