@@ -30,6 +30,7 @@ import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .cast import bound_faults, load_cast, sub_actors_enabled
 from .catalogue import Catalogue
 from .checks import Outcome, run_check
 from .folder import apply_setup, check_ready
@@ -193,6 +194,11 @@ def prepared(
     # The setup's own calls are not the agent's. Clearing them keeps a check that counts calls
     # from crediting the agent with work the scenario did on its behalf.
     world.calls = []
+    # The answer key is proved with the scenario's failing services failing, as a run has them.
+    # One that may not enter at all is left out: its answer key holds either way.
+    if scenario.sub_actors and sub_actors_enabled():
+        certain = [one for one in scenario.sub_actors if one.trigger.kind != "probability"]
+        world.faults = bound_faults(certain, load_cast(world_root))
     return world, applied, ready
 
 

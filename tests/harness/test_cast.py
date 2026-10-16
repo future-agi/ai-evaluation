@@ -375,3 +375,27 @@ def test_a_sub_actor_that_may_not_enter_needs_a_sub_goal_about_it(tmp_path, monk
         kept=[],
     )
     assert "may not enter" not in str(said)
+
+
+def test_the_answer_key_is_proved_with_the_bound_service_failing(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    root, _contract, catalogue = _environment(tmp_path)
+    failing = _service().model_copy(update={"faults": [FaultProfile(tool="add", kind="error", on_call=1)]})
+    save_cast(root, Cast(sub_actors=[failing]))
+    bound = [{"id": "subactor_service", "trigger": {"kind": "always"}}]
+
+    gives_up = accept_scenario(_scenario(sub_actors=bound), world_root=root, catalogue=catalogue, kept=[])
+    assert gives_up["is_error"]
+
+    retries = _scenario(
+        sub_actors=bound,
+        solution=[
+            {"tool": "lst", "arguments": {}},
+            {"tool": "add", "arguments": {"item_id": "big_mac"}},
+            {"tool": "add", "arguments": {"item_id": "big_mac"}},
+        ],
+    )
+    said = accept_scenario(retries, world_root=root, catalogue=catalogue, kept=[])
+    assert not said.get("is_error"), said
