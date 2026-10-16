@@ -678,6 +678,7 @@ async def validate_once(
         process_logs = authoring / "generic-harness" / "process-logs"
         logs_before = set(process_logs.glob("*.log"))
         validation_error = None
+        manifest = None
         from .hosted_entrypoint import peek_target_provider_secret_values
 
         target_secret_values = peek_target_provider_secret_values(
@@ -1133,13 +1134,14 @@ async def validate_once(
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
                 # Generated data cannot repair the infrastructure trust store.
                 phase = "infrastructure"
-            raise RuntimeValidationError(
+            validation_error = RuntimeValidationError(
                 phase,
                 outbound.redact_outbound_text(
                     f"{type(exc).__name__}: {exc}", extra_secret_values=secret_values
                 ),
                 diagnostics=tuple(getattr(exc, "diagnostics", ())),
-            ) from None
+            )
+            raise validation_error from None
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
@@ -1150,7 +1152,10 @@ async def validate_once(
                     validation_error.process_evidence = retained_process_evidence(
                         process_logs, logs_before, redaction_values
                     )
-                    control_service = getattr(manifest.runtime, "control_service", None)
+                    control_service = (
+                        getattr(manifest.runtime, "control_service", None)
+                        if manifest is not None else None
+                    )
                     if control_service:
                         validation_error.target_process_evidence = retained_process_evidence(
                             process_logs, logs_before, redaction_values,
