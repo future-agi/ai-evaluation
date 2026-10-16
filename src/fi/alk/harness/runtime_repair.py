@@ -927,7 +927,7 @@ The private conversation must capture actual completed tool evidence after recom
     stage = Stage(
         SessionSpec(
             system_prompt=system_prompt
-            + " You have at most 40 investigation turns. Submit as soon as the evidence supports a correction.",
+            + " You have at most 80 investigation turns. Submit as soon as the evidence supports a correction.",
             servers={
                 "runtime_repair": submission_server,
                 "investigation": tool_server(
@@ -937,7 +937,7 @@ The private conversation must capture actual completed tool evidence after recom
             },
             builtins=(),
             cwd=str(root),
-            max_turns=40,
+            max_turns=80,
             gated=True,
             thinking=True,
         ),

@@ -194,6 +194,14 @@ def test_contract_rejects_invalid_observation_config(changes):
         )
 
 
+def test_endpoint_rejection_explains_required_placeholder():
+    with pytest.raises(ValidationError, match=r"\{\{correlation_id\}\}"):
+        RuntimeInterface(
+            kind="http", port=8000, path="/chat",
+            completed_tool_events={**SPEC, "path": "/events/{conversation_id}"},
+        )
+
+
 def test_contract_preserves_declared_observation_config():
     interface = RuntimeInterface(
         kind="http", port=8000, path="/chat", completed_tool_events=SPEC
