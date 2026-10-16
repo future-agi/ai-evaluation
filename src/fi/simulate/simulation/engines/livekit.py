@@ -64,6 +64,7 @@ from .caller_barge_in import (
     selected_call_indices,
 )
 from .opening import PromptOpeningGate
+from .sub_actor_voice import SubActorVoice, with_sub_actor_turns
 from fi.simulate.agent.definition import (
     AgentDefinition,
     LiveKitSimulatorRuntime,
@@ -93,7 +94,11 @@ from fi.simulate.endpoints.originators import (
 )
 from fi.simulate.simulation.bridge import LiveKitAudioBridge
 from fi.simulate.simulation.bridge.audio import PCMResampler
-from fi.simulate.simulation.livekit_models import LiveKitModels, build_livekit_models
+from fi.simulate.simulation.livekit_models import (
+    LiveKitModels,
+    build_livekit_models,
+    build_livekit_tts,
+)
 from fi.simulate.recording.room_recorder import (
     RoomRecorder,
     mix_recordings,
@@ -916,7 +921,7 @@ class _TestRunnerAgent(Agent):
             # Nothing stands behind a recording, and a room behind one gives the game away.
             logger.info("mailbox answered, so ambience is dropped (noise %r)", source)
             source = ""
-        if not source and not tone_style and not _answered_by_voicemail():
+        if not source and not tone_style and not _answered_by_voicemail() and not _bound_sub_actor_voices():
             return
 
         try:
@@ -1942,6 +1947,8 @@ class LiveKitEngine(BaseEngine):
         target_transcription_handler_registered = False
         target_transcription_tasks: set[asyncio.Task[None]] = set()
         caller_barge_in: CallerBargeIn | None = None
+        sub_actor_voices: list[SubActorVoice] = []
+        agent_turns_ended = 0
         # Set the moment the conversation ends. A target transcription stream
         # still in flight at that point is the target's final utterance; it must
         # be recorded into the transcript, but WITHOUT triggering another
@@ -2342,6 +2349,7 @@ class LiveKitEngine(BaseEngine):
 
                 session.on("agent_state_changed", on_simulator_state_changed)
 
+            sub_actor_voices = self._sub_actor_voices(customer_agent, models)
 
             # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
             # silence after the target finishes. Register before dispatch/readiness so even an
@@ -2365,6 +2373,10 @@ class LiveKitEngine(BaseEngine):
                         target_after_preamble_started.set()
                     opening_preamble_audio_finished.clear()
                 elif new_state == "listening":
+                    nonlocal agent_turns_ended
+                    agent_turns_ended += 1
+                    for voice in sub_actor_voices:
+                        voice.agent_turn_ended(agent_turns_ended)
                     if caller_barge_in is not None and not target_transcription_mode:
                         caller_barge_in.target_ended()
                     if prompt_opening is not None:
@@ -2867,6 +2879,8 @@ class LiveKitEngine(BaseEngine):
             customer_agent.end_of_call()
             if caller_barge_in is not None:
                 await caller_barge_in.close()
+            for voice in sub_actor_voices:
+                await voice.close()
             if stop_reason == "simulator_end_call":
                 wait_for_end_speech = getattr(
                     customer_agent,
@@ -3005,6 +3019,8 @@ class LiveKitEngine(BaseEngine):
             )
             if caller_barge_in is not None:
                 await caller_barge_in.close()
+            for voice in sub_actor_voices:
+                await voice.close()
             if customer_agent is not None:
                 customer_agent.end_of_call()
             # Stop the media source before flushing its final transcription.
@@ -3241,6 +3257,8 @@ class LiveKitEngine(BaseEngine):
                     "livekit_outcome_missing",
                     "LiveKit test case ended without an outcome",
                 )
+        sub_actor_events = [event for voice in sub_actor_voices for event in voice.events()]
+        messages = with_sub_actor_turns(messages, sub_actor_events)
         # Failed calls keep their evidence and original failure, too.
         outcome.messages = messages
         outcome.transcript = "\n".join(
@@ -3297,6 +3315,7 @@ class LiveKitEngine(BaseEngine):
         outcome.metadata.update(
             {
                 "simulator_participant_identity": simulator_identity,
+                "sub_actor_events": sub_actor_events,
                 "caller_barge_in": (
                     caller_barge_in.summary() if caller_barge_in is not None
                     else {
@@ -3362,6 +3381,45 @@ class LiveKitEngine(BaseEngine):
             test_case_id,
         )
         return outcome
+
+    def _sub_actor_voices(self, customer_agent: Any, models: Any) -> list[SubActorVoice]:
+        """One voice per bound sub-actor, written and synthesised off the call's critical path."""
+        bound = _bound_sub_actor_voices()
+        player = getattr(customer_agent, "_background_player", None)
+        if not bound or player is None:
+            return []
+        base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
+
+        async def play(frames: list[Any], volume: float) -> None:
+            async def stream() -> Any:
+                for frame in frames:
+                    yield frame
+
+            handle = player.play(AudioConfig(stream(), volume=volume))
+            waiter = getattr(handle, "wait_for_playout", None)
+            if callable(waiter):
+                await waiter()
+            else:
+                await asyncio.sleep(
+                    sum(frame.samples_per_channel / frame.sample_rate for frame in frames)
+                )
+
+        voices = []
+        for actor in bound:
+            tts = models.tts
+            wanted = str((actor.get("behaviour") or {}).get("voice") or "")
+            if wanted and base is not None:
+                field = "model" if base.provider == "deepgram" else "voice"
+                try:
+                    tts = build_livekit_tts(
+                        base.model_copy(update={field: wanted}), models.http_session
+                    )
+                except Exception:
+                    logger.warning("sub-actor voice %r unavailable; using the caller's", wanted)
+            voice = SubActorVoice(actor=actor, model=models.llm, tts=tts, play=play)
+            voice.start()
+            voices.append(voice)
+        return voices
 
     async def _create_customer_agent(
         self,
@@ -4285,6 +4343,15 @@ def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
         num_channels=1,
         samples_per_channel=total,
     )
+
+
+def _bound_sub_actor_voices() -> list[dict[str, Any]]:
+    """The speaking sub-actors this call carries; set per scenario by the call runner."""
+    try:
+        voices = json.loads(os.environ.get("HARNESS_SUB_ACTOR_VOICES", "") or "[]")
+    except ValueError:
+        return []
+    return [one for one in voices if isinstance(one, dict)] if isinstance(voices, list) else []
 
 
 def _answered_by_voicemail() -> bool:

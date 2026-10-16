@@ -498,6 +498,15 @@ async def build_livekit_models(
         raise
 
 
+def build_livekit_tts(
+    tts_config: TTSConfig, http_session: aiohttp.ClientSession | None
+) -> livekit_tts.TTS:
+    """A second voice for the same call, sharing the call's HTTP session."""
+    return _factory(_TTS_FACTORIES, tts_config.provider.lower(), "TTS")(
+        tts_config, http_session
+    )
+
+
 def _factory(factories: dict[str, Callable], provider: str, model_type: str):
     factory = factories.get(provider)
     if factory is None:
