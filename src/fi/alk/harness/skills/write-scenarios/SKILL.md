@@ -276,6 +276,14 @@ tools take them.
   it, offers the next step), never a completion only that outside action could bring. Neither the
   caller's instruction nor setup can stand in for that action: setup holds what was true before the
   call, and something the caller would do off the line during it never happens.
+- A step succeeds only where nothing it refuses on holds: read each tool's `refuses` in the contract
+  and rule every one out through setup or the caller's situation, or write the refusal as the outcome.
+  An effect the contract states under a condition ("ready if a setting is on", "found when one is
+  active") holds only when your setup makes that condition true, and setup can only set what the
+  world holds before the call.
+- Setup changes the record the world already holds for a thing; it never adds a second one for the
+  same thing. Two records for one address, person or item give the agent a choice your solution
+  cannot know it made, and a check comparing the identifier fails the correct one.
 
 A wrong value or an extra step in the solution fails a correct agent, because a check that finds it
 there expects the agent to match it.
