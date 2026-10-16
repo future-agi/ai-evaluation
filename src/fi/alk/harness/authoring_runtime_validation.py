@@ -193,6 +193,26 @@ def _freeze_certified_bundle(bundle: Path, authoring: Path) -> None:
     shutil.copytree(bundle, certified_bundle)
 
 
+def _setup_check_keys(bundle: Path, invariants: list, baseline_digest: str) -> list[str]:
+    """One key per scenario folder, in load order, over everything its setup check depends on."""
+
+    shared = hashlib.sha256()
+    shared.update(baseline_digest.encode("utf-8"))
+    shared.update(json.dumps(invariants, sort_keys=True, default=str).encode("utf-8"))
+    for item in sorted(path for path in bundle.rglob("*") if path.is_file()):
+        relative = item.relative_to(bundle)
+        if relative.parts[0] in {"scenarios", "manifest.json"}:
+            continue
+        shared.update(relative.as_posix().encode("utf-8") + b"\0")
+        shared.update(item.read_bytes())
+    prefix = shared.hexdigest()
+    return [
+        "sha256:" + hashlib.sha256((prefix + _artifact_digest(folder)).encode()).hexdigest()
+        for folder in sorted((bundle / "scenarios").iterdir())
+        if folder.is_dir()
+    ]
+
+
 def _make_local_seed_files_readable(bundle: Path) -> None:
     """Allow an unprivileged data service to read public, generated seed inputs.
 
@@ -453,6 +473,7 @@ async def validate_once(
     secrets_path=Path("/run/futureagi/secrets.json"),
     local_runtime: bool = False,
     reuse_invariants_only: bool = False,
+    review=None,
 ) -> int:
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
@@ -570,8 +591,12 @@ async def validate_once(
         )
         # Parallel runtime instances inside the one sandbox, each with its own ports and databases.
         requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
+        # Setup checks touch only the world's database, so a single-database world checks each
+        # scenario on its own clone of the sealed baseline instead of a whole agent stack.
+        database_lanes = max(1, int(os.environ.get("ALK_VALIDATION_DB_LANES", "16") or 16))
         executor = ThreadPoolExecutor(
-            max_workers=requested_lanes, thread_name_prefix="runtime-validation"
+            max_workers=max(requested_lanes, database_lanes),
+            thread_name_prefix="runtime-validation",
         )
         started = time.monotonic()
         phase = "runtime"
@@ -587,7 +612,9 @@ async def validate_once(
             if local_runtime:
                 _make_local_seed_files_readable(bundle)
             validation_parallelism = (
-                1 if external_provider else max(requested_lanes, 2 if generic else 1)
+                1
+                if external_provider or review is not None
+                else max(requested_lanes, 2 if generic else 1)
             )
             preflight_bundle(
                 bundle,
@@ -602,6 +629,14 @@ async def validate_once(
                 work_directory=work,
                 instances=validation_parallelism,
             )
+            if review is not None:
+                # Only the source data review, against this world, while scenarios are written.
+                await provider.reset(runtimes[0], work_directory=work)
+                world = await ProcessWorldFactory(work).create(
+                    runtimes[0], rng=random.Random(job.seed or 0)
+                )
+                await review(world.read_only(), runtimes[0].endpoints)
+                return 0
             # From here onward the generated build/start plan has succeeded. Failures belong to
             # the generated world, tool boundary, or scenarios rather than runtime discovery.
             phase = "environment"
@@ -673,8 +708,20 @@ async def validate_once(
                 raise RuntimeValidationError(
                     phase, "Runtime scenario count differs from the requested count"
                 )
+            targets: list = list(runtimes)
+            if (
+                generic
+                and not external_provider
+                and await provider.clone_world_database(runtime, "lane0") is not None
+            ):
+                targets = [
+                    f"lane{index}"
+                    for index in range(max(1, min(database_lanes, len(scenarios))))
+                ]
+                lanes = len(targets)
 
             baseline_state_digest: str | None = None
+            cleared: list = []
 
             # A failure under an in-place reset is re-checked once against a full restart.
             in_place = os.environ.get("ALK_VALIDATION_RESET_IN_PLACE", "1") != "0"
@@ -689,10 +736,12 @@ async def validate_once(
                             await check_setup(scenario, invariants, against)
                         except RuntimeValidationError as exc:
                             failures.append(str(exc))
+                        else:
+                            cleared.append(scenario)
 
                 await asyncio.gather(
                     *(
-                        lane(suite[index::lanes], runtimes[index])
+                        lane(suite[index::lanes], targets[index])
                         for index in range(lanes)
                         if suite[index::lanes]
                     )
@@ -710,10 +759,13 @@ async def validate_once(
 
             async def check_setup_once(scenario, invariants, against, keep_processes):
                 nonlocal baseline_state_digest
-                against = runtime if against is None else against
-                await provider.reset(
-                    against, work_directory=work, keep_processes=keep_processes
-                )
+                if isinstance(against, str):
+                    against = await provider.clone_world_database(runtime, against)
+                else:
+                    against = runtime if against is None else against
+                    await provider.reset(
+                        against, work_directory=work, keep_processes=keep_processes
+                    )
                 world = await factory.create(against, rng=random.Random(job.seed or 0))
                 if generic and not external_provider:
                     current_digest = _world_state_digest(world)
@@ -855,11 +907,36 @@ async def validate_once(
                 )
             phase = "scenarios"
             walk = time.monotonic()
-            await check_setups(invariants)
+            pending = scenarios
+            if generic:
+                # A scenario that already passed against this exact baseline, bundle and
+                # invariants passes again, so a repair re-checks only what failed or changed.
+                baseline_state_digest = _world_state_digest(baseline)
+                passed_path = authoring / "generic-harness" / "setup-checks-passed.json"
+                passed = (
+                    set(json.loads(passed_path.read_text(encoding="utf-8")))
+                    if passed_path.is_file()
+                    else set()
+                )
+                key_of = dict(
+                    zip(
+                        map(id, scenarios),
+                        _setup_check_keys(bundle, invariants, baseline_state_digest),
+                    )
+                )
+                pending = [item for item in scenarios if key_of[id(item)] not in passed]
+            try:
+                await check_setups(invariants, pending)
+            finally:
+                if generic:
+                    passed.update(key_of[id(item)] for item in cleared)
+                    passed_path.write_text(
+                        json.dumps(sorted(passed)) + "\n", encoding="utf-8"
+                    )
             print(
                 f"runtime validation: setup pass {time.monotonic() - walk:.0f}s for "
-                f"{len(scenarios)} scenarios with {len(invariants)} invariants, "
-                f"complete in {time.monotonic() - started:.0f}s",
+                f"{len(pending)} of {len(scenarios)} scenarios with {len(invariants)} "
+                f"invariants, complete in {time.monotonic() - started:.0f}s",
                 flush=True,
             )
             if generic:
@@ -1161,11 +1238,13 @@ async def validate_and_repair(
                     else:
                         status = repair_result
                 else:
-                    status = repair_result
-                    if not status:
-                        from .scenario_repair import certify_scenario_repair
-                        from .scenario_tools import load_scenarios, write_scenarios
+                    from .scenario_repair import certify_scenario_repair
+                    from .scenario_tools import load_scenarios, write_scenarios
 
+                    status = repair_result
+                    for correction in range(budgets.scenario_patches + 1):
+                        if status:
+                            break
                         assert scenarios_before is not None
                         scenarios_after = load_scenarios(authoring)
                         try:
@@ -1175,14 +1254,27 @@ async def validate_and_repair(
                                 expected_count=job.scenario_count,
                                 diagnostic_codes={item.code for item in diagnostics},
                             )
-                        except Exception:
+                        except Exception as rejected:
                             # Restore the last certified candidate; a rejected patch never becomes
                             # the input to another repair attempt.
                             write_scenarios(scenarios_before, authoring)
-                            raise
+                            if correction == budgets.scenario_patches:
+                                raise
+                            print(
+                                f"runtime validation: scenario repair rejected, repairing again: {rejected}",
+                                flush=True,
+                            )
+                            status = await repair(
+                                repair_phase,
+                                guidance
+                                + "\nThe previous repair was rejected and undone: "
+                                + f"{rejected}. Repair again within these rules.",
+                            )
+                            continue
                         artifacts.write_scenario_repair(
                             receipt, sequence=decision.sequence
                         )
+                        break
                 after_hash = _generic_candidate_hash(source, authoring)
                 repair_controller.record_result(
                     decision.sequence,

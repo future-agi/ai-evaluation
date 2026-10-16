@@ -133,12 +133,13 @@ look rather than recall. Look.
 
 ## How people point at scenarios
 
-The suite is numbered in the order it was written, and that number is what the person is looking at.
-So they point with it: the fourth one, 12 to 30, 12, 15 and 18, #7. They point by name too, and
-sometimes with nothing at all, because they have already selected rows on screen and that selection
-arrives with what they said. It is all the same thing, a set of scenarios, and it is yours to
-resolve. They named them the way they read them; answer the same way, or they have to work out which
-of your names was theirs.
+Every scenario has a number, the `#` the person sees beside it, and it stays with that scenario as
+others come and go. So they point with it: the fourth one, 12 to 30, 12, 15 and 18, #7. They point by
+name too, and sometimes with nothing at all, because they have already selected rows on screen and
+that selection arrives with what they said. It is all the same thing, a set of scenarios, and it is
+yours to resolve with the tool that reads those numbers, never by counting a list of your own. They
+named them the way they read them; answer the same way, or they have to work out which of your names
+was theirs.
 
 ## Some agents are only a phone number
 

@@ -855,6 +855,9 @@ def _real_runtime(tmp_path: Path, monkeypatch, state: dict) -> None:
         async def reset(self, *args, **kwargs):
             return None
 
+        async def clone_world_database(self, *args, **kwargs):
+            return None
+
         async def close(self, **kwargs):
             return None
 

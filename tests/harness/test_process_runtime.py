@@ -8818,3 +8818,76 @@ def test_every_world_can_run_the_environment_its_build_created(tmp_path: Path) -
     for cwd in cwds:
         assert (cwd / ".venv" / "bin" / "serve").is_file()
         assert (cwd / "main.py").is_file()
+
+
+def _clone_provider(strategies, *, shared=True):
+    store = types.SimpleNamespace
+    provider = pr.ProcessRuntimeProvider()
+    provider._manifest = store(
+        seed=store(
+            stores=[
+                store(capability=f"db{index}", baseline=store(strategy=strategy))
+                for index, strategy in enumerate(strategies)
+            ]
+        ),
+        capabilities={
+            f"db{index}": store(service=f"postgres{index}")
+            for index in range(len(strategies))
+        },
+    )
+    statements = []
+    provider._context = store(
+        credentials={"postgres0": store(username="harness", password="pw")},
+        port_plan=store(port_for=lambda name, world_index: 14000),
+        sql_runner=lambda **kwargs: statements.append(kwargs["statement"]) or [],
+    )
+    provider._build_output = store(
+        stores=[store(process_name="postgres0", baseline_reference="baseline_t")]
+    )
+    provider._job_shared_handles = {"postgres0": object()} if shared else {}
+    runtime = pr.EnvironmentRuntime(
+        runtime_id="r",
+        world_index=0,
+        bundle_digest="d",
+        state=pr.RuntimeState.READY,
+        endpoints={
+            "db": pr.RuntimeEndpoint(
+                capability="db0",
+                protocol="postgres",
+                address="postgresql://harness:p%40w@localhost:14000/w0",
+            ),
+            "api": pr.RuntimeEndpoint(
+                capability="api", protocol="http", address="http://localhost:15001"
+            ),
+        },
+    )
+    return provider, runtime, statements
+
+
+def test_clone_world_database_points_a_copy_at_a_fresh_baseline_clone():
+    provider, runtime, statements = _clone_provider([pr.BaselineStrategy.TEMPLATE_DATABASE])
+
+    lane = asyncio.run(provider.clone_world_database(runtime, "lane3"))
+
+    assert lane.endpoints["db"].address == "postgresql://harness:p%40w@localhost:14000/lane3"
+    assert lane.endpoints["api"] == runtime.endpoints["api"]
+    assert runtime.endpoints["db"].address.endswith("/w0")
+    assert statements[1:] == [
+        'DROP DATABASE IF EXISTS "lane3"',
+        'CREATE DATABASE "lane3" TEMPLATE "baseline_t"',
+    ]
+
+
+@pytest.mark.parametrize(
+    "strategies,shared",
+    [
+        ([pr.BaselineStrategy.DATADIR_COPY], True),
+        ([pr.BaselineStrategy.TEMPLATE_DATABASE] * 2, True),
+        ([pr.BaselineStrategy.TEMPLATE_DATABASE], False),
+    ],
+)
+def test_clone_world_database_declines_every_other_world_shape(strategies, shared):
+    provider, runtime, statements = _clone_provider(strategies, shared=shared)
+
+    assert asyncio.run(provider.clone_world_database(runtime, "lane0")) is None
+    assert statements == []

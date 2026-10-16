@@ -505,12 +505,15 @@ def _over_its_share(
     kept: list[Scenario],
     wanted: int,
     name: str = "",
+    asked: dict[str, list[str]] | None = None,
 ) -> str:
     """Why this coordinate is a level the suite already has enough of, or "" when it is not."""
     if not grid or wanted < 12 or not isinstance(coverage, dict):
         return ""
     for axis, levels in grid.items():
         mine = level_name(coverage.get(axis) or coverage.get(level_name(axis)) or "")
+        if mine in {level_name(one) for one in (asked or {}).get(level_name(axis), [])}:
+            continue
         # A quiet line is rare: most callers ring from somewhere.
         quiet = level_name(axis) == "interface" and mine in _QUIET_INTERFACE
         if level_name(axis) in _NOT_SHARED and not quiet:
@@ -543,6 +546,8 @@ def _over_its_share(
             )
             + "Write one of these instead: "
             + ", ".join(sorted(thin)[:8])
+            + f". If the person asked for {mine!r}, call aim_for with it in asked_for under "
+            f"{axis!r} and submit again."
         )
     return ""
 
@@ -1510,7 +1515,12 @@ def scenario_tools(
         if strayed:
             return _refuse(strayed)
         crowded_level = _over_its_share(
-            args.get("coverage"), target.get("axes"), kept, cap(), str(args.get("name") or "")
+            args.get("coverage"),
+            target.get("axes"),
+            kept,
+            cap(),
+            str(args.get("name") or ""),
+            target.get("asked"),
         )
         if crowded_level:
             return _refuse(crowded_level)
@@ -1524,8 +1534,11 @@ def scenario_tools(
         if twin:
             return _refuse(twin)
         if cap() and target.get("people") != "alike":
+            # A replacement does not count against itself.
             crowded = crowded_field(
-                kept, Scenario.model_validate(args).persona, cap()
+                [one for one in kept if one.name != str(args.get("name") or "")],
+                Scenario.model_validate(args).persona,
+                cap(),
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
@@ -1669,6 +1682,10 @@ def scenario_tools(
         "kind of caller on purpose, and that bound comes off. Their request decides this, never "
         "your own convenience: a writer that found the bound inconvenient and turned it off has "
         "made a suite about one person.\n\n"
+        "`asked_for` names the coverage levels the person explicitly asked for, for example "
+        '{"interface": ["quiet_line"]} for callers with no background noise. Those levels are '
+        "not held to their share of the suite. Only what the person said, never a level you "
+        "would find convenient.\n\n"
         "`keywords` is the suite's whole keyword vocabulary, and only the planner sets it. Declare "
         "it here before the first brief goes out and deal it to every writer, because a writer "
         "cannot see what its siblings chose: twelve writers left to invent their own produced 135 "
@@ -1704,6 +1721,10 @@ def scenario_tools(
             {
                 "count": int,
                 "people": {"type": "string", "enum": ["varied", "alike"]},
+                "asked_for": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                },
                 "keywords": {"type": "array", "items": {"type": "string"}},
                 "axes": {
                     "type": "object",
@@ -1734,6 +1755,16 @@ def scenario_tools(
                 ". Callers may now be alike; the spread bound is off"
                 if people == "alike"
                 else ". No accent, language or location may dominate the suite"
+            )
+        asked = {
+            level_name(str(axis)): [str(one).strip() for one in levels if str(one).strip()]
+            for axis, levels in (args.get("asked_for") or {}).items()
+            if isinstance(levels, list)
+        }
+        if asked:
+            target["asked"] = asked
+            said += ". Asked for, not held to a share: " + "; ".join(
+                f"{axis} {', '.join(levels)}" for axis, levels in asked.items()
             )
         vocabulary = [
             str(one).strip() for one in (args.get("keywords") or []) if str(one).strip()

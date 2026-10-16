@@ -1327,3 +1327,4 @@ def test_source_fingerprint_hashes_symlink_metadata_without_reading_target(
     second = source_fingerprint(source)
 
     assert first == second
+

@@ -34,12 +34,16 @@ CONNECT_TIMEOUT_SECONDS = 60.0
 READINESS_TIMEOUT_SECONDS = 120.0
 CLEANUP_TIMEOUT_SECONDS = 30.0
 
-# Supported endpoint overrides used by the simulator model adapter.
+# Model routing the simulator's model adapter reads: where calls go, on which key, and what to
+# fall back to. A call worker starts from a closed environment, so each must be listed.
 SIMULATOR_MODEL_ENV = frozenset(
     {
+        "AGENTCC_API_KEY",
+        "AGENTCC_BASE_URL",
         "SIMULATOR_LLM_API_KEY",
         "SIMULATOR_LLM_BASE_URL",
         "SIMULATOR_LLM_API_KEY_HEADER",
+        "SIMULATOR_LLM_FALLBACK_MODELS",
         "SIMULATOR_LLM_THINKING",
         "OPENAI_BASE_URL",
     }
