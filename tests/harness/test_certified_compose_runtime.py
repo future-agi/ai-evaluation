@@ -162,12 +162,17 @@ def test_configuration_cannot_control_trusted_client(tmp_path, key):
         )
 
 
-def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("locked_images", [False, True])
+def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch, locked_images):
     source, bundle_dir, work = (tmp_path / name for name in ("src", "bundle", "work"))
     for path in (source, bundle_dir, work):
         path.mkdir()
     (source / "fixture.txt").write_text("baseline")
-    (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    document = topology()
+    if locked_images:
+        for service in document["services"].values():
+            service["image"] = service["image"].split(":")[0] + "@sha256:" + "a" * 64
+    (bundle_dir / "compose.json").write_text(json.dumps(document))
     from fi.alk.harness.bundle_v2 import BundleProvenanceV2
     from fi.alk.harness.provision import source_fingerprint
 
@@ -182,9 +187,15 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
     provider = CertifiedComposeRuntimeProvider(socket_path=tmp_path / "socket")
     monkeypatch.setattr(provider, "_check_socket", lambda: None)
     commands = []
+    started_images = []
 
     def command(directory, project, *args, **kwargs):
         commands.append((project, args))
+        if args[0] == "up":
+            started_images.append({
+                name: service["image"]
+                for name, service in json.loads((directory / "compose.json").read_text())["services"].items()
+            })
         if args[0] == "config":
             return json.dumps({"services": {}})
         if args[0] == "port":
@@ -217,6 +228,9 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
         assert all(not directory.exists() for directory in directories)
         assert sum(args[0] == "down" for _, args in commands) == 3
         assert all("--volumes" in args for _, args in commands if args[0] == "down")
+        assert len(started_images) == 3
+        assert all(images == {name: service["image"] for name, service in document["services"].items()}
+                   for images in started_images)
 
     asyncio.run(run())
 

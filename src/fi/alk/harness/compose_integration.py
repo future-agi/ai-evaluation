@@ -249,6 +249,30 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
 
         normalize_compose(document, source, capabilities=manifest.capabilities)
         manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
+        from .compose_image_lock import lock_document
+
+        if any(not service.get("build") for service in document["services"].values()):
+            identities = provider({}, None).resolve_images(
+                manifest=manifest, document=(temporary / "compose.json").read_text(),
+                runtime=runtime, source=source,
+            )
+            lock_document(document, identities)
+            (temporary / "compose.json").write_text(json.dumps(document, indent=2))
+            (temporary / "image-lock.json").write_text(json.dumps({
+                "version": 1,
+                "images": [item.model_dump(mode="json") for item in identities],
+                "source_built_services": sorted(
+                    name for name, service in document["services"].items() if service.get("build")
+                ),
+                "source_build_reproducibility": "not_verified",
+            }, indent=2))
+            manifest = manifest.model_copy(update={
+                "files": _files(temporary),
+                "provenance": manifest.provenance.model_copy(update={
+                    "generated_files": [*manifest.provenance.generated_files, "image-lock.json"],
+                }),
+            })
+            manifest = manifest.model_copy(update={"digest": seal_bundle_v2(manifest)})
         (temporary / "manifest.json").write_text(manifest.model_dump_json(indent=2))
         manifest = load_bundle_v2(temporary)
         preflight_bundle(
