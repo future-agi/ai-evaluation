@@ -310,6 +310,11 @@ class _HostedChatTarget:
     async def open(self) -> None:
         return
 
+    def interject(self, name: str, text: str) -> None:
+        """A second participant's message, heard by the agent with the person's next turn."""
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64] or "participant"
+        self._messages.append({"role": "user", "name": label, "content": text})
+
     async def say(self, utterance: str) -> str:
         self._messages.append({"role": "user", "content": utterance})
         for continuation in range(8):

@@ -44,6 +44,14 @@ class TargetConversationEnded(Exception):
 class Exchange:
     speaker: str
     text: str
+    # A sub-actor's turn: who it was, so the turn is never read as the person's or the agent's.
+    name: str = ""
+    sub_actor: str = ""
+
+    def message(self, role: str) -> dict[str, str]:
+        if self.speaker != "sub_actor":
+            return {"role": role, "content": self.text}
+        return {"role": "sub_actor", "name": self.name, "sub_actor": self.sub_actor, "content": self.text}
 
 
 @dataclass
@@ -63,10 +71,7 @@ class Transcript:
     def canonical_messages(self) -> list[dict[str, str]]:
         """The turns in the role convention the judge reads: `user` said it, `assistant` answered."""
         return [
-            {
-                "role": "assistant" if turn.speaker == "agent" else "user",
-                "content": turn.text,
-            }
+            turn.message("assistant" if turn.speaker == "agent" else "user")
             for turn in self.exchanges
         ]
 
@@ -77,12 +82,7 @@ class Transcript:
                 {
                     "transcript": self.spoken(),
                     "messages": [
-                        {
-                            "role": "user"
-                            if turn.speaker == "customer"
-                            else "assistant",
-                            "content": turn.text,
-                        }
+                        turn.message("user" if turn.speaker == "customer" else "assistant")
                         for turn in self.exchanges
                     ],
                     "ended": self.ended,
@@ -185,6 +185,96 @@ def customer_prompt(
     )
 
 
+_IN_CHAT = frozenset({"thread_message", "inbound_message"})
+_NEEDS_TOOLS = frozenset({"on_tool", "on_escalation"})
+
+
+class _ChatSubActors:
+    """The scenario's sub-actors that enter a chat: a second participant, or something that arrives."""
+
+    def __init__(self, scenario: Scenario, world_root: Any, model: str | None) -> None:
+        import secrets
+
+        from ..cast import bound_participants, load_cast, sub_actors_enabled
+
+        self.entering: list[dict[str, Any]] = []
+        if world_root and scenario.sub_actors and sub_actors_enabled():
+            self.entering = [
+                one
+                for one in bound_participants(scenario.sub_actors, load_cast(world_root))
+                if one["channel"] in _IN_CHAT
+            ]
+        self.model = model
+        # Drawn once per conversation, so a probability trigger varies across runs, not within one.
+        self.seed = secrets.token_hex(8)
+        self.fired: set[str] = set()
+        self.turns_left: dict[str, int] = {}
+
+    async def after_agent(self, turns: int, reply: str, target: Any) -> list[Exchange]:
+        from fi.simulate.simulation.sub_actors import Moment, due
+
+        entered: list[Exchange] = []
+        tools = [call.name for call in getattr(getattr(target, "world", None), "calls", [])]
+        for one in self.entering:
+            ident = one["id"]
+            speaking_on = self.turns_left.get(ident, 0) > 0
+            if not speaking_on:
+                if ident in self.fired:
+                    continue
+                moment = Moment(agent_turns=turns, last_text=reply, tools_called=tools)
+                if not due(one["trigger"], moment, seed=self.seed, sub_actor_id=ident):
+                    continue
+                self.fired.add(ident)
+                self.turns_left[ident] = max(1, int((one.get("behaviour") or {}).get("max_lines") or 1))
+            self.turns_left[ident] -= 1
+            exchange = await self._enter(one, reply, target)
+            if exchange is not None:
+                entered.append(exchange)
+        return entered
+
+    async def _enter(self, one: dict[str, Any], reply: str, target: Any) -> Exchange | None:
+        if one["channel"] == "inbound_message":
+            self.turns_left[one["id"]] = 0
+            inbound = one.get("inbound") or {}
+            world = getattr(target, "world", None)
+            if world is None or not hasattr(world, "add"):
+                return None
+            world.add(str(inbound.get("collection") or ""), dict(inbound.get("record") or {}))
+            return Exchange(
+                "sub_actor",
+                f"(a new {inbound.get('collection')} record arrived)",
+                name=one["name"],
+                sub_actor=one["id"],
+            )
+        behaviour = one.get("behaviour") or {}
+        role = f", {one['role']}" if one.get("role") else ""
+        stage = Stage(
+            SessionSpec(
+                system_prompt=(
+                    f"You are {one['name']}{role}, a second person in a chat between someone and an "
+                    f"automated agent. Who you are and what you want: {behaviour.get('prompt') or ''}\n\n"
+                    "Write one short message, in your own words, as yourself. Never claim to be the "
+                    "other person. Output only the message."
+                ),
+                max_turns=1,
+                model=chosen_model(self.model),
+                gated=False,
+            ),
+            name="sub-actor",
+        )
+        await stage.__aenter__()
+        try:
+            said = (await stage.say(f"The agent just wrote: {reply}")).text.strip()
+        finally:
+            await stage.__aexit__(None, None, None)
+        if not said:
+            return None
+        interject = getattr(target, "interject", None)
+        if callable(interject):
+            interject(one["name"], said)
+        return Exchange("sub_actor", said, name=one["name"], sub_actor=one["id"])
+
+
 async def converse(
     target: Target,
     scenario: Scenario,
@@ -220,6 +310,7 @@ async def converse(
         if on_exchange:
             on_exchange(exchange)
 
+    others = _ChatSubActors(scenario, world_root, model)
     await target.open()
     await customer.__aenter__()
     try:
@@ -237,18 +328,29 @@ async def converse(
             # one.
             said = scenario.instruction
         record("customer", said)
+        waiting = ""
         for _turn in range(max(1, scenario.max_turns)):
             try:
-                reply = await target.say(said)
+                reply = await target.say("\n\n".join([waiting, said]) if waiting else said)
+                waiting = ""
             except TargetConversationEnded as ended:
                 if ended.final_message:
                     record("agent", ended.final_message)
                 transcript.ended = FINISHED
                 break
             record("agent", reply or "(said nothing)")
-
-            turn = await customer.say(reply or "(no response)")
+            heard = []
+            for entered in await others.after_agent(_turn + 1, reply or "", target):
+                transcript.exchanges.append(entered)
+                if on_exchange:
+                    on_exchange(entered)
+                heard.append(f"[{entered.name}]: {entered.text}")
+            # The thread is shared: the person sees the other participant's message too.
+            turn = await customer.say("\n\n".join([reply or "(no response)", *heard]))
             said = turn.text.strip()
+            if heard and not callable(getattr(target, "interject", None)):
+                # A target with no way to hear a second participant hears them before the person.
+                waiting = "\n\n".join(heard)
             if DONE in said or STUCK in said:
                 transcript.ended = GAVE_UP if STUCK in said else FINISHED
                 # The closing line comes with the sentinel, and is kept. Breaking on the marker

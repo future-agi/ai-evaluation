@@ -199,7 +199,9 @@ class SubActorVoice:
         if self.write is None or not inbound.get("collection"):
             return
         await asyncio.to_thread(self.write, str(inbound["collection"]), dict(inbound.get("record") or {}))
-        self._record("arrived", "", self.clock(), record=inbound.get("record"))
+        self._record(
+            "arrived", f"(a new {inbound['collection']} record arrived)", self.clock(), record=inbound.get("record")
+        )
 
     def _record(self, kind: str, text: str, started: float, **extra: Any) -> None:
         self._events.append(
@@ -241,7 +243,7 @@ def sub_actor_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "e2e_latency": None,
         }
         for event in events
-        if event.get("kind") == "spoke" and event.get("text")
+        if event.get("kind") in ("spoke", "arrived") and event.get("text")
     ]
 
 
