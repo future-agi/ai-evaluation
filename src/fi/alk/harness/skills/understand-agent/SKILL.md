@@ -44,12 +44,12 @@ and the disagreement is worth mentioning.
 Every rule a tool enforces counts, wherever it lives: a guard in a helper it calls, a check in the
 service it forwards to, a constraint or default in the schema, the seed data or the environment.
 Scenario writers know the agent only from this contract, so a rule it leaves out fails a correct
-agent later. When there is a repository, find the tools and the prompt yourself, then brief
-`agent_reader` sub-agents in one message, one per tool or per few closely related tools, each
-naming the tools and where they are defined; they trace every call to the bottom and report with
-file and line. Write each tool's entry from what they report. Before `submit_contract`, brief one
-more reader with your draft's tools and rules to check against the source, and correct everything
-it finds.
+agent later. Find the tools and the prompt yourself. When the source is small enough to trace
+every tool to the bottom yourself, do that. When it is not, brief `agent_reader` sub-agents in one
+message, at most eight, each given several closely related tools and where they are defined; they
+trace every call to the bottom and report with file and line, and you write each tool's entry from
+what they report. Either way, before `submit_contract`, brief one reader with your draft's tools and
+rules to check against the source, and correct everything it finds.
 
 Find, in roughly this order:
 
