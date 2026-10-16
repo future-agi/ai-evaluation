@@ -41,8 +41,8 @@ Start from the entry point and follow the registrations, not the documentation. 
 docstrings describe intent; the contract records behaviour. Where they disagree, the code wins
 and the disagreement is worth mentioning.
 
-Every rule a tool enforces counts, wherever it lives: a guard in a helper it calls, a check in the
-service it forwards to, a constraint or default in the schema, the seed data or the environment.
+Every rule a tool enforces counts, wherever it lives: a guard in a helper it calls, a check in
+whatever it calls on, a constraint or default in the data, the files or the environment it acts on.
 Scenario writers know the agent only from this contract, so a rule it leaves out fails a correct
 agent later. Find the tools and the prompt yourself. When the source is small enough to trace
 every tool to the bottom yourself, do that. When it is not, brief `agent_reader` sub-agents in one
@@ -95,8 +95,8 @@ Find, in roughly this order:
 
 5. **What each tool does to the rest of the call.** The tool's `description` is the agent's own
    wording for it; what you found goes in its own fields. `effects`: what it reads, creates and
-   changes, and what earlier state it clears (a changed choice that discards a quote or a
-   confirmation taken after it). `refuses`: every refusal by value or by something outside the
+   changes, and what earlier state it clears (a later change that discards what an earlier step
+   produced). `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
    argument whose value must come from an earlier tool's output, and that tool. Fill these for
    every tool that has them; a writer sees nothing else.

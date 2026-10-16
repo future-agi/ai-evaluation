@@ -360,8 +360,8 @@ def contract_tools(
                             "effects": {
                                 "type": "string",
                                 "description": "What a successful call reads, creates and changes, "
-                                "and what earlier state it clears, such as a quote or confirmation "
-                                "a later step then has to take again.",
+                                "and what earlier state it clears, which a later step then has to "
+                                "produce again.",
                             },
                             "inputs_from": {
                                 "type": "object",
