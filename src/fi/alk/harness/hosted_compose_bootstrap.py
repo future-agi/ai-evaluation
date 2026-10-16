@@ -351,14 +351,14 @@ class _Registration:
             _snapshot(profile, staging, deadline)
             if source_fingerprint(staging) != request.source_digest:
                 raise _failure("source_digest_mismatch")
-            from .compose_integration import validate_source
-
-            validate_source(
-                staging,
-                job.public_material_admissions,
-                fixtures=job.public_test_fixture_admissions,
-                source_digest=request.source_digest,
-            )
+            if any(
+                admission.source_digest != request.source_digest
+                for admission in [
+                    *job.public_material_admissions,
+                    *job.public_test_fixture_admissions,
+                ]
+            ):
+                raise _failure("admission_source_mismatch")
             if time.monotonic() >= deadline:
                 raise _failure("copy_deadline")
             destination = Path(profile.private_root) / "source"
