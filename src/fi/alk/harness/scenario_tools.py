@@ -1831,6 +1831,9 @@ def scenario_tools(
                 "args": list,
                 "arg_types": dict,
                 "description": str,
+                "refuses": str,
+                "effects": str,
+                "inputs_from": dict,
                 "remove": bool,
                 "why": str,
             },
@@ -1848,6 +1851,9 @@ def scenario_tools(
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
             description=str(args.get("description") or ""),
+            refuses=str(args.get("refuses") or ""),
+            effects=str(args.get("effects") or ""),
+            inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
             remove=bool(args.get("remove")),
         )
         return _ok(said) if done else _err(said)

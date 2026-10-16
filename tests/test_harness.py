@@ -8186,3 +8186,26 @@ def test_a_writer_sees_what_each_tool_refuses_changes_and_takes_from_earlier_cal
     assert "effects: creates one booking; clears the token" in brief
     assert "token <- prepare_booking_confirmation" in brief
     assert AgentContract.model_validate({"agent": "old", "tools": [{"name": "t"}]}).tools[0].effects == ""
+
+
+def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+    from fi.alk.harness.contract import AgentContract
+
+    _world, contract = _cart_world()
+    name, before = contract.tools[0].name, contract.tools[0].model_copy()
+
+    done, said = fix_tool(
+        contract,
+        tmp_path,
+        tool_name=name,
+        why="the check showed what it clears",
+        refuses="returns ok false for an unknown item",
+        effects="clears the basket total",
+        inputs_from={before.args[0]: "lst"} if before.args else {},
+    )
+
+    tool = AgentContract.model_validate_json((tmp_path / "contract.json").read_text()).tools[0]
+    assert done, said
+    assert (tool.description, tool.args) == (before.description, before.args)
+    assert tool.effects == "clears the basket total" and tool.refuses == "returns ok false for an unknown item"
