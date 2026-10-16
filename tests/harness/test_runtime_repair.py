@@ -362,8 +362,9 @@ def test_setup_investigation_may_decline_after_bounded_decision(
     assert budgets == [80, 4]
 
 
+@pytest.mark.parametrize("root_member", [False, True])
 def test_dependency_investigation_shows_sibling_optional_extras_without_manifest_values(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, root_member
 ):
     import asyncio
     from fi.alk.harness import runtime_repair
@@ -371,7 +372,9 @@ def test_dependency_investigation_shows_sibling_optional_extras_without_manifest
     from fi.alk.harness.job import HarnessStage
 
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.uv.workspace]\nmembers=["agent-server", "agent-sdk"]\n'
+        '[tool.uv.workspace]\nmembers=['
+        + ('".", ' if root_member else "")
+        + '"agent-server", "agent-sdk"]\n'
     )
     server = tmp_path / "agent-server"
     server.mkdir()
