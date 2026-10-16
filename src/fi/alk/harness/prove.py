@@ -345,6 +345,7 @@ def branches_disagree(scenario: Scenario, catalogue: Catalogue, world_root: Path
         for name in scenario.sub_goals
         if (goal := catalogue.named(name)) is not None and goal.deterministic() and not goal.sub_actor
     ]
+    reference = reference_of(scenario.solution)
     verdicts = []
     for faults in (bound_faults(certain, cast), bound_faults(scenario.sub_actors, cast)):
         world, _applied, _ready = prepared(scenario, world_root)
@@ -353,11 +354,16 @@ def branches_disagree(scenario: Scenario, catalogue: Catalogue, world_root: Path
             for step in scenario.solution:
                 play_reference_step(world, step)
             verdicts.append(
-                {name: run_check(goal.check, world, list(world.calls), name=name).held for name, goal in untagged}
+                {
+                    name: run_check(goal.check, world, list(world.calls), name=name, reference=reference).held
+                    for name, goal in untagged
+                }
             )
         finally:
             world.close()
     return [name for name, held in verdicts[0].items() if held != verdicts[1][name]]
+
+
 def _declared_options(world_root: Path) -> set[str]:
     """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
     try:

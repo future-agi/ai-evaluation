@@ -499,17 +499,26 @@ def test_a_sub_goal_whose_verdict_depends_on_the_draw_is_refused(tmp_path, monke
     root, _contract, catalogue = _environment(tmp_path)
     failing = _service().model_copy(update={"faults": [FaultProfile(tool="add", kind="error", on_call=1)]})
     save_cast(root, Cast(sub_actors=[failing]))
-    catalogue.sub_goals.append(
-        SubGoal(name="recovered", what="w", judged="Applies when: x\nPass when: y\nFail when: z\nIf it does not arise: Pass", sub_actor="subactor_service")
+    by_reference = (
+        "def check(world, calls, reference):\n"
+        "    for step in reference:\n"
+        "        want = step['arguments'].get('item_id')\n"
+        "        if step['tool'] == 'add' and not any(c.name == 'add' and c.ok and c.arguments.get('item_id') == want for c in calls):\n"
+        "            return 'not done: add %r' % want\n"
+        "    return None\n"
     )
+    catalogue.sub_goals += [
+        SubGoal(name="right-item-ref", what="w", reference="caller: the item", check=by_reference),
+        SubGoal(name="recovered", what="w", judged="Applies when: x\nPass when: y\nFail when: z\nIf it does not arise: Pass", sub_actor="subactor_service"),
+    ]
     save_catalogue(catalogue, root)
     scenario = Scenario.model_validate(
         _scenario(
             sub_actors=[{"id": "subactor_service", "trigger": {"kind": "probability", "p": 0.5}}],
-            sub_goals=["item-added", "right-item", "recovered"],
+            sub_goals=["item-added", "right-item", "right-item-ref", "recovered"],
         )
     )
-    assert set(branches_disagree(scenario, catalogue, root)) == {"item-added", "right-item"}
+    assert set(branches_disagree(scenario, catalogue, root)) == {"item-added", "right-item", "right-item-ref"}
 
     retries = scenario.model_copy(
         update={
