@@ -117,6 +117,10 @@ def select_runtime(
             service_bases,
             additional_services=runtime.additional_services,
         )
+    for name in runtime.compose_image_services:
+        if name not in services:
+            raise RuntimeSelectionError(f"compose_image_service_unselected: {name}")
+        services[name].pop("build", None)
     services = {
         name: {
             key: _interpolate_structure(value, public_environment or {})
@@ -128,8 +132,6 @@ def select_runtime(
         for name, service in services.items()
     }
     for name in runtime.compose_image_services:
-        if name not in services:
-            raise RuntimeSelectionError(f"compose_image_service_unselected: {name}")
         image = services[name].get("image")
         if (
             not isinstance(image, str)
@@ -138,7 +140,6 @@ def select_runtime(
             or any(char.isspace() for char in image)
         ):
             raise RuntimeSelectionError(f"compose_image_reference_invalid: {name}")
-        services[name].pop("build", None)
     for name, service in services.items():
         if service_bases[name] != compose.parent:
             _rebase_service(

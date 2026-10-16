@@ -546,7 +546,10 @@ def test_overlay_expanded_volume_size_is_bounded_before_cli(tmp_path, monkeypatc
 
 def test_source_overlay_image_selection(tmp_path, cli):
     base, overlay = files(tmp_path)
-    base.write_text(base.read_text().replace("  gateway:\n", "  gateway:\n    build: .\n"))
+    base.write_text(base.read_text().replace(
+        "  gateway:\n",
+        "  gateway:\n    build:\n      context: .\n      args: {TOKEN: '${BUILD_TOKEN:?build only}'}\n",
+    ))
     overlay.write_text(
         overlay.read_text().replace(
             "  gateway:\n", "  gateway:\n    image: example/release:2\n"
