@@ -195,12 +195,13 @@ The suite must always be runnable and true to the agent, the world and the contr
   reply with what you found broken (which scenarios, by number, and why) and exactly how you fixed
   each.
 - **A proof is not the agent.** A step reported NOT RUN was never executed: what it returns and
-  changes is your reading of the agent's code, so read that code before a solution or check relies
-  on it. When the build has been validated you are told so in this conversation. Then run a few
-  scenarios (at most five) that between them take different solution paths, favouring those with
+  changes is what the contract says, unverified. When the build has been validated you are told so
+  in this conversation. Then run a few scenarios (at most five) that between them take different
+  solution paths, favouring those with
   steps that did not run, and read every result in full. A scenario that failed because it was
   wrong about the agent (a solution step the agent need not take, data the agent cannot use, a
-  check stricter than the rule) you fix, save and run again. A passing call whose transcript shows
+  check stricter than the rule) means the contract is wrong there: correct the contract first, then
+  every scenario the correction affects, save and run again. A passing call whose transcript shows
   the agent doing something wrong means a sub-goal is too weak: tighten it. A failure that looks
   like the agent's own fault, or that you cannot place, you report with the evidence and ask about.
   Say the environment is ready only after this.
