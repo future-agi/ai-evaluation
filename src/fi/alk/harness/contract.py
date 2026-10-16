@@ -740,7 +740,7 @@ class Runtime(BaseModel):
     )
     workspaces: dict[str, str] = Field(
         default_factory=dict,
-        description="Named native workspace roots relative to the agent process working directory; requires source evidence.",
+        description="Named task workspace roots relative to the agent process working directory. Trace the actual file-tool directory in source/configuration; uploaded source is not automatically the task workspace. These bindings enable private scenario file setup and readback.",
     )
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.

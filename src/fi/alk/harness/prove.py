@@ -89,7 +89,7 @@ class Proof:
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
         if self.deferred and not self.broken:
-            return "DEFERRED: native setup, readiness and outcome checks require the live runtime."
+            return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:
@@ -192,6 +192,8 @@ def prepared(
     """A fresh world with this scenario's setup applied, and how that went."""
     if native_runtime(world_root):
         raise RuntimeError("native_fixture_proof_deferred_to_live_runtime")
+    if workspace_fixture(scenario, Catalogue()):
+        raise RuntimeError("workspace_fixture_proof_deferred_to_live_runtime")
     world = restore(world_root)
     world.reset()
     applied = apply_setup(scenario, world)
@@ -329,6 +331,72 @@ def native_runtime(world_root: Path) -> bool:
         return False
 
 
+def workspace_bindings(world_root: Path) -> dict[str, str]:
+    from .understand import load
+
+    contract = load(world_root)
+    return dict(contract.runtime.workspaces) if contract and contract.runtime else {}
+
+
+def _file_calls(tree: ast.AST) -> list[ast.Call]:
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "world"
+            and node.func.attr in {"write_file", "read_file"}]
+
+
+def workspace_fixture(scenario: Scenario, catalogue: Catalogue) -> bool:
+    sources = [scenario.setup_code, scenario.ready_code]
+    sources.extend(source for _, source in _checks_for(scenario, catalogue))
+    for source in sources:
+        try:
+            if _file_calls(ast.parse(source)):
+                return True
+        except SyntaxError:
+            continue
+    return False
+
+
+def workspace_fixture_problems(scenario: Scenario, catalogue: Catalogue,
+                               bindings: dict[str, str]) -> list[str]:
+    """Check fixture structure; only live readiness can verify target file contents."""
+    if not bindings:
+        return ["file fixtures require a declared runtime.workspaces binding"]
+    from .world.files import relative_parts
+    from .world.errors import WorldUsageError
+
+    writes = False
+    reads = False
+    problems = []
+    sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]
+    sources.extend(("check", source) for _, source in _checks_for(scenario, catalogue))
+    for entry, source in sources:
+        if not source.strip():
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            problems.append(f"{entry} syntax error: {exc.msg}")
+            continue
+        if not any(isinstance(node, ast.FunctionDef) and node.name == entry for node in tree.body):
+            problems.append(f"missing {entry} function")
+        for node in _file_calls(tree):
+            writes |= entry == "setup" and node.func.attr == "write_file"
+            reads |= entry == "ready" and node.func.attr == "read_file"
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                try:
+                    relative_parts(node.args[1].value)
+                except WorldUsageError as exc:
+                    problems.append(str(exc))
+            if node.args and isinstance(node.args[0], ast.Constant):
+                name = node.args[0].value
+                if name not in bindings:
+                    problems.append(f"workspace {name!r} is not declared in runtime.workspaces")
+    if writes and not reads:
+        problems.append("ready(world) must read back seeded files and verify their contents in the live runtime")
+    return problems
+
+
 def native_source_problem(source: str, entry: str) -> str:
     try:
         tree = ast.parse(source)
@@ -355,6 +423,10 @@ def prove(
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
+    if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
+        proof.deferred = True
+        proof.broken = workspace_fixture_problems(scenario, catalogue, workspace_bindings(world_root))
+        return proof
     if native_runtime(world_root):
         proof.deferred = True
         sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]

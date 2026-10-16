@@ -113,6 +113,14 @@ Find, in roughly this order:
    what it provides, and which tools cannot work without it. The environment stage builds these,
    so a dependency you do not record is a tool that will have nothing to answer it.
 
+   For tools that read or edit task files, trace the directory they actually use through
+   startup arguments, environment and session creation. Declare a stable private directory in
+   `runtime.workspaces` only when source proves the target uses it. Paths are relative to the
+   target process working directory. The uploaded agent repository is not automatically its
+   task workspace. If the directory is configurable, use the source-supported setting and
+   record the same directory in the binding. If it is remote, per-session or unknown, leave
+   the binding absent and record that existing-file tasks cannot be seeded through ALK.
+
 9. **Whether its tools have code, and how to reach it.** This is the difference between testing
    the agent and testing somebody's reimplementation of it, so it is worth real effort.
 
