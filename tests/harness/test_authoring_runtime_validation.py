@@ -175,8 +175,9 @@ def test_runtime_validation_error_carries_structured_diagnostics() -> None:
     assert error.diagnostics == (diagnostic,)
 
 
+@pytest.mark.parametrize("readiness_only", [False, True])
 def test_generic_validation_uses_typed_patch_policy_and_persists_history(
-    tmp_path,
+    tmp_path, readiness_only,
 ) -> None:
     source = tmp_path / "source"
     authoring = tmp_path / "authoring"
@@ -210,17 +211,21 @@ def test_generic_validation_uses_typed_patch_policy_and_persists_history(
 
     job = SimpleNamespace(metadata={"generic_harness_v1": True})
     asyncio.run(
-        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair, readiness_only=readiness_only)
     )
 
     assert calls == ["validate", "repair", "validate"]
     history = json.loads(
-        (authoring / "generic-harness" / "repair-history.json").read_text()
+        (authoring / "generic-harness" / ("readiness-repair-history.json" if readiness_only else "repair-history.json")).read_text()
     )
     assert [item["action"] for item in history["decisions"]] == [
         RepairAction.PATCH_ENVIRONMENT.value,
         RepairAction.CERTIFY.value,
     ]
+    if readiness_only:
+        assert not (authoring / "runtime-validation.json").exists()
+        assert not (authoring / "generic-harness/certification.json").exists()
+        return
     proof = json.loads((authoring / "runtime-validation.json").read_text())
     assert proof["generic_harness"] == "v1"
     assert proof["setup_ready_scenarios"] == 5
@@ -1645,3 +1650,91 @@ def test_runtime_repairs_leave_budget_for_real_chat_setup(tmp_path):
     assert controller.history.runtime_patches_used == 4
     assert controller.history.environment_patches_used == 1
     assert controller.history.decisions[-1].action is RepairAction.CERTIFY
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_repair_exception_preserves_runtime_failure_without_secret_text(tmp_path, capsys, readiness_only):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir", code="required_value_missing", message="missing value",
+    )
+    original = RuntimeValidationError("environment", "invalid runtime", diagnostics=(diagnostic,))
+
+    class LlmCallsLimitExceededError(Exception):
+        pass
+
+    async def validate(*args):
+        raise original
+
+    async def repair(*args):
+        raise LlmCallsLimitExceededError("private-secret-token")
+
+    with pytest.raises(RuntimeValidationError) as caught:
+        asyncio.run(validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring,
+            validate=validate, repair=repair, readiness_only=readiness_only,
+        ))
+    assert caught.value is original
+    history_path = authoring / "generic-harness" / (
+        "readiness-repair-history.json" if readiness_only else "repair-history.json"
+    )
+    history = json.loads(history_path.read_text())
+    assert len(history["results"]) == 1
+    result = history["results"][0]
+    assert result["outcome"] == "failed"
+    assert result["after_candidate_hash"] == result["before_candidate_hash"]
+    output = capsys.readouterr().out
+    assert "LlmCallsLimitExceededError" in output
+    assert "private-secret-token" not in output + history_path.read_text() + str(caught.value)
+    assert caught.value.__suppress_context__
+
+
+def test_repair_cancellation_is_not_reclassified(tmp_path):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.VALIDATING_ENVIRONMENT,
+        component="world_ir", code="required_value_missing", message="missing value",
+    )
+
+    async def validate(*args):
+        raise RuntimeValidationError("environment", "invalid", diagnostics=(diagnostic,))
+
+    async def repair(*args):
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(validate_and_repair(
+            SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring,
+            validate=validate, repair=repair,
+        ))
+    history = json.loads((authoring / "generic-harness/repair-history.json").read_text())
+    assert history["results"] == []
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_default_validator_is_resolved_at_call_time(tmp_path, monkeypatch, readiness_only):
+    from fi.alk.harness import authoring_runtime_validation as validation
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    calls = []
+
+    async def replacement(job, source, authoring, **kwargs):
+        calls.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(validation, "validate_once", replacement)
+    asyncio.run(validation.validate_and_repair(
+        SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring,
+        readiness_only=readiness_only,
+    ))
+    assert calls == ([{"readiness_only": True}] if readiness_only else [{}])

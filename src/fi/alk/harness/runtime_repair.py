@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .backends import FILE_TOOLS, SessionSpec, tool, tool_server
 from .contract import AgentContract, Dependency, Runtime
 from .diagnostics import HarnessDiagnostic
-from .session import Stage
+from .session import DONE, RESULT, TOOL, Event, Stage
 
 
 _SAFE_RUNTIME_LAUNCHERS = {
@@ -141,6 +142,122 @@ def _dependency_root(root: Path, runtime: Runtime) -> Path:
     return _discovered_python_component(root)[0]
 
 
+def _optional_extra_inventory(source_root: Path, runtime: Runtime) -> str:
+    """Show source-declared groups without sending arbitrary manifest text to the model."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    from .generated_runtime import (
+        _pyproject_document,
+        python_workspace_members,
+        python_workspace_root,
+    )
+
+    if runtime is None:
+        return ""
+    source_root = source_root.resolve()
+    try:
+        component = (
+            (source_root / runtime.workdir).resolve()
+            if runtime.workdir
+            else source_root
+        )
+        if not component.is_relative_to(source_root):
+            return ""
+        # Workspace discovery reads each ancestor manifest. Check every one before calling it.
+        for directory in (component, *component.parents):
+            if not directory.is_relative_to(source_root):
+                break
+            manifest = directory / "pyproject.toml"
+            if manifest.exists() and not manifest.resolve().is_relative_to(source_root):
+                return ""
+        workspace = python_workspace_root(source_root, component)
+        projects = [workspace, *sorted(python_workspace_members(workspace))]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ""
+    rows = []
+    for project in projects[:32]:
+        manifest = project / "pyproject.toml"
+        if not manifest.resolve().is_relative_to(source_root):
+            continue
+        metadata = _pyproject_document(manifest).get("project", {})
+        optional = (
+            metadata.get("optional-dependencies", {})
+            if isinstance(metadata, dict)
+            else {}
+        )
+        if not isinstance(optional, dict):
+            continue
+        for group in sorted(name for name in optional if isinstance(name, str)):
+            requirements = optional[group]
+            if not re.fullmatch(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*", group):
+                continue
+            packages = []
+            for raw in requirements if isinstance(requirements, list) else []:
+                try:
+                    packages.append(Requirement(raw).name)
+                except (InvalidRequirement, TypeError):
+                    continue
+            path = (project / "pyproject.toml").relative_to(source_root).as_posix()
+            rows.append(f"{path}: {group} -> {', '.join(packages[:12]) or '(empty)'}")
+            if len(rows) == 64:
+                return "\n".join(rows)
+    return "\n".join(rows)
+
+
+def _process_error_clues(guidance: str) -> str:
+    """Surface bounded, already-redacted target failures before the full process log."""
+    marker = "<untrusted_current_attempt_process_logs>"
+    if marker not in guidance:
+        return ""
+    logs = guidance.split(marker, 1)[1].split(
+        "</untrusted_current_attempt_process_logs>", 1
+    )[0]
+    # The last retained log is commonly the agent; install logs sort before it.
+    last_log = re.split(r"(?m)^\S+\.log\n", logs)[-1]
+    lines = last_log.splitlines()
+    clues = []
+    for index, line in enumerate(lines):
+        if re.search(
+            r"\b(error|exception|failed|requires|install|missing|not found)\b",
+            line,
+            re.I,
+        ):
+            clues.append(line.strip()[:240])
+            if re.search(r"\binstall\b", line, re.I) and index + 1 < len(lines):
+                clues.append(lines[index + 1].strip()[:240])
+        if len(clues) >= 12:
+            break
+    return "\n".join(clues)[:2000]
+
+
+def _repair_progress(event: Event) -> None:
+    """Log only tool names and typed outcomes; source reads may contain secrets."""
+    if event.kind == TOOL:
+        name = event.tool.rsplit("__", 1)[-1]
+        label = (
+            name
+            if name in {"Read", "Glob", "Grep", "submit_runtime_plan_patch"}
+            else "other"
+        )
+        print(f"runtime repair: {label}", flush=True)
+    elif event.kind == RESULT and event.detail.get("is_error"):
+        rejection = re.search(
+            r"patch rejected: [A-Za-z]+: ([a-z][a-z0-9_]+)", event.text
+        )
+        print(
+            f"runtime repair: rejected {rejection.group(1) if rejection else 'tool_error'}",
+            flush=True,
+        )
+    elif event.kind == RESULT and "runtime plan patch accepted" in event.text:
+        print("runtime repair: patch accepted", flush=True)
+    elif event.kind == DONE:
+        outcome = event.detail.get("outcome")
+        print(
+            f"runtime repair: {outcome if outcome in {'success', 'failed', 'cancelled'} else 'done'}",
+            flush=True,
+        )
+
+
 def validate_runtime_plan_patch(
     source_root: Path,
     contract: AgentContract,
@@ -247,9 +364,12 @@ def validate_runtime_plan_patch(
         select_python_extras(
             workspace_root,
             runtime.extras,
-            context_excludes=tuple((prefix / path).as_posix() for path in _context_excludes(
-                dependency_root, runtime, "pyproject.toml", runtime.command
-            )),
+            context_excludes=tuple(
+                (prefix / path).as_posix()
+                for path in _context_excludes(
+                    dependency_root, runtime, "pyproject.toml", runtime.command
+                )
+            ),
         )
     workdir = (root / runtime.workdir).resolve() if runtime.workdir else root
     try:
@@ -292,7 +412,14 @@ def validate_runtime_plan_patch(
                 if not directories[0] or not workdir.is_dir():
                     raise ValueError("runtime_repair_workdir_missing")
         for token in entry_tokens:
-            if Path(token).suffix.casefold() not in {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx"}:
+            if Path(token).suffix.casefold() not in {
+                ".py",
+                ".js",
+                ".mjs",
+                ".cjs",
+                ".ts",
+                ".tsx",
+            }:
                 continue
             entrypoint = (workdir / token).resolve()
             try:
@@ -486,6 +613,18 @@ The identical chat request must pass after rebuilding before readiness is establ
     briefing = (
         "Repair the generated runtime plan for this repository.\n\nDIAGNOSTICS\n"
         + json.dumps(diagnostics_json, sort_keys=True, indent=2)[:20000]
+        + (
+            "\n\nSOURCE-DECLARED OPTIONAL EXTRAS (names only; verify the relevant source branch)\n"
+            + inventory
+            if dependency_investigation
+            and (inventory := _optional_extra_inventory(source_root, contract.runtime))
+            else ""
+        )
+        + (
+            "\n\n<untrusted_error_clues>\n" + clues + "\n</untrusted_error_clues>"
+            if dependency_investigation and (clues := _process_error_clues(guidance))
+            else ""
+        )
         + "\n\nCURRENT CONTRACT\n"
         + contract.model_dump_json(indent=2)[:36000]
         + ("\n\nREQUIRED JOB INTENT\n" + guidance if guidance else "")
@@ -503,11 +642,12 @@ The identical chat request must pass after rebuilding before readiness is establ
         name="repair-runtime-plan",
     )
     async with stage:
-        await stage.say(briefing)
+        await stage.say(briefing, on_event=_repair_progress)
         if not captured and not dependency_investigation:
             await stage.say(
                 "No valid runtime plan was submitted. Inspect the remaining evidence and call "
-                "submit_runtime_plan_patch now."
+                "submit_runtime_plan_patch now.",
+                on_event=_repair_progress,
             )
     if not captured and dependency_investigation:
         return None

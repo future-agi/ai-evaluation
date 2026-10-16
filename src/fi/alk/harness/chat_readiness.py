@@ -43,7 +43,8 @@ async def probe_chat_ingress(
     *,
     interface,
     endpoint,
-    document,
+    document=None,
+    opening_message=None,
     authoring: Path,
     candidate_hash,
     bundle_digest,
@@ -57,9 +58,9 @@ async def probe_chat_ingress(
     from .authoring_runtime_validation import RuntimeValidationError
 
     attempt = uuid4().hex
-    key = scenario_key or document["scenario_key"]
-    persona = document.get("persona") or {}
-    opening = persona.get("initial_message") if isinstance(persona, dict) else None
+    key = scenario_key or (document or {}).get("scenario_key") or attempt
+    persona = (document or {}).get("persona") or {}
+    opening = opening_message or (persona.get("initial_message") if isinstance(persona, dict) else None)
     message = {
         "role": "user",
         "content": opening if isinstance(opening, str) and opening.strip() else "Hello",
@@ -68,10 +69,11 @@ async def probe_chat_ingress(
         "attempt": attempt,
         "candidate_hash": candidate_hash,
         "bundle_digest": bundle_digest,
-        "scenario_key": key,
         "status": "failed",
         "timeout_seconds": timeout,
     }
+    if document is not None or scenario_key is not None:
+        receipt["scenario_key"] = key
     try:
         wrapper = create_chat_wrapper(
             interface,
