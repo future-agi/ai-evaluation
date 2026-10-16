@@ -100,81 +100,12 @@ _PYTHON_TYPES = {
     dict: "object",
 }
 
-# The keys Vertex's Schema type accepts. JSON Schema carries more; anything else is dropped
-# rather than passed through, because an unknown key fails declaration validation and takes
-# the whole stage down before its first turn.
-_SCHEMA_KEYS = (
-    "description",
-    "enum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "minimum",
-    "minItems",
-    "nullable",
-    "pattern",
-    "properties",
-    "required",
-    "type",
-    "anyOf",
-    "additionalProperties",
-)
-
-
-def _gemini_schema(schema: Any) -> dict[str, Any]:
-    """A JSON Schema fragment as Vertex's Schema dialect.
-
-    The real difference is nullability: JSON Schema says ``"type": ["string", "null"]``,
-    Vertex says ``"type": "string", "nullable": true``. Everything Vertex does not know is
-    dropped, recursively, so a tool schema written for the loosest backend still declares.
-    """
-    if not isinstance(schema, dict):
-        return {"type": "string"}
-    cleaned: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key not in _SCHEMA_KEYS:
-            continue
-        if key == "type" and isinstance(value, list):
-            bare = [entry for entry in value if entry != "null"]
-            if len(bare) > 1:
-                cleaned["anyOf"] = [_gemini_schema({"type": kind}) for kind in bare]
-            else:
-                cleaned["type"] = bare[0] if bare else "string"
-            if "null" in value:
-                cleaned["nullable"] = True
-        elif key == "properties" and isinstance(value, dict):
-            cleaned["properties"] = {
-                name: _gemini_schema(inner) for name, inner in value.items()
-            }
-        elif key == "additionalProperties" and isinstance(value, dict):
-            cleaned[key] = _gemini_schema(value)
-        elif key == "items":
-            cleaned["items"] = _gemini_schema(value)
-        elif key == "anyOf" and isinstance(value, list):
-            cleaned["anyOf"] = [_gemini_schema(inner) for inner in value]
-        elif key == "enum" and isinstance(value, list):
-            # Vertex enums are strings; None inside one is JSON Schema's way of saying
-            # nullable, and everything else is stringified the way the model will echo it.
-            cleaned["enum"] = [str(entry) for entry in value if entry is not None]
-            if None in value:
-                cleaned["nullable"] = True
-        else:
-            cleaned[key] = value
-    # Vertex refuses an array that does not say what it holds. JSON Schema treats items as
-    # optional, and most such arrays here carry row-shaped dicts, so an open object is the
-    # faithful default.
-    if cleaned.get("type") == "array" and "items" not in cleaned:
-        cleaned["items"] = {"type": "object"}
-    return cleaned
-
-
 def _json_schema(schema: Any) -> dict[str, Any]:
-    """The tool's schema as Vertex-safe schema, whichever shorthand it was declared in."""
+    """Preserve JSON Schema; expand the shorthand used by small internal tools."""
     if isinstance(schema, dict) and (
-        "properties" in schema or schema.get("type") == "object"
+        any(key in schema for key in ("type", "properties", "$ref", "$defs", "anyOf", "oneOf"))
     ):
-        return _gemini_schema(schema)
+        return schema
     if isinstance(schema, dict):
         return {
             "type": "object",
@@ -390,7 +321,7 @@ def _spec_tool(name: str, spec: ToolSpec) -> Any:
             return types.FunctionDeclaration(
                 name=name,
                 description=spec.description,
-                parameters=_json_schema(spec.input_schema),
+                parameters_json_schema=_json_schema(spec.input_schema),
             )
 
         async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> Any:
