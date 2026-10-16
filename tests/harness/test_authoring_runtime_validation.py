@@ -1375,7 +1375,7 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     )
     inspected = []
 
-    async def inspect(source_root, current_contract, diagnostics, *, guidance="", available_secret_aliases=frozenset()):
+    async def inspect(source_root, current_contract, diagnostics, *, guidance="", available_secret_aliases=frozenset(), allow_ingress_repair=False):
         assert "Preserve the submitted identifiers." in guidance
         assert "require_tool_workflow" in guidance
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))
@@ -1954,3 +1954,136 @@ def test_startup_failure_preserves_redacted_process_logs_for_repair(
             assert "aiohttp not installed" in evidence
             assert "private-startup-token" not in evidence
             assert "stale failure" not in evidence
+
+
+@pytest.mark.parametrize("readiness_only", [False, True])
+def test_ingress_repair_capability_is_private_and_revalidates_candidate(tmp_path, monkeypatch, readiness_only):
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.contract import RuntimeInterface
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "cli.py").write_text("from agent import interactive\ninteractive()\n")
+    (source / "server.py").write_text("from agent import chat\nROUTE = '/chat'\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = AgentContract(agent="same-agent", runtime=Runtime(
+        language="python", execution="native", command=["python", "cli.py"],
+        interface=RuntimeInterface(kind="command", protocol="fi.alk")))
+    path = authoring / "contract.json"
+    path.write_text(contract.model_dump_json())
+    calls = []
+    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress", code="chat_ingress_failed", message="selected CLI did not return a chat response")
+
+    async def validate(*args):
+        current = AgentContract.model_validate_json(path.read_text())
+        calls.append(("validate", current.runtime.command))
+        if current.runtime.interface.kind == "command":
+            raise RuntimeValidationError("environment", "wrong ingress", diagnostics=(diagnostic,))
+        return 1
+
+    async def inspect(root, current, diagnostics, *, allow_ingress_repair=False, **kwargs):
+        calls.append(("capability", allow_ingress_repair))
+        return RuntimePlanPatch(mode="chat_ingress", base_contract_hash=_contract_hash(current),
+            runtime=current.runtime.model_copy(update={"command": ["python", "server.py"],
+                "interface": RuntimeInterface(kind="http", protocol="fi.alk", port=8080, path="/chat")}),
+            evidence_paths=("cli.py", "server.py"), diagnostic_codes=("chat_ingress_failed",),
+            summary="Correct the source-backed ingress declaration")
+
+    monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    run = validate_and_repair(job, source, authoring, validate=validate, readiness_only=readiness_only)
+    if readiness_only:
+        asyncio.run(run)
+        assert calls == [("validate", ["python", "cli.py"]), ("capability", True), ("validate", ["python", "server.py"])]
+        patch = json.loads((authoring / "generic-harness/runtime-plan-repair-1.json").read_text())
+        assert patch["mode"] == "chat_ingress"
+    else:
+        with pytest.raises(ValueError, match="ingress_repair_not_allowed"):
+            asyncio.run(run)
+        assert calls == [("validate", ["python", "cli.py"]), ("capability", False)]
+        assert AgentContract.model_validate_json(path.read_text()) == contract
+
+
+def test_ingress_repair_replays_same_private_chat_over_http(tmp_path, monkeypatch):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.chat_readiness import probe_chat_ingress
+    from fi.alk.harness.contract import RuntimeInterface
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "cli.py").write_text("def interactive():\n    return ''\n")
+    server_source = source / "server.py"
+    server_source.write_text('''import json
+from http.server import BaseHTTPRequestHandler
+requests = []
+def chat(message):
+    return str(sum(int(value) for value in message.split()))
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        requests.append((self.path, request))
+        content = chat(request['new_message']['content']) if self.path == '/chat' else ''
+        body = json.dumps({'content': content}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+''')
+    namespace = {}
+    exec(compile(server_source.read_text(), str(server_source), "exec"), namespace)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), namespace["Handler"])
+    except PermissionError:
+        pytest.skip("loopback listener unavailable in this sandbox")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        authoring = tmp_path / "authoring"
+        authoring.mkdir()
+        contract = AgentContract(agent="fixture-agent", runtime=Runtime(
+            language="python", execution="native", command=["python", "cli.py"],
+            interface=RuntimeInterface(kind="command", protocol="fi.alk")))
+        path = authoring / "contract.json"
+        path.write_text(contract.model_dump_json())
+        source_before = {entry.name: entry.read_bytes() for entry in source.iterdir()}
+        tools = [{"name": "calculate", "description": "Add numbers", "parameters": {"type": "object"}}]
+        endpoint = f"http://127.0.0.1:{server.server_port}"
+
+        async def validate(*args):
+            current = AgentContract.model_validate_json(path.read_text())
+            await probe_chat_ingress(interface=current.runtime.interface, endpoint=endpoint,
+                opening_message="2 3", authoring=authoring, candidate_hash=_contract_hash(current),
+                bundle_digest="sha256:" + "0" * 64, secret_values={}, redaction_values={},
+                tools=tools, scenario_key="private-same-request", timeout=5)
+            return 1
+
+        async def inspect(root, current, diagnostics, *, allow_ingress_repair=False, **kwargs):
+            assert allow_ingress_repair
+            assert {item.code for item in diagnostics} == {"chat_ingress_failed"}
+            return RuntimePlanPatch(mode="chat_ingress", base_contract_hash=_contract_hash(current),
+                runtime=current.runtime.model_copy(update={"command": ["python", "server.py"],
+                    "interface": RuntimeInterface(kind="http", protocol="fi.alk", port=server.server_port, path="/chat")}),
+                evidence_paths=("cli.py", "server.py"), diagnostic_codes=("chat_ingress_failed",),
+                summary="Use the source HTTP handler for the same private conversation")
+
+        monkeypatch.setattr(runtime_repair, "request_runtime_plan_patch", inspect)
+        asyncio.run(validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}),
+                    source, authoring, validate=validate, readiness_only=True))
+        requests = namespace["requests"]
+        assert [route for route, _ in requests] == ["/invoke", "/chat"]
+        assert requests[0][1]["messages"] == requests[1][1]["messages"] == [{"role": "user", "content": "2 3"}]
+        assert requests[0][1]["tools"] == requests[1][1]["tools"] == tools
+        assert {entry.name: entry.read_bytes() for entry in source.iterdir()} == source_before
+        receipts = [json.loads(item.read_text()) for item in (authoring / "generic-harness/chat-readiness").glob("*.json")]
+        assert sorted(item["status"] for item in receipts) == ["failed", "passed"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
