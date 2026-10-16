@@ -633,9 +633,17 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
         calls.append(args)
         return {"content": [{"type": "text", "text": "kept"}]}
 
+    (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "branch": "the account is on hold", "solution": [{"tool": "a"}]})
+    )
     drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
     runtime._from_platform = True
-    assert asyncio.run(drop.handler({"names": ["one"]})).get("is_error") is None
+    corrected = {"name": "one", "branch": "the account is on hold", "solution": [{"tool": "b"}]}
+    assert asyncio.run(submit.handler(corrected)).get("is_error") is None
+    assert asyncio.run(submit.handler({**corrected, "branch": "a lost item"}))["is_error"] is True
+    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
-    assert calls == [{"names": ["one"]}]
+    assert calls == [corrected]
