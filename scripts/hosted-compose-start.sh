@@ -15,7 +15,10 @@ for attempt in $(seq 1 60); do
     ready=true
     break
   fi
-  kill -0 "$daemon"
+  if ! kill -0 "$daemon" 2>/dev/null; then
+    cat /run/alk-docker/daemon.log >&2
+    exit 1
+  fi
   sleep 1
 done
 "$ready"
