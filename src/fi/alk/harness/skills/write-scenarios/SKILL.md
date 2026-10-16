@@ -291,20 +291,14 @@ that governs this situation in the agent's instructions, then write only the ste
 complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
 tools take them.
 
-- When the caller states something a rule says to hand over, stop or refuse on (an injury, a lawyer,
-  a dispute, a request outside the agent's scope), the solution is that action with nothing before it
-  the rule does not ask for: no identity check and no lookup. An identity check belongs before
-  disclosing or changing something, never before handing over. A rule that says to act at once comes
-  before the agent's usual opening steps, verifying the caller included. When the reason to hand over
+- When the caller states something a rule says to hand over, stop or refuse on, the solution is that
+  action with nothing before it the rule does not ask for: no identity check and no lookup. An
+  identity check belongs before disclosing or changing something, never before handing over. A rule
+  that says to act at once comes before the agent's usual opening steps, verifying the caller
+  included. When the reason to hand over
   can only be found by looking (an account's state the caller does not mention), the lookups that find
   it come first, as in the example under "What is not a scenario".
 - A step another tool already does inside its own work is not one the agent repeats.
-- The outcome must be one the call itself can reach. The simulated caller can only talk: it cannot
-  open a link, use an app, read a screen or pay on a page. When the agent's flow needs one of those
-  (a payment link, an emailed code), the outcome is what the agent does around it (sends it, checks
-  it, offers the next step), never a completion only that outside action could bring. Neither the
-  caller's instruction nor setup can stand in for that action: setup holds what was true before the
-  call, and something the caller would do off the line during it never happens.
 - A step succeeds only where nothing it refuses on holds: read each tool's `refuses` in the contract
   and rule every one out through setup or the caller's situation, or write the refusal as the outcome.
   An effect the contract states under a condition ("ready if a setting is on", "found when one is
@@ -354,13 +348,11 @@ the catalogue (`inspect_world` lists them, and the catalogue file holds their ch
 compares, and when it applies. Name one only when its situation arises here and a correct agent
 passes it whichever way its rules allow, and whichever turn this caller may take within their
 situation: if the caller could reasonably ask for a person or change their mind, name sub-goals for
-what the agent must do either way, not for an outcome only one of those turns reaches. Two is the usual number; one is right when the agent had
-nothing to find out before acting, as when a rule tells it to act at once. Where a rule tells it to hand over at once on what the caller says, name no identity or lookup
-sub-goal: an agent that obeys the rule never reaches them. The first time you name a
-sub-goal in your session, and whenever you add or replace one, run it with `try_check`: your solution,
-another way the instructions allow, and your solution with a fixed value wrong. The first two must
-hold and the third must fail; when they do not, replace the sub-goal with `add_sub_goal` or name
-another. Sub-goals are shared, so after that first try you reuse it without trying again.
+what the agent must do either way, not for an outcome only one of those turns reaches. The first
+time you name a sub-goal in your session, and whenever you add or replace one, run it with
+`try_check`: your solution, another way the instructions allow, and your solution with a fixed
+value wrong. The first two must hold and the third must fail; when they do not, replace the sub-goal
+with `add_sub_goal` or name another. Sub-goals are shared, so after that first try you reuse it without trying again.
 
 **What the proof plays, and how to answer it.** Beyond your solution and your alternatives, it plays an
 agent that gets every fixed value right but makes its own choice for everything else, and an agent that
@@ -750,8 +742,7 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
     quiet line?
 23. Would an agent that follows its rules to the letter pass every named sub-goal? If a rule says to
     act at once on what this caller says, does the solution start with that act, with no
-    verification or lookup before it? Does any sub-goal need the caller to do something off the
-    line?
+    verification or lookup before it?
 
 ## The three gates
 
@@ -870,7 +861,8 @@ GOOD   solution   [find_account(identifier=...), get_account(account_id=...),
 
 That is the case where the reason is found by looking. When the caller states the reason and a rule
 says to hand over at once, the solution is the hand-over alone, and the scenario can still fail: an
-agent that carries on (keeps taking details, verifies first, files a claim) instead of handing over.
+agent that carries on (keeps taking details, verifies first, starts the task it should hand over)
+instead of handing over.
 Name sub-goals for exactly that, the hand-over and the forbidden carrying on, never for the lookups
 the rule skips.
 
@@ -1028,7 +1020,8 @@ the scenario cannot be completed.
 **The caller only talks.** Never tell them to do something off the line: tap a link, pay on a page,
 open an app, read a screen. They will say they did it and nothing in the world changes, so an agent
 that checks finds it undone. When the agent's flow waits on such an action, the call ends at what the
-agent does around it, and the sub-goals stop there too.
+agent does around it, and the sub-goals stop there too. Setup cannot stand in for the action either:
+it holds what was true before the call.
 
 **Every value the caller is told to give is in their details.** "Give the last four digits of your
 phone number" needs the phone number in the instruction; a caller told to give a value they were never

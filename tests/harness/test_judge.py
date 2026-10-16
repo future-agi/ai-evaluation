@@ -198,6 +198,27 @@ def test_the_judge_turn_goes_to_the_gateways_chat_completions(monkeypatch):
     assert sent["body"]["tool_choice"] == {"type": "function", "function": {"name": "decide"}}
 
 
+def test_with_no_gateway_the_judge_still_decides_through_the_harness_session(monkeypatch):
+    monkeypatch.setattr(judge_module, "provider_env", lambda _model: {})
+
+    class _Stage:
+        def __init__(self, spec, name="", overheard=True):
+            self.tools = {t.name: t for t in spec.servers["world"].tools}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def say(self, _prompt):
+            await self.tools["decide"].handler({"verdict": "fail", "explanation": "not recorded", "evidence": "rows"})
+
+    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    held, why = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording="call.wav"))
+    assert held is False and why == "not recorded"
+
+
 def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, tmp_path):
     recording = tmp_path / "call.wav"
     recording.write_bytes(b"RIFF-audio")

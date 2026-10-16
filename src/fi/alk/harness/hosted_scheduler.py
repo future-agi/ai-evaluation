@@ -1592,10 +1592,7 @@ class HostedScheduler:
         offered: dict[str, Any],
     ) -> tuple[list[tuple[bool | None, str]] | None, str]:
         """All of a call's judged sub-goals in one conversation (None to judge each alone), and any
-        report that the customer left their side.
-
-        Any failure, including a single sub-goal left undecided, judges every one of them alone.
-        """
+        report that the customer left their side."""
         if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
             return None, ""
         try:

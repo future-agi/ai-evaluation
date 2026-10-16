@@ -596,6 +596,8 @@ def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
     states = iter(["running", "running", "completed"])
 
     async def runs(run_id, limit):
+        if run_id == "unknown":
+            return {"error": "no Run with that id belongs to this environment"}
         return {"run_id": run_id, "state": next(states), "calls": []}
 
     async def no_sleep(_delay):
@@ -609,13 +611,15 @@ def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
     result = asyncio.run(read({"run_id": "r-1", "wait": True}))
 
     assert '"completed"' in result["content"][0]["text"]
+    assert "no Run" in asyncio.run(read({"run_id": "unknown", "wait": True}))["content"][0]["text"]
 
 
 def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():
-    from fi.alk.harness.hosted_chat_entrypoint import _RUN_WAIT_SECONDS
+    from fi.alk.harness.hosted_chat_entrypoint import _RUN_POLL_SECONDS, _RUN_WAIT_SECONDS
+    from fi.alk.harness.hosted_conversation import _UNAVAILABLE_BUDGET_SECONDS
     from fi.alk.harness.session import STAGE_IDLE_TIMEOUT_SECONDS
 
-    assert _RUN_WAIT_SECONDS < STAGE_IDLE_TIMEOUT_SECONDS
+    assert _RUN_WAIT_SECONDS + _RUN_POLL_SECONDS + _UNAVAILABLE_BUDGET_SECONDS < STAGE_IDLE_TIMEOUT_SECONDS
 
 
 def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_one(tmp_path, monkeypatch):

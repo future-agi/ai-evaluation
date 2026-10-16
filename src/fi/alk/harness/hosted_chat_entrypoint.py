@@ -27,6 +27,7 @@ from .authoring_entrypoint import _load_provider_import_profile, agent_source_ki
 from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
+    _UNAVAILABLE_BUDGET_SECONDS,
     ConversationClient,
     ConversationTransportError,
     PlatformSessionStore,
@@ -74,8 +75,9 @@ _NEEDS_CONFIRMATION = frozenset(
 )
 _CONFIRM = "Yes, make this change"
 _RUN_FINISHED = frozenset({"completed", "failed", "canceled"})
-# A wait ends a minute before the turn would be stopped for being idle.
-_RUN_WAIT_SECONDS = max(60.0, STAGE_IDLE_TIMEOUT_SECONDS - 60)
+_RUN_POLL_SECONDS = 20.0
+# A wait, with its last poll and that poll's retries, ends before the turn would be stopped for being idle.
+_RUN_WAIT_SECONDS = max(0.0, STAGE_IDLE_TIMEOUT_SECONDS - _RUN_POLL_SECONDS - _UNAVAILABLE_BUDGET_SECONDS - 30)
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -579,17 +581,18 @@ class HostedChatRuntime:
         )
         async def read_runs(args: dict[str, Any]) -> dict[str, Any]:
             run_id, limit = str(args.get("run_id") or ""), int(args.get("limit") or 10)
-            deadline = asyncio.get_running_loop().time() + _RUN_WAIT_SECONDS
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + _RUN_WAIT_SECONDS
             try:
                 result = await self.client.runs(run_id, limit)
                 while (
                     args.get("wait")
                     and run_id
-                    and result.get("state") not in _RUN_FINISHED
-                    and asyncio.get_running_loop().time() < deadline
+                    and result.get("state") not in _RUN_FINISHED | {None}
+                    and loop.time() < deadline
                     and not self.stopping.is_set()
                 ):
-                    await asyncio.sleep(20)
+                    await asyncio.sleep(min(_RUN_POLL_SECONDS, deadline - loop.time()))
                     result = await self.client.runs(run_id, limit)
             except ConversationTransportError as exc:
                 return text(str(exc), error=True)

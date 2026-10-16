@@ -59,8 +59,8 @@ def reference_of(solution: Sequence[Any]) -> list[dict[str, Any]]:
 
 
 def takes_reference(checker: object) -> bool:
-    """Whether a check is written `check(world, calls, reference)`."""
-    source = getattr(checker, "_alk_source", None)
+    """Whether a check, or its source, is written `check(world, calls, reference)`."""
+    source = checker if isinstance(checker, str) else getattr(checker, "_alk_source", None)
     if source:
         entry = getattr(checker, "_alk_entry", "check")
         try:
