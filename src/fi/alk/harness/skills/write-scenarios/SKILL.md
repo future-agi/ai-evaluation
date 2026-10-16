@@ -197,7 +197,8 @@ fields from it, in this order, each from the one before:
 2. `solution` is what the agent does in that world under its rules, step by step, ending on the
    outcome this situation reaches.
 3. `instruction` gives the person what they want and how they behave in that situation, and ends with
-   a `Your details:` block holding every value they can be asked for.
+   a `Your details:` block holding every value they can be asked for. It holds only what the person
+   knows: a fact about the world they are unaware of stays in setup.
 4. `sub_goals` assert that outcome and the hard moment, against the solution's fixed values.
 5. `name`, `branch`, `tests`, `use_case` and the coordinate label that situation.
 
