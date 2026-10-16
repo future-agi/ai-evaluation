@@ -404,6 +404,11 @@ from fi.alk.harness.hosted_compose_bootstrap import _load_profile
 profile = _load_profile()
 assert profile is not None
 assert os.getuid() == profile.client_uid
+for path in Path("/usr/local").rglob("*"):
+    info = path.lstat()
+    assert info.st_uid == 0, str(path)
+    if not stat.S_ISLNK(info.st_mode):
+        assert not info.st_mode & 0o022, (str(path), oct(stat.S_IMODE(info.st_mode)))
 for raw in (
     "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/usr/sbin", "/bin", "/sbin",
     "/opt/alk-venv/bin/python", "/usr/bin/docker", "/usr/bin/dockerd",
@@ -414,7 +419,7 @@ for raw in (
     resolved = lexical.resolve(strict=True)
     for path in {lexical, resolved, *lexical.parents, *resolved.parents}:
         info = path.stat()
-        assert info.st_uid == 0 and not info.st_mode & 0o022, str(path)
+        assert info.st_uid == 0 and not info.st_mode & 0o022, (str(path), info.st_uid, oct(stat.S_IMODE(info.st_mode)))
 assert stat.S_ISSOCK(Path(profile.initialize_socket).stat().st_mode)
 try:
     connection = socket.socket(socket.AF_UNIX)
