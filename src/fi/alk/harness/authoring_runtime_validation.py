@@ -452,6 +452,7 @@ async def validate_once(
     *,
     secrets_path=Path("/run/futureagi/secrets.json"),
     local_runtime: bool = False,
+    reuse_invariants_only: bool = False,
 ) -> int:
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
@@ -799,7 +800,11 @@ async def validate_once(
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
             print("runtime validation: reviewing source data invariants", flush=True)
             invariants[:] = await author_invariants(
-                source, authoring, baseline.read_only(), endpoints=runtime.endpoints
+                source,
+                authoring,
+                baseline.read_only(),
+                endpoints=runtime.endpoints,
+                reuse_only=reuse_invariants_only,
             )
             # Review probes may have effects; none belongs in the test baseline.
             await provider.reset(runtime, work_directory=work)

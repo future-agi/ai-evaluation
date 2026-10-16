@@ -205,8 +205,45 @@ def probe_local_service(services: dict[str, str], args: dict):
 
 logger = logging.getLogger(__name__)
 
+
+def prune_invariant_scopes(authoring: Path) -> list[str]:
+    """Narrow saved invariant scopes to the scenarios on disk; return the checks dropped.
+
+    A check whose whole scope left the suite is dropped: an empty scope means every scenario.
+    """
+    artifact = authoring / ARTIFACT
+    if not artifact.is_file():
+        return []
+    body = json.loads(artifact.read_text())
+    checks = body.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return []
+    present = set()
+    for path in (authoring / "scenarios").glob("*/scenario.json"):
+        scenario = json.loads(path.read_text())
+        present.add(
+            str(
+                scenario.get("scenario_key") or scenario.get("name") or path.parent.name
+            )
+        )
+    kept, dropped = [], []
+    for check in checks:
+        scope = list(check.get("scenarios") or [])
+        if not scope:
+            kept.append(check)
+            continue
+        narrowed = [name for name in scope if name in present]
+        if narrowed:
+            kept.append({**check, "scenarios": narrowed})
+        else:
+            dropped.append(str(check.get("name", "")))
+    if kept != checks:
+        artifact.write_text(json.dumps({**body, "checks": kept}, indent=2) + "\n")
+    return dropped
+
+
 async def author_invariants(
-    source: Path, authoring: Path, world, *, endpoints=None
+    source: Path, authoring: Path, world, *, endpoints=None, reuse_only: bool = False
 ) -> list[dict]:
     files = source_files(source)
     scenarios = {}
@@ -217,6 +254,7 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
+    unavailable = "Certify-only: no saved source-data invariant review to reuse"
     # Do not manufacture SQL data merely to satisfy a SQL-review gate. A graph may have
     # rich in-process state and tools yet no relational store for a SELECT invariant to
     # examine. Require the observed runtime world to be empty as well as the contract's
@@ -258,6 +296,10 @@ async def author_invariants(
                     )
                 artifact.write_text(json.dumps(evidence, indent=2) + "\n")
                 return []
+            unavailable = (
+                "Certify-only: the live world has business tables, so the data-free "
+                "source review no longer applies and invariants must be authored again"
+            )
     if artifact.exists():
         checks = json.loads(artifact.read_text())["checks"]
         if not isinstance(checks, list) or not checks:
@@ -272,6 +314,10 @@ async def author_invariants(
                     "Repair removed a scenario covered by a saved invariant"
                 )
         return checks
+    if reuse_only:
+        from .authoring_runtime_validation import RuntimeValidationError
+
+        raise RuntimeValidationError("environment", unavailable)
 
     checks: dict[str, dict] = {}
     reviewed: set[str] = set()
