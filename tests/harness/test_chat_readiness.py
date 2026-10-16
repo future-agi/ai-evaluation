@@ -543,7 +543,7 @@ def test_all_tool_calls_must_be_usable_even_with_text(
 
 
 @pytest.mark.parametrize("recovers", [True, False])
-def test_dependency_patch_repeats_identical_http_request_once(tmp_path, profile_app, recovers):
+def test_dependency_patch_repeats_identical_http_request_and_stops_without_new_evidence(tmp_path, profile_app, recovers):
     from fi.alk.harness.authoring_runtime_validation import validate_and_repair
 
     url, state = profile_app
@@ -581,6 +581,9 @@ def test_dependency_patch_repeats_identical_http_request_once(tmp_path, profile_
         assert "Cannot import declared-package" in guidance
         assert "secret123" not in guidance
         repairs.append(guidance)
+        current = AgentContract.model_validate_json((authoring / "contract.json").read_text())
+        if current.runtime.extras:
+            return None
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(contract),
             runtime=contract.runtime.model_copy(update={"extras": ["renamed_transport"]}),
@@ -594,7 +597,7 @@ def test_dependency_patch_repeats_identical_http_request_once(tmp_path, profile_
     else:
         with pytest.raises(RuntimeValidationError):
             asyncio.run(run)
-    assert len(repairs) == 1
+    assert len(repairs) == (1 if recovers else 2)
     assert builds == [[], ["renamed_transport"]]
     assert len(state["calls"]) == 2
     assert state["calls"][0] == state["calls"][1]

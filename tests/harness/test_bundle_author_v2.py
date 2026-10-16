@@ -1531,6 +1531,31 @@ def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
     assert _docker_python(tmp_path) == "python3.12"
 
 
+@pytest.mark.parametrize("version", ["3.14", "3.14.2"])
+@pytest.mark.parametrize("manifest", ["pyproject.toml", "requirements.txt", None])
+def test_native_python_provisions_source_pin(tmp_path: Path, version: str, manifest: str | None) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / ".python-version").write_text(version + "\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    if manifest:
+        (tmp_path / manifest).write_text(
+            "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+            if manifest == "pyproject.toml" else ""
+        )
+    process = _plan_python(
+        tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+        needs_secrets=False,
+    )
+    command = " ".join(process.build_commands[0])
+    assert "uv " in command
+    assert "--python" in command
+    assert version in command
+    if manifest != "pyproject.toml":
+        assert process.run_command == [".venv/bin/python", "agent.py"]
+
+
 def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     binary = tmp_path / "bin"
@@ -3787,3 +3812,37 @@ def test_environment_bundle_omits_public_suite_and_simulator(tmp_path):
     assert "scenarios/" not in manifest.provenance.adopted_files
     with pytest.raises(BundleAuthorError, match="scenario_artifacts_missing"):
         author_bundle_v2(source=source, job=job, authoring=authoring, output=tmp_path / "full")
+
+
+def test_native_plan_preserves_config_files_and_rejects_unknown_aliases(tmp_path):
+    (tmp_path / "agent.py").write_text("print('hello')")
+    runtime = {
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "config_files": {
+            ".env": {"values": {"MODE": "test"}, "secret_aliases": {"API_KEY": "KEY"}}
+        },
+        "directories": ["state"],
+    }
+    job = _job(connector="auto", with_secrets=True, secret_aliases=("KEY",))
+    plan = resolve_environment_plan(
+        tmp_path,
+        job,
+        contract_modality="chat",
+        contract_interface_kind="command",
+        contract_runtime=runtime,
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    assert process.config_files[".env"].secret_aliases == {"API_KEY": "KEY"}
+    assert process.environment["MODE"] == "test"
+    assert process.directories == ["state"]
+    with pytest.raises(
+        BundleAuthorError, match="runtime_config_target_reference_required"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime=runtime,
+        )

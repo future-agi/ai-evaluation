@@ -261,6 +261,11 @@ async def _understand(args: argparse.Namespace) -> int:
     offered = (
         (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
     )
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
@@ -268,6 +273,7 @@ async def _understand(args: argparse.Namespace) -> int:
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
         available_evals=offered if isinstance(offered, list) else None,
+        require_storage_decision=generic and not args.interactive,
     )
 
     print(f"agent: {source.name}  ({source.kind})")

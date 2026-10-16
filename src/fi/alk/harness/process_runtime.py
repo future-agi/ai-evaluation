@@ -2312,7 +2312,12 @@ def spawn_source_process(
                 process.name,
             )
     runtime_dir = build_dir
-    if port_plan.effective_instances > 1 or process.workspaces:
+    if (
+        port_plan.effective_instances > 1
+        or process.workspaces
+        or process.config_files
+        or process.directories
+    ):
         runtime_dir = world_dir / "runtime"
         try:
             # Stop/reap precedes every spawn/reset. Never reuse another world's
@@ -2361,12 +2366,34 @@ def spawn_source_process(
             "could not prepare runtime caches",
             process=process.name,
         ) from exc
+    from .runtime_files import materialize_config_resources
+
+    try:
+        config_environment = materialize_config_resources(
+            runtime_dir, process.config_files, process.directories, injected
+        )
+        if resolved_user is not None and (process.config_files or process.directories):
+            _chown_tree(
+                runtime_dir,
+                uid=resolved_user.pw_uid,
+                gid=resolved_user.pw_gid,
+                chown=chown,
+            )
+    except OSError as exc:
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            "could not materialize runtime config resources",
+            process=process.name,
+            domain=FailureDomain.AGENT,
+        ) from exc
     env = _base_process_env(
         runtime_dir,
         {
             **(process.build_environment or {}),
             **rendered,
             **injected,
+            **config_environment,
             **authoritative_endpoints,
         },
     )
@@ -2384,7 +2411,12 @@ def spawn_source_process(
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
-    if port_plan.effective_instances > 1 or process.workspaces:
+    if (
+        port_plan.effective_instances > 1
+        or process.workspaces
+        or process.config_files
+        or process.directories
+    ):
         for name, directory in (
             ("TMPDIR", "tmp"),
             ("PYTHONPYCACHEPREFIX", "pycache"),
@@ -6428,7 +6460,7 @@ class ProcessRuntimeProvider:
             if armed and world_index >= 1:
                 try:
                     self._ensure_world(world_index)
-                except (ProcessRuntimeError, OSError, shutil.Error) as exc:
+                except (ProcessRuntimeError, OSError, shutil.Error):
                     # Rule 2: continue on the contiguous 0..k−1 prefix — NO renumbering. Tear
                     # down whatever this world published, drop the ceiling to k, ledger
                     # `world_start_failed`, re-write build.json.

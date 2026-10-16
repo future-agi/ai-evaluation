@@ -182,7 +182,7 @@ def test_repair_result_records_before_after_and_no_op() -> None:
 
 
 @pytest.mark.parametrize("changed", [True, False])
-def test_chat_dependency_hypothesis_is_once_per_run_and_keeps_source_ownership(changed):
+def test_chat_setup_hypotheses_are_bounded_and_keep_source_ownership(changed):
     from fi.alk.harness.diagnostics import RepairOwner
 
     diagnostic = HarnessDiagnostic.create(
@@ -191,22 +191,27 @@ def test_chat_dependency_hypothesis_is_once_per_run_and_keeps_source_ownership(c
         code="chat_ingress_failed",
         message="Application error",
     )
-    controller = RepairController()
-    for index, expected in enumerate(
-        (RepairAction.PATCH_ENVIRONMENT, RepairAction.REJECT)
-    ):
-        assert (
-            controller.decide(
-                CandidateObservation(
-                    candidate_hash=f"candidate-{index if changed else 0}",
-                    phase=RepairPhase.ENVIRONMENT,
-                    diagnostics=(diagnostic,),
-                )
-            ).action
-            is expected
+    controller = RepairController(RepairBudgets(environment_patches=2))
+    expected_actions = (
+        [
+            RepairAction.PATCH_ENVIRONMENT,
+            RepairAction.PATCH_ENVIRONMENT,
+            RepairAction.REJECT,
+        ]
+        if changed
+        else [RepairAction.PATCH_ENVIRONMENT, RepairAction.REJECT, RepairAction.REJECT]
+    )
+    for index, expected in enumerate(expected_actions):
+        decision = controller.decide(
+            CandidateObservation(
+                candidate_hash=f"candidate-{index if changed else 0}",
+                phase=RepairPhase.ENVIRONMENT,
+                diagnostics=(diagnostic,),
+            )
         )
+        assert decision.action is expected
     assert diagnostic.owner is RepairOwner.SOURCE
-    assert controller.history.environment_patches_used == 1
+    assert controller.history.environment_patches_used == (2 if changed else 1)
 
 
 @pytest.mark.parametrize(

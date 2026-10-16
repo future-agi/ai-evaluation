@@ -469,9 +469,9 @@ def _repair_guidance(diagnostics) -> str:
 def _needs_runtime_plan_repair(diagnostics) -> bool:
     """Route execution construction failures away from world-data authoring."""
 
-    from .repair_controller import is_chat_dependency_investigation
+    from .repair_controller import is_chat_setup_investigation
 
-    if is_chat_dependency_investigation(diagnostics):
+    if is_chat_setup_investigation(diagnostics):
         return True
     runtime_codes = {
         "generated_runtime_plan_invalid",
@@ -1260,8 +1260,14 @@ async def validate_and_repair(
     base_guidance = (
         "\n".join(job.authoring_guidance()) if isinstance(job, HarnessJob) else ""
     )
+    available_secret_aliases = (
+        job.available_target_environment_names()
+        if isinstance(job, HarnessJob)
+        else frozenset()
+    )
     if validate is None:
         if readiness_only:
+
             async def validate(job, source, authoring):
                 return await validate_once(job, source, authoring, readiness_only=True)
         else:
@@ -1273,7 +1279,9 @@ async def validate_and_repair(
     )
     if readiness_only:
         if not generic:
-            raise RuntimeValidationError("runtime", "Early readiness requires the generic runtime")
+            raise RuntimeValidationError(
+                "runtime", "Early readiness requires the generic runtime"
+            )
         (authoring / "generic-harness" / "runtime-readiness.json").unlink(missing_ok=True)
     if repair is None:
 
@@ -1343,7 +1351,11 @@ async def validate_and_repair(
                         (authoring / "contract.json").read_text(encoding="utf-8")
                     )
                     return await request_runtime_plan_patch(
-                        source, contract, _active_repair_diagnostics, guidance=guidance
+                        source,
+                        contract,
+                        _active_repair_diagnostics,
+                        guidance=guidance,
+                        available_secret_aliases=available_secret_aliases,
                     )
                 if generic and all(
                     (artifact_root / name).is_file()
@@ -1543,9 +1555,9 @@ async def validate_and_repair(
                         apply_runtime_plan_patch,
                     )
 
-                    from .repair_controller import is_chat_dependency_investigation
+                    from .repair_controller import is_chat_setup_investigation
 
-                    if is_chat_dependency_investigation(diagnostics) and not isinstance(
+                    if is_chat_setup_investigation(diagnostics) and not isinstance(
                         repair_result, RuntimePlanPatch
                     ):
                         status = 1
@@ -1581,6 +1593,7 @@ async def validate_and_repair(
                             allowed_diagnostic_codes={
                                 item.code for item in diagnostics
                             },
+                            available_secret_aliases=available_secret_aliases,
                         )
                         patch_path = (
                             authoring
