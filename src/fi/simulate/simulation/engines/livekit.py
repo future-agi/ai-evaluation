@@ -64,8 +64,6 @@ from .caller_barge_in import (
     selected_call_indices,
 )
 from .opening import PromptOpeningGate
-from fi.simulate.simulation.sub_actors import enters
-
 from .sub_actor_voice import SubActorsOnCall, SubActorVoice, with_sub_actor_turns, world_access
 from fi.simulate.agent.definition import (
     AgentDefinition,
@@ -116,6 +114,7 @@ from fi.simulate.runtime import (
 from fi.simulate.simulation.engines.base import BaseEngine
 from fi.simulate.simulation.generator import ScenarioGenerator
 from fi.simulate.simulation.models import Persona, Scenario, TestCaseResult, TestReport
+from fi.simulate.simulation.sub_actors import enters
 from fi.simulate.simulation.voice_prompt import (
     HOLD_MARKER,
     CallType,
@@ -3397,9 +3396,9 @@ class LiveKitEngine(BaseEngine):
     ) -> list[SubActorVoice]:
         """One per bound sub-actor, written and synthesised off the call's critical path."""
         bound = _bound_sub_actor_voices()
-        player = getattr(customer_agent, "_background_player", None)
         if not bound:
             return []
+        player = getattr(customer_agent, "_background_player", None)
         tools_called, write = world_access(os.environ.get("HARNESS_SUB_ACTOR_WORLD", ""))
 
         async def say(frames: list[Any], text: str, name: str) -> None:
@@ -3415,6 +3414,7 @@ class LiveKitEngine(BaseEngine):
             context = customer_agent.chat_ctx.copy()
             context.add_message(role="system", content=f"{name} said on the line: {text}")
             await customer_agent.update_chat_ctx(context)
+
         base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
 
         async def play(frames: list[Any], volume: float) -> None:

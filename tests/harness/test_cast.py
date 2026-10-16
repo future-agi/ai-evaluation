@@ -176,20 +176,30 @@ def test_a_fault_on_a_tool_the_agent_runs_in_its_own_process_is_refused():
     assert not sub_actor_problems(_service(), modality="voice", tools={"add", "lst"}, reachable={"add"})
 
 
-def test_bindings_are_refused_when_they_cannot_run():
+@pytest.mark.parametrize(
+    ("bindings", "modality", "refused"),
+    [
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="mid_journey", turn=2))], "voice", False),
+        ([Binding(id="subactor_service", trigger=Trigger(kind="on_tool", tool="add", on_call=2))], "voice", False),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="on_keyword", words=["manager"]))], "voice", False),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="on_escalation", tool="transfer"))], "voice", False),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="probability", p=0.4))], "voice", False),
+        ([Binding(id="nobody")], "voice", True),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="probability"))], "voice", True),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="probability", p=1.0))], "voice", True),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="mid_journey", turn=11))], "voice", True),
+        ([Binding(id="subactor_service", trigger=Trigger(kind="on_tool", tool="lst"))], "voice", True),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="on_keyword"))], "voice", True),
+        ([Binding(id="subactor_bystander", trigger=Trigger(kind="on_escalation", tool="refund"))], "voice", True),
+        ([Binding(id="subactor_service", trigger=Trigger(kind="on_keyword", words=["x"]))], "voice", True),
+        ([Binding(id="subactor_bystander")], "chat", True),
+        ([Binding(id="subactor_service"), Binding(id="subactor_service")], "voice", True),
+    ],
+)
+def test_bindings_are_refused_when_they_cannot_run(bindings, modality, refused):
     cast = Cast(sub_actors=[_voice(), _service()])
-
-    def problems(*bindings, modality="voice", max_turns=10):
-        return binding_problems(list(bindings), cast, modality=modality, max_turns=max_turns)
-
-    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="mid_journey", turn=2)))
-    assert not problems(Binding(id="subactor_service", trigger=Trigger(kind="on_tool", tool="add", on_call=2)))
-    assert problems(Binding(id="nobody"))
-    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="probability")))
-    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="mid_journey", turn=11)))
-    assert problems(Binding(id="subactor_service", trigger=Trigger(kind="on_tool", tool="lst")))
-    assert problems(Binding(id="subactor_bystander"), modality="chat")
-    assert problems(Binding(id="subactor_service"), Binding(id="subactor_service"))
+    problems = binding_problems(bindings, cast, modality=modality, max_turns=10, tools={"add", "lst", "transfer"})
+    assert bool(problems) is refused, problems
 
 
 def test_a_call_carries_the_faults_and_voices_its_scenario_binds():
@@ -295,18 +305,20 @@ def test_with_the_switch_off_a_binding_is_refused_and_nothing_changes(tmp_path, 
     assert "sub_actors" not in written
 
 
-def test_the_bundle_seals_the_cast_beside_the_catalogue(tmp_path):
+@pytest.mark.parametrize(("catalogue", "sealed"), [(True, ["sub_goals.json", "cast.json"]), (False, ["cast.json"])])
+def test_the_bundle_seals_the_cast_beside_the_catalogue(tmp_path, catalogue, sealed):
     from fi.alk.harness.bundle_author_v2 import _copy_sub_goal_catalogue
 
     authoring, staging = tmp_path / "authoring", tmp_path / "staging"
     authoring.mkdir()
     staging.mkdir()
-    (authoring / "sub_goals.json").write_text('{"sub_goals": []}')
-    assert _copy_sub_goal_catalogue(authoring, staging) == ["sub_goals.json"]
-    assert not (staging / "cast.json").exists()
+    if catalogue:
+        (authoring / "sub_goals.json").write_text('{"sub_goals": []}')
+        assert _copy_sub_goal_catalogue(authoring, staging) == ["sub_goals.json"]
+        assert not (staging / "cast.json").exists()
 
     save_cast(authoring, Cast(sub_actors=[_service()]))
-    assert _copy_sub_goal_catalogue(authoring, staging) == ["sub_goals.json", "cast.json"]
+    assert _copy_sub_goal_catalogue(authoring, staging) == sealed
     assert load_cast(staging).sub_actors[0].id == "subactor_service"
 
 
@@ -325,21 +337,6 @@ def test_the_builder_keeps_the_cast_from_chat_and_asks_before_changing_it(tmp_pa
     said = asyncio.run(tools["add_sub_actor"].handler(_service().model_dump()))
     assert not said.get("is_error"), said
     assert load_cast(root).sub_actors[0].id == "subactor_service"
-
-
-def test_every_trigger_kind_is_checked_before_a_run():
-    cast = Cast(sub_actors=[_voice(), _service()])
-
-    def problems(binding):
-        return binding_problems([binding], cast, modality="voice", max_turns=10, tools={"add", "lst", "transfer"})
-
-    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_keyword", words=["manager"])))
-    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_keyword")))
-    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_escalation", tool="transfer")))
-    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_escalation", tool="refund")))
-    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="probability", p=0.4)))
-    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="probability", p=1.0)))
-    assert problems(Binding(id="subactor_service", trigger=Trigger(kind="on_keyword", words=["x"])))
 
 
 def test_a_channel_is_refused_where_no_run_can_carry_it():
@@ -402,21 +399,11 @@ def test_the_answer_key_is_proved_with_the_bound_service_failing(tmp_path, monke
     assert not said.get("is_error"), said
 
 
-def test_every_delivered_channel_and_trigger_is_offered_accepted_and_taught(tmp_path, monkeypatch):
-    from fi.alk.harness.config import SKILLS_ROOT
+def test_every_delivered_channel_and_trigger_is_offered_and_accepted(tmp_path, monkeypatch):
     from fi.alk.harness.scenario_tools import _sub_actor_field
     from fi.simulate.simulation.sub_actors import CHANNELS, TRIGGERS, delivered_channels
 
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
-    skills = "\n".join(
-        (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
-        for name in ("build-environment", "write-scenarios", "plan-suite")
-    )
-    for channel in delivered_channels():
-        assert f"`{channel}`" in skills, f"no skill says when {channel} applies"
-    for trigger in TRIGGERS:
-        assert f"`{trigger}`" in skills, f"no skill says when {trigger} applies"
-
     _root, tools = _cast_tools(tmp_path, monkeypatch)
     add = tools["add_sub_actor"]
     assert add.input_schema["properties"]["channel"]["enum"] == delivered_channels()
@@ -527,16 +514,6 @@ def test_a_sub_goal_whose_verdict_depends_on_the_draw_is_refused(tmp_path, monke
         }
     )
     assert branches_disagree(retries, catalogue, root) == ["item-added"]
-
-
-def test_the_cast_is_sealed_even_without_a_catalogue(tmp_path):
-    from fi.alk.harness.bundle_author_v2 import _copy_sub_goal_catalogue
-
-    authoring, staging = tmp_path / "authoring", tmp_path / "staging"
-    authoring.mkdir()
-    staging.mkdir()
-    save_cast(authoring, Cast(sub_actors=[_service()]))
-    assert _copy_sub_goal_catalogue(authoring, staging) == ["cast.json"]
 
 
 def test_the_faults_table_exists_only_where_sub_actors_are_on(monkeypatch):

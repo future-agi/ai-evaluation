@@ -43,9 +43,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, Sequence
 
-from .cast import absent
 from . import observability
 from .job import FailureDomain, HarnessStage
+from .cast import absent
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import judge_sub_goal as _judge
