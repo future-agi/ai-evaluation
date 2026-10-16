@@ -47,6 +47,10 @@ class CompletedToolEvents(BaseModel):
         description="Source-declared failure terminal kinds, paired by the same action identifier as observations. Each emits ok=false and requires a non-null error result.",
     )
     error_path: str = Field(default="", max_length=256)
+    result_error_path: str = Field(
+        default="", max_length=256,
+        description="Source-declared nullable boolean/string error field relative to the tool result, decoded once if JSON text. Missing, null, false or empty string means no reported error; true or nonempty string means failure. Other values or invalid traversal reject the evidence. The original result is preserved.",
+    )
     status_path: str = Field(default="", max_length=256)
     completed_status: str = Field(default="", max_length=128)
 
@@ -138,4 +142,8 @@ class CompletedToolRows(BaseModel):
     arguments_path: str = Field(min_length=1, max_length=256)
     result_path: str = Field(min_length=1, max_length=256)
     error_path: str = Field(default="", max_length=256)
+    result_error_path: str = Field(
+        default="", max_length=256,
+        description="Source-declared nullable boolean/string error field relative to the tool result, decoded once if JSON text. Missing, null, false or empty string means no reported error; true or nonempty string means failure. Other values or invalid traversal reject the evidence. The original result is preserved.",
+    )
     max_items: int = Field(default=128, ge=1, le=2000)

@@ -560,6 +560,7 @@ class RuntimeInterface(BaseModel):
         if (
             self.completed_tools
             and not self.completed_tools.error_path
+            and not self.completed_tools.result_error_path
             and not (self.failure_rule and self.failure_rule.success_values is not None)
         ):
             raise ValueError(

@@ -946,7 +946,13 @@ including absence. Reference the actual conversation with {{messages}}, {{new_me
 system instructions or fabricated prompts. Preserve existing failure predicate values; only
 translate their source response paths. You may add a source-backed failure rule when absent.
 Use source event identifiers to pair actions with completed observations and retain error results.
-Inspect success, error and rejection event producers. Declare distinct failed terminal kinds in
+Inspect success, error and rejection event producers, including native tool result wrappers.
+Completion status alone does not prove success. When source defines a nullable boolean or string
+error field inside the result, declare result_error_path relative to result_path. A JSON-text
+result is decoded once for classification and the original is retained. Missing, null, false or
+empty string reports no error; true or nonempty string reports failure. Other values or invalid
+traversal invalidate the evidence. Use this only for a source-established convention and preserve
+existing boolean error_path semantics. Declare distinct failed terminal kinds in
 completed_tool_events.failure_events with kind, action_id_path and result_path. All terminal
 kinds must join the same action identifier; do not mistake chronological parents for action
 references. Failure events always record ok=false and require a non-null error result. Select
