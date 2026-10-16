@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +96,50 @@ def test_registration_freezes_source_and_only_target_values(setup):
         registration.initialize(request.model_copy(update={"source_digest": "0" * 64}))
     with pytest.raises(module.BrokerError, match="registration_conflict"):
         registration.initialize(request.model_copy(update={"job_id": "other"}))
+
+
+@pytest.mark.parametrize(
+    ("relative", "content", "error"),
+    [
+        (".npmrc", "registry=https://registry.npmjs.org/\n", "bundle_secret_file_forbidden"),
+        (
+            "tests/credential_fixture.py",
+            "FAKE_TOKEN = 'ghp_" + "x" * 36 + "'\n",
+            "bundle_secret_material_detected",
+        ),
+    ],
+)
+def test_raw_source_content_is_admitted_at_provisioning_not_bootstrap(
+    setup, relative, content, error
+):
+    from fi.alk.harness.bundle import BundleError
+    from fi.alk.harness.certified_compose_runtime import CertifiedComposeRuntimeProvider
+
+    profile, job, request = setup
+    original = Path(profile.source) / relative
+    original.parent.mkdir(parents=True, exist_ok=True)
+    original.write_text(content)
+    request = request.model_copy(
+        update={"source_digest": source_fingerprint(Path(profile.source))}
+    )
+    registration = module._Registration(profile)
+    registration.initialize(request)
+    frozen = Path(registration.broker.config.source)
+    assert (frozen / relative).read_text() == content
+    assert stat.S_IMODE((frozen / relative).stat().st_mode) == 0o444
+    assert source_fingerprint(frozen) == request.source_digest
+
+    provider = CertifiedComposeRuntimeProvider(socket_path=Path(profile.docker_socket))
+    bundle = SimpleNamespace(
+        provenance=SimpleNamespace(
+            source_digest=request.source_digest,
+            public_material_admissions=job.public_material_admissions,
+            public_test_fixture_admissions=job.public_test_fixture_admissions,
+        )
+    )
+    with pytest.raises(BundleError, match=error):
+        provider._provision(bundle, frozen, frozen, frozen, 1)
+    assert provider._worlds == {}
 
 
 @pytest.mark.parametrize("attack", ["symlink", "hardlink", "fifo", "directory_symlink"])
