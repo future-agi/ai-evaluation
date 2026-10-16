@@ -110,6 +110,60 @@ def receipts(path):
     ]
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr", "both"])
+@pytest.mark.parametrize("verbose", [False, True])
+def test_command_failure_retains_both_streams_without_leaking_credentials(
+    tmp_path, monkeypatch, capsys, stream, verbose
+):
+    import sys
+
+    from fi.alk.harness.bundle_author_v2 import _subprocess_adapter_source
+
+    secret = "first-secret-line\nsecond-secret-line"
+    output = (
+        "build progress\n" * 400 + "noise" * 1000 + "\n" + "X" * 1990 + secret + "\n"
+        if verbose else secret + "\n"
+    )
+    statements = ["import sys"]
+    for name in ("stdout", "stderr"):
+        if stream in (name, "both"):
+            statements.append(
+                f"sys.{name}.write({output!r} + 'Configure the local provider ({name}).\\n')"
+            )
+    statements.append("sys.exit(1)")
+    monkeypatch.setenv(
+        "ALK_SUBPROCESS_COMMAND", json.dumps([sys.executable, "-c", ";".join(statements)])
+    )
+    namespace = {"__name__": "compiled_command_bridge"}
+    exec(_subprocess_adapter_source(), namespace)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), namespace["Handler"])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(RuntimeValidationError) as failure:
+            asyncio.run(probe(
+                tmp_path, f"http://127.0.0.1:{server.server_port}",
+                interface=RuntimeInterface(kind="command"),
+                redaction_values={"credential": secret},
+            ))
+        evidence = str(failure.value) + json.dumps(receipts(tmp_path))
+        assert "submitted command exited 1" in evidence
+        for name in ("stdout", "stderr"):
+            if stream in (name, "both"):
+                assert f"Configure the local provider ({name})." in evidence
+                assert f"{name}:" in evidence
+        assert "first-secret-line" not in evidence
+        assert "second-secret-line" not in evidence
+        process_log = capsys.readouterr().err
+        assert "first-secret-line" not in process_log
+        assert "second-secret-line" not in process_log
+        assert len(str(failure.value)) <= 4000
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
 def test_healthy_server_requires_profile_then_typed_runtime_patch_passes(
     tmp_path, profile_app
 ):
