@@ -192,6 +192,25 @@ def test_a_fixed_value_must_be_where_its_stated_source_says():
     assert not problems("record: accounts.id", "A-77")
 
 
+def test_a_solution_step_must_match_the_agents_contract(tmp_path):
+    import json
+
+    from fi.alk.harness.scenario import Scenario, Step
+    from fi.alk.harness.scenario_tools import _steps_the_contract_refuses
+
+    tools = [{"name": "hand_over", "args": ["line", "reason"], "arg_values": {"line": ["general", "priority"]}}]
+    (tmp_path / "contract.json").write_text(json.dumps({"tools": tools}))
+
+    def problems(*steps: Step) -> list[str]:
+        return _steps_the_contract_refuses(Scenario(name="s", instruction="Help.", solution=list(steps)), tmp_path)
+
+    assert not problems(Step(tool="hand_over", arguments={"line": "priority", "reason": "injury"}))
+    assert not problems(Step(tool="hand_over", arguments={"line": "$call.look_up.line"}))
+    assert problems(Step(tool="look_up", arguments={}))
+    assert problems(Step(tool="hand_over", arguments={"queue": "general"}))
+    assert problems(Step(tool="hand_over", arguments={"line": "claims"}))
+
+
 def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values():
     from fi.alk.harness.prove import _other_choices
     from fi.alk.harness.scenario import Scenario, Step

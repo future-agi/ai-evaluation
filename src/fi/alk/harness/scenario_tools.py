@@ -765,6 +765,38 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
+def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
+    """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
+    try:
+        contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    tools = {spec.get("name"): spec for spec in contract.get("tools") or [] if isinstance(spec, dict)}
+    if not tools:
+        return []
+    wrong = []
+    for step in scenario.solution:
+        spec = tools.get(step.tool)
+        if spec is None:
+            wrong.append(f"{step.tool} is not one of the agent's tools")
+            continue
+        names = set(spec.get("args") or [])
+        declared = spec.get("arg_values") or {}
+        for name, value in step.arguments.items():
+            if names and name not in names:
+                wrong.append(f"{step.tool} takes no argument {name!r}")
+            allowed = declared.get(name)
+            chained = isinstance(value, str) and value.startswith("$call")
+            if allowed and isinstance(value, (str, int, float, bool)) and not chained and value not in allowed:
+                wrong.append(f"{step.tool} {name}={value!r} is not one of {allowed}")
+    if not wrong:
+        return []
+    return [
+        "these solution steps do not match the agent's contract (its tools, their arguments and "
+        "declared values): " + "; ".join(wrong)
+    ]
+
+
 def _fixed_sources_that_do_not_hold(scenario: Scenario, trial: Any, instructions: str) -> list[str]:
     """Fixed text values whose stated source (caller, record or a quoted rule) does not contain them."""
 
@@ -879,6 +911,7 @@ def accept_scenario(
         problems.extend(_credentials_the_world_lacks(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+        problems.extend(_steps_the_contract_refuses(scenario, world_root))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
     finally:

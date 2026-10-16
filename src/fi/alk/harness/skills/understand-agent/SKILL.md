@@ -54,7 +54,8 @@ Find, in roughly this order:
 3. **Argument values.** Where an argument is constrained to a set, an enum, a literal union, or a
    lookup into fixed data, record the real values. Constrained means something rejects any other
    value; a free-text argument stays free even when the code only ever passes a default and one
-   other value, and recording those two makes every other value look wrong.
+   other value, and recording those two makes every other value look wrong. Where the code parses
+   a value's form (a prefix, an id shape), the tool's description says that form.
 
 4. **What each tool refuses until something else has happened.** Read each tool's body for a
    guard that raises before it does any work, and record the tools that make that guard pass in
@@ -64,6 +65,12 @@ Find, in roughly this order:
      tool refuses until a quote has been taken or an option selected, name those tools.
    - A guard on identity the agent establishes **when the call opens** is not. A caller is
      already recognised by the time any tool runs, so a check on that is satisfied for free.
+     The same goes for records it loads then from who is calling (an active order or booking
+     found by the caller's number or login): leave `requires` empty, and say in `notes` how the
+     agent identifies the caller and what it finds from that.
+   - A guard that depends on an argument's value (one option refused until something outside the
+     conversation has happened) cannot be said in `requires`. Write it in the tool's description:
+     the value, and what it waits for.
 
    Leave `requires` empty when a tool can be called first thing. Getting this wrong in the
    cautious direction is not safe: a scenario writer with no precondition data assumes the worst
