@@ -176,7 +176,7 @@ afterwards. It is a whole conversation from first contact to a settled outcome, 
 | `instruction` | What the person is trying to achieve, written to them, plus everything they hold. | yes |
 | `sub_goals` | Names from the shared catalogue that must hold. Nothing else grades this scenario. | yes |
 | `solution` | What a correct agent would do, as steps. Never run against the agent under test. | yes |
-| `fixture` | A readable manifest of the data this scenario relies on. Its `origin` must be `seed`, `generated` or `mixed`. A fixture changes nothing by itself, with one exception: the number the caller calls from goes under `caller_phone`, and a call places from that key and no other. | yes, when the world has data |
+| `fixture` | A readable manifest of the data this scenario relies on. Its `origin` must be `seed`, `generated` or `mixed`. A fixture changes nothing by itself, with one exception: the number the caller calls from goes under `caller_phone`; a call is placed from it, and without it from a default number that may belong to someone else. | yes, when the world has data |
 | `persona` | Who the person is, as structured fields. | yes, when the prompt asks for one |
 | `setup_code` | Python defining `setup(world)`. This is what actually changes the world. | when the instruction presumes anything |
 | `ready_code` | Python defining `ready(world)`. Returns `None` when the world is ready, or a sentence naming what is missing. | recommended |
@@ -1384,6 +1384,10 @@ able to answer.
 the replacement, the account's and the order's, give both and name each role. Handed one, the person
 offers it for the other purpose because it is the only such value they have. It is real, it is in the
 instruction, and it still fails, which is harder to diagnose than a missing value.
+
+**The person is who the agent identifies.** The brief's WHO THE AGENT IS TALKING TO says how the agent
+recognises the person and what it loads before any tool runs. Whatever the scenario turns on (an
+order, a booking, an account) must belong to that person, or the agent finds nothing.
 
 **Take them all from one record.** Fields from two records describe somebody who does not exist, and
 no lookup will find them.

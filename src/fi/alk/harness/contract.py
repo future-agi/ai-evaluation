@@ -73,6 +73,7 @@ _STRING_FIELDS = (
     "modality",
     "call_direction",
     "system_prompt_excerpt",
+    "caller_identity",
     "notes",
 )
 _LIST_FIELDS = (
@@ -629,6 +630,8 @@ class AgentContract(BaseModel):
     data_store: DataStore | None = None
     runtime: Runtime | None = None
     real_use_cases: list[str] = Field(default_factory=list)
+    # How the agent knows who it is talking to, and what it loads from that before any tool runs.
+    caller_identity: str = ""
     # Free-form. The fields above are the fixed core because code consumes them; this is where
     # the reader records whatever else about *this* agent is worth carrying forward — quirks,
     # traps, names that look real but are not — in whatever form fits. It is shown verbatim to
@@ -669,7 +672,7 @@ class AgentContract(BaseModel):
             # what a tool refuses until another has run replays the agent's whole flow to reach it.
             needs = f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
             lines.append(
-                f"  - {tool.name}({signature}){values}{needs} : {tool.description[:140]}"
+                f"  - {tool.name}({signature}){values}{needs} : {tool.description}"
             )
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
@@ -689,6 +692,11 @@ class AgentContract(BaseModel):
                     if self.call_direction == "outbound"
                     else "people dial in to this agent"
                 ),
+            )
+        if self.caller_identity.strip():
+            parts.append(
+                "WHO THE AGENT IS TALKING TO (how it identifies them, and what it loads from that "
+                "before any tool runs):\n" + self.caller_identity.strip()
             )
         if self.system_prompt_excerpt.strip():
             parts.append(

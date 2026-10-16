@@ -457,6 +457,14 @@ def contract_tools(
                     "something the agent's own text says it does, never stretched from a passing "
                     "word or a tool name. Scenarios are written later, from these.",
                 },
+                "caller_identity": {
+                    "type": "string",
+                    "description": "How the agent knows who it is talking to (the number they "
+                    "call from, a login, an account id passed in), and what it loads from that "
+                    "before any tool runs (their account, an order or booking already in flight). "
+                    "Read it from the code that starts a session. Empty only when the agent never "
+                    "identifies the person.",
+                },
                 "notes": {
                     "type": "string",
                     "description": "Free-form, yours. Anything else worth carrying forward: "

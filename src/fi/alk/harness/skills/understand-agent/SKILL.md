@@ -59,18 +59,23 @@ Find, in roughly this order:
 
 4. **What each tool refuses until something else has happened.** Read each tool's body for a
    guard that raises before it does any work, and record the tools that make that guard pass in
-   `requires`. Distinguish two kinds, because they cost very different things:
+   `requires`. Tell these apart, because they cost very different things:
 
    - A guard on state the agent builds **during the conversation** is a real precondition. If a
      tool refuses until a quote has been taken or an option selected, name those tools.
    - A guard on identity the agent establishes **when the call opens** is not. A caller is
      already recognised by the time any tool runs, so a check on that is satisfied for free.
      The same goes for records it loads then from who is calling (an active order or booking
-     found by the caller's number or login): leave `requires` empty, and say in `notes` how the
-     agent identifies the caller and what it finds from that.
-   - A guard that depends on an argument's value (one option refused until something outside the
-     conversation has happened) cannot be said in `requires`. Write it in the tool's description:
-     the value, and what it waits for.
+     found by the caller's number or login): leave `requires` empty, and record how the agent
+     identifies the person and what it loads in `caller_identity`. Recognising someone is not
+     verifying them: a guard on a verification step taken in the conversation is a real
+     precondition, and that step goes in `requires`.
+   - A guard that depends on an argument's value (one option refused until a step in the
+     conversation, or something outside it, has happened) cannot be said in `requires`. Write it
+     in the tool's description: each value, and what it waits for.
+
+   Read a guard's whole condition. One the code skips under a test or harness mode does not hold
+   when the agent is tested, so it is not a precondition.
 
    Leave `requires` empty when a tool can be called first thing. Getting this wrong in the
    cautious direction is not safe: a scenario writer with no precondition data assumes the worst
