@@ -141,3 +141,21 @@ def test_a_bound_service_arms_its_faults_for_this_call_only(tmp_path, monkeypatc
 
     _environ, armed = _drive(tmp_path / "next", monkeypatch)
     assert armed == [[]]
+
+
+def test_a_service_bound_by_probability_is_armed_only_when_its_draw_says():
+    from fi.alk.harness.cast import Binding, Trigger
+    from fi.simulate.simulation.sub_actors import drawn
+
+    bindings = [Binding(id="subactor_service", trigger=Trigger(kind="probability", p=0.5))]
+    seeds = [f"run-{n}" for n in range(40)]
+    armed = [bool(cr._entering_faults(bindings, _CAST, seed)) for seed in seeds]
+    assert armed == [drawn(seed, "subactor_service", 0.5) for seed in seeds]
+    assert any(armed) and not all(armed)
+
+
+def test_the_caller_is_told_what_to_do_when_someone_takes_the_line():
+    environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Partner", "channel": "audio_handoff"}])}
+    assert "say nothing" in cr._with_sub_actors("Book it.", environ)
+    environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Supervisor", "channel": "transfer_leg"}])}
+    assert cr._with_sub_actors("Book it.", environ) == "Book it."

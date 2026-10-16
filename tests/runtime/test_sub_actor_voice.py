@@ -45,7 +45,14 @@ class _Tts:
         return _Stream([SimpleNamespace(frame=f"frame:{text}")])
 
 
-def _voice(kind: str = "mid_journey", turn: int = 2, lines: str = "Hurry up.\nAsk for the extra.\nThird.", max_lines: int = 2):
+def _voice(
+    kind: str = "mid_journey",
+    turn: int = 2,
+    lines: str = "Hurry up.\nAsk for the extra.\nThird.",
+    max_lines: int = 2,
+    channel: str = "audio_mix",
+    **trigger,
+):
     played: list = []
 
     async def play(frames, volume):
@@ -58,14 +65,24 @@ def _voice(kind: str = "mid_journey", turn: int = 2, lines: str = "Hurry up.\nAs
             "name": "Bystander",
             "role": "someone near the caller",
             "behaviour": {"prompt": "impatient", "loudness_db": -20, "max_lines": max_lines},
-            "trigger": {"kind": kind, "turn": turn},
+            "trigger": {"kind": kind, "turn": turn, **trigger},
+            "channel": channel,
+            "inbound": {"collection": "messages", "record": {"body": "a new message"}},
         },
         model=_Model(lines),
         tts=_Tts(),
         play=play,
+        say=lambda frames, text: _said(played, frames, text),
+        tools_called=lambda: ["lookup", "transfer"],
+        write=lambda collection, record: played.append(("wrote", collection, record)),
+        seed="run-1",
         clock=lambda: float(next(ticks)),
     )
     return voice, played
+
+
+async def _said(played, frames, text):
+    played.append(("said", text))
 
 
 def test_it_enters_after_the_agent_turn_its_trigger_names_and_only_once():
@@ -73,13 +90,12 @@ def test_it_enters_after_the_agent_turn_its_trigger_names_and_only_once():
         voice, played = _voice(turn=2)
         voice.start()
         voice.agent_turn_ended(1)
-        await asyncio.sleep(0)
+        await asyncio.gather(*voice._tasks)
         assert played == []
         voice.agent_turn_ended(2)
-        await voice._delivery
         voice.agent_turn_ended(2)
         voice.agent_turn_ended(3)
-        await asyncio.sleep(0)
+        await asyncio.gather(*voice._tasks)
         return voice, played
 
     voice, played = asyncio.run(scenario())
@@ -105,7 +121,7 @@ def test_a_failed_preparation_leaves_it_silent_without_failing_the_call():
         voice.model = Broken()
         voice.start()
         voice.agent_turn_ended(2)
-        await voice._delivery
+        await asyncio.gather(*voice._tasks)
         await voice.close()
         return voice, played
 
@@ -124,3 +140,56 @@ def test_what_it_said_is_placed_in_the_transcript_where_it_was_heard():
     assert merged[1]["name"] == "Bystander" and merged[1]["content"] == "Hurry up."
     assert with_sub_actor_turns(messages, []) == messages
     assert sub_actor_messages([{"kind": "spoke", "text": "", "at": 1}]) == []
+
+
+def _run(voice, *turns):
+    async def scenario():
+        voice.start()
+        for number, text in turns:
+            voice.agent_turn_ended(number, text)
+            await asyncio.gather(*voice._tasks)
+        await voice.close()
+
+    asyncio.run(scenario())
+
+
+def test_someone_who_takes_the_line_speaks_one_line_per_agent_turn_for_its_turns():
+    voice, played = _voice(kind="mid_journey", turn=1, channel="audio_handoff", lines="Let me talk to them.", max_lines=2)
+    _run(voice, (1, "How can I help?"), (2, "Sure."), (3, "Anything else?"))
+    assert played == [("said", "Let me talk to them."), ("said", "Let me talk to them.")]
+    assert [event["kind"] for event in voice.events()] == ["spoke", "spoke"]
+
+
+def test_a_keyword_brings_a_sub_actor_in_only_when_it_is_said():
+    voice, played = _voice(kind="on_keyword", channel="audio_handoff", lines="I can help.", max_lines=1, words=["manager"])
+    _run(voice, (1, "Let me check that."), (2, "I will get my manager."))
+    assert played == [("said", "I can help.")]
+
+
+def test_an_escalation_brings_in_who_answers_the_transfer():
+    voice, played = _voice(kind="on_escalation", channel="transfer_leg", lines="Supervisor here.", max_lines=1, tool="transfer")
+    _run(voice, (1, "Transferring you now."))
+    assert played == [("said", "Supervisor here.")]
+
+    voice, played = _voice(kind="on_escalation", channel="transfer_leg", lines="Supervisor here.", max_lines=1, tool="refund")
+    _run(voice, (1, "Transferring you now."))
+    assert played == []
+
+
+def test_a_probability_trigger_is_drawn_once_from_the_run_seed():
+    from fi.simulate.simulation.sub_actors import drawn
+
+    entered = [drawn(f"run-{n}", "s", 0.5) for n in range(200)]
+    assert 60 < sum(entered) < 140
+    assert drawn("run-7", "s", 0.5) == drawn("run-7", "s", 0.5)
+    voice, _played = _voice(kind="probability", turn=1, p=0.999999)
+    assert voice.due(1)
+    voice, _played = _voice(kind="probability", turn=1, p=0.000001)
+    assert not voice.due(1)
+
+
+def test_an_inbound_message_arrives_in_the_world_when_due():
+    voice, played = _voice(kind="mid_journey", turn=1, channel="inbound_message")
+    _run(voice, (1, "One moment."))
+    assert played == [("wrote", "messages", {"body": "a new message"})]
+    assert voice.events()[0]["kind"] == "arrived"

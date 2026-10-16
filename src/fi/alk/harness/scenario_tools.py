@@ -777,8 +777,11 @@ def _sub_actor_field() -> dict[str, Any]:
             "type": "array",
             "description": "Sub-actors from the world's cast this scenario uses, each with when "
             "it enters: `always` (after the agent's first turn), `mid_journey` with `turn` "
-            "(after the agent's turn N), or `on_tool` with `tool` and `on_call` (the Nth call of "
-            "that tool, for a sub-actor whose faults name it). Leave it out for the person alone.",
+            "(after the agent's turn N), `on_tool` with `tool` and `on_call` (the Nth call of "
+            "that tool), `on_keyword` with `words` (one of them in the last turn), "
+            "`on_escalation` with `tool` (the agent hands over through that tool), or "
+            "`probability` with `p` (it may not enter at all, so a sub-goal about it must name "
+            "it). Leave it out for the person alone.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -786,10 +789,22 @@ def _sub_actor_field() -> dict[str, Any]:
                     "trigger": {
                         "type": "object",
                         "properties": {
-                            "kind": {"type": "string", "enum": ["always", "mid_journey", "on_tool"]},
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "always",
+                                    "mid_journey",
+                                    "on_tool",
+                                    "on_keyword",
+                                    "on_escalation",
+                                    "probability",
+                                ],
+                            },
                             "turn": {"type": "integer"},
                             "tool": {"type": "string"},
                             "on_call": {"type": "integer"},
+                            "words": {"type": "array", "items": {"type": "string"}},
+                            "p": {"type": "number"},
                         },
                     },
                 },
@@ -799,21 +814,33 @@ def _sub_actor_field() -> dict[str, Any]:
     }
 
 
-def _bindings_that_cannot_run(scenario: Scenario, world_root: Path, *, spoken: bool) -> list[str]:
+def _bindings_that_cannot_run(
+    scenario: Scenario, world_root: Path, catalogue: Catalogue, *, spoken: bool
+) -> list[str]:
     """Sub-actor bindings that name no sub-actor in the cast, or say when it enters in a way no run can."""
     if not scenario.sub_actors:
         return []
     if not sub_actors_enabled():
         return ["sub_actors: this environment has no sub-actors, so leave sub_actors empty"]
-    return [
-        "sub_actors: " + problem
-        for problem in binding_problems(
-            scenario.sub_actors,
-            load_cast(world_root),
-            modality="voice" if spoken else "chat",
-            max_turns=scenario.max_turns,
-        )
-    ]
+    problems = binding_problems(
+        scenario.sub_actors,
+        load_cast(world_root),
+        modality="voice" if spoken else "chat",
+        max_turns=scenario.max_turns,
+    )
+    # A sub-actor that may not enter needs every sub-goal about it to stand aside when it did not.
+    about = {
+        goal.sub_actor
+        for goal in (catalogue.named(name) for name in scenario.sub_goals)
+        if goal is not None and goal.sub_actor
+    }
+    problems.extend(
+        f"{binding.id}: by probability it may not enter, so name a sub-goal whose sub_actor is "
+        f"{binding.id}; a sub-goal about something that did not happen cannot be graded"
+        for binding in scenario.sub_actors
+        if binding.trigger.kind == "probability" and binding.id not in about
+    )
+    return ["sub_actors: " + problem for problem in problems]
 
 
 def accept_scenario(
@@ -867,7 +894,7 @@ def accept_scenario(
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-        problems.extend(_bindings_that_cannot_run(scenario, world_root, spoken=spoken))
+        problems.extend(_bindings_that_cannot_run(scenario, world_root, catalogue, spoken=spoken))
     finally:
         trial.close()
 

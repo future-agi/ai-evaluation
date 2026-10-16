@@ -53,6 +53,8 @@ from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
 
 from .background_noise import place_of, scenario_source
+from fi.simulate.simulation.sub_actors import drawn
+
 from .cast import Binding, Cast, bound_faults, bound_voices, load_cast, sub_actors_enabled
 from .bundle_v2 import EvidenceSeam
 from .hosted_scheduler import CallAborted, CallOutcome
@@ -160,6 +162,8 @@ _TOOL_TRACE_TABLE = "_alk_tool_trace"
 _FAULTS_TABLE = "_alk_faults"
 # The speaking sub-actors one call carries, as JSON. Set per call and cleared otherwise.
 SUB_ACTOR_VOICES_ALIAS = "HARNESS_SUB_ACTOR_VOICES"
+# Where the engine reads the live tool trace and writes inbound items. Set per call, never logged.
+SUB_ACTOR_WORLD_ALIAS = "HARNESS_SUB_ACTOR_WORLD"
 
 _RESULT_TRUNCATE_CHARS = 2000
 
@@ -750,6 +754,16 @@ def _arm_faults(dsn: str, rows: list[dict[str, Any]]) -> None:
         logger.warning("sub-actor faults not armed: %s", type(exc).__name__)
 
 
+def _entering_faults(bindings: list[Binding], cast: Cast, seed: str) -> list[dict[str, Any]]:
+    """The faults this call applies: a probability binding is drawn once, from the call's own seed."""
+    skipped = {
+        binding.id
+        for binding in bindings
+        if binding.trigger.kind == "probability" and not drawn(seed, binding.id, binding.trigger.p)
+    }
+    return [row for row in bound_faults(bindings, cast) if row["sub_actor"] not in skipped]
+
+
 def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
     if not sub_actors_enabled():
         return []
@@ -763,19 +777,31 @@ def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
 
 
 def _with_sub_actors(instruction: str, environ: Mapping[str, str]) -> str:
-    """The caller's situation, naming anyone else who will speak near them."""
+    """The caller's situation, saying who else is part of the call and what the caller does then."""
     try:
         voices = json.loads(environ.get(SUB_ACTOR_VOICES_ALIAS) or "[]")
     except ValueError:
         return instruction
-    present = [
-        f"{one['name']} ({one['role']})" if one.get("role") else one["name"]
-        for one in voices
-        if isinstance(one, dict) and one.get("name")
-    ]
-    if not present:
+    lines = []
+    for one in voices:
+        if not isinstance(one, dict) or not one.get("name"):
+            continue
+        who = f"{one['name']} ({one['role']})" if one.get("role") else one["name"]
+        channel = one.get("channel") or "audio_mix"
+        if channel == "audio_mix":
+            lines.append(f"With you, and may speak during the call: {who}.")
+        elif channel == "audio_handoff":
+            lines.append(
+                f"{who} may take the phone from you for a few turns. While they have it, say "
+                "nothing; carry on once they hand it back."
+            )
+        elif channel == "ivr":
+            lines.append(
+                f"{who} answers first. Say nothing until it has put the call through to you."
+            )
+    if not lines:
         return instruction
-    return f"{instruction}\n\nWith you, and may speak during the call: {', '.join(present)}."
+    return instruction + "\n\n" + "\n".join(lines)
 
 
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
@@ -1315,6 +1341,7 @@ class CallRunnerImpl:
         bindings = _sub_actor_bindings(doc)
         cast = load_cast(self._context.bundle_dir) if bindings else Cast()
         voices = bound_voices(bindings, cast)
+        call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
         if voices:
             call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)
         else:
@@ -1434,7 +1461,11 @@ class CallRunnerImpl:
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
                 if sub_actors_enabled():
-                    _arm_faults(endpoint.address, bound_faults(bindings, cast))
+                    _arm_faults(endpoint.address, _entering_faults(bindings, cast, run_id))
+                if voices:
+                    # The engine reads the live trace for on_tool and on_escalation triggers, and
+                    # writes what an inbound_message brings into the world.
+                    call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
 
         started_at = datetime.now(timezone.utc)
         outer_timeout = run_seconds + _OUTER_WAIT_FOR_PAD_SECONDS

@@ -13,7 +13,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_serializer, model_validator
+
+from fi.simulate.simulation.sub_actors import CHANNELS as REGISTRY
+from fi.simulate.simulation.sub_actors import SPEAKING, TRIGGERS
 
 CAST_FILE = "cast.json"
 SWITCH = "HARNESS_SUB_ACTORS"
@@ -24,14 +27,10 @@ def sub_actors_enabled() -> bool:
     return os.environ.get(SWITCH, "").strip().lower() in {"1", "true", "yes", "on"}
 
 # Which agent modalities each channel can reach a sub-actor through.
-CHANNELS: dict[str, set[str]] = {
-    "audio_mix": {"voice"},
-    "tool_response": {"voice", "chat", "browser"},
-}
+CHANNELS: dict[str, set[str]] = {name: set(entry["modalities"]) for name, entry in REGISTRY.items()}
 
 KINDS = ("behavioral", "system", "hybrid")
 ORIGINS = ("derived", "user-added")
-TRIGGERS = ("always", "mid_journey", "on_tool")
 FAULTS = ("timeout", "error", "rate_limit", "malformed", "latency", "content")
 
 
@@ -41,9 +40,19 @@ class Trigger(BaseModel):
     kind: str = "always"
     # mid_journey: after the agent's Nth turn.
     turn: int = 0
-    # on_tool: the Nth call of this tool.
+    # on_tool: the Nth call of this tool. on_escalation: the agent's transfer or escalation tool.
     tool: str = ""
     on_call: int = 1
+    # on_keyword: any of these words in the last turn.
+    words: list[str] = Field(default_factory=list)
+    # probability: the chance it enters at all, drawn once per run from the run's seed.
+    p: float = 0.0
+
+    @model_serializer(mode="wrap")
+    def _only_what_it_uses(self, handler: Any) -> dict[str, Any]:
+        body = handler(self)
+        unused = {"turn": 0, "tool": "", "on_call": 1, "words": [], "p": 0.0}
+        return {key: value for key, value in body.items() if key == "kind" or unused.get(key, object()) != value}
 
 
 class Behaviour(BaseModel):
@@ -75,6 +84,8 @@ class SubActor(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     behaviour: Behaviour | None = None
     faults: list[FaultProfile] = Field(default_factory=list)
+    # inbound_message: what arrives in the world mid-task, {"collection": ..., "record": {...}}.
+    inbound: dict[str, Any] = Field(default_factory=dict)
 
 
 class PrimaryActor(BaseModel):
@@ -145,6 +156,11 @@ def sub_actor_problems(
             f"a {modality} agent cannot be reached through {actor.channel}; it reaches "
             + ", ".join(sorted(m for m in CHANNELS[actor.channel]))
         )
+    elif not REGISTRY[actor.channel]["delivered"]:
+        problems.append(
+            f"no run in this environment can deliver {actor.channel} yet: it needs the runner "
+            "for that kind of agent"
+        )
     if actor.kind not in KINDS:
         problems.append(f"kind {actor.kind!r} is not one of {list(KINDS)}")
     if actor.origin not in ORIGINS:
@@ -157,8 +173,12 @@ def sub_actor_problems(
         problems.append(f"a {actor.kind} sub-actor needs a behaviour with a prompt")
     if fails and not actor.faults:
         problems.append(f"a {actor.kind} sub-actor needs at least one fault")
-    if actor.channel == "audio_mix" and not speaks:
-        problems.append("audio_mix carries a voice, so the sub-actor must have a behaviour")
+    if actor.channel in SPEAKING and actor.channel != "inbound_message" and not speaks:
+        problems.append(f"{actor.channel} carries what the sub-actor says, so it must have a behaviour")
+    if actor.channel == "inbound_message" and not (
+        str(actor.inbound.get("collection") or "").strip() and isinstance(actor.inbound.get("record"), dict)
+    ):
+        problems.append("inbound_message needs inbound.collection and the inbound.record that arrives")
     if actor.channel == "tool_response" and not fails:
         problems.append("tool_response carries faults, so the sub-actor must have them")
     unknown = sorted({*actor.depends_on, *(f.tool for f in actor.faults)} - tools)
@@ -187,6 +207,7 @@ def binding_problems(
     *,
     modality: str,
     max_turns: int,
+    tools: set[str] | None = None,
 ) -> list[str]:
     """Why a scenario's bindings cannot run, or nothing."""
     problems = []
@@ -209,14 +230,24 @@ def binding_problems(
             problems.append(
                 f"{binding.id}: mid_journey turn {trigger.turn} is outside 1..{max_turns}"
             )
-        if trigger.kind == "on_tool":
-            profiled = {fault.tool for fault in actor.faults}
-            if trigger.tool not in profiled:
+        if trigger.kind in ("on_tool", "on_escalation"):
+            known_tools = {fault.tool for fault in actor.faults} if actor.faults else set(tools or ())
+            if trigger.tool not in known_tools and (actor.faults or tools is not None):
                 problems.append(
-                    f"{binding.id}: on_tool names {trigger.tool!r}, which it has no fault for"
+                    f"{binding.id}: {trigger.kind} names {trigger.tool!r}, which "
+                    + ("it has no fault for" if actor.faults else "is not one of the agent's tools")
                 )
-        if actor.channel == "audio_mix" and modality and modality != "voice":
-            problems.append(f"{binding.id} speaks over audio, which a {modality} scenario has none of")
+        if trigger.kind == "on_keyword" and not [one for one in trigger.words if one.strip()]:
+            problems.append(f"{binding.id}: on_keyword needs the words that bring it in")
+        if trigger.kind == "probability" and not 0 < trigger.p < 1:
+            problems.append(f"{binding.id}: probability needs p between 0 and 1")
+        if actor.channel == "tool_response" and trigger.kind not in ("always", "on_tool", "probability"):
+            problems.append(
+                f"{binding.id}: a failing service is set up before the call, so it enters always, "
+                "on_tool or by probability"
+            )
+        if modality and actor.channel in CHANNELS and modality not in CHANNELS[actor.channel]:
+            problems.append(f"{binding.id} arrives through {actor.channel}, which a {modality} scenario cannot carry")
     return problems
 
 
@@ -244,20 +275,27 @@ def bound_faults(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
     return rows
 
 
-def bound_voices(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
-    """The speaking sub-actors a call must carry, with when each enters."""
-    voices = []
+def bound_participants(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
+    """The sub-actors that enter a conversation, with their channel and when each enters."""
+    entering = []
     for binding in bindings:
         actor = cast.get(binding.id)
-        if actor is None or actor.channel != "audio_mix" or actor.behaviour is None:
+        if actor is None or actor.channel not in SPEAKING:
             continue
-        voices.append(
+        entering.append(
             {
                 "id": actor.id,
                 "name": actor.name,
                 "role": actor.role,
-                "behaviour": actor.behaviour.model_dump(),
+                "channel": actor.channel,
+                "behaviour": actor.behaviour.model_dump() if actor.behaviour else {},
+                "inbound": dict(actor.inbound),
                 "trigger": binding.trigger.model_dump(),
             }
         )
-    return voices
+    return entering
+
+
+def bound_voices(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
+    """The entering sub-actors a voice call carries."""
+    return [one for one in bound_participants(bindings, cast) if "voice" in CHANNELS[one["channel"]]]

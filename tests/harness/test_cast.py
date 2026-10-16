@@ -275,7 +275,7 @@ def test_a_scenario_binds_only_what_the_cast_holds(tmp_path, monkeypatch):
     )
     assert not said.get("is_error"), said
     written = json.loads((root / "scenarios" / "adds-a-big-mac" / "scenario.json").read_text())
-    assert written["sub_actors"] == [{"id": "subactor_bystander", "trigger": {"kind": "mid_journey", "turn": 2, "tool": "", "on_call": 1}}]
+    assert written["sub_actors"] == [{"id": "subactor_bystander", "trigger": {"kind": "mid_journey", "turn": 2}}]
 
 
 def test_with_the_switch_off_a_binding_is_refused_and_nothing_changes(tmp_path, monkeypatch):
@@ -324,3 +324,54 @@ def test_the_builder_keeps_the_cast_from_chat_and_asks_before_changing_it(tmp_pa
     said = asyncio.run(tools["add_sub_actor"].handler(_service().model_dump()))
     assert not said.get("is_error"), said
     assert load_cast(root).sub_actors[0].id == "subactor_service"
+
+
+def test_every_trigger_kind_is_checked_before_a_run():
+    cast = Cast(sub_actors=[_voice(), _service()])
+
+    def problems(binding):
+        return binding_problems([binding], cast, modality="voice", max_turns=10, tools={"add", "lst", "transfer"})
+
+    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_keyword", words=["manager"])))
+    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_keyword")))
+    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_escalation", tool="transfer")))
+    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="on_escalation", tool="refund")))
+    assert not problems(Binding(id="subactor_bystander", trigger=Trigger(kind="probability", p=0.4)))
+    assert problems(Binding(id="subactor_bystander", trigger=Trigger(kind="probability", p=1.0)))
+    assert problems(Binding(id="subactor_service", trigger=Trigger(kind="on_keyword", words=["x"])))
+
+
+def test_a_channel_is_refused_where_no_run_can_carry_it():
+    speaker = _voice().model_copy(update={"channel": "thread_message"})
+    assert not sub_actor_problems(speaker, modality="chat", tools=set(), faults_reach=False)
+    assert sub_actor_problems(speaker, modality="voice", tools=set(), faults_reach=False)
+    page = _voice().model_copy(update={"channel": "page_content"})
+    assert any("no run" in one for one in sub_actor_problems(page, modality="browser", tools=set(), faults_reach=False))
+    arrives = SubActor(id="s", name="Inbox", kind="behavioral", channel="inbound_message", behaviour=Behaviour(prompt="x"))
+    assert sub_actor_problems(arrives, modality="chat", tools=set(), faults_reach=False)
+    arrives = arrives.model_copy(update={"inbound": {"collection": "messages", "record": {"body": "hi"}}})
+    assert not sub_actor_problems(arrives, modality="chat", tools=set(), faults_reach=False)
+
+
+def test_a_sub_actor_that_may_not_enter_needs_a_sub_goal_about_it(tmp_path, monkeypatch):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    root, _contract, catalogue = _environment(tmp_path)
+    save_cast(root, Cast(sub_actors=[_voice()]))
+    bound = [{"id": "subactor_bystander", "trigger": {"kind": "probability", "p": 0.5}}]
+    refused = accept_scenario(_scenario(sub_actors=bound), world_root=root, catalogue=catalogue, kept=[])
+    assert refused["is_error"] and "may not enter" in refused["content"][0]["text"]
+
+    catalogue.sub_goals.append(
+        SubGoal(name="ignored-bystander", what="w", judged="Applies when: x\nPass when: y\nFail when: z\nIf it does not arise: Pass", sub_actor="subactor_bystander")
+    )
+    save_catalogue(catalogue, root)
+    said = accept_scenario(
+        _scenario(sub_actors=bound, sub_goals=["item-added", "right-item", "ignored-bystander"]),
+        world_root=root,
+        catalogue=catalogue,
+        kept=[],
+    )
+    assert "may not enter" not in str(said)

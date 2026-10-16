@@ -1,4 +1,5 @@
-"""A second person heard on the caller's side of a call, entering when its scenario says."""
+"""Sub-actors on a voice call: a voice near the caller, someone who takes the line, a menu that answers
+first, a supervisor on a transfer, or something arriving in the world mid-call."""
 
 from __future__ import annotations
 
@@ -7,19 +8,42 @@ import logging
 import time
 from typing import Any
 
+from fi.simulate.simulation.sub_actors import Moment, due
+
 logger = logging.getLogger(__name__)
 
-_LINES_INSTRUCTIONS = (
+# Channels whose lines are heard as the call's main speaker rather than mixed under it.
+FOREGROUND = frozenset({"audio_handoff", "transfer_leg", "ivr"})
+_NEEDS_TOOLS = frozenset({"on_tool", "on_escalation"})
+
+_BACKGROUND = (
     "You are {name}{role}, near someone who is on a phone call with an automated agent. You are not on "
     "the call yourself; the agent may still hear you. Who you are and what you want: {prompt}\n\n"
     "Write at most {count} short things you would say out loud during that call, one per line, each "
     "under 15 words, in your own voice. Never claim to be the caller and never address the agent by a "
     "name. Output only the lines."
 )
+_FOREGROUND = {
+    "audio_handoff": "You are {name}{role}. You have just taken the phone from the person who was "
+    "talking to an automated agent. Who you are and what you want: {prompt}",
+    "transfer_leg": "You are {name}{role}, and a call has just been transferred to you by an automated "
+    "agent. Who you are and what you know: {prompt}",
+    "ivr": "You are {name}{role}, the automated phone menu that answers this line before a person does. "
+    "What the menu offers and how it routes: {prompt}",
+}
+_NEXT_LINE = (
+    "\n\nThe agent's last words: {said}\n\nSay your next line out loud, under 30 words, in your own "
+    "voice. Output only the line."
+)
+
+
+def _who(actor: dict[str, Any]) -> dict[str, str]:
+    role = actor.get("role")
+    return {"name": actor.get("name") or "someone", "role": f", {role}" if role else ""}
 
 
 class SubActorVoice:
-    """One bound sub-actor that speaks: its lines are written and voiced before it is needed."""
+    """One bound sub-actor on a call: decides when it is due, then enters on its channel."""
 
     def __init__(
         self,
@@ -28,59 +52,75 @@ class SubActorVoice:
         model: Any,
         tts: Any,
         play: Any,
+        say: Any = None,
+        tools_called: Any = None,
+        write: Any = None,
+        seed: str = "",
         clock: Any = time.time,
     ):
         self.actor = actor
         self.model = model
         self.tts = tts
-        # Plays a list of frames at a volume and returns when they have been heard.
+        # Plays frames under the caller at a volume, returning when they have been heard.
         self.play = play
+        # Speaks frames as the call's main speaker, returning when they have been heard.
+        self.say = say
+        # The names of the tools the agent has called so far, read from the run's live trace.
+        self.tools_called = tools_called
+        # Adds a record to the world: (collection, record).
+        self.write = write
+        self.seed = seed
         self.clock = clock
+        self.channel = str(actor.get("channel") or "audio_mix")
         behaviour = actor.get("behaviour") or {}
         self.max_lines = max(1, int(behaviour.get("max_lines") or 1))
         self.volume = 10 ** (float(behaviour.get("loudness_db", -12.0)) / 20)
-        trigger = actor.get("trigger") or {}
-        self.kind = str(trigger.get("kind") or "always")
-        self.turn = int(trigger.get("turn") or 0)
+        self.trigger = dict(actor.get("trigger") or {"kind": "always"})
         self._lines: list[tuple[str, list[Any]]] = []
         self._preparation: asyncio.Task[None] | None = None
-        self._delivery: asyncio.Task[None] | None = None
+        self._tasks: list[asyncio.Task[None]] = []
         self._delivered = False
+        self._turns_left = 0
         self._events: list[dict[str, Any]] = []
 
+    # Kept for the background voice, whose lines do not depend on the conversation.
+    @property
+    def kind(self) -> str:
+        return str(self.trigger.get("kind") or "always")
+
     def start(self) -> None:
-        self._preparation = asyncio.create_task(self.prepare())
+        if self.channel == "audio_mix":
+            self._preparation = asyncio.create_task(self.prepare())
+
+    async def _write_lines(self, prompt: str) -> list[str]:
+        from livekit.agents import llm as livekit_llm
+
+        context = livekit_llm.ChatContext.empty()
+        context.add_message(role="user", content=prompt)
+        parts: list[str] = []
+        async with self.model.chat(chat_ctx=context, tools=[], tool_choice="none") as stream:
+            async for chunk in stream:
+                content = getattr(getattr(chunk, "delta", None), "content", None)
+                if isinstance(content, str):
+                    parts.append(content)
+        return [
+            line.strip().strip('"“”-* ')
+            for line in "".join(parts).splitlines()
+            if line.strip()
+        ]
+
+    async def _voiced(self, line: str) -> list[Any]:
+        async with self.tts.synthesize(line) as stream:
+            return [item.frame async for item in stream]
 
     async def prepare(self) -> None:
         behaviour = self.actor.get("behaviour") or {}
-        role = self.actor.get("role")
         try:
-            from livekit.agents import llm as livekit_llm
-
-            context = livekit_llm.ChatContext.empty()
-            context.add_message(
-                role="user",
-                content=_LINES_INSTRUCTIONS.format(
-                    name=self.actor.get("name") or "someone",
-                    role=f", {role}" if role else "",
-                    prompt=behaviour.get("prompt") or "",
-                    count=self.max_lines,
-                ),
+            lines = await self._write_lines(
+                _BACKGROUND.format(**_who(self.actor), prompt=behaviour.get("prompt") or "", count=self.max_lines)
             )
-            parts: list[str] = []
-            async with self.model.chat(chat_ctx=context, tools=[], tool_choice="none") as stream:
-                async for chunk in stream:
-                    content = getattr(getattr(chunk, "delta", None), "content", None)
-                    if isinstance(content, str):
-                        parts.append(content)
-            lines = [
-                line.strip().strip('"“”-* ')
-                for line in "".join(parts).splitlines()
-                if line.strip()
-            ][: self.max_lines]
-            for line in lines:
-                async with self.tts.synthesize(line) as stream:
-                    frames = [item.frame async for item in stream]
+            for line in lines[: self.max_lines]:
+                frames = await self._voiced(line)
                 if frames:
                     self._lines.append((line, frames))
         except asyncio.CancelledError:
@@ -88,22 +128,44 @@ class SubActorVoice:
         except Exception as exc:  # A quiet sub-actor is a weaker test, never a failed call.
             logger.warning("sub-actor %s not prepared: %s", self.actor.get("id"), type(exc).__name__)
 
-    def due(self, agent_turns: int) -> bool:
-        """Whether the agent has now finished the turn this sub-actor enters after."""
+    def due(self, agent_turns: int, last_text: str = "", tools_called: list[str] | None = None) -> bool:
+        """Whether the agent has now reached the moment this sub-actor enters at."""
         if self._delivered:
             return False
-        if self.kind == "always":
-            return agent_turns >= 1
-        if self.kind == "mid_journey":
-            return agent_turns == self.turn
-        return False
+        moment = Moment(agent_turns=agent_turns, last_text=last_text, tools_called=list(tools_called or []))
+        return due(self.trigger, moment, seed=self.seed, sub_actor_id=str(self.actor.get("id") or ""))
 
-    def agent_turn_ended(self, agent_turns: int) -> None:
-        if self.due(agent_turns):
+    def agent_turn_ended(self, agent_turns: int, last_text: str = "") -> None:
+        self._tasks.append(asyncio.create_task(self._consider(agent_turns, last_text)))
+
+    async def _consider(self, agent_turns: int, last_text: str) -> None:
+        try:
+            if self._turns_left > 0:
+                self._turns_left -= 1
+                await self._speak_next(last_text)
+                return
+            tools: list[str] = []
+            if self.kind in _NEEDS_TOOLS and self.tools_called is not None:
+                tools = list(await asyncio.to_thread(self.tools_called))
+            if not self.due(agent_turns, last_text, tools):
+                return
             self._delivered = True
-            self._delivery = asyncio.create_task(self.deliver())
+            await self.deliver(last_text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("sub-actor %s not delivered: %s", self.actor.get("id"), type(exc).__name__)
 
-    async def deliver(self) -> None:
+    async def deliver(self, last_text: str = "") -> None:
+        if self.channel == "inbound_message":
+            await self._arrive()
+        elif self.channel in FOREGROUND:
+            self._turns_left = self.max_lines - 1
+            await self._speak_next(last_text)
+        else:
+            await self._play_prepared()
+
+    async def _play_prepared(self) -> None:
         if self._preparation is not None:
             await asyncio.gather(self._preparation, return_exceptions=True)
         for text, frames in self._lines:
@@ -113,28 +175,55 @@ class SubActorVoice:
             except Exception as exc:
                 logger.warning("sub-actor line not played: %s", type(exc).__name__)
                 continue
-            self._events.append(
-                {
-                    "sub_actor": self.actor.get("id"),
-                    "name": self.actor.get("name"),
-                    "kind": "spoke",
-                    "text": text,
-                    "at": started,
-                    "ended_at": self.clock(),
-                }
-            )
+            self._record("spoke", text, started)
+
+    async def _speak_next(self, last_text: str) -> None:
+        if self.say is None:
+            return
+        behaviour = self.actor.get("behaviour") or {}
+        opening = _FOREGROUND[self.channel].format(**_who(self.actor), prompt=behaviour.get("prompt") or "")
+        heard = " | ".join(event["text"] for event in self._events[-3:])
+        prompt = opening + (f"\n\nWhat you have said so far: {heard}" if heard else "")
+        lines = await self._write_lines(prompt + _NEXT_LINE.format(said=last_text or "(nothing yet)"))
+        if not lines:
+            return
+        frames = await self._voiced(lines[0])
+        if not frames:
+            return
+        started = self.clock()
+        await self.say(frames, lines[0])
+        self._record("spoke", lines[0], started)
+
+    async def _arrive(self) -> None:
+        inbound = self.actor.get("inbound") or {}
+        if self.write is None or not inbound.get("collection"):
+            return
+        await asyncio.to_thread(self.write, str(inbound["collection"]), dict(inbound.get("record") or {}))
+        self._record("arrived", "", self.clock(), record=inbound.get("record"))
+
+    def _record(self, kind: str, text: str, started: float, **extra: Any) -> None:
+        self._events.append(
+            {
+                "sub_actor": self.actor.get("id"),
+                "name": self.actor.get("name"),
+                "channel": self.channel,
+                "kind": kind,
+                "text": text,
+                "at": started,
+                "ended_at": self.clock(),
+                **extra,
+            }
+        )
 
     def events(self) -> list[dict[str, Any]]:
         return list(self._events)
 
     async def close(self) -> None:
-        for task in (self._preparation, self._delivery):
-            if task is not None and not task.done():
+        pending = [task for task in (self._preparation, *self._tasks) if task is not None]
+        for task in pending:
+            if not task.done():
                 task.cancel()
-        await asyncio.gather(
-            *(task for task in (self._preparation, self._delivery) if task is not None),
-            return_exceptions=True,
-        )
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def sub_actor_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -174,3 +263,33 @@ def with_sub_actor_turns(
         index = next((i for i, one in enumerate(ordered) if when(one) > at), len(ordered))
         ordered.insert(index, line)
     return ordered
+
+
+def world_access(dsn: str) -> tuple[Any, Any]:
+    """Read the run's live tool trace and add records to its world, both through the world's database."""
+    if not dsn:
+        return None, None
+
+    def tools_called() -> list[str]:
+        import psycopg
+
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
+            return [row[0] for row in connection.execute("SELECT name FROM _alk_tool_trace ORDER BY at")]
+
+    def write(collection: str, record: dict[str, Any]) -> None:
+        import json
+
+        import psycopg
+        from psycopg import sql
+
+        columns = list(record)
+        statement = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(collection),
+            sql.SQL(", ").join(map(sql.Identifier, columns)),
+            sql.SQL(", ").join(sql.Placeholder() * len(columns)),
+        )
+        values = [json.dumps(value) if isinstance(value, (dict, list)) else value for value in record.values()]
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
+            connection.execute(statement, values)
+
+    return tools_called, write

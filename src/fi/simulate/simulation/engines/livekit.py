@@ -64,7 +64,7 @@ from .caller_barge_in import (
     selected_call_indices,
 )
 from .opening import PromptOpeningGate
-from .sub_actor_voice import SubActorVoice, with_sub_actor_turns
+from .sub_actor_voice import FOREGROUND, SubActorVoice, with_sub_actor_turns, world_access
 from fi.simulate.agent.definition import (
     AgentDefinition,
     LiveKitSimulatorRuntime,
@@ -2349,7 +2349,7 @@ class LiveKitEngine(BaseEngine):
 
                 session.on("agent_state_changed", on_simulator_state_changed)
 
-            sub_actor_voices = self._sub_actor_voices(customer_agent, models)
+            sub_actor_voices = self._sub_actor_voices(customer_agent, models, session, seed=run_id)
 
             # "Agent speaks first" is a four-second race for speech ONSET, not four seconds of
             # silence after the target finishes. Register before dispatch/readiness so even an
@@ -2376,7 +2376,9 @@ class LiveKitEngine(BaseEngine):
                     nonlocal agent_turns_ended
                     agent_turns_ended += 1
                     for voice in sub_actor_voices:
-                        voice.agent_turn_ended(agent_turns_ended)
+                        voice.agent_turn_ended(
+                            agent_turns_ended, target_stt_finals[-1] if target_stt_finals else ""
+                        )
                     if caller_barge_in is not None and not target_transcription_mode:
                         caller_barge_in.target_ended()
                     if prompt_opening is not None:
@@ -3382,15 +3384,31 @@ class LiveKitEngine(BaseEngine):
         )
         return outcome
 
-    def _sub_actor_voices(self, customer_agent: Any, models: Any) -> list[SubActorVoice]:
-        """One voice per bound sub-actor, written and synthesised off the call's critical path."""
+    def _sub_actor_voices(
+        self, customer_agent: Any, models: Any, session: Any, *, seed: str
+    ) -> list[SubActorVoice]:
+        """One per bound sub-actor, written and synthesised off the call's critical path."""
         bound = _bound_sub_actor_voices()
         player = getattr(customer_agent, "_background_player", None)
-        if not bound or player is None:
+        if not bound:
             return []
+        tools_called, write = world_access(os.environ.get("HARNESS_SUB_ACTOR_WORLD", ""))
+
+        async def say(frames: list[Any], text: str) -> None:
+            async def stream() -> Any:
+                for frame in frames:
+                    yield frame
+
+            handle = session.say(text, audio=stream(), allow_interruptions=False, add_to_chat_ctx=False)
+            waiter = getattr(handle, "wait_for_playout", None)
+            if callable(waiter):
+                await waiter()
         base = (getattr(self, "_last_simulator_setup", None) or {}).get("tts_config")
 
         async def play(frames: list[Any], volume: float) -> None:
+            if player is None:
+                return
+
             async def stream() -> Any:
                 for frame in frames:
                     yield frame
@@ -3416,7 +3434,16 @@ class LiveKitEngine(BaseEngine):
                     )
                 except Exception:
                     logger.warning("sub-actor voice %r unavailable; using the caller's", wanted)
-            voice = SubActorVoice(actor=actor, model=models.llm, tts=tts, play=play)
+            voice = SubActorVoice(
+                actor=actor,
+                model=models.llm,
+                tts=tts,
+                play=play,
+                say=say if actor.get("channel") in FOREGROUND else None,
+                tools_called=tools_called,
+                write=write,
+                seed=seed,
+            )
             voice.start()
             voices.append(voice)
         return voices
