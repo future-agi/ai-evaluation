@@ -4155,6 +4155,29 @@ def _call_files(work_directory: Path) -> dict[str, tuple[str, int]]:
     }
 
 
+def test_a_previous_calls_file_never_survives_into_the_next_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "simulation_call_execution_id"
+
+    for call_id in (None, "", "call-2"):
+        path.write_text("call-1", encoding="utf-8")
+        if call_id == "call-2":
+            monkeypatch.setattr(
+                hs.os,
+                "replace",
+                lambda *_: (_ for _ in ()).throw(OSError("disk full")),
+            )
+        assert hs._write_call_file(path, call_id) is None
+        assert not path.exists(), call_id
+    monkeypatch.undo()
+
+    path.write_text("call-1", encoding="utf-8")
+    assert hs._write_call_file(path, "call-2") == path
+    assert path.read_text(encoding="utf-8") == "call-2"
+    assert path.stat().st_mode & 0o777 == 0o444
+
+
 class _FirstCreateFails:
     def __init__(self) -> None:
         self.failed = False

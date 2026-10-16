@@ -1475,6 +1475,7 @@ def _skipped_receipt(scenario: Scenario) -> ResultReceipt:
 
 
 def _write_call_file(path: Path, call_execution_id: str | None) -> Path | None:
+    _remove_call_file(path)
     if not call_execution_id:
         return None
     staged = path.with_name(f".{path.name}.tmp")
