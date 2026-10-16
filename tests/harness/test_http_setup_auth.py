@@ -8,7 +8,10 @@ import pytest
 
 from fi.alk.harness.chat_readiness import probe_chat_ingress
 from fi.alk.harness.chat_transport import create_chat_wrapper
-from fi.alk.harness.contract import RuntimeInterface
+from fi.alk.harness.contract import AgentContract, Runtime, RuntimeInterface
+from fi.alk.harness.runtime_repair import (
+    RuntimePlanPatch, _contract_hash, validate_runtime_plan_patch,
+)
 from fi.simulate.agent.wrapper import AgentInput
 
 
@@ -125,6 +128,97 @@ def auth_app():
     server.shutdown()
     thread.join()
     server.server_close()
+
+
+@pytest.fixture
+def local_setup_auth_patch(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'import os\nsecret = os.environ["LOCAL_SERVER_KEY"]\n'
+        'def authenticated(headers):\n    return headers.get("Authorization") == "Bearer " + secret\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", protocol="json_template", port=8080, path="/chat",
+            local_auth={"server_environment": "LOCAL_SERVER_KEY", "template_variable": "local_auth"},
+            headers_template={
+                "Authorization": "Bearer {{local_auth}}", "X-Setup-Result": "{{configured}}",
+            },
+            setup_requests=[
+                {"path": "/configure", "body_template": {"user": "user"},
+                 "headers_template": {"X-Preserve": "existing"}, "capture": {"configured": "content"}},
+                {"path": "/configure", "body_template": {"user": "user"}},
+            ],
+            request_template={"user": "user", "text": "{{new_message_content}}"},
+            response_path="content",
+        ),
+    ))
+    runtime = contract.runtime.model_copy(deep=True)
+    for step in runtime.interface.setup_requests:
+        step.headers_template["Authorization"] = "Bearer {{local_auth}}"
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("app.py",), diagnostic_codes=("credential_missing",),
+        summary="Bind existing local authentication to the source-required setup headers.",
+    )
+    return contract, patch
+
+
+def test_existing_local_auth_repair_authenticates_setup_before_captured_chat_headers(
+    tmp_path, auth_app, local_setup_auth_patch,
+):
+    url, state = auth_app
+    contract, patch = local_setup_auth_patch
+    auth_values = {"LOCAL_SERVER_KEY": "token-user"}
+    original = create_chat_wrapper(contract.runtime.interface, url, local_auth_values=auth_values)
+    failed = asyncio.run(original.call(AgentInput(thread_id="user", messages=[])))
+    assert failed.metadata["external_agent"]["success"] is False
+    assert [path for path, _, _ in state["calls"]] == ["/configure"]
+    assert "Authorization" not in state["calls"][0][2]
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"credential_missing"},
+    )
+    wrapper = create_chat_wrapper(repaired.runtime.interface, url, local_auth_values=auth_values)
+    response = asyncio.run(wrapper.call(AgentInput(thread_id="user", messages=[])))
+    assert response.content == "hello user"
+    assert [path for path, _, _ in state["calls"]] == ["/configure", "/configure", "/configure", "/chat"]
+    for _, _, headers in state["calls"][1:]:
+        assert headers["Authorization"] == "Bearer token-user"
+    assert all("X-Setup-Result" not in headers for _, _, headers in state["calls"][:-1])
+    assert state["calls"][-1][2]["X-Setup-Result"] == "hello user"
+
+
+@pytest.mark.parametrize("change", [
+    "body", "path", "remove_header", "replace_header", "unbound_token",
+    "auth_identity", "global_headers", "config", "no_evidence",
+])
+def test_existing_local_auth_setup_repair_rejects_other_changes(
+    tmp_path, local_setup_auth_patch, change,
+):
+    contract, patch = local_setup_auth_patch
+    step = patch.runtime.interface.setup_requests[0]
+    if change == "body":
+        step.body_template = {"user": "different"}
+    elif change == "path":
+        step.path = "/different"
+    elif change == "remove_header":
+        del step.headers_template["X-Preserve"]
+    elif change == "replace_header":
+        step.headers_template["X-Preserve"] = "{{local_auth}}"
+    elif change == "unbound_token":
+        step.headers_template["Authorization"] = "literal-token"
+    elif change == "auth_identity":
+        patch.runtime.interface.local_auth.server_environment = "OTHER_KEY"
+    elif change == "global_headers":
+        patch.runtime.interface.headers_template["X-New"] = "{{local_auth}}"
+    elif change == "config":
+        patch.runtime.command = ["python", "other.py"]
+    else:
+        patch = patch.model_copy(update={"evidence_paths": ()})
+    with pytest.raises(ValueError, match="runtime_repair_"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"credential_missing"},
+        )
 
 
 def interface(mode):

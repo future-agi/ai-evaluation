@@ -323,7 +323,12 @@ class RuntimeHttpSetupRequest(BaseModel):
     path: str
     body_template: Any = Field(default_factory=dict)
     encoding: Literal["json", "form"] = "json"
-    headers_template: dict[str, str] = Field(default_factory=dict)
+    headers_template: dict[str, str] = Field(
+        default_factory=dict,
+        description="Headers for this setup request only. Chat headers_template is not applied "
+        "during setup. If this route requires local_auth, bind its template_variable here too. "
+        "Earlier setup captures are available; later captures are not.",
+    )
     capture_headers: dict[str, str] = Field(default_factory=dict)
     accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
     failure_rule: RuntimeHttpFailureRule | None = None
@@ -449,7 +454,12 @@ class RuntimeInterface(BaseModel):
         "list-index segments selecting assistant text. Negative indexes are supported, "
         "e.g. output.-1.content.0.text. Bracket indexing and JSONPath expressions are not supported.",
     )
-    headers_template: dict[str, str] = Field(default_factory=dict)
+    headers_template: dict[str, str] = Field(
+        default_factory=dict,
+        description="Chat headers rendered after setup completes, using setup captures or local "
+        "auth. These are not inherited by setup_requests; declare required auth headers on each "
+        "protected setup request. Session cookies are preserved in an isolated cookie jar.",
+    )
     completed_tool_events: CompletedToolEvents | None = None
     completed_tools: CompletedToolRows | None = None
     local_auth: LocalHttpAuth | None = Field(
