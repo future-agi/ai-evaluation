@@ -785,6 +785,9 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 
 def sent(exporter):
     return {name.lower(): value for name, value in dict(exporter._headers).items()}
+
+def sent_exact(exporter):
+    return dict(exporter._headers)
 """
 
 
@@ -866,22 +869,16 @@ print(json.dumps({
 
 
 @pytest.mark.parametrize(
-    ("before", "expected"),
+    "before",
     [
-        (
-            {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-team=a,X-Api-Key=c"},
-            "x-team=a,x-api-key=ingest-key,x-secret-key=ingest-secret",
-        ),
-        (
-            {"OTEL_EXPORTER_OTLP_HEADERS": "x-team=b,x-secret-key=c"},
-            "x-team=b,x-api-key=ingest-key,x-secret-key=ingest-secret",
-        ),
-        ({}, "x-api-key=ingest-key,x-secret-key=ingest-secret"),
+        {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-team=a,X-Api-Key=c"},
+        {"OTEL_EXPORTER_OTLP_HEADERS": "x-team=b,x-secret-key=c"},
+        {},
     ],
     ids=["traces_value", "generic_value_only", "neither"],
 )
-def test_traces_headers_variable_is_merged_not_overridden(
-    tmp_path: Path, before: dict[str, str], expected: str
+def test_the_headers_variables_are_never_written(
+    tmp_path: Path, before: dict[str, str]
 ) -> None:
     script = """
 print(json.dumps({
@@ -891,8 +888,71 @@ print(json.dumps({
 """
     reported = _reported(_export_run(tmp_path, script, before))
 
-    assert reported["traces"] == expected
+    assert reported["traces"] == before.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
     assert reported["generic"] == before.get("OTEL_EXPORTER_OTLP_HEADERS")
+
+
+def test_an_exporter_built_without_headers_for_another_vendor_gets_no_ingest_key(
+    tmp_path: Path,
+) -> None:
+    script = """
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = "x-team=a"
+print(json.dumps({
+    "http": sent(Http(endpoint="http://elsewhere.test:4318/v1/traces")),
+    "grpc": sent(Grpc(endpoint="elsewhere.test:4317", insecure=True)),
+    "traces": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    assert reported["http"] == {"x-team": "a"}
+    assert reported["grpc"] == {"x-team": "a"}
+    assert reported["traces"] is None
+
+
+def test_grpc_gets_lower_case_names_and_http_keeps_the_names_it_was_given(
+    tmp_path: Path,
+) -> None:
+    script = """
+endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+print(json.dumps({
+    "grpc": sent_exact(Grpc(endpoint="collector.test:4318", insecure=True)),
+    "http": sent_exact(Http(endpoint=endpoint, headers={"X-Team": "a"})),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    assert set(reported["grpc"]) == set(OUR_AUTH)
+    assert reported["http"] == {"X-Team": "a", **OUR_AUTH}
+
+
+def test_an_exporter_built_with_no_endpoint_argument_reads_the_environment(
+    tmp_path: Path,
+) -> None:
+    script = """
+print(json.dumps({"http": sent(Http()), "grpc": sent(Grpc(insecure=True))}))
+"""
+    extra = {
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://collector.test:4318/v1/traces"
+    }
+    reported = _reported(_export_run(tmp_path, script, extra))
+
+    assert {key: reported["http"].get(key) for key in OUR_AUTH} == OUR_AUTH
+
+
+def test_traces_headers_win_over_the_generic_ones_and_ours_win_over_both(
+    tmp_path: Path,
+) -> None:
+    script = """
+print(json.dumps(sent(Http(endpoint=os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]))))
+"""
+    before = {
+        "OTEL_EXPORTER_OTLP_HEADERS": "x-team=generic,x-only-generic=1,x-api-key=g",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-team=traces,X-Secret-Key=t",
+    }
+    reported = _reported(_export_run(tmp_path, script, before))
+
+    assert reported == {"x-team": "traces", "x-only-generic": "1", **OUR_AUTH}
 
 
 def test_a_generic_header_written_after_install_reaches_an_exporter_built_without_headers(

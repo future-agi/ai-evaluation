@@ -298,19 +298,6 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
     _write("applied")
 
 
-def _merge_traces_headers(ours: list[tuple[str, str]]) -> None:
-    current = os.environ.get(_TRACES_HEADERS) or os.environ.get(_GENERIC_HEADERS)
-    kept = [
-        (name, value)
-        for name, value in _header_entries(current)
-        if name.lower() not in _AUTH_HEADERS
-    ]
-    os.environ[_TRACES_HEADERS] = ",".join(
-        f"{urllib.parse.quote(name, safe='')}={urllib.parse.quote(value, safe='')}"
-        for name, value in kept + ours
-    )
-
-
 class _CallFile:
     def __init__(self, path: str) -> None:
         self._path = path
@@ -433,7 +420,6 @@ def install() -> None:
             _PATCHES[_TRACE] = functools.partial(_patch_tracer_provider, path=call_file)
         ingest = _read_ingest()
         if ingest is not None:
-            _merge_traces_headers(ingest[0])
             for name, lower in _EXPORTERS.items():
                 _PATCHES[name] = functools.partial(
                     _patch_exporter, ingest=ingest, lower=lower

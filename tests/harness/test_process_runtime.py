@@ -8982,6 +8982,14 @@ def test_export_environment_order_our_project_name_wins_and_mark_wins(
     assert env["FI_BASE_URL"] == "https://collector.example"
     assert env["FI_SIMULATION_EXPORT"] == "our_keys"
 
+    # The dict sets no base URL and no endpoint, so theirs survive.
+    env = _spawn(tmp_path / "no-endpoint", process, _EXPORT)["env"]
+    assert env["FI_BASE_URL"] == "https://their.example"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://localhost:4318/v1/traces"
+    )
+    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+
     # A name they never rendered is simply added.
     env = _spawn(tmp_path / "unrendered", _source_process(name="agent"), export)["env"]
     assert (
