@@ -240,8 +240,9 @@ def test_setup_and_chat_share_deadline(tmp_path, profile_app):
 
 
 @pytest.mark.parametrize("readiness_only", [False, True])
+@pytest.mark.parametrize("required_workflow", [False, True])
 def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
-    tmp_path, monkeypatch, profile_app, readiness_only
+    tmp_path, monkeypatch, profile_app, readiness_only, required_workflow
 ):
     from fi.alk.harness import authoring_runtime_validation as validation
     from fi.alk.harness import (
@@ -378,10 +379,14 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
     monkeypatch.setattr(
         scenario_source,
         "load_scenarios",
-        lambda *a: [
+        lambda *a: ([SimpleNamespace(
+            scenario_key="refusal", scenario_id="refusal-id", requires_tool_evidence=False,
+            setup=lambda w: calls.append("refusal-setup"), ready=lambda w: True,
+        )] if required_workflow else []) + [
             SimpleNamespace(
                 scenario_key="one",
                 scenario_id="scenario-id",
+                requires_tool_evidence=required_workflow,
                 setup=lambda w: calls.append("setup"),
                 ready=lambda w: True,
             )
@@ -390,11 +395,24 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
     monkeypatch.setattr(source_data_invariants, "author_invariants", invariants)
     monkeypatch.setattr(source_data_invariants, "check_invariants", check)
     monkeypatch.setattr(validation, "_freeze_certified_bundle", freeze)
+    workflow_selections = []
+
+    async def workflow(**kwargs):
+        workflow_selections.append(kwargs["scenario"].scenario_key)
+        assert kwargs["scenario"].requires_tool_evidence
+        current = AgentContract.model_validate_json(contract_path.read_text())
+        await probe(
+            authoring, url, interface=current.runtime.interface,
+            scenario_key=kwargs["scenario"].scenario_key,
+        )
+
+    from fi.alk.harness import chat_readiness
+    monkeypatch.setattr(chat_readiness, "probe_chat_workflow", workflow)
     job = SimpleNamespace(
         source=SimpleNamespace(kind=None),
         agent=SimpleNamespace(secret_refs={}),
         metadata={"generic_harness_v1": True},
-        scenario_count=1,
+        scenario_count=2 if required_workflow else 1,
         runtime=RuntimeRequirements(),
         seed=0,
     )
@@ -454,6 +472,7 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         assert (authoring / "generic-harness/readiness-repair-history.json").exists()
     else:
         assert calls[-2:] == ["freeze", "close"]
+    assert workflow_selections == (["one", "one", "one"] if required_workflow and not readiness_only else [])
     assert sorted(item["status"] for item in receipts(authoring)) == [
         "failed",
         "failed",
@@ -690,3 +709,182 @@ def test_internal_readiness_initializes_real_chat_and_requires_reset(tmp_path, p
     assert receipt["status"] == ("passed" if reset_mode == "restore" else "failed")
     assert not (authoring / "scenarios").exists()
     assert not (authoring / "runtime-validation.json").exists()
+
+
+def workflow_probe(tmp_path, url, **changes):
+    from fi.alk.harness.chat_readiness import probe_chat_workflow
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(exist_ok=True)
+    (bundle / "contract.json").write_text(AgentContract(
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+    ).model_dump_json())
+    scenario_dir = bundle / "scenarios" / "private"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    (scenario_dir / "scenario.json").write_text(json.dumps({
+        "scenario_key": "private", "name": "private", "instruction": "Look up the account",
+    }))
+    args = dict(
+        job=SimpleNamespace(metadata={}), source=tmp_path, bundle=bundle, authoring=tmp_path,
+        runtime=SimpleNamespace(
+            metadata={"observation_mode": "native"}, world_index=0,
+            endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},
+        ),
+        scenario=SimpleNamespace(scenario_key="private", scenario_id="private-id"),
+        candidate_hash="candidate", bundle_digest="bundle", secret_values={},
+        redaction_values={"key": "secret123"}, timeout=1,
+    )
+    args.update(changes)
+    return probe_chat_workflow(**args)
+
+
+def workflow_receipt(tmp_path):
+    paths = list((tmp_path / "generic-harness/chat-readiness").glob("*/receipt.json"))
+    assert len(paths) == 1
+    return paths[0], json.loads(paths[0].read_text())
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_private_workflow_checks_executed_tools_after_clarification(
+    tmp_path, profile_app, monkeypatch, completed
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "Which account? secret123"})
+    observed = []
+
+    async def conversation(target, *_args):
+        first = await target.say("Look up my account")
+        state["body"] = {"content": "The account is active secret123"}
+        if completed:
+            state["body"].update(
+                tool_calls=[{"id": "lookup-1", "name": "lookup_account", "arguments": {"account_id": "A-1"}}],
+                tool_responses=[{"tool_call_id": "lookup-1", "result": {"active": True}}],
+            )
+        second = await target.say("Account A-1")
+        observed.extend(target.world.calls)
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up my account"), Exchange("agent", first),
+                       Exchange("customer", "Account A-1"), Exchange("agent", second)],
+            calls=list(target.world.calls), ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    if completed:
+        asyncio.run(workflow_probe(tmp_path, url))
+        assert [(call.name, call.arguments, call.result) for call in observed] == [
+            ("lookup_account", {"account_id": "A-1"}, {"active": True})
+        ]
+    else:
+        with pytest.raises(RuntimeValidationError) as failure:
+            asyncio.run(workflow_probe(tmp_path, url))
+        assert failure.value.diagnostics[0].code == "chat_tool_evidence_unverified"
+        assert "Which account?" in str(failure.value)
+        assert "secret123" not in str(failure.value)
+    assert [request[1]["new_message"]["content"] for request in state["calls"]] == [
+        "Look up my account", "Account A-1",
+    ]
+    receipt_path, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == ("passed" if completed else "failed")
+    assert receipt["tool_call_count"] == int(completed)
+    assert receipt["candidate_hash"] == "candidate"
+    assert receipt["bundle_digest"] == "bundle"
+    assert receipt["scenario_key"] == "private"
+    assert receipt["turns"] == 4
+    assert receipt_path.parent.stat().st_mode & 0o777 == 0o700
+    for path in receipt_path.parent.iterdir():
+        assert "secret123" not in path.read_text()
+        assert path.stat().st_mode & 0o777 == 0o600
+    assert any("transcript" in name for name in receipt["artifacts"])
+    assert not (tmp_path / "results").exists()
+
+
+@pytest.mark.parametrize("status,code", [(401, "credential_missing"), (422, "chat_ingress_configuration_invalid")])
+def test_private_workflow_preserves_transport_classification(tmp_path, profile_app, monkeypatch, status, code):
+    from fi.alk.harness import chat_call_runner
+
+    url, state = profile_app
+    state["status"] = status
+
+    async def conversation(target, *_args):
+        await target.say("Look up my account")
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    with pytest.raises(RuntimeValidationError) as failure:
+        asyncio.run(workflow_probe(tmp_path, url))
+    assert failure.value.diagnostics[0].code == code
+    receipt_path, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == "failed"
+    assert any("trace" in name for name in receipt["artifacts"])
+    assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_path, profile_app, monkeypatch, cancel):
+    import importlib
+
+    conversation = importlib.import_module("fi.alk.harness.run.conversation")
+    url, state = profile_app
+    state.update(profile=True, body={
+        "content": "The account is active secret123",
+        "tool_calls": [{"id": "lookup-1", "name": "lookup_account", "arguments": {"account_id": "A-1"}}],
+        "tool_responses": [{"tool_call_id": "lookup-1", "result": {"active": True, "credential": "secret123"}}],
+    })
+    started = asyncio.Event()
+    closed = []
+
+    class CustomerStage:
+        spent_usd = 0.0
+        simulator_tokens = (12, 4)
+
+        def __init__(self, *_args, **_kwargs):
+            self.opening = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            closed.append(True)
+
+        async def say(self, _message):
+            if self.opening:
+                self.opening = False
+                return SimpleNamespace(text="Look up account A-1")
+            started.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(conversation, "Stage", CustomerStage)
+
+    async def run():
+        task = asyncio.create_task(workflow_probe(tmp_path, url, timeout=2))
+        if cancel:
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(RuntimeValidationError) as failure:
+                await task
+            assert failure.value.diagnostics[0].code == "chat_ingress_timeout"
+
+    asyncio.run(run())
+    assert len(state["calls"]) == 1
+    assert closed == [True]
+    assert started.is_set()
+    receipt_path, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == ("cancelled" if cancel else "failed")
+    assert receipt["tool_call_count"] == 1
+    assert receipt["turns"] == 2
+    transcript = next(receipt_path.parent.glob("transcript-*.json"))
+    assert json.loads(transcript.read_text())["messages"] == [
+        {"role": "user", "content": "Look up account A-1"},
+        {"role": "assistant", "content": "The account is active <redacted>"},
+    ]
+    tool_trace = next(receipt_path.parent.glob("tool_trace-*.json"))
+    call = json.loads(tool_trace.read_text())
+    assert call["name"] == "lookup_account"
+    assert call["arguments"] == {"account_id": "A-1"}
+    assert call["result"]["active"] is True
+    assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())

@@ -1031,7 +1031,7 @@ async def validate_once(
                     _tools,
                     _chat_target_timeout_seconds,
                 )
-                from .chat_readiness import probe_chat_ingress
+                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
@@ -1046,7 +1046,11 @@ async def validate_once(
                             "environment",
                             "Chat readiness requires a representative scenario",
                         )
-                    await check_setup(scenarios[0], [])
+                    representative = next(
+                        (item for item in scenarios if getattr(item, "requires_tool_evidence", False)),
+                        scenarios[0],
+                    )
+                    await check_setup(representative, [])
                     endpoint = runtime.endpoints.get("target_http")
                     if endpoint is None:
                         raise RuntimeValidationError(
@@ -1054,27 +1058,37 @@ async def validate_once(
                             "generated_runtime_plan_invalid: target_http is absent",
                         )
                     source_key = (
-                        getattr(scenarios[0], "source_scenario_key", None)
-                        or scenarios[0].scenario_key
+                        getattr(representative, "source_scenario_key", None)
+                        or representative.scenario_key
                     )
                     document = _with_scenario_edits(
                         _scenario_document(bundle, source_key), job.metadata, source_key
                     )
-                    await probe_chat_ingress(
-                        interface=interface,
-                        endpoint=endpoint.address,
-                        document=document,
-                        scenario_key=scenarios[0].scenario_key,
-                        authoring=authoring,
-                        candidate_hash=_generic_candidate_hash(source, authoring),
-                        bundle_digest=manifest.digest,
-                        secret_values=target_secret_values,
-                        redaction_values=redaction_values,
-                        local_auth_values=getattr(runtime, "_local_auth_values", None),
-                        tools=_tools(contract) if interface.include_tools else (),
-                        scenario_id=scenarios[0].scenario_id,
-                        timeout=_chat_target_timeout_seconds(),
-                    )
+                    if getattr(representative, "requires_tool_evidence", False):
+                        await probe_chat_workflow(
+                            job=job, source=source, bundle=bundle, authoring=authoring,
+                            runtime=runtime, scenario=representative,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            bundle_digest=manifest.digest,
+                            secret_values=target_secret_values,
+                            redaction_values=redaction_values,
+                        )
+                    else:
+                        await probe_chat_ingress(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            document=document,
+                            scenario_key=representative.scenario_key,
+                            authoring=authoring,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            bundle_digest=manifest.digest,
+                            secret_values=target_secret_values,
+                            redaction_values=redaction_values,
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
+                            tools=_tools(contract) if interface.include_tools else (),
+                            scenario_id=representative.scenario_id,
+                            timeout=_chat_target_timeout_seconds(),
+                        )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)

@@ -168,6 +168,10 @@ _POLICIES = MappingProxyType(
             domain=FailureDomain.AGENT,
             owner=RepairOwner.SOURCE,
         ),
+        "chat_tool_evidence_unverified": DiagnosticPolicy(
+            domain=FailureDomain.AGENT,
+            owner=RepairOwner.SOURCE,
+        ),
         "generated_runtime_plan_invalid": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.AUTHORING,

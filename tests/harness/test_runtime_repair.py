@@ -265,8 +265,9 @@ def test_readiness_patch_rejects_unselectable_workspace_groups(
         )
 
 
+@pytest.mark.parametrize("code", ["chat_ingress_failed", "chat_tool_evidence_unverified"])
 def test_setup_investigation_may_decline_after_bounded_decision(
-    tmp_path, dependency_patch, monkeypatch
+    tmp_path, dependency_patch, monkeypatch, code
 ):
     import asyncio
     from fi.alk.harness import runtime_repair
@@ -294,7 +295,7 @@ def test_setup_investigation_may_decline_after_bounded_decision(
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.CONNECTING_AGENT,
         component="chat_ingress",
-        code="chat_ingress_failed",
+        code=code,
         message="unproven",
     )
     assert (
@@ -304,7 +305,7 @@ def test_setup_investigation_may_decline_after_bounded_decision(
         is None
     )
     assert len(calls) == 2
-    assert budgets == [20, 4]
+    assert budgets == [40, 4]
 
 
 def test_dependency_investigation_shows_sibling_optional_extras_without_manifest_values(
@@ -1065,3 +1066,88 @@ def test_setup_only_patch_does_not_require_python_build_component(tmp_path):
         tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
     )
     assert repaired.runtime.config_files[".env"].values["REGION"] == "global"
+
+
+@pytest.mark.parametrize("change", [None, "command", "path", "include_tools", "headers_template", "extras", "unchanged"])
+def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, change):
+    (tmp_path / "app.py").write_text("# native completed tool results in response.output\n")
+    contract = AgentContract(runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"],
+        interface=RuntimeInterface(kind="http", port=8080, path="/chat", protocol="json_template", request_template={"text": "{{new_message_content}}"}, response_path="answer"),
+    ))
+    events = {
+        "source": "response", "items_path": "output", "kind_path": "type",
+        "action_kind": "function_call", "observation_kind": "function_call_output",
+        "action_id_path": "call_id", "observation_action_id_path": "call_id",
+        "name_path": "name", "arguments_path": "arguments", "result_path": "output",
+        "status_path": "status", "completed_status": "completed",
+    }
+    data = contract.runtime.model_dump()
+    if change != "unchanged":
+        data["interface"]["completed_tool_events"] = events
+    if change == "command":
+        data["command"] = ["python", "other.py"]
+    elif change == "path":
+        data["interface"]["path"] = "/other"
+    elif change == "include_tools":
+        data["interface"]["include_tools"] = not data["interface"]["include_tools"]
+    elif change == "headers_template":
+        data["interface"]["headers_template"] = {"Authorization": "invented"}
+    elif change == "extras":
+        data["extras"] = ["other"]
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=Runtime.model_validate(data),
+        evidence_paths=("app.py",), diagnostic_codes=("chat_tool_evidence_unverified",),
+        summary="Map the source-owned completed action and observation pairs.",
+    )
+    if change is None:
+        repaired = validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+        assert repaired.runtime.interface.completed_tool_events.items_path == "output"
+        assert repaired.runtime.command == contract.runtime.command
+    else:
+        with pytest.raises(ValueError, match="runtime_repair_(only_tool_observation_allowed|tool_observation_evidence_required)"):
+            validate_runtime_plan_patch(
+                tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+            )
+
+
+def test_submission_fallback_keeps_recent_bounded_source_evidence(tmp_path, dependency_patch, monkeypatch):
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    contract, _ = dependency_patch
+    for index in range(6):
+        (tmp_path / f"schema{index}.txt").write_text(f"schema-marker-{index}\n" + ("x" * 100 + "\n") * 70)
+    briefings = []
+
+    class InspectingStage:
+        def __init__(self, spec, **kwargs):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, **kwargs):
+            briefings.append(briefing)
+            if "investigation" in self.spec.servers:
+                read = next(t for t in self.spec.servers["investigation"].tools if t.name == "Read")
+                for index in range(6):
+                    await read.handler({"file_path": str(tmp_path / f"schema{index}.txt")})
+
+    monkeypatch.setattr(runtime_repair, "Stage", InspectingStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress",
+        code="chat_tool_evidence_unverified", message="Missing observed tools",
+    )
+    assert asyncio.run(runtime_repair.request_runtime_plan_patch(tmp_path, contract, (diagnostic,))) is None
+    evidence = briefings[-1].split("<untrusted_investigation_evidence>\n", 1)[1].split("\n</untrusted_investigation_evidence>", 1)[0]
+    assert "schema-marker-5" in evidence
+    assert "schema-marker-0" not in evidence
+    assert len(evidence) <= 24003
