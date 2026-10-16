@@ -135,7 +135,9 @@ Find, in roughly this order:
 
 11. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
+   When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
+   generating one. Otherwise use it as evidence for a supported native startup path; do not
+   select an unsupported container build. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be
