@@ -307,3 +307,20 @@ def test_the_bundle_seals_the_cast_beside_the_catalogue(tmp_path):
     save_cast(authoring, Cast(sub_actors=[_service()]))
     assert _copy_sub_goal_catalogue(authoring, staging) == ["sub_goals.json", "cast.json"]
     assert load_cast(staging).sub_actors[0].id == "subactor_service"
+
+
+def test_the_builder_keeps_the_cast_from_chat_and_asks_before_changing_it(tmp_path, monkeypatch):
+    from fi.alk.harness.builder import suite_server
+    from fi.alk.harness.hosted_chat_entrypoint import _NEEDS_CONFIRMATION
+
+    root, contract, _catalogue = _environment(tmp_path)
+    monkeypatch.delenv("HARNESS_SUB_ACTORS", raising=False)
+    assert "add_sub_actor" not in {one.name for one in suite_server(root, [], contract).tools}
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    tools = {one.name: one for one in suite_server(root, [], contract).tools}
+    assert {"add_sub_actor", "drop_sub_actor"} <= set(tools)
+    assert {"add_sub_actor", "drop_sub_actor"} <= _NEEDS_CONFIRMATION
+    said = asyncio.run(tools["add_sub_actor"].handler(_service().model_dump()))
+    assert not said.get("is_error"), said
+    assert load_cast(root).sub_actors[0].id == "subactor_service"

@@ -24,12 +24,15 @@ from .backends import (
     tool_server,
 )
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
+from .cast import sub_actors_enabled
 from .contract import AgentContract
 from .scenario import voicemail_enabled
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
+from .world.snapshot import MANIFEST, restore
+from .world.tools import cast_tools
 
 BUILDER = "builder"
 KNOWLEDGE_SERVER = "knowledge"
@@ -312,9 +315,19 @@ def suite_server(
         _persist(contract, out)
         return _ok(f"{name} added to the contract. Re-prove the scenarios that use it, then save_changes.")
 
+    cast = []
+    if sub_actors_enabled() and contract is not None:
+        # Which tools the agent runs itself decides where a fault can be applied.
+        world = restore(out) if (out / MANIFEST).exists() else None
+        try:
+            cast = cast_tools(contract, out, source_root=str(source_root or ""), world=world)
+        finally:
+            if world is not None:
+                world.close()
     return tool_server(
         name="suite",
-        tools=[drop_scenarios, prove_scenarios, check_health, impact_of, change_world, declare_tool],
+        tools=[drop_scenarios, prove_scenarios, check_health, impact_of, change_world, declare_tool]
+        + cast,
     )
 
 
