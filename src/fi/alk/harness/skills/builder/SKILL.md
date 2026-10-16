@@ -207,7 +207,9 @@ The suite must always be runnable and true to the agent, the world and the contr
   each passing call name the mistakes an agent could make in that scenario (another record, another
   value the person asked for, a safeguard skipped or done after the change it guards, a rule broken)
   and find the sub-goal and the fixed value that fails each; `try_check` with that mistake shows it.
-  Where nothing would, tighten the fixed marks or the sub-goal. A failure that looks
+  Where nothing would, tighten the fixed marks or the sub-goal. A call that errored has no verdict
+  and says nothing about the scenario: read why it stopped, run it again once, and change nothing
+  on its account. A failure that looks
   like the agent's own fault, or that you cannot place, you report with the evidence and ask about.
   Say the environment is ready only after this.
 - **Never call the suite healthy or ready unless the last `check_health` said so.** If problems
