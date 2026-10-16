@@ -18,9 +18,9 @@ def is_chat_setup_investigation(diagnostics) -> bool:
     return (
         bool(diagnostics)
         and {item.code for item in diagnostics}
-        in ({"chat_ingress_failed"}, {"credential_missing"})
+        in ({"chat_ingress_failed"}, {"credential_missing"}, {"chat_tool_evidence_unverified"})
         and all(
-            item.code in {"chat_ingress_failed", "credential_missing"}
+            item.code in {"chat_ingress_failed", "credential_missing", "chat_tool_evidence_unverified"}
             and item.component == "chat_ingress"
             and item.stage is HarnessStage.CONNECTING_AGENT
             and item.owner is RepairOwner.SOURCE

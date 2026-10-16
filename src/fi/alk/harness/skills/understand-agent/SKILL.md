@@ -97,6 +97,16 @@ Find, in roughly this order:
    Never declare token values, disable authentication, override supplied credentials, or use this
    for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
 
+   Inspect whether the selected chat route returns pending tool requests for its caller to execute,
+   or executes tools internally before replying. For internal execution, inspect the source response
+   schema or correlated event API and declare `runtime.interface.completed_tools` or
+   `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
+   actions and observations using source identifiers and preserve conversation correlation. Tool
+   declarations and assistant text are not execution evidence. Never fabricate events or replay
+   completed tools. If the source offers equivalent chat routes, prefer one that exposes completed
+   tool results over a text-only compatibility route. If no supported observation seam exists,
+   record that limitation.
+
 7. **Which side places the call.** Voice only, and read from the agent's own instructions rather
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent

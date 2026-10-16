@@ -182,13 +182,14 @@ def test_repair_result_records_before_after_and_no_op() -> None:
 
 
 @pytest.mark.parametrize("changed", [True, False])
-def test_chat_setup_hypotheses_are_bounded_and_keep_source_ownership(changed):
+@pytest.mark.parametrize("code", ["chat_ingress_failed", "chat_tool_evidence_unverified"])
+def test_chat_setup_hypotheses_are_bounded_and_keep_source_ownership(changed, code):
     from fi.alk.harness.diagnostics import RepairOwner
 
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.CONNECTING_AGENT,
         component="chat_ingress",
-        code="chat_ingress_failed",
+        code=code,
         message="Application error",
     )
     controller = RepairController(RepairBudgets(environment_patches=2))
