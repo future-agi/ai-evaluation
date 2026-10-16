@@ -11,6 +11,8 @@ from fi.alk.harness.chat_call_runner import _HostedChatTarget
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface, RuntimeHttpFailureRule
 from fi.simulate.agent.wrapper import AgentInput
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http_events import CompletedToolEvents, CompletedToolRows
 
 
 ROWS = {
@@ -586,3 +588,50 @@ def test_terminal_failure_bypasses_different_result_shape(native_app):
     assert response.metadata["external_agent"]["success"] is True
     assert response.metadata["native_completed_tools"][0]["ok"] is False
     assert response.metadata["native_completed_tools"][0]["result"] == "not JSON"
+
+
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("application_success", [False, True])
+def test_response_event_completion_requires_a_tool_outcome_mapping(direct, application_success):
+    events = {key: value for key, value in EVENTS.items() if key != "error_path"}
+    failure_rule = {"status_path": "error_msg", "success_values": [None]} if application_success else None
+    with pytest.raises(ValueError, match="response events require a tool outcome mapping"):
+        if direct:
+            HTTPAgentWrapper(
+                endpoint="http://localhost:8080/chat", protocol="json_template",
+                request_template={"input": "{{messages}}"},
+                completed_tool_events=events, failure_rule=failure_rule,
+            )
+        else:
+            interface(completed_tools=None, completed_tool_events=events,
+                      failure_rule=failure_rule)
+
+
+@pytest.mark.parametrize("paired", [False, True])
+@pytest.mark.parametrize("path", [
+    " ", " error", "error ", "out come.error", "outcome.\nerror", "outcome[0].error",
+    "$['error']", ".error", "error.", "outcome..error", "$", "$.", "$error",
+])
+def test_malformed_result_error_selectors_rejected_before_chat(paired, path):
+    model, spec = (CompletedToolEvents, EVENTS) if paired else (CompletedToolRows, ROWS)
+    with pytest.raises(ValueError, match="invalid tool result error path"):
+        model.model_validate({**spec, "result_error_path": path})
+
+
+@pytest.mark.parametrize("paired", [False, True])
+@pytest.mark.parametrize("path", ["out-comes.0.érror", "$.out-comes.0.érror"])
+def test_result_error_selector_preserves_keys_and_numeric_indices(native_app, paired, path):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD if paired else PAYLOAD)
+    result = {"out-comes": [{"érror": "blocked"}]}
+    if paired:
+        state["payload"]["output"][1]["output"] = result
+        config = interface(completed_tools=None, completed_tool_events={
+            **EVENTS, "result_error_path": path})
+    else:
+        state["payload"]["tool_calls"][0]["tool_result"] = result
+        config = interface(completed_tools={**ROWS, "result_error_path": path}, failure_rule=None)
+    response = invoke(create_chat_wrapper(config, base, secret_values={}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+    assert response.metadata["native_completed_tools"][0]["result"] == result
