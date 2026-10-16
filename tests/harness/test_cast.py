@@ -524,3 +524,13 @@ def test_the_faults_table_exists_only_where_sub_actors_are_on(monkeypatch):
     assert "_alk_faults" not in _seed_prefix() and "_alk_tool_trace" in _seed_prefix()
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     assert "_alk_faults" in _seed_prefix()
+
+
+def test_the_world_summary_names_the_cast_only_with_the_switch_on(tmp_path, monkeypatch):
+    from fi.alk.harness.scenario_tools import world_summary
+
+    root, tools = _cast_tools(tmp_path, monkeypatch)
+    asyncio.run(tools["add_sub_actor"].handler(_voice().model_dump()))
+    assert "subactor_bystander" in world_summary(root)
+    monkeypatch.delenv("HARNESS_SUB_ACTORS")
+    assert "subactor_bystander" not in world_summary(root)

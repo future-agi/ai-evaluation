@@ -395,8 +395,10 @@ proportions rather than spreading every level evenly.
 When the world has a cast of sub-actors, their presence is a condition on some scenarios, so it is
 planned as levels on the axes that already hold conditions: a second voice, a second participant or a
 menu in the way is a competing signal on `interface`, a service whose responses fail or a record that
-changes mid-task is how reliable the channel is, also on `interface`, and a sub-actor pushing the agent to act for someone who is not the person it serves is an `overlay`. Give
-those levels a share like any other, so presence is covered without appearing in every scenario.
+changes mid-task is how reliable the channel is, also on `interface`, and a sub-actor pushing the agent to act for someone who is not the person it serves is an `overlay`. Every
+sub-actor in the cast gets such a level, named for it, and each level a share like any other, so
+every sub-actor is tested without appearing in every scenario. A brief that deals one of those levels
+tells the writer to bind that sub-actor.
 
 ### Overlay carries three things, and they are three axes
 

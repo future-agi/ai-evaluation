@@ -2446,6 +2446,9 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
+        cast = load_cast(world_root) if sub_actors_enabled() else None
+        if cast and cast.sub_actors:
+            lines.append("\nTHE CAST (who else a scenario can bring into the call):\n" + cast.summary())
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:
