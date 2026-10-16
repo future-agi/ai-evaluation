@@ -201,14 +201,14 @@ def test_small_sessions_keep_every_read() -> None:
     assert all(_said(one) == "x" * 100 for one in contents)
 
 
-def test_a_long_session_forgets_all_but_the_newest_reads() -> None:
+def test_a_long_session_keeps_recent_reads_within_the_character_budget() -> None:
     contents = [
         _read(f"c{n}", "mcp__scenarios__inspect_world", "x" * 10_000) for n in range(10)
     ]
     _forget_old_reads(contents)
     kept = [one for one in contents if _said(one) == "x" * 10_000]
-    assert len(kept) == 2
-    assert kept == contents[-2:]
+    assert len(kept) == 6
+    assert kept == contents[-6:]
     assert "inspect_world" in _said(contents[0])
 
 

@@ -295,7 +295,7 @@ def _forget_old_reads(contents: list[Any]) -> None:
     from google.genai import types
 
     arguments: dict[str, str] = {}
-    reads: list[tuple[Any, str, str]] = []
+    reads: list[tuple[Any, str, str, int]] = []
     held = 0
     for content in contents:
         for part in getattr(content, "parts", None) or []:
@@ -314,13 +314,15 @@ def _forget_old_reads(contents: list[Any]) -> None:
             if text.startswith(_FORGOTTEN):
                 continue
             held += len(text)
-            reads.append((part, name, getattr(answer, "id", "") or ""))
+            reads.append((part, name, getattr(answer, "id", "") or "", len(text)))
     if held <= _READ_CHARS_BEFORE_FORGETTING:
         return
     recent: dict[str, int] = {}
-    for part, name, call_id in reversed(reads):
+    kept_chars = 0
+    for part, name, call_id, size in reversed(reads):
         recent[name] = recent.get(name, 0) + 1
-        if recent[name] <= _READS_KEPT_WHOLE:
+        if recent[name] <= _READS_KEPT_WHOLE or kept_chars + size <= _READ_CHARS_BEFORE_FORGETTING:
+            kept_chars += size
             continue
         said = arguments.get(call_id, "")
         part.function_response = types.FunctionResponse(
