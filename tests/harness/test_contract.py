@@ -164,11 +164,19 @@ def test_runtime_command_preserves_static_braces(argument):
     from fi.alk.harness.contract import Runtime
 
     command = ["agent", "--format", argument]
-    assert Runtime(command=command).command == command
+    assert Runtime(command=command, interface={"kind": "command", "protocol": "fi.alk"}).command == command
 
 
 def test_runtime_command_rejects_message_template_in_normalized_shell_string():
     from fi.alk.harness.contract import Runtime
 
     with pytest.raises(ValueError, match="runtime_command_message_template_unsupported"):
-        Runtime(command="agent chat -q '{{new_message}}'")
+        Runtime(command="agent chat -q '{{new_message}}'", interface={"kind": "command", "protocol": "fi.alk"})
+
+
+def test_http_server_keeps_source_owned_message_template_argument():
+    from fi.alk.harness.contract import Runtime
+
+    command = ["server", "--chat-template", "{{messages}}"]
+    runtime = Runtime(command=command, interface={"kind": "http", "protocol": "openai_chat", "port": 8080, "path": "/v1/chat/completions"})
+    assert runtime.command == command
