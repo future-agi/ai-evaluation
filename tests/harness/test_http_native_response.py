@@ -458,3 +458,48 @@ def test_response_failure_events_preserve_status_and_dedup_guards(native_app, st
         assert invoke(wrapper).metadata["native_completed_tools"] == []
     else:
         assert not first.metadata.get("native_completed_tools")
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_declared_result_errors_classify_completed_tools(native_app, paired):
+    base, state = native_app
+    bodies = [
+        json.dumps({"status": "error", "error": "unattended execution blocked"}),
+        json.dumps({"stdout": "42", "exit_code": 0}),
+        {"revision": 2, "todos": [{"title": "calculate", "status": "completed"}], "error": None},
+        json.dumps({"error": "search backend unavailable"}),
+    ]
+    names = ["execute_code", "terminal", "tool_call", "search_files"]
+    arguments = [{"code": "print(42)"}, {"command": "echo 42"},
+                 {"calls": [{"name": "todo_list", "arguments": {"status": "completed"}}]},
+                 {"pattern": "fixture"}]
+    if paired:
+        state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+        state["payload"]["output"] = [
+            event
+            for index, (name, args, body) in enumerate(zip(names, arguments, bodies))
+            for event in [
+                {"type": "function_call", "call_id": str(index), "name": name,
+                 "arguments": json.dumps(args), "status": "completed"},
+                {"type": "function_call_output", "call_id": str(index),
+                 "output": body, "status": "completed"},
+            ]
+        ]
+        config = interface(completed_tools=None,
+                           completed_tool_events={**EVENTS, "result_error_path": "error"})
+    else:
+        state["payload"]["tool_calls"] = [
+            {"tool_name": name, "tool_arguments": args, "tool_result": body}
+            for name, args, body in zip(names, arguments, bodies)
+        ]
+        config = interface(completed_tools={**ROWS, "result_error_path": "error"}, failure_rule=None)
+    target = create_chat_wrapper(config, base, secret_values={})
+    response = invoke(target)
+    assert response.metadata["external_agent"]["success"] is True
+    tools = response.metadata["native_completed_tools"]
+    assert [call["ok"] for call in tools] == [False, True, True, False]
+    assert [call["result"] for call in tools] == bodies
+    assert [call["name"] for call in tools] == names
+    assert [call["arguments"] for call in tools] == arguments
+    if paired:
+        assert invoke(target).metadata["native_completed_tools"] == []
