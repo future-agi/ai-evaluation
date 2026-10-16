@@ -1712,6 +1712,52 @@ def test_a_process_not_claiming_the_purpose_does_not_receive_the_secret(
     assert handle.handle.captured_output() == "SECRET=<none>"
 
 
+@pytest.mark.parametrize("purpose", ["target_provider", "simulator_provider"])
+def test_spawn_source_process_projects_only_target_vertex_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purpose: str
+) -> None:
+    for name in (
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_PROJECT",
+    ):
+        monkeypatch.setenv(name, "controller-value")
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    process = _source_process(
+        run_command=[
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps({k: os.environ.get(k) for k in ['VERTEXAI_LOCATION', 'VERTEXAI_PROJECT']}))",
+        ],
+        secret_purposes=["target_provider"],
+    )
+    handle = pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=tmp_path / "world",
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={
+            "GOOGLE_CLOUD_LOCATION": "global",
+            "GOOGLE_CLOUD_PROJECT": "target-project",
+        },
+        secret_purposes={
+            "GOOGLE_CLOUD_LOCATION": purpose,
+            "GOOGLE_CLOUD_PROJECT": purpose,
+        },
+    )
+    _reap(handle.handle)
+    expected = (
+        {"VERTEXAI_LOCATION": "global", "VERTEXAI_PROJECT": "target-project"}
+        if purpose == "target_provider"
+        else {"VERTEXAI_LOCATION": None, "VERTEXAI_PROJECT": None}
+    )
+    assert json.loads(handle.handle.captured_output()) == expected
+
+
 def test_spawn_source_process_materializes_uploaded_google_credentials(
     tmp_path: Path,
 ) -> None:

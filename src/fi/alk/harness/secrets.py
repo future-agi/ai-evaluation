@@ -25,6 +25,18 @@ def process_secret_environment_names(injected_names: Iterable[str]) -> set[str]:
     return {PROCESS_SECRET_FILE_ENVIRONMENT.get(name, name) for name in injected_names}
 
 
+def target_provider_environment(values: Mapping[str, str]) -> dict[str, str]:
+    """Project target Vertex settings into SDK aliases without changing explicit choices."""
+    projected = dict(values)
+    for canonical, primary, fallback in (
+        ("GOOGLE_CLOUD_LOCATION", "VERTEXAI_LOCATION", "VERTEX_LOCATION"),
+        ("GOOGLE_CLOUD_PROJECT", "VERTEXAI_PROJECT", "VERTEX_PROJECT"),
+    ):
+        if values.get(canonical) and primary not in values and fallback not in values:
+            projected[primary] = values[canonical]
+    return projected
+
+
 def runtime_configuration_environment(values: Mapping[str, str]) -> dict[str, str]:
     """Namespace submitted-agent values away from runner/controller credentials."""
     return {

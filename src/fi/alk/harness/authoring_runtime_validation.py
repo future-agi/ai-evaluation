@@ -516,7 +516,7 @@ async def _probe_runtime_readiness(
 
     interface = contract.runtime.interface if contract.runtime else None
     endpoint = runtime.endpoints.get("target_http")
-    if interface is None or interface.kind not in {"http", "callable"} or endpoint is None:
+    if interface is None or interface.kind not in {"http", "callable", "command"} or endpoint is None:
         raise RuntimeValidationError(
             "runtime", "generated_runtime_plan_invalid: unsupported chat ingress"
         )
@@ -980,7 +980,7 @@ async def validate_once(
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
                 if contract.modality != "voice":
-                    if interface is None or interface.kind not in {"http", "callable"}:
+                    if interface is None or interface.kind not in {"http", "callable", "command"}:
                         raise RuntimeValidationError(
                             "runtime",
                             "generated_runtime_plan_invalid: unsupported chat ingress",

@@ -67,7 +67,7 @@ from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .job import FailureDomain
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
-from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT
+from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT, target_provider_environment
 from .provider_import import (
     ProviderImportError,
     ProviderImportSpec,
@@ -2342,6 +2342,7 @@ def spawn_source_process(
         },
     )
     env.update(runtime_environment)
+    env = target_provider_environment(env)
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)

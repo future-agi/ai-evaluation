@@ -480,9 +480,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind not in {"http", "callable"}:
+        if interface is None or interface.kind not in {"http", "callable", "command"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
+                "chat_interface_unsupported: an HTTP, callable, or command runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
