@@ -512,20 +512,19 @@ def validate_runtime_plan_patch(
         if (runtime.interface is None) != (original.interface is None):
             raise ValueError("runtime_repair_readiness_interface_changed")
         if runtime.interface is not None and original.interface is not None:
+            mutable_interface = {
+                "setup_requests", "setup_secrets", "local_auth", "headers_template",
+            }
+            if (
+                allowed_diagnostic_codes == {"chat_ingress_failed"}
+                and original.interface.kind == "http"
+                and original.interface.protocol == "json_template"
+            ):
+                mutable_interface.add("response_path")
             if runtime.interface.model_dump(
-                exclude={
-                    "setup_requests",
-                    "setup_secrets",
-                    "local_auth",
-                    "headers_template",
-                }
+                exclude=mutable_interface
             ) != original.interface.model_dump(
-                exclude={
-                    "setup_requests",
-                    "setup_secrets",
-                    "local_auth",
-                    "headers_template",
-                }
+                exclude=mutable_interface
             ):
                 raise ValueError("runtime_repair_readiness_interface_changed")
             if len(runtime.interface.setup_requests) != len(
@@ -887,8 +886,11 @@ local HTTP server token only, you may add interface.local_auth with server_envir
 server auth guard. ALK supplies a private random token; never write a value, disable auth, or use
 this for external account credentials. Preserve existing auth and header bindings. On
 credential_missing this local_auth plus header addition is the ONLY permitted correction.
-Every other
-runtime and interface field must remain identical, including command, model and response decoding.
+On chat_ingress_failed for an existing HTTP json_template interface, you may also correct
+response_path when the source response shape proves the selector wrong. Cite the response code.
+Use dot-separated keys and numeric list indexes, including negative indexes, not bracket indexing.
+Preserve the endpoint, protocol, request template, model, failure rule and completed-tool mappings.
+Every other runtime and interface field must remain identical, including command and model.
 Preserve requested provider/model intent. Do not invent secrets or bind simulator credentials.
 If source evidence does not justify a correction, stop without submitting a patch.
 The identical chat request and reset must pass after rebuilding before readiness is established."""

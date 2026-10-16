@@ -1047,6 +1047,8 @@ def test_readiness_patch_cannot_change_setup_protocol(tmp_path, setup_patch, cha
     [
         {"model": "different"},
         {"response_path": "error"},
+        {"path": "/different"},
+        {"protocol": "openai_chat"},
         {"request_template": {"fake": True}},
         {"failure_rule": None},
     ],
@@ -1069,6 +1071,71 @@ def test_readiness_patch_cannot_change_ingress(tmp_path, setup_patch, changes):
             patch,
             allowed_diagnostic_codes={"chat_ingress_failed"},
             available_secret_aliases=frozenset({"TARGET_TOKEN", "TARGET_PROJECT"}),
+        )
+
+
+@pytest.fixture
+def response_selector_patch(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'import os\ntoken = os.environ["API_TOKEN"]\n'
+        'def respond():\n    return {"output": [{"content": [{"text": "answer"}]}]}\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", port=8080, path="/chat", protocol="json_template",
+            request_template={"input": "{{messages}}"},
+            response_path="output[-1].content[0].text",
+        ),
+    ))
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.response_path = "output.-1.content.0.text"
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("app.py",), diagnostic_codes=("chat_ingress_failed",),
+        summary="Correct the response selector using the source response shape.",
+    )
+    return contract, patch
+
+
+def test_readiness_patch_corrects_source_backed_response_selector(tmp_path, response_selector_patch):
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+
+    contract, patch = response_selector_patch
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+    )
+    wrapper = create_chat_wrapper(repaired.runtime.interface, "http://localhost:8080")
+    response = wrapper._agent_response_from_payload(
+        {"output": [{"content": [{"text": "answer"}]}]},
+    )
+    assert response.content == "answer"
+    assert repaired.runtime.interface.model_dump(exclude={"response_path"}) == (
+        contract.runtime.interface.model_dump(exclude={"response_path"})
+    )
+
+
+def test_readiness_response_selector_requires_source_evidence(tmp_path, response_selector_patch):
+    contract, patch = response_selector_patch
+    patch = patch.model_copy(update={"evidence_paths": ()})
+    with pytest.raises(ValueError, match="runtime_repair_readiness_setup_evidence_required"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+
+
+def test_credential_patch_cannot_change_response_selector(tmp_path, response_selector_patch):
+    from fi.alk.harness.contract import LocalHttpAuth
+
+    contract, patch = response_selector_patch
+    patch.runtime.interface.local_auth = LocalHttpAuth(
+        server_environment="API_TOKEN", template_variable="local_token",
+    )
+    patch.runtime.interface.headers_template = {"Authorization": "Bearer {{local_token}}"}
+    patch = patch.model_copy(update={"diagnostic_codes": ("credential_missing",)})
+    with pytest.raises(ValueError, match="runtime_repair_readiness_interface_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"credential_missing"},
         )
 
 
