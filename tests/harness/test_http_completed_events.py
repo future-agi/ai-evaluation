@@ -344,3 +344,42 @@ def test_correlation_dot_segment_cannot_change_declared_path():
         result = invoke(wrapper(base))
         assert result.metadata['external_agent']['success'] is True
         assert requests[1] == ('GET', '/events/%2E%2E')
+
+
+def test_native_validation_failure_and_retry_are_recorded_once():
+    spec = {
+        **SPEC,
+        "action_id_path": "tool_call_id",
+        "observation_action_id_path": "tool_call_id",
+        "arguments_path": "tool_call.arguments",
+        "failure_events": [{"kind": "rejected", "action_id_path": "tool_call_id",
+                            "result_path": "message"}],
+    }
+    events = [
+        {"kind": "action", "tool_call_id": "first", "name": "edit",
+         "tool_call": {"arguments": '{"path":"a.py"}'}},
+        {"kind": "completed", "tool_call_id": "first", "result": "read", "failed": False},
+        {"kind": "action", "tool_call_id": "invalid", "name": "edit",
+         "tool_call": {"arguments": '{"path":7}'}},
+        {"kind": "rejected", "tool_call_id": "invalid", "message": "path must be a string"},
+        {"kind": "action", "tool_call_id": "retry", "name": "edit",
+         "tool_call": {"arguments": '{"path":"a.py"}'}},
+        {"kind": "completed", "tool_call_id": "retry", "result": "written", "failed": False},
+    ]
+    with server(pages=[{"items": events, "next": None}]) as (base, requests):
+        world = SimpleNamespace(calls=[])
+        target = _HostedChatTarget(
+            wrapper=wrapper(base, spec),
+            contract=SimpleNamespace(runtime=SimpleNamespace(
+                interface=SimpleNamespace(include_tools=False))),
+            world=world, scenario_key="case", scenario_id="one",
+        )
+        assert asyncio.run(target.say("edit")) == "Edited."
+        assert [(call.arguments, call.result, call.ok) for call in world.calls] == [
+            ({"path": "a.py"}, "read", True),
+            ({"path": 7}, "path must be a string", False),
+            ({"path": "a.py"}, "written", True),
+        ]
+        assert asyncio.run(target.say("thanks")) == "Edited."
+        assert len(world.calls) == 3
+        assert requests == [("POST", "/chat"), ("GET", "/events/conversation-1")] * 2
