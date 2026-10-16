@@ -532,3 +532,37 @@ def test_a_retried_run_start_sends_the_same_operation_id(monkeypatch):
     asyncio.run(client.start_run([1], [], 1))
 
     assert len(sent) == 2 and sent[0]["operation_id"] == sent[1]["operation_id"]
+
+
+def test_the_platform_check_of_a_build_repairs_without_asking_but_drops_still_ask(tmp_path, monkeypatch):
+    from fi.alk.harness.backends import ToolSpec
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+    runtime._published_fingerprint()
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(json.dumps({"name": "one", "instruction": "refund"}))
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
+    asked = []
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    async def handler(args):
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    runtime._ask = ask
+    _turn(runtime, {"content": "The environment is validated and sealed.", "builder_check": True})
+    assert runtime._repairing is True
+
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    goal = runtime._confirmed(ToolSpec("add_sub_goal", "", {}, handler))
+    drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
+    assert asyncio.run(submit.handler({"name": "one", "instruction": "cancel"})).get("is_error") is None
+    assert asyncio.run(goal.handler({"name": "refunded"})).get("is_error") is None
+    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
+    assert asked == ["drop_scenarios"]
+
+    asyncio.run(runtime._handle({"sequence": 2, "message_id": "m-2", "kind": "user_message", "payload": {"content": "make it harder"}}))
+    assert runtime._repairing is False

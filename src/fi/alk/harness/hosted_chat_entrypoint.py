@@ -444,7 +444,7 @@ class HostedChatRuntime:
         async def guarded(args: dict[str, Any]) -> Any:
             if spec.name == "submit_scenario" and (self._repairing or not self._changes_meaning(args)):
                 return await handler(args)
-            if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
+            if spec.name == "add_sub_goal" and (self._repairing or not self._replaces_sub_goal(args)):
                 return await handler(args)
             answer = await self._ask(
                 spec.name,
@@ -1126,7 +1126,8 @@ class HostedChatRuntime:
         assistant_message_id = str(uuid.uuid4())
         self._turn_acknowledged_through = sequence
         self._tool_names.clear()
-        self._repairing = False
+        # The platform's check of a finished build corrects the builder's own work, as a repair does.
+        self._repairing = bool(payload.get("builder_check"))
         await self.client.emit(
             "turn_started",
             stage=self.conversation.stage_name,
