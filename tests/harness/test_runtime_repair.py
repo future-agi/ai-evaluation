@@ -1476,3 +1476,24 @@ def test_submission_fallback_keeps_recent_bounded_source_evidence(tmp_path, depe
     assert "schema-marker-5" in evidence
     assert "schema-marker-0" not in evidence
     assert len(evidence) <= 24003
+
+
+def test_failure_event_repair_preserves_mapping_through_chat_transport(
+    tmp_path, observable_transport_patch,
+):
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+
+    contract, patch = observable_transport_patch
+    data = patch.runtime.model_dump()
+    failures = [{"kind": "rejected", "action_id_path": "call_id", "result_path": "message"}]
+    data["interface"]["completed_tool_events"]["failure_events"] = failures
+    patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    wrapper = create_chat_wrapper(repaired.runtime.interface, "http://localhost:8080")
+    assert [event.model_dump() for event in wrapper.completed_tool_events.failure_events] == failures
+    with pytest.raises(ValueError):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+        )

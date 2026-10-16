@@ -114,3 +114,22 @@ def test_a_complete_entrypoint_and_an_unreachable_one_both_pass():
     assert not [
         p for p in validate_contract(contract) if "needs-module-and-callable" in p
     ]
+
+
+def test_failure_event_schema_is_available_in_authoring_and_repair(tmp_path):
+    from fi.alk.harness.runtime_repair import _RuntimeSubmission
+    from fi.alk.harness.tools import contract_tools
+    from fi.simulate.agent.wrappers.http_events import CompletedToolFailureEvent
+
+    submit = next(tool for tool in contract_tools(tmp_path).tools if tool.name == "submit_contract")
+    initial = submit.input_schema["properties"]["runtime"]["properties"]["interface"]["properties"]["completed_tool_events"]
+    repair = _RuntimeSubmission.model_json_schema()
+    field = initial["properties"]["failure_events"]
+    assert field["maxItems"] == 8
+    assert field["items"] == CompletedToolFailureEvent.model_json_schema()
+    assert "$defs" not in initial
+    assert repair["$defs"]["CompletedToolEvents"]["properties"]["failure_events"]["items"] == {
+        "$ref": "#/$defs/CompletedToolFailureEvent",
+    }
+    assert repair["$defs"]["CompletedToolFailureEvent"] == field["items"]
+    assert field["items"]["required"] == ["kind", "action_id_path", "result_path"]

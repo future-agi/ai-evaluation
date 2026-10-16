@@ -433,3 +433,28 @@ def test_unrecognized_tool_error_message_stays_private(
     )
     assert trace["response_excerpt"] == ""
     assert "unregistered-secret-value" not in json.dumps(response.metadata)
+
+
+@pytest.mark.parametrize("status", ["completed", "in_progress"])
+def test_response_failure_events_preserve_status_and_dedup_guards(native_app, status):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    state["payload"]["output"][1] = {
+        "type": "rejected", "call_id": "call-1", "message": "invalid path", "status": status,
+    }
+    events = {**EVENTS, "failure_events": [
+        {"kind": "rejected", "action_id_path": "call_id", "result_path": "message"},
+    ]}
+    wrapper = create_chat_wrapper(
+        interface(completed_tools=None, completed_tool_events=events), base, secret_values={},
+    )
+    first = invoke(wrapper)
+    assert first.metadata["external_agent"]["success"] is (status == "completed")
+    if status == "completed":
+        assert first.metadata["native_completed_tools"] == [{
+            "name": "read_document", "arguments": {"path": "fixture.txt"},
+            "result": "invalid path", "ok": False,
+        }]
+        assert invoke(wrapper).metadata["native_completed_tools"] == []
+    else:
+        assert not first.metadata.get("native_completed_tools")
