@@ -647,7 +647,11 @@ def cast_tools(
         try:
             actor = SubActor.model_validate(
                 {
-                    **{key: value for key, value in args.items() if key not in ("primary_role", "origin") and value is not None},
+                    **{
+                        key: value
+                        for key, value in args.items()
+                        if key not in ("primary_role", "origin") and value is not None
+                    },
                     "origin": origin,
                 }
             )
