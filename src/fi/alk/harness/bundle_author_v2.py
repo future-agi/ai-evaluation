@@ -2105,6 +2105,8 @@ def resolve_environment_plan(
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
     compose = selected.compose_file if isinstance(selected, ComposeSelection) else None
+    if runtime_model.compose_image_services:
+        raise BundleAuthorError("runtime_compose_image_requires_container_runtime")
     from .contract import RuntimeInterface
 
     raw_interface = (contract_runtime or {}).get("interface") or {}
