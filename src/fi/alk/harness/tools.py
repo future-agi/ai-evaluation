@@ -23,12 +23,14 @@ from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
+    RuntimeInterface,
     RuntimeSecretFile,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
     LocalHttpAuth,
     known_modalities,
+    generated_chat_interface_problem,
     validate_contract,
 )
 from .instrumentation_evidence import detect_instrumentation
@@ -165,23 +167,9 @@ def accept_contract(
             "for memory-only state, or none when there is no state store. "
             "Omitting data_store does not declare a stateless agent."
         )
-    if (
-        require_setup_contract
-        and contract.modality == "chat"
-        and (
-            contract.runtime is None
-            or contract.runtime.interface is None
-            or not contract.runtime.interface.kind
-        )
-    ):
-        problems.append(
-            "missing-chat-interface: inspect the source and declare runtime.interface.kind "
-            "for its existing HTTP endpoint or callable callback. Declare command only for "
-            "a proven noninteractive entrypoint that consumes the bridge's JSON stdin, "
-            "ALK_USER_MESSAGE, or ALK_MESSAGES_JSON. An interactive CLI or startup command "
-            "alone is not a chat interface. The declared interface must still pass a real "
-            "chat readiness check."
-        )
+    if require_setup_contract and contract.modality == "chat":
+        if problem := generated_chat_interface_problem(contract.runtime):
+            problems.append(problem)
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -789,16 +777,13 @@ def contract_tools(
                             "properties": {
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["http", "websocket", "callable"],
-                                    "description": "How the simulator reaches the running "
-                                    "agent. HTTP is currently the hosted repository path.",
+                                    "enum": ["http", "websocket", "callable", "command"],
+                                    "description": RuntimeInterface.model_fields["kind"].description,
                                 },
                                 "protocol": {
                                     "type": "string",
                                     "enum": ["fi.alk", "openai_chat", "json_template"],
-                                    "description": "The submitted endpoint's request/response "
-                                    "envelope. Use json_template for any other source-owned JSON "
-                                    "API and describe its exact envelope below.",
+                                    "description": RuntimeInterface.model_fields["protocol"].description,
                                 },
                                 "model": {
                                     "type": "string",
