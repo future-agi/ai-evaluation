@@ -463,7 +463,7 @@ class HostedChatRuntime:
                 spec.name,
                 {
                     "question": f"Confirm this change: {spec.name} "
-                    + json.dumps(args, sort_keys=True, default=str)[:600],
+                    + json.dumps(args, sort_keys=True, default=str, indent=1),
                     "options": [_CONFIRM, "No"],
                 },
                 None,

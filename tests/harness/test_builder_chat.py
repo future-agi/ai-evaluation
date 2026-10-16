@@ -310,6 +310,10 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     answers.append("No")
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
     assert "drop_scenarios" in asked[0] and "add_sub_goal" in asked[2]
+    long_meaning = {**meaning, "setup_code": "def setup(world):\n" + "    pass\n" * 200 + "    world.done()"}
+    answers.append("No")
+    assert asyncio.run(submit.handler(long_meaning))["is_error"] is True
+    assert "world.done()" in asked[-1]
 
     runtime._note_health("one is broken")
     answers.append("No")
