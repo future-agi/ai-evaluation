@@ -18,6 +18,7 @@ from typing import Any, Iterable
 from fi import agentcc
 
 from .backends import SessionSpec, resolve
+from .backends.files import SECRET_REFUSAL, above_secrets, secret_path
 
 # The first backend's default, kept importable because callers and tests name it. The model a
 # run actually gets comes from chosen_model, which asks the selected backend.
@@ -261,17 +262,6 @@ UNWANTED = (
 )
 
 
-# Where credentials live in a sandbox or a checkout, and what reads them. A session never needs
-# any of them: the platform hands secrets to processes as files and environment, not to a model.
-_SECRET_PATHS = re.compile(
-    r"(^|/)(\.env[^/]*|\.claude|\.ssh|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc"
-    r"|\.authoring-credentials)(/|$)"
-    r"|^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
-    r"|(credential|secret|token|service[-_]?account)[^/]*\.json$|\.(pem|key|p12)$",
-    re.IGNORECASE,
-)
-# A search rooted here would reach into where credentials live.
-_SECRET_ROOTS = re.compile(r"^/(proc|run/futureagi|run/secrets)/")
 _SECRET_COMMANDS = re.compile(
     r"\b(env|printenv|export\s+-p|declare\s+-[a-z]*x|set)\s*($|[|;&>])|/proc/"
     r"|\b(ps|pgrep|pkill|top|htop)\b"
@@ -279,11 +269,6 @@ _SECRET_COMMANDS = re.compile(
     r"|os\.environ|getenv|process\.env|/run/futureagi|/run/secrets|\.env\b|\.claude/"
     r"|GOOGLE_APPLICATION_CREDENTIALS|simulator-secrets|-sa\.json",
     re.IGNORECASE,
-)
-SECRET_REFUSAL = (
-    "Environment variables, credentials, keys and tokens are kept out of this session on purpose. "
-    "Do not read, print or work around this; tell the person you cannot share or handle secrets, "
-    "and carry on with the rest of the task."
 )
 
 
@@ -333,14 +318,9 @@ def secret_refusal(tool: str, arguments: dict[str, Any]) -> str:
         if arguments.get(key)
     ]
     pattern = str(arguments.get("pattern") or "") if tool == "Glob" else ""
-    # Judged on where a path leads, not how it is written: `..` and symlinks are resolved.
-    resolved = [os.path.realpath(one) for one in [*paths, pattern] if one]
-    if any(_SECRET_PATHS.search(one) for one in [*paths, pattern, *resolved] if one):
+    if any(secret_path(one) for one in [*paths, pattern] if one):
         return SECRET_REFUSAL
-    if tool in ("Grep", "Glob") and any(
-        _SECRET_ROOTS.match(root + "/") or root in ("/", "/run", os.path.expanduser("~"))
-        for root in resolved[: len(paths)]
-    ):
+    if tool in ("Grep", "Glob") and any(above_secrets(one) for one in paths):
         return SECRET_REFUSAL
     return ""
 

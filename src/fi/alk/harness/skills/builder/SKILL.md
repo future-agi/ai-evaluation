@@ -190,8 +190,8 @@ The suite must always be runnable and true to the agent, the world and the contr
 - **Health**: the brief carries a health check taken when the conversation opened. Run `check_health`
   after every change too. Anything broken (a failing proof, a sub-goal or tool that no longer exists,
   scenarios out of step with the world or contract, the index or sealed bundle out of step with the
-  suite, an error from your own work) is yours to repair without being asked, because restoring a
-  correct, runnable suite changes nothing the person decided. Repair it, save, and open your next
+  suite, an error from your own work) is yours to find and repair. A repair that keeps what each
+  scenario tests goes ahead; one that changes it is confirmed like any other change. Repair, save, and open your next
   reply with what you found broken (which scenarios, by number, and why) and exactly how you fixed
   each.
 - **Never call the suite healthy or ready unless the last `check_health` said so.** If problems
