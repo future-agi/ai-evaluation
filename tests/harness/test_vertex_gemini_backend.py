@@ -323,99 +323,78 @@ def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
     assert "ANTHROPIC_BASE_URL" not in straight
 
 
-def test_schema_preserves_mixed_scalar_union_in_installed_sdk():
-    from google.genai import types
-    from fi.alk.harness.backends.vertex_gemini import _gemini_schema
+def _declaration(schema):
+    from fi.alk.harness.backends import ToolSpec
+    from fi.alk.harness.backends.vertex_gemini import _spec_tool
 
-    converted = _gemini_schema({
-        "type": "object",
-        "properties": {"values": {"type": "array", "items": {
-            "type": ["string", "integer", "number", "boolean", "null"]}}},
-    })
-    schema = types.Schema.model_validate(converted)
-    items = schema.properties["values"].items
-    assert items.type is None
-    assert items.nullable is True
-    assert [branch.type for branch in items.any_of] == [
-        types.Type.STRING, types.Type.INTEGER, types.Type.NUMBER, types.Type.BOOLEAN,
-    ]
+    async def handler(args):
+        return args
+
+    return _spec_tool("submit", ToolSpec(
+        name="submit", description="Submit", input_schema=schema, handler=handler,
+    ))._get_declaration()
 
 
-def test_schema_preserves_existing_nullable_string_shape():
-    from google.genai import types
-    from fi.alk.harness.backends.vertex_gemini import _gemini_schema
+def test_declaration_preserves_json_schema_on_vertex_wire():
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from google.genai import _common
+    from google.genai.models import _GenerateContentParameters_to_vertex
+    from google.genai.types import _GenerateContentParameters
+    from fi.alk.harness.runtime_repair import _RuntimeSubmission
+    from fi.alk.harness.repair_authoring import _PatchSubmission
 
-    converted = _gemini_schema({"type": ["string", "null"], "description": "value"})
-    assert converted == {"type": "string", "nullable": True, "description": "value"}
-    assert types.Schema.model_validate(converted).type == types.Type.STRING
-
-
-def test_schema_preserves_nonnullable_scalar_union():
-    from google.genai import types
-    from fi.alk.harness.backends.vertex_gemini import _gemini_schema
-
-    converted = _gemini_schema({"type": ["integer", "boolean"]})
-    schema = types.Schema.model_validate(converted)
-    assert schema.nullable is None
-    assert [branch.type for branch in schema.any_of] == [types.Type.INTEGER, types.Type.BOOLEAN]
-
-
-def test_submit_contract_success_values_keep_numeric_and_null_sdk_types(tmp_path):
-    from google.genai import types
-    from fi.alk.harness.backends.vertex_gemini import _json_schema
-    from fi.alk.harness.tools import contract_tools
-
-    submit = next(
-        tool
-        for tool in contract_tools(tmp_path).tools
-        if tool.name == "submit_contract"
-    )
-    declaration = types.FunctionDeclaration(
-        name=submit.name, parameters=_json_schema(submit.input_schema)
-    )
-    interface = declaration.parameters.properties["runtime"].properties["interface"]
-    predicate = interface.properties["failure_rule"].properties["success_values"]
-    assert "[null] for JSON null" in predicate.description
-    assert "[0] for numeric zero" in predicate.description
-    assert "[false] for boolean false" in predicate.description
-    assert "empty list is invalid" in predicate.description
-    items = predicate.items
-    assert items.nullable is True
-    assert [branch.type for branch in items.any_of] == [
-        types.Type.STRING,
-        types.Type.NUMBER,
-        types.Type.BOOLEAN,
-    ]
-
-
-def test_submit_contract_map_shapes_survive_vertex_conversion(tmp_path):
-    from google.genai import types
-    from fi.alk.harness.backends.vertex_gemini import _json_schema
-    from fi.alk.harness.tools import contract_tools
-
-    submit = next(
-        tool
-        for tool in contract_tools(tmp_path).tools
-        if tool.name == "submit_contract"
-    )
-    declaration = types.FunctionDeclaration(
-        name=submit.name, parameters=_json_schema(submit.input_schema)
-    )
-    runtime = declaration.parameters.properties["runtime"]
-    config = types.Schema.model_validate(
-        runtime.properties["config_files"].additional_properties
-    )
-    assert config.type == types.Type.OBJECT
-    assert config.additional_properties is False
-    assert set(config.properties) == {"format", "values", "secret_aliases"}
-    for name in ("values", "secret_aliases"):
-        entry = types.Schema.model_validate(
-            config.properties[name].additional_properties
+    for model in (_RuntimeSubmission, _PatchSubmission):
+        original = model.model_json_schema()
+        supplied = deepcopy(original)
+        declaration = _declaration(supplied)
+        assert declaration.parameters is None
+        assert declaration.parameters_json_schema == original
+        params = _GenerateContentParameters(
+            model="gemini-test", contents="test",
+            config={"tools": [{"function_declarations": [declaration]}]},
         )
-        assert entry.type == types.Type.STRING
-    secrets = types.Schema.model_validate(
-        runtime.properties["secret_files"].additional_properties
-    )
-    assert secrets.type == types.Type.ARRAY
-    assert secrets.items.type == types.Type.OBJECT
-    assert {"alias", "destination"} <= set(secrets.items.required)
+        wire = _GenerateContentParameters_to_vertex(SimpleNamespace(vertexai=True), _common.convert_to_dict(params))
+        wire = _common.encode_unserializable_types(_common.convert_to_dict(wire))
+        actual = wire["tools"][0]["functionDeclarations"][0]["parameters_json_schema"]
+        assert actual == original
+        assert supplied == original
+    assert actual["$defs"]["RepairPatchOperation"]["properties"]["op"]["$ref"]
+
+
+def test_runtime_repair_declaration_exposes_nested_observation_schema():
+    from fi.alk.harness.runtime_repair import _RuntimeSubmission
+
+    schema = _declaration(_RuntimeSubmission.model_json_schema()).parameters_json_schema
+    assert schema["properties"]["runtime"] == {"$ref": "#/$defs/Runtime"}
+    interface = schema["$defs"]["RuntimeInterface"]
+    assert {"completed_tool_events", "completed_tools"} <= set(interface["properties"])
+    events = schema["$defs"]["CompletedToolEvents"]["properties"]
+    assert {"path", "correlation_header", "action_id_path", "result_path"} <= set(events)
+    assert events["source"]["enum"] == ["endpoint", "response"]
+    assert events["max_pages"]["maximum"] == 20
+
+
+def test_submit_contract_schema_preserves_scalar_and_map_constraints(tmp_path):
+    from fi.alk.harness.tools import contract_tools
+
+    submit = next(item for item in contract_tools(tmp_path).tools if item.name == "submit_contract")
+    actual = _declaration(submit.input_schema).parameters_json_schema
+    assert actual == submit.input_schema
+    runtime = actual["properties"]["runtime"]["properties"]
+    predicate = runtime["interface"]["properties"]["failure_rule"]["properties"]["success_values"]
+    assert "[null] for JSON null" in predicate["description"]
+    assert set(predicate["items"]["type"]) == {"string", "number", "boolean", "null"}
+    config = runtime["config_files"]["additionalProperties"]
+    assert config["additionalProperties"] is False
+    assert set(config["properties"]) == {"format", "values", "secret_aliases"}
+
+
+def test_declaration_expands_python_shorthand():
+    schema = _declaration({"name": str, "count": int, "rows": list}).parameters_json_schema
+    assert schema == {
+        "type": "object", "properties": {
+            "name": {"type": "string"}, "count": {"type": "integer"},
+            "rows": {"type": "array", "items": {"type": "object"}},
+        }, "required": ["name", "count", "rows"],
+    }
