@@ -462,6 +462,21 @@ class HostedChatRuntime:
 
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
+                if spec.name in ("drop_scenarios", "drop_scenario") or (
+                    spec.name == "submit_scenario" and self._changes_situation(args)
+                ):
+                    return {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Not done: during the build and its check a scenario keeps the "
+                                "situation it tests. Correct its answer key (solution, fixed values, "
+                                "sub-goals, setup) for that same situation; if the agent fails it, that "
+                                "is the agent's fault: report it in your summary.",
+                            }
+                        ],
+                        "is_error": True,
+                    }
                 return await handler(args)
             if spec.name == "submit_scenario" and not self._changes_meaning(args):
                 return await handler(args)
@@ -493,6 +508,18 @@ class HostedChatRuntime:
             }
 
         return replace(spec, handler=guarded)
+
+    def _changes_situation(self, args: dict[str, Any]) -> bool:
+        """Whether a submission changes what an existing scenario tests, not how it is graded."""
+        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
+        try:
+            held = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return any(
+            field in args and args.get(field) != held.get(field)
+            for field in ("use_case", "branch", "tests", "coverage")
+        )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
         from .catalogue import load_catalogue
