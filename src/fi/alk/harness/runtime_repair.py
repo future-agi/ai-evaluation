@@ -337,7 +337,6 @@ def _provider_selector_candidate(
         marker not in guidance
         or closing not in guidance
         or not interface
-        or not interface.model
     ):
         return None
     logs = guidance.rsplit(marker, 1)[1].split(closing, 1)[0]
@@ -429,8 +428,10 @@ def _provider_selector_candidate(
 
 def _provider_values(runtime: Runtime) -> tuple[str, ...]:
     interface = runtime.interface
-    if not interface or not interface.model:
+    if not interface:
         return ()
+    if not interface.model:
+        return tuple(dict.fromkeys(runtime.extras))
     namespace = interface.model.split("/", 1)[0].strip().lower()
 
     def canonical(value: str) -> str:

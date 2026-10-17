@@ -706,8 +706,9 @@ def test_explicit_install_hint_rejects_excluded_or_external_manifest(tmp_path):
 @pytest.mark.parametrize(
     "diagnostic_code", ["chat_ingress_failed", "chat_tool_evidence_unverified"]
 )
+@pytest.mark.parametrize("interface_model", ["vertex_ai/gemini-flash", None])
 def test_unconfigured_provider_selects_source_declared_runtime_provider(
-    tmp_path, monkeypatch, diagnostic_code
+    tmp_path, monkeypatch, diagnostic_code, interface_model
 ):
     import asyncio
 
@@ -729,7 +730,7 @@ def test_unconfigured_provider_selects_source_declared_runtime_provider(
             interface=RuntimeInterface(
                 kind="http",
                 protocol="openai_chat",
-                model="vertex_ai/gemini-flash",
+                model=interface_model,
                 port=8080,
                 path="/chat",
             ),
