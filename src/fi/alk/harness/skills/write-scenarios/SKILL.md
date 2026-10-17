@@ -642,7 +642,9 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 Only when `inspect_world` lists sub-actors in the cast. A coordinate whose level is named for a
 sub-actor binds that sub-actor. Bind one with `sub_actors` when the scenario is about how the agent
 copes with it, and say when it enters: `always`, `mid_journey` after the agent's
-turn N, `on_tool` on the Nth call of a tool, or `on_keyword` after a turn containing one of its words. Use `probability` only when the scenario
+turn N, `on_tool` on the Nth call of a tool, or `on_keyword` after a turn containing one of its words.
+Pick a moment the conversation reaches before the person could be done: when the agent can finish
+the task in its first reply, there is no turn 2, so use `always`. Use `probability` only when the scenario
 is about the agent coping whether or not the sub-actor shows up, and only with a sub-goal whose
 `sub_actor` names it, since a sub-goal about something that did not happen cannot be graded. Most scenarios bind none; presence is a condition on some scenarios, not on every one.
 

@@ -299,3 +299,21 @@ def test_a_heard_agent_turn_reaches_the_sub_actors_once_and_silences_the_person_
 
     asyncio.run(exercise())
     assert heard == ["pass", "hold"]
+
+
+def test_someone_who_gives_the_phone_back_lets_the_person_speak_next():
+    voice, played = _voice(kind="mid_journey", turn=1, channel="audio_handoff", lines="Here they are. [BACK]", max_lines=3)
+    held = _run(voice, (1, "What is the code?"), (2, "Thanks."))
+    assert played == [("said", "Here they are.")]
+    assert held == [True, False]
+
+
+def test_a_line_that_cannot_be_heard_never_leaves_the_person_silent():
+    class Silent:
+        def synthesize(self, text: str):
+            raise RuntimeError("voice not found")
+
+    voice, played = _voice(kind="mid_journey", turn=1, channel="audio_handoff", lines="Mine now.", max_lines=3)
+    voice.tts, voice.fallback_tts = Silent(), None
+    held = _run(voice, (1, "Hello?"), (2, "Anyone there?"))
+    assert played == [] and held == [False, False]

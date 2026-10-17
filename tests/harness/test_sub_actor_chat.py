@@ -119,3 +119,64 @@ def test_the_hosted_chat_target_hears_a_second_participant_by_name():
     target._messages = []
     target.interject("Second person", "add one")
     assert target._messages == [{"role": "user", "name": "Second_person", "content": "add one"}]
+
+
+def test_the_person_is_told_who_else_is_in_the_chat(tmp_path, monkeypatch):
+    from fi.alk.harness.contract import AgentContract
+
+    seen = []
+
+    class Recording(_Stage):
+        def __init__(self, spec, name=""):
+            super().__init__(spec, name)
+            seen.append((name, spec.system_prompt))
+
+        async def say(self, _text):
+            return SimpleNamespace(text="Thanks.\n[DONE]")
+
+        spent_usd = 0.0
+
+    class Agent(_Target):
+        async def open(self):
+            return
+
+        async def say(self, _text):
+            return "Done."
+
+        async def close(self):
+            return
+
+        spent_usd = 0.0
+
+    actor = SubActor(id="subactor_friend", name="Friend", channel="thread_message", behaviour=Behaviour(prompt="x"))
+    _setup(tmp_path, monkeypatch, actor, Trigger(kind="mid_journey", turn=2))
+    monkeypatch.setattr(conversation, "Stage", Recording)
+    scenario = Scenario(name="s", instruction="Order one item.", sub_actors=[Binding(id=actor.id, trigger=Trigger(kind="mid_journey", turn=2))])
+    contract = AgentContract(agent="shop", modality="chat", real_use_cases=["order"])
+    asyncio.run(conversation.converse(Agent(), scenario, contract, world_root=tmp_path, seed="run-1"))
+    person = next(prompt for name, prompt in seen if name == "customer")
+    assert "Friend is in this chat with you" in person and "Give them a turn" in person
+
+
+def test_a_participant_who_writes_again_sees_what_it_already_wrote(tmp_path, monkeypatch):
+    prompts = []
+
+    class Remembering(_Stage):
+        def __init__(self, spec, name=""):
+            super().__init__(spec, name)
+            prompts.append(spec.system_prompt)
+
+    actor = SubActor(
+        id="subactor_friend", name="Friend", channel="thread_message", behaviour=Behaviour(prompt="x", max_lines=2)
+    )
+    others = _setup(tmp_path, monkeypatch, actor, Trigger(kind="mid_journey", turn=1))
+    monkeypatch.setattr(conversation, "Stage", Remembering)
+    target = _Target()
+
+    async def scenario():
+        await others.after_agent(1, "Hello.", target)
+        await others.after_agent(2, "Anything else?", target)
+
+    asyncio.run(scenario())
+    assert "What you have said so far" not in prompts[0]
+    assert "What you have said so far: Can you add one more for me?" in prompts[1]

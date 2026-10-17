@@ -52,7 +52,7 @@ from fi.simulate.results.futureagi import target_provider_usage
 from fi.simulate.runtime.report import SimulationReport
 from fi.simulate.runtime.run import TestCaseStatus
 from fi.simulate.runtime.runner import SimulationRunner
-from fi.simulate.simulation.sub_actors import tells_person
+from fi.simulate.simulation.sub_actors import with_others
 
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
@@ -664,7 +664,7 @@ def _build_spec(
         scenario=caller_scenario(
             name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
             persona=doc.get("persona"),
-            situation=_with_sub_actors(doc["instruction"], sub_actors or []),
+            situation=with_others(doc["instruction"], sub_actors or []),
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
@@ -772,20 +772,6 @@ def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
         except ValueError:
             continue
     return bindings
-
-
-def _with_sub_actors(instruction: str, voices: list[dict[str, Any]]) -> str:
-    """The person's situation, saying who else is part of the call and what the person does then."""
-    lines = [
-        tells_person(
-            str(one.get("channel") or ""),
-            f"{one['name']} ({one['role']})" if one.get("role") else str(one["name"]),
-        )
-        for one in voices
-        if isinstance(one, dict) and one.get("name")
-    ]
-    lines = [line for line in lines if line]
-    return instruction + "\n\n" + "\n".join(lines) if lines else instruction
 
 
 def read_tool_trace(dsn: str) -> list[dict[str, Any]]:

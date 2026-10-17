@@ -51,6 +51,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "delivered": True,
         "enters": "thread",
         "about": "a second participant in the conversation, seen by the agent and the person",
+        "tells_person": "{who} is in this chat with you and may write to the agent too. Give them a turn "
+        "before you end the conversation.",
         "setting": "You are a second person in a chat between someone and an automated agent. Never claim "
         "to be the other person.",
     },
@@ -93,9 +95,29 @@ def speaking_as(actor: dict[str, Any]) -> str:
     return f"You are {actor.get('name') or 'someone'}{role}. {setting}\n\n{about}".strip()
 
 
+def speaking_on(actor: dict[str, Any], said: list[str]) -> str:
+    """The opening of a sub-actor's next line: who it is, and the last of what it has said, so it stays itself."""
+    heard = " | ".join(said[-3:])
+    return speaking_as(actor) + (f"\n\nWhat you have said so far: {heard}" if heard else "")
+
+
 def tells_person(channel: str, who: str) -> str:
     template = (CHANNELS.get(channel) or {}).get("tells_person") or ""
     return template.format(who=who) if template else ""
+
+
+def with_others(instruction: str, participants: list[dict[str, Any]]) -> str:
+    """The person's situation, saying who else is there and what the person does then."""
+    lines = [
+        tells_person(
+            str(one.get("channel") or ""),
+            f"{one['name']} ({one['role']})" if one.get("role") else str(one["name"]),
+        )
+        for one in participants
+        if isinstance(one, dict) and one.get("name")
+    ]
+    lines = [line for line in lines if line]
+    return instruction + "\n\n" + "\n".join(lines) if lines else instruction
 
 
 @dataclass

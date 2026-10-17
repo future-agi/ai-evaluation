@@ -14,6 +14,7 @@ from fi.alk.harness.bundle_v2 import EvidenceSeam
 
 from fi.alk.harness import call_runner as cr
 from fi.alk.harness.cast import Behaviour, Cast, SubActor, save_cast
+from fi.simulate.simulation.sub_actors import with_others
 
 _CAST = Cast(
     sub_actors=[
@@ -78,12 +79,13 @@ def test_with_the_switch_off_nothing_is_carried(tmp_path, monkeypatch):
 
 def test_the_caller_is_told_who_else_is_there():
     voices = [{"name": "Bystander", "role": "someone near the caller", "channel": "audio_mix"}]
-    assert "Bystander (someone near the caller)" in cr._with_sub_actors("Book it.", voices)
-    assert cr._with_sub_actors("Book it.", []) == "Book it."
+    assert "Bystander (someone near the caller)" in with_others("Book it.", voices)
+    assert with_others("Book it.", []) == "Book it."
 
 
 def test_the_caller_is_told_what_to_do_when_someone_takes_the_line():
-    assert "say nothing" in cr._with_sub_actors("Book it.", [{"name": "Partner", "channel": "audio_handoff"}])
+    assert "say nothing" in with_others("Book it.", [{"name": "Partner", "channel": "audio_handoff"}])
+    assert "Give them a turn" in with_others("Order it.", [{"name": "Friend", "channel": "thread_message"}])
 
 
 def test_turns_count_only_the_person_and_the_agent():

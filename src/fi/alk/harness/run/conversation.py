@@ -215,6 +215,7 @@ class _ChatSubActors:
 
         # The run's own seed, so one draw decides a probability binding.
         self.states = {one["id"]: Entering(one, seed) for one in self.entering}
+        self.said: dict[str, list[str]] = {}
 
     async def after_agent(self, turns: int, reply: str, target: Any) -> list[Exchange]:
         from fi.simulate.simulation.sub_actors import Moment
@@ -238,12 +239,13 @@ class _ChatSubActors:
         return entered
 
     async def _enter(self, one: dict[str, Any], reply: str, target: Any) -> Exchange | None:
-        from fi.simulate.simulation.sub_actors import speaking_as
+        from fi.simulate.simulation.sub_actors import speaking_on
 
+        said_before = self.said.setdefault(one["id"], [])
         async with Stage(
             SessionSpec(
                 system_prompt=(
-                    speaking_as(one) + "\n\nWrite one short message, in your own words and language, as "
+                    speaking_on(one, said_before) + "\n\nWrite one short message, in your own words and language, as "
                     "yourself. Output only the message."
                 ),
                 max_turns=1,
@@ -255,6 +257,7 @@ class _ChatSubActors:
             said = (await stage.say(f"The agent just wrote: {reply}")).text.strip()
         if not said:
             return None
+        said_before.append(said)
         interject = getattr(target, "interject", None)
         if callable(interject):
             interject(one["name"], said)
@@ -273,14 +276,16 @@ async def converse(
 ) -> Transcript:
     """Run one scenario as a conversation and return what happened."""
     transcript = Transcript()
+    from fi.simulate.simulation.sub_actors import with_others
+
     from ..simulator import load_simulator_prompt
 
+    others = _ChatSubActors(scenario, world_root, model, seed or secrets.token_hex(8))
     customer = Stage(
         SessionSpec(
-            system_prompt=customer_prompt(
-                scenario,
-                contract,
-                load_simulator_prompt(world_root) if world_root else "",
+            system_prompt=with_others(
+                customer_prompt(scenario, contract, load_simulator_prompt(world_root) if world_root else ""),
+                others.entering,
             ),
             max_turns=1,
             model=chosen_model(model),
@@ -299,7 +304,6 @@ async def converse(
     def record(speaker: str, text: str) -> None:
         keep(Exchange(speaker, text))
 
-    others = _ChatSubActors(scenario, world_root, model, seed or secrets.token_hex(8))
     await target.open()
     await customer.__aenter__()
     try:

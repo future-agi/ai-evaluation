@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from fi.simulate.simulation.engines.caller_barge_in import complete_text, synthesize_frames
-from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Entering, Moment, enters, speaking_as
+from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Entering, Moment, enters, speaking_as, speaking_on
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,11 @@ _BACKGROUND = (
     "under 15 words, in your own voice and language. Never claim to be the caller and never address the "
     "agent by a name. Output only the lines."
 )
+# Ends a line whose speaker gives the line back, so the person speaks next.
+_BACK = "[BACK]"
 _NEXT_LINE = (
     "\n\nThe agent's last words: {said}\n\nSay your next line out loud, under 30 words, in your own "
-    "voice. Output only the line."
+    f"voice. Output only the line. If you give the line back with it, end it with {_BACK}."
 )
 
 
@@ -130,8 +132,7 @@ class SubActorVoice:
         """React to one committed agent turn. True while this sub-actor holds the line."""
         try:
             if self.entering.holding():
-                await self._speak_next(last_text)
-                return True
+                return await self._speak_next(last_text)
             if self.answers_first:
                 return False
             if self.entering.entered and enters(self.channel) == "mixed":
@@ -175,18 +176,19 @@ class SubActorVoice:
     async def _speak_next(self, last_text: str) -> bool:
         if self.say is None:
             return False
-        opening = speaking_as(self.actor)
-        heard = " | ".join(event["text"] for event in self._events[-3:])
-        prompt = opening + (f"\n\nWhat you have said so far: {heard}" if heard else "")
+        prompt = speaking_on(self.actor, [event["text"] for event in self._events])
         lines = await self._write_lines(prompt + _NEXT_LINE.format(said=last_text or "(nothing yet)"))
-        if not lines:
-            return False
-        frames = await self._voiced(lines[0])
+        line = lines[0].removesuffix(_BACK).strip() if lines else ""
+        frames = await self._voiced(line) if line else []
         if not frames:
+            # A line that cannot be heard gives the line back, so the person is never left silent.
+            self.entering.turns_left = 0
             return False
         started = self.clock()
-        await self.say(frames, lines[0], str(self.actor.get("name") or "someone"))
-        self._record("spoke", lines[0], started)
+        await self.say(frames, line, str(self.actor.get("name") or "someone"))
+        self._record("spoke", line, started)
+        if lines[0].endswith(_BACK):
+            self.entering.turns_left = 0
         return True
 
     def _record(self, kind: str, text: str, started: float, **extra: Any) -> None:
