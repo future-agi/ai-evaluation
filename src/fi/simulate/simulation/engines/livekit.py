@@ -2357,9 +2357,10 @@ class LiveKitEngine(BaseEngine):
 
                 session.on("agent_state_changed", on_simulator_state_changed)
 
+            end_requested = getattr(customer_agent, "end_requested", None)
             sub_actors = SubActorsOnCall(
                 self._sub_actor_voices(customer_agent, models, session, seed=run_id),
-                on_handed_over=customer_agent.end_requested.set,
+                on_handed_over=end_requested.set if end_requested is not None else None,
             )
             customer_agent._sub_actor_turn = sub_actors.agent_turn if sub_actors else None
 
