@@ -166,6 +166,19 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     assert calls[1].error == "declined"
 
 
+def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_path: Path) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text(
+        "".join(
+            json.dumps({"name": "verify_otp", "arguments": {}, "output": output, "is_error": False}) + "\n"
+            for output in ("{'verified': True}", '{"verified": true}', "sent")
+        ),
+        encoding="utf-8",
+    )
+    calls = cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    assert [call.result for call in calls] == [{"verified": True}, {"verified": True}, "sent"]
+
+
 def test_file_tool_trace_clear_removes_previous_attempt(tmp_path: Path) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
     trace.write_text("stale\n", encoding="utf-8")

@@ -28,6 +28,7 @@ Three sub-systems (world-handle-interface.md, hosted-execution-seams.md v1.15 §
 
 from __future__ import annotations
 
+import ast
 import atexit
 import asyncio
 import gc
@@ -832,13 +833,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         if not isinstance(arguments, dict):
             arguments = {}
         ok = bool(record.get("ok", True))
-        raw_result = record.get("result")
-        if isinstance(raw_result, str):
-            result: Any = _truncate(raw_result)
-        else:
-            # Already parsed JSON (dict/list/etc, psycopg's own jsonb decoding) -- per
-            # world-handle-interface.md, only the STRING form is truncated at 2000 chars.
-            result = raw_result
+        result = _structured(record.get("result"))
         error = _truncate(str(record.get("error") or ""))
         raw_at = record.get("at")
         at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
@@ -907,7 +902,7 @@ def _collect_file_tool_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             Call(
                 name=name,
                 arguments=arguments,
-                result=None if is_error else output,
+                result=None if is_error else _structured(output),
                 ok=not is_error,
                 error=str(output) if is_error and output is not None else None,
                 at=float(raw_at) if isinstance(raw_at, (int, float)) else 0.0,
@@ -986,7 +981,7 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 Call(
                     name=name,
                     arguments=arguments,
-                    result=raw.get("result") if ok else None,
+                    result=_structured(raw.get("result")) if ok else None,
                     ok=ok,
                     error=str(raw.get("error") or ""),
                     refused=not ok,
@@ -994,6 +989,22 @@ def _collect_provider_tool_calls(case: Any) -> tuple[Call, ...]:
                 )
             )
     return tuple(calls)
+
+
+def _structured(value: Any) -> Any:
+    """A tool result that arrives as the text of a dict or list is read back into one, so checks see one shape."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text[:1] in ("{", "["):
+        for parse in (json.loads, ast.literal_eval):
+            try:
+                parsed = parse(text)
+            except (ValueError, SyntaxError, MemoryError, RecursionError):
+                continue
+            if isinstance(parsed, (dict, list)):
+                return parsed
+    return _truncate(value)
 
 
 def _truncate(value: str, *, limit: int = _RESULT_TRUNCATE_CHARS) -> str:
