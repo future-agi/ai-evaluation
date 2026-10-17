@@ -1219,6 +1219,13 @@ async def request_runtime_plan_patch(
                 diagnostic_codes=tuple(sorted(allowed)),
                 summary=submission.summary,
             )
+            if (
+                missing_loader
+                and patch.runtime_dependencies is None
+                and patch.runtime.execution != "compose"
+                and not patch.runtime.compose_file
+            ):
+                raise ValueError("runtime_repair_dependency_seam_unresolved")
             validate_runtime_plan_patch(
                 source_root,
                 contract,
