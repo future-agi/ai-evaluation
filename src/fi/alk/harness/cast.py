@@ -82,6 +82,8 @@ class SubActor(BaseModel):
     channel: str
     origin: str = "derived"
     depends_on: list[str] = Field(default_factory=list)
+    # Who a speaking sub-actor is, in the caller persona's fields; how it sounds is chosen from it.
+    persona: dict[str, Any] = Field(default_factory=dict)
     behaviour: Behaviour | None = None
     faults: list[FaultProfile] = Field(default_factory=list)
     # inbound_message: what arrives in the world mid-task, {"collection": ..., "record": {...}}.
@@ -290,11 +292,22 @@ def bound_participants(bindings: list[Binding], cast: Cast) -> list[dict[str, An
                 "role": actor.role,
                 "channel": actor.channel,
                 "behaviour": actor.behaviour.model_dump() if actor.behaviour else {},
+                "persona": {**actor.persona, "name": actor.persona.get("name") or actor.name},
+                "about": _described(actor),
                 "inbound": dict(actor.inbound),
                 "trigger": binding.trigger.model_dump(),
             }
         )
     return entering
+
+
+def _described(actor: SubActor) -> str:
+    """Who a sub-actor is and what it wants, the way the caller's persona is put to the simulator."""
+    from .scenario import Persona
+
+    who = Persona.model_validate({**actor.persona, "name": actor.persona.get("name") or actor.name})
+    wants = actor.behaviour.prompt if actor.behaviour else ""
+    return "\n\n".join(part for part in (who.format_persona(), wants) if part)
 
 
 def bound_voices(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:

@@ -78,8 +78,12 @@ from .simulator_voice import (
     READINESS_TIMEOUT_SECONDS,
     SIMULATOR_MODEL_ENV,
     caller_scenario,
+    persona_emotion,
+    persona_speech_rate,
+    persona_voice,
     simulation_spec,
     simulator_definition,
+    voice_providers,
 )
 from .world.errors import WorldUnavailable
 from .world.runtime import Call
@@ -538,6 +542,15 @@ def _target_speaks_first(
     return not _dials_the_person(doc, environ)
 
 
+def _setting(simulator_config: Mapping[str, Any], environ: Mapping[str, str]) -> Callable[[str], str]:
+    """One simulator setting for this call: lowercase job config wins, then the provider environment alias."""
+
+    def setting(name: str) -> str:
+        return str(simulator_config.get(name.lower()) or environ.get(name) or "")
+
+    return setting
+
+
 def _build_spec(
     *,
     run_id: str,
@@ -558,9 +571,7 @@ def _build_spec(
     Lowercase job config wins; provider environment aliases are accepted for compatibility.
     """
 
-    def setting(name: str) -> str:
-        return str(simulator_config.get(name.lower()) or environ.get(name) or "")
-
+    setting = _setting(simulator_config, environ)
     simulator = simulator_definition(setting, doc.get("persona"))
     connector = connector.strip().lower()
     # Match the platform agent-definition inbound-phone path. Provider IDs still
@@ -672,6 +683,29 @@ def _build_spec(
         run_seconds=run_seconds,
         agent_definition=provider_agent,
     )
+
+
+def _voiced_sub_actors(voices: list[dict[str, Any]], caller: Any, tts_provider: str) -> list[dict[str, Any]]:
+    """How each sub-actor sounds on this call, chosen from its persona as the caller's is, in a voice no one
+    else on the call has, at a level of its own."""
+    caller = dict(caller) if isinstance(caller, Mapping) else {}
+    taken = {str(caller.get("voice") or caller.get("voice_id") or persona_voice(caller, tts_provider))}
+    voiced = []
+    for one in voices:
+        persona = one.get("persona") or {}
+        voice = persona_voice(persona, tts_provider, frozenset(taken))
+        second = persona_voice(persona, tts_provider, frozenset(taken | {voice}))
+        taken |= {voice, second}
+        behaviour = dict(one.get("behaviour") or {})
+        behaviour.update(
+            voice=voice,
+            second_voice=second,
+            speed=persona_speech_rate(persona),
+            emotion=persona_emotion(persona),
+            loudness_db=float(behaviour.get("loudness_db", -12.0)) + random.uniform(-4.0, 4.0),
+        )
+        voiced.append({**one, "behaviour": behaviour})
+    return voiced
 
 
 # --- evidence collection -----------------------------------------------------------------------
@@ -1319,7 +1353,11 @@ class CallRunnerImpl:
 
         bindings = _sub_actor_bindings(doc)
         cast = load_cast(self._context.bundle_dir) if bindings else Cast()
-        voices = bound_voices(bindings, cast)
+        voices = _voiced_sub_actors(
+            bound_voices(bindings, cast),
+            doc.get("persona"),
+            voice_providers(_setting(self._context.job.agent.config, call_environ))[1],
+        )
         call_environ.pop(SUB_ACTOR_WORLD_ALIAS, None)
         if voices:
             call_environ[SUB_ACTOR_VOICES_ALIAS] = json.dumps(voices)

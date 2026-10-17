@@ -4,40 +4,27 @@ first, a supervisor on a transfer, or something arriving in the world mid-call."
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import random
 import time
 from typing import Any
 
-from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Moment, due, enters
+from fi.simulate.simulation.engines.caller_barge_in import complete_text, synthesize_frames
+from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Moment, due, enters, speaking_as
 
 logger = logging.getLogger(__name__)
 
 _BACKGROUND = (
-    "You are {name}{role}, near someone who is on a phone call with an automated agent. You are not on "
-    "the call yourself; the agent may still hear you. Who you are and what you want: {prompt}\n\n"
-    "Write at most {count} short things you would say out loud during that call, one per line, each "
-    "under 15 words, in your own voice. Never claim to be the caller and never address the agent by a "
-    "name. Output only the lines."
+    "\n\nWrite at most {count} short things you would say out loud during that call, one per line, each "
+    "under 15 words, in your own voice and language. Never claim to be the caller and never address the "
+    "agent by a name. Output only the lines."
 )
-_FOREGROUND = {
-    "audio_handoff": "You are {name}{role}. You have just taken the phone from the person who was "
-    "talking to an automated agent. Who you are and what you want: {prompt}\n\nYou do not know their "
-    "codes, numbers, account details or what they have chosen: never give one or choose for them; when "
-    "the agent asks for one, say you will hand the phone back.",
-    "transfer_leg": "You are {name}{role}, and a call has just been transferred to you by an automated "
-    "agent. Who you are and what you know: {prompt}",
-    "ivr": "You are {name}{role}, the automated phone menu that answers this line before a person does. "
-    "What the menu offers and how it routes: {prompt}",
-}
 _NEXT_LINE = (
     "\n\nThe agent's last words: {said}\n\nSay your next line out loud, under 30 words, in your own "
     "voice. Output only the line."
 )
 
-
-def _who(actor: dict[str, Any]) -> dict[str, str]:
-    role = actor.get("role")
-    return {"name": actor.get("name") or "someone", "role": f", {role}" if role else ""}
 
 
 class SubActorVoice:
@@ -60,7 +47,7 @@ class SubActorVoice:
         self.actor = actor
         self.model = model
         self.tts = tts
-        # The caller's voice, used when the sub-actor's own voice cannot speak.
+        # A second voice of its own, used when its first cannot speak; never the caller's.
         self.fallback_tts = fallback_tts
         # Plays frames under the caller at a volume, returning when they have been heard.
         self.play = play
@@ -84,6 +71,13 @@ class SubActorVoice:
         self._delivered = False
         self._turns_left = 0
         self._events: list[dict[str, Any]] = []
+        # A background voice says one line at a time, a moment into the person's reply, and not on every
+        # turn, so its lines fall through the call as someone nearby would say them.
+        self._random = random.Random(
+            int.from_bytes(hashlib.sha256(f"{seed}|{actor.get('id')}".encode()).digest()[:8], "big")
+        )
+        self.pause = (0.5, 2.5)
+        self.chance = 0.5
 
     # Kept for the background voice, whose lines do not depend on the conversation.
     @property
@@ -99,38 +93,22 @@ class SubActorVoice:
 
         context = livekit_llm.ChatContext.empty()
         context.add_message(role="user", content=prompt)
-        parts: list[str] = []
-        async with self.model.chat(chat_ctx=context, tools=[], tool_choice="none") as stream:
-            async for chunk in stream:
-                content = getattr(getattr(chunk, "delta", None), "content", None)
-                if isinstance(content, str):
-                    parts.append(content)
-        return [
-            line.strip().strip('"“”-* ')
-            for line in "".join(parts).splitlines()
-            if line.strip()
-        ]
+        written = await complete_text(self.model, context)
+        return [line.strip().strip('"“”-* ') for line in written.splitlines() if line.strip()]
 
     async def _voiced(self, line: str) -> list[Any]:
         try:
-            async with self.tts.synthesize(line) as stream:
-                return [item.frame async for item in stream]
+            return await synthesize_frames(self.tts, line)
         except Exception as exc:
             if self.fallback_tts is None or self.fallback_tts is self.tts:
                 raise
-            logger.warning(
-                "sub-actor %s voice failed (%s); using the caller's", self.actor.get("id"), type(exc).__name__
-            )
+            logger.warning("sub-actor %s voice failed (%s); using its second voice", self.actor.get("id"), type(exc).__name__)
             self.tts = self.fallback_tts
-            async with self.tts.synthesize(line) as stream:
-                return [item.frame async for item in stream]
+            return await synthesize_frames(self.tts, line)
 
     async def prepare(self) -> None:
-        behaviour = self.actor.get("behaviour") or {}
         try:
-            lines = await self._write_lines(
-                _BACKGROUND.format(**_who(self.actor), prompt=behaviour.get("prompt") or "", count=self.max_lines)
-            )
+            lines = await self._write_lines(speaking_as(self.actor) + _BACKGROUND.format(count=self.max_lines))
             for line in lines[: self.max_lines]:
                 frames = await self._voiced(line)
                 if frames:
@@ -166,6 +144,10 @@ class SubActorVoice:
                 return True
             if self.answers_first:
                 return False
+            if self._delivered and enters(self.channel) == "mixed":
+                if self._random.random() < self.chance:
+                    self._tasks.append(asyncio.create_task(self._play_next()))
+                return False
             tools: list[str] = []
             if self.kind in NEEDS_TOOLS and self.tools_called is not None:
                 tools = list(await asyncio.to_thread(self.tools_called))
@@ -187,26 +169,28 @@ class SubActorVoice:
         if way == "line":
             self._turns_left = self.max_lines - 1
             return await self._speak_next(last_text)
-        self._tasks.append(asyncio.create_task(self._play_prepared()))
+        self._tasks.append(asyncio.create_task(self._play_next()))
         return False
 
-    async def _play_prepared(self) -> None:
+    async def _play_next(self) -> None:
         if self._preparation is not None:
             await asyncio.gather(self._preparation, return_exceptions=True)
-        for text, frames in self._lines:
-            started = self.clock()
-            try:
-                await self.play(frames, self.volume)
-            except Exception as exc:
-                logger.warning("sub-actor line not played: %s", type(exc).__name__)
-                continue
-            self._record("spoke", text, started)
+        if not self._lines:
+            return
+        text, frames = self._lines.pop(0)
+        await asyncio.sleep(self._random.uniform(*self.pause))
+        started = self.clock()
+        try:
+            await self.play(frames, self.volume)
+        except Exception as exc:
+            logger.warning("sub-actor line not played: %s", type(exc).__name__)
+            return
+        self._record("spoke", text, started)
 
     async def _speak_next(self, last_text: str) -> bool:
         if self.say is None:
             return False
-        behaviour = self.actor.get("behaviour") or {}
-        opening = _FOREGROUND[self.channel].format(**_who(self.actor), prompt=behaviour.get("prompt") or "")
+        opening = speaking_as(self.actor)
         heard = " | ".join(event["text"] for event in self._events[-3:])
         prompt = opening + (f"\n\nWhat you have said so far: {heard}" if heard else "")
         lines = await self._write_lines(prompt + _NEXT_LINE.format(said=last_text or "(nothing yet)"))

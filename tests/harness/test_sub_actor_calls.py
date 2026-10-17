@@ -184,3 +184,19 @@ def test_turns_count_only_the_person_and_the_agent():
         exchanges=[Exchange("customer", "hi"), Exchange("sub_actor", "add one", name="F", sub_actor="s"), Exchange("agent", "ok")]
     )
     assert sum(1 for turn in transcript.exchanges if turn.speaker != "sub_actor") == 2
+
+
+def test_each_sub_actor_sounds_like_its_own_persona_and_never_like_the_caller():
+    caller = {"name": "Dana", "gender": "female", "accent": "American", "languages": ["English"]}
+    voices = [
+        {"id": "child", "behaviour": {"loudness_db": -12.0}, "persona": {"name": "Child", "gender": "female", "age_group": "18-25", "personality": "Friendly"}},
+        {"id": "rep", "behaviour": {}, "persona": {"name": "Alex", "gender": "male", "personality": "Professional"}},
+    ]
+    voiced = cr._voiced_sub_actors(voices, caller, "cartesia")
+    said = [cr.persona_voice(caller, "cartesia")] + [
+        voice for one in voiced for voice in (one["behaviour"]["voice"], one["behaviour"]["second_voice"])
+    ]
+    assert all(said) and len(set(said)) == len(said)
+    assert voiced[1]["behaviour"]["emotion"] == cr.persona_emotion(voices[1]["persona"])
+    assert voiced[0]["behaviour"]["speed"] == cr.persona_speech_rate(voices[0]["persona"])
+    assert -16.0 <= voiced[0]["behaviour"]["loudness_db"] <= -8.0

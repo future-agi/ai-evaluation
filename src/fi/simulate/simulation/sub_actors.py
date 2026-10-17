@@ -24,6 +24,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "enters": "mixed",
         "about": "a voice near the person, mixed under them, that the agent may hear",
         "tells_person": "With you, and may speak during the call: {who}.",
+        "setting": "You are near someone who is on a phone call with an automated agent. You are not on "
+        "the call yourself; the agent may still hear you.",
     },
     "audio_handoff": {
         "modalities": {"voice"},
@@ -32,6 +34,9 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "about": "someone who takes the line from the person for up to `max_lines` turns",
         "tells_person": "{who} may take the phone from you for a few turns. While they have it, say "
         "nothing; carry on once they hand it back.",
+        "setting": "You have just taken the phone from the person who was talking to an automated agent. "
+        "You do not know their codes, numbers, account details or what they have chosen: never give one "
+        "or choose for them; when the agent asks for one, say you will hand the phone back.",
     },
     "transfer_leg": {
         "modalities": {"voice"},
@@ -40,6 +45,7 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "about": "whoever answers when the agent hands the call over",
         "tells_person": "If the agent transfers you, {who} answers and the call ends once they have "
         "spoken. Say nothing while they speak.",
+        "setting": "A call has just been transferred to you by an automated agent.",
     },
     "ivr": {
         "modalities": {"voice"},
@@ -48,6 +54,7 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "first": True,
         "about": "an automated menu that answers before the person does",
         "tells_person": "{who} answers first. Say nothing until it has put the call through to you.",
+        "setting": "You are the automated phone menu that answers this line before a person does.",
     },
     "tool_response": {
         "modalities": {"voice", "chat", "browser"},
@@ -60,6 +67,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "delivered": True,
         "enters": "thread",
         "about": "a second participant in the conversation, seen by the agent and the person",
+        "setting": "You are a second person in a chat between someone and an automated agent. Never claim "
+        "to be the other person.",
     },
     "inbound_message": {
         "modalities": {"voice", "chat"},
@@ -97,6 +106,14 @@ def delivered_channels() -> list[str]:
 
 def described(entries: dict[str, str]) -> str:
     return "; ".join(f"`{name}`: {about}" for name, about in entries.items())
+
+
+def speaking_as(actor: dict[str, Any]) -> str:
+    """Who a speaking sub-actor is and where it is: the opening of every line it writes, on any channel."""
+    role = f", {actor['role']}" if actor.get("role") else ""
+    about = actor.get("about") or (actor.get("behaviour") or {}).get("prompt") or ""
+    setting = (CHANNELS.get(str(actor.get("channel") or "")) or {}).get("setting") or ""
+    return f"You are {actor.get('name') or 'someone'}{role}. {setting}\n\n{about}".strip()
 
 
 def tells_person(channel: str, who: str) -> str:

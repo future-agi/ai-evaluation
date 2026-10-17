@@ -845,6 +845,21 @@ def aura_voice_for(persona: dict) -> str:
     return voices[index]
 
 
+def persona_voice(persona: Mapping[str, Any], tts_provider: str, avoid: frozenset[str] = frozenset()) -> str:
+    """The voice this persona speaks in on this provider, never one in `avoid`; "" when the provider has none."""
+    pick = {"cartesia": cartesia_voice_for, "deepgram": aura_voice_for}.get((tts_provider or "").lower())
+    if pick is None:
+        return ""
+    name = str(persona.get("name") or "")
+    other = "male" if _norm(persona.get("gender")) == "female" else "female"
+    for gender in (persona.get("gender"), other):
+        for attempt in range(64):
+            voice = pick({**persona, "gender": gender, "name": f"{name}{'#' * attempt}"})
+            if voice not in avoid:
+                return voice
+    return voice
+
+
 def simulator_definition(
     get: Callable[[str], str], persona: Mapping[str, Any] | None = None
 ) -> "simulate.SimulatorAgentDefinition":
@@ -1066,13 +1081,10 @@ def caller_scenario(
     """
     persona = dict(persona) if isinstance(persona, Mapping) else {"name": "customer"}
     persona["role"] = "customer"
-    provider = (tts_provider or "").lower()
     # A voice from the persona's accent/language, so callers in one suite sound different.
     if not persona.get("voice") and not persona.get("voice_id"):
-        if provider == "cartesia":
-            persona["voice"] = cartesia_voice_for(persona)
-        elif provider == "deepgram":
-            persona["voice"] = aura_voice_for(persona)
+        if voice := persona_voice(persona, tts_provider):
+            persona["voice"] = voice
     fixture = fixture if isinstance(fixture, Mapping) else {}
     metadata = dict(persona.get("metadata") or {})
     if caller_phone := fixture_caller_phone(fixture):
@@ -1201,6 +1213,7 @@ __all__ = [
     "caller_scenario",
     "fixture_caller_phone",
     "cartesia_voice_for",
+    "persona_voice",
     "persona_stt_language",
     "simulation_spec",
     "simulator_definition",

@@ -232,6 +232,25 @@ def worth_delegating(wanted: int) -> bool:
     return int(wanted or 0) >= FEWEST_WORTH_DELEGATING
 
 
+def persona_properties() -> dict[str, Any]:
+    """Who a person is, in the platform's own persona fields: the caller's and every sub-actor's."""
+    return {
+        "name": {"type": "string"},
+        "gender": persona_field("gender"),
+        "age_group": persona_field("age_group"),
+        "occupation": persona_field("occupation"),
+        "location": persona_field("location"),
+        "personality": persona_field("personality"),
+        "communication_style": persona_field("communication_style"),
+        "languages": {
+            "type": "array",
+            "items": persona_field("languages"),
+            "description": "The one language this person speaks.",
+        },
+        "accent": persona_field("accent"),
+    }
+
+
 def persona_field(name: str) -> dict[str, Any]:
     """The schema for one persona field, carrying the platform's own values where it has them.
 
@@ -1618,24 +1637,12 @@ def scenario_tools(
                     "details. This fills the simulator prompt's persona slot."
                     + persona_vocabulary_note(),
                     "properties": {
-                        "name": {"type": "string"},
-                        "gender": persona_field("gender"),
-                        "age_group": persona_field("age_group"),
-                        "occupation": persona_field("occupation"),
-                        "location": persona_field("location"),
-                        "personality": persona_field("personality"),
-                        "communication_style": persona_field("communication_style"),
+                        **persona_properties(),
                         "initial_message": {
                             "type": "string",
                             "description": "The caller's natural opening request, specific to "
                             "this scenario. Do not use a generic greeting.",
                         },
-                        "languages": {
-                            "type": "array",
-                            "items": persona_field("languages"),
-                            "description": "The one language the caller speaks on the call.",
-                        },
-                        "accent": persona_field("accent"),
                         "multilingual": {"type": "boolean"},
                         "metadata": {"type": "object"},
                     },

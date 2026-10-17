@@ -256,15 +256,13 @@ class _ChatSubActors:
                 name=one["name"],
                 sub_actor=one["id"],
             )
-        behaviour = one.get("behaviour") or {}
-        role = f", {one['role']}" if one.get("role") else ""
+        from fi.simulate.simulation.sub_actors import speaking_as
+
         async with Stage(
             SessionSpec(
                 system_prompt=(
-                    f"You are {one['name']}{role}, a second person in a chat between someone and an "
-                    f"automated agent. Who you are and what you want: {behaviour.get('prompt') or ''}\n\n"
-                    "Write one short message, in your own words, as yourself. Never claim to be the "
-                    "other person. Output only the message."
+                    speaking_as(one) + "\n\nWrite one short message, in your own words and language, as "
+                    "yourself. Output only the message."
                 ),
                 max_turns=1,
                 model=chosen_model(self.model),

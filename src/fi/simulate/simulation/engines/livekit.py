@@ -3438,22 +3438,26 @@ class LiveKitEngine(BaseEngine):
 
         voices = []
         for actor in bound:
-            tts = models.tts
-            wanted = str((actor.get("behaviour") or {}).get("voice") or "")
-            if wanted and base is not None:
-                field = "model" if base.provider == "deepgram" else "voice"
+            behaviour = actor.get("behaviour") or {}
+            delivery = {key: behaviour[key] for key in ("speed", "emotion") if behaviour.get(key)}
+            own = []
+            for wanted in (behaviour.get("voice"), behaviour.get("second_voice")):
+                if not wanted or base is None:
+                    continue
                 try:
-                    tts = build_livekit_tts(
-                        base.model_copy(update={field: wanted}), models.http_session
-                    )
+                    own.append(build_livekit_tts(_with_voice(base, str(wanted), **delivery), models.http_session))
                 except Exception:
-                    logger.warning("sub-actor voice %r unavailable; using the caller's", wanted)
+                    logger.warning("sub-actor voice %r unavailable", wanted)
+            if not own:
+                # Never in the caller's voice: the agent could not tell them apart.
+                logger.warning("sub-actor %s has no voice of its own and stays silent", actor.get("id"))
+                continue
             voice = SubActorVoice(
                 actor=actor,
                 model=models.llm,
-                tts=tts,
+                tts=own[0],
                 play=play,
-                fallback_tts=models.tts,
+                fallback_tts=own[1] if len(own) > 1 else None,
                 say=say if enters(str(actor.get("channel") or "")) == "line" else None,
                 tools_called=tools_called,
                 write=write,
@@ -3528,8 +3532,7 @@ class LiveKitEngine(BaseEngine):
             else None
         )
         if persona_voice:
-            field = "model" if tts_config.provider == "deepgram" else "voice"
-            tts_config = tts_config.model_copy(update={field: str(persona_voice)})
+            tts_config = _with_voice(tts_config, str(persona_voice))
         models = await build_livekit_models(
             llm_config=llm_config,
             stt_config=stt_config,
@@ -4391,6 +4394,12 @@ def _tone_frame(hz: float, seconds: float) -> "rtc.AudioFrame":
         num_channels=1,
         samples_per_channel=total,
     )
+
+
+def _with_voice(tts_config: Any, voice: str, **delivery: Any) -> Any:
+    """This TTS setting in another voice. Deepgram encodes the voice in the model name (``aura-*``)."""
+    field = "model" if tts_config.provider == "deepgram" else "voice"
+    return tts_config.model_copy(update={field: voice, **delivery})
 
 
 def _bound_sub_actor_voices() -> list[dict[str, Any]]:

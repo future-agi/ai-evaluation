@@ -736,7 +736,12 @@ has one sub-actor:
 - a record the agent reads that can change while it works gets an `inbound_message`, whose
   `inbound` names the collection and the record that arrives.
 
-A behavioural sub-actor's prompt says who they are, what they want and what they know.
+A behavioural sub-actor is a person, so give it a `persona` in the same fields as the person the
+agent serves: gender, age group, the language it speaks, its accent, personality and communication
+style, each true to who it is in this world. Every channel uses what applies to it, so how it sounds or writes is chosen from the
+persona and never set by you. Its `behaviour.prompt` says what it wants and what it knows, and
+`loudness_db` how loud it is beside the person: below them for someone further away, above them for
+someone louder.
 
 The cast belongs to the world, so every scenario sees the same one, and a scenario binds the ones it
 needs. Only an agent with none of these slots has an empty cast; never add a sub-actor for a slot the

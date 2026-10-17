@@ -78,6 +78,7 @@ def _voice(
         seed="run-1",
         clock=lambda: float(next(ticks)),
     )
+    voice.pause, voice.chance = (0.0, 0.0), 1.0
     return voice, played
 
 
@@ -105,7 +106,7 @@ def test_it_enters_after_the_agent_turn_its_trigger_names_and_only_once():
     assert all(event["sub_actor"] == "subactor_bystander" for event in voice.events())
 
 
-def test_a_voice_the_provider_cannot_speak_falls_back_to_the_caller_s():
+def test_a_voice_the_provider_cannot_speak_falls_back_to_its_second_voice():
     class Unknown:
         def synthesize(self, text: str):
             raise RuntimeError("voice not found")
@@ -135,6 +136,22 @@ def test_a_transfer_ends_the_call_once_whoever_answered_has_spoken():
 
     first, ended = asyncio.run(scenario())
     assert first == [] and ended
+
+
+def test_a_background_voice_says_one_line_per_agent_turn_not_all_at_once():
+    async def scenario():
+        voice, played = _voice(turn=1)
+        voice.start()
+        await voice.on_agent_turn(1)
+        await asyncio.gather(*voice._tasks)
+        first = len(played)
+        await voice.on_agent_turn(2)
+        await asyncio.gather(*voice._tasks)
+        return first, played
+
+    first, played = asyncio.run(scenario())
+    assert first == 1
+    assert [frames for frames, _ in played] == [["frame:Hurry up."], ["frame:Ask for the extra."]]
 
 
 def test_always_enters_after_the_first_agent_turn():

@@ -588,14 +588,16 @@ def cast_tools(
     contract: AgentContract, destination: Path, *, source_root: str = "", world: Any = None, origin: str = "derived"
 ) -> list[Any]:
     """The tools that keep the world's cast: shared by the build stage and the builder session."""
+    from ..scenario_tools import persona_properties
 
     @tool(
         "add_sub_actor",
         "Add or replace a participant in this agent's world that is neither the agent nor the "
         "person it serves. The cast is shared by every scenario; a scenario binds the ones it "
         "needs and says when each enters.\n\n"
-        "`kind`: `behavioral` speaks (needs `behaviour.prompt`: who they are, what they want, "
-        "what they know), `system` is a service whose responses fail (needs `faults`), `hybrid` "
+        "`kind`: `behavioral` speaks (needs a `persona`, who they are, in the same fields as the "
+        "person's, and `behaviour.prompt`: what they want and what they know; how they sound is "
+        "chosen from the persona), `system` is a service whose responses fail (needs `faults`), `hybrid` "
         "has both. `channel`, which this agent must be reachable on: "
         + described({name: CHANNEL_REGISTRY[name]["about"] for name in delivered_channels()})
         + ". Each fault names a `tool`, a `kind` "
@@ -611,6 +613,7 @@ def cast_tools(
                 "kind": {"type": "string", "enum": ["behavioral", "system", "hybrid"]},
                 "channel": {"type": "string", "enum": delivered_channels()},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
+                "persona": {"type": "object", "properties": persona_properties()},
                 "behaviour": {
                     "type": "object",
                     "properties": {
