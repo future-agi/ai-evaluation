@@ -817,6 +817,21 @@ def _with_sub_actors(instruction: str, environ: Mapping[str, str]) -> str:
     return instruction + "\n\n" + "\n".join(lines) if lines else instruction
 
 
+def read_tool_trace(dsn: str) -> list[dict[str, Any]]:
+    """The world's tool trace so far, in call order, read without writing."""
+    import psycopg
+
+    with psycopg.connect(
+        dsn, autocommit=True, connect_timeout=5, options="-c default_transaction_read_only=on"
+    ) as connection:
+        cursor = connection.execute(
+            f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
+            "ORDER BY at ASC"
+        )
+        columns = [description[0] for description in cursor.description or []]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+
 def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     """`_alk_tool_trace`'s name and column shape are an isolated local
     convention -- unpinned by any contract (the only harness-reserved table anywhere in this
@@ -829,20 +844,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     if endpoint is None:
         return ()
     try:
-        import psycopg
-
-        with psycopg.connect(
-            endpoint.address,
-            autocommit=True,
-            connect_timeout=5,
-            options="-c default_transaction_read_only=on",
-        ) as connection:
-            cursor = connection.execute(
-                f'SELECT name, arguments, result, ok, error, at FROM "{_TOOL_TRACE_TABLE}" '  # noqa: S608
-                "ORDER BY at ASC"
-            )
-            rows = cursor.fetchall()
-            columns = [description[0] for description in cursor.description or []]
+        records = read_tool_trace(endpoint.address)
     except Exception as exc:  # noqa: BLE001 - missing table / connection failure -> no evidence, not a crash
         # WHY: same DSN-in-exception-message risk as `_clear_tool_trace_calls` above -- log only
         # the exception TYPE, never exc_info/str(exc), which can carry the world DB password.
@@ -852,8 +854,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         return ()
 
     calls: list[Call] = []
-    for row in rows:
-        record = dict(zip(columns, row, strict=True))
+    for record in records:
         name = record.get("name")
         if not isinstance(name, str) or not name:
             continue

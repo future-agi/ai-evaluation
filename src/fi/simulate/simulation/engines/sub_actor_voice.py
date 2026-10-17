@@ -324,27 +324,13 @@ def world_access(dsn: str) -> tuple[Any, Any]:
     """Read the run's live tool trace and add records to its world, both through the world's database."""
     if not dsn:
         return None, None
+    from fi.alk.harness.call_runner import read_tool_trace
+    from fi.alk.harness.world.stores.postgres import AttachedPostgresStore
 
     def tools_called() -> list[str]:
-        import psycopg
-
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
-            return [row[0] for row in connection.execute("SELECT name FROM _alk_tool_trace ORDER BY at")]
+        return [str(record.get("name")) for record in read_tool_trace(dsn)]
 
     def write(collection: str, record: dict[str, Any]) -> None:
-        import json
-
-        import psycopg
-        from psycopg import sql
-
-        columns = list(record)
-        statement = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
-            sql.Identifier(collection),
-            sql.SQL(", ").join(map(sql.Identifier, columns)),
-            sql.SQL(", ").join(sql.Placeholder() * len(columns)),
-        )
-        values = [json.dumps(value) if isinstance(value, (dict, list)) else value for value in record.values()]
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
-            connection.execute(statement, values)
+        AttachedPostgresStore(dsn).add(collection, record)
 
     return tools_called, write
