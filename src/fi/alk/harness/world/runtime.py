@@ -313,11 +313,12 @@ class GeneratedWorld(EnvironmentAdapter):
         )
         if fault is None:
             return execute(name, arguments)
+        from ..tool_trace_proxy import FAILED, with_content
+
         kind, label = fault["kind"], fault["sub_actor"]
-        if kind in ("timeout", "error", "rate_limit"):
-            said = {"timeout": "upstream timed out", "error": "upstream error", "rate_limit": "too many requests"}
+        if kind in FAILED:
             return self._record(
-                Call(name=name, arguments=dict(arguments or {}), ok=False, error=said[kind], fault=kind, sub_actor=label)
+                Call(name=name, arguments=dict(arguments or {}), ok=False, error=FAILED[kind][1], fault=kind, sub_actor=label)
             )
         if kind == "latency":
             time.sleep(int(fault.get("latency_ms") or 0) / 1000)
@@ -329,17 +330,7 @@ class GeneratedWorld(EnvironmentAdapter):
         if kind == "malformed":
             made.result, made.ok, made.error = None, False, "malformed response"
         elif kind == "content":
-            extra = str(fault.get("content") or "")
-            value = made.result
-            made.result = (
-                {**value, "note": extra}
-                if isinstance(value, dict)
-                else [*value, extra]
-                if isinstance(value, list)
-                else f"{value} {extra}".strip()
-                if value is not None
-                else extra
-            )
+            made.result = with_content(made.result, str(fault.get("content") or ""))
         return made
 
     def _execute(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:

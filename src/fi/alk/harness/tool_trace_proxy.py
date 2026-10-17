@@ -8,17 +8,21 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import error, request
 
-import psycopg
+# Read with defaults so the world runtime can share this file's fault rules; the bundle always sets them.
+PORT = int(os.environ.get("PORT") or 0)
+UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-PORT = int(os.environ["PORT"])
-UPSTREAM = os.environ["UPSTREAM_URL"].rstrip("/")
-DATABASE_URL = os.environ["DATABASE_URL"]
+# A call a bound sub-actor fails outright: the status it answers with and what it says.
+FAILED = {"timeout": (504, "upstream timed out"), "error": (500, "upstream error"), "rate_limit": (429, "too many requests")}
 
 
 def _record(
     name: str, arguments: object, result: object, ok: bool, failure: str = ""
 ) -> None:
     try:
+        import psycopg
+
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
             connection.execute(
                 "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
@@ -48,6 +52,8 @@ _FAULTS: list[bool] = []
 def _faults_sealed() -> bool:
     if not _FAULTS:
         try:
+            import psycopg
+
             with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
                 found = connection.execute("SELECT to_regclass('_alk_faults') IS NOT NULL").fetchone()
             _FAULTS.append(bool(found and found[0]))
@@ -61,6 +67,8 @@ def _fault_for(name: str) -> dict[str, object] | None:
     if not _faults_sealed():
         return None
     try:
+        import psycopg
+
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
             faults = connection.execute(
                 "SELECT kind, on_call, latency_ms, content, sub_actor FROM _alk_faults WHERE tool = %s",
@@ -85,7 +93,8 @@ def _fault_for(name: str) -> dict[str, object] | None:
     return None
 
 
-def _with_content(result: object, content: str) -> object:
+def with_content(result: object, content: str) -> object:
+    """A result with a bound sub-actor's content added to what the agent reads."""
     if isinstance(result, dict):
         return {**result, "note": content}
     if isinstance(result, list):
@@ -124,13 +133,12 @@ class Handler(BaseHTTPRequestHandler):
         )
         name = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
         fault = _fault_for(name)
-        if fault and fault["kind"] in ("timeout", "error", "rate_limit"):
+        if fault and fault["kind"] in FAILED:
             if fault["kind"] == "timeout":
                 time.sleep(FAULT_TIMEOUT_SECONDS)
-            status = {"timeout": 504, "error": 500, "rate_limit": 429}[fault["kind"]]
-            detail = {"timeout": "upstream timed out", "error": "upstream error", "rate_limit": "too many requests"}
+            status, detail = FAILED[str(fault["kind"])]
             _record(name, arguments, None, False, str(fault["label"]))
-            self._reply(status, json.dumps({"detail": detail[fault["kind"]]}).encode())
+            self._reply(status, json.dumps({"detail": detail}).encode())
             return
         if fault and fault["kind"] == "latency":
             time.sleep(int(fault["latency_ms"]) / 1000)
@@ -150,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(status, content[: max(1, len(content) // 2)] or b"{", response_type)
                 return
             if fault and fault["kind"] == "content":
-                result = _with_content(result, str(fault["content"]))
+                result = with_content(result, str(fault["content"]))
                 content = json.dumps(result).encode()
                 response_type = "application/json"
             _record(name, arguments, result, status < 400, str(fault["label"]) if fault else "")
