@@ -320,8 +320,8 @@ containing the value. A value from a record is written in the form the tool take
 format the tool's description names is part of the value. The build refuses a source that does not hold. Only fixed arguments are shown to
 the checks and the judge, so everything else stays out of their reach:
 
-- the agent's own choices: a destination or category it picks, a label or note it writes in its own
-  words, even when the caller asked for that very thing (the caller fixes what they want, not the
+- the agent's own choices: a destination or category it picks, a label, note or reason it writes in its
+  own words, even when the caller asked for that very thing (the caller fixes what they want, not the
   words the agent records it under), and the same for a place or description the caller gave and
   the agent writes down (the identifier the world resolves it to is fixed, from the record);
 - a value the agent's code fills in elsewhere, which does not fix what the agent's model passes;
