@@ -873,8 +873,21 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
     assert result.result == {"account_id": "ACC-2048", "status": "active"}
 
 
-def test_failed_second_turn_retains_partial_transcript_and_http_trace(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (400, "target_agent_failed"),
+        (408, "call_failed"),
+        (409, "target_agent_failed"),
+        (429, "call_failed"),
+        (500, "call_failed"),
+        (502, "call_failed"),
+        (503, "call_failed"),
+        (504, "call_failed"),
+    ],
+)
+def test_http_failure_classification_retains_partial_evidence(
+    tmp_path, monkeypatch, status, expected_code
 ):
     from fi.simulate.agent.wrappers.http import HTTPCallFailure
 
@@ -886,7 +899,7 @@ def test_failed_second_turn_retains_partial_transcript_and_http_trace(
         failure = HTTPCallFailure(
             {
                 "success": False,
-                "status_code": 502,
+                "status_code": status,
                 "failure_stage": "http",
                 "error": "upstream refused",
                 "response_excerpt": "upstream refused",
@@ -921,6 +934,7 @@ def test_failed_second_turn_retains_partial_transcript_and_http_trace(
                 SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
             )
         )
+    assert caught.value.code == expected_code
     partial = caught.value.partial
     assert partial is not None
     assert partial.transcript_artifact == "transcript-1"
@@ -932,7 +946,7 @@ def test_failed_second_turn_retains_partial_transcript_and_http_trace(
         if message["role"] == "assistant"
     ] == ["first answer"]
     trace, transcript = [json.loads(data) for data in adapter.uploads]
-    assert trace["status_code"] == 502
+    assert trace["status_code"] == status
     assert len(transcript["messages"]) == 3
 
 
