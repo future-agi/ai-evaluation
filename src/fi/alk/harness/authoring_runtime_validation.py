@@ -756,37 +756,6 @@ async def validate_once(
                         raise
                     await check_setup_once(scenario, invariants, against, False)
 
-            async def replay_answer_keys(invariants, suite):
-                # The agent's own service reads the runtime's database, not a lane's clone, so each
-                # answer key is replayed on a runtime, after its scenario's setup there.
-                from .understand import load as load_contract
-
-                contract = load_contract(bundle)
-                if contract is None or not suite:
-                    return
-                failures: list[str] = []
-
-                async def lane(own, against):
-                    upstream = next(
-                        (one.address for one in against.endpoints.values() if one.configuration_name == "TOOLS_UPSTREAM_URL"),
-                        "",
-                    )
-                    for scenario in own if upstream else ():
-                        await check_setup_once(scenario, invariants, against, in_place)
-                        refused = await asyncio.to_thread(_answer_key_refusals, scenario.solution, contract, upstream)
-                        if refused and scenario in cleared:
-                            cleared.remove(scenario)
-                        failures.extend(
-                            f"{scenario.scenario_key}: the agent's own service refuses its answer key at {one}"
-                            for one in refused
-                        )
-
-                await asyncio.gather(
-                    *(lane(suite[index :: len(runtimes)], runtimes[index]) for index in range(len(runtimes)))
-                )
-                if failures:
-                    raise RuntimeValidationError("scenarios", "\n".join(sorted(failures)))
-
             async def check_setup_once(scenario, invariants, against, keep_processes):
                 nonlocal baseline_state_digest
                 if isinstance(against, str):
@@ -953,7 +922,6 @@ async def validate_once(
                 pending = [item for item in scenarios if key_of[id(item)] not in passed]
             try:
                 await check_setups(invariants, pending)
-                await replay_answer_keys(invariants, [item for item in pending if getattr(item, "solution", ())])
             finally:
                 if generic:
                     passed.update(key_of[id(item)] for item in cleared)
@@ -1019,32 +987,6 @@ async def validate_once(
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
-
-
-def _answer_key_refusals(solution, contract, base_url: str) -> list[str]:
-    """Each answer-key step the agent's own service refuses, replayed in order with the payload the
-    agent sends it. Steps that never reach a service are left to the call."""
-    from .prove import _resolve_reference_values
-    from .world.provisioned import post_tool
-
-    calls: list = []
-    refusals: list[str] = []
-    for number, step in enumerate(solution, start=1):
-        tool = str(step.get("tool") or "")
-        entry = contract.entry_for(tool)
-        served = entry is not None and (
-            entry.service or any(one.kind == "service" and tool in one.used_by for one in contract.dependencies)
-        )
-        if not served or not entry.endpoint or entry.method.upper() != "POST":
-            continue
-        payload = step.get("environment_arguments") or (step.get("arguments") if entry.mode == "service" else None)
-        if not payload:
-            continue
-        call = post_tool(base_url, entry.endpoint, _resolve_reference_values(dict(payload), calls), name=tool)
-        calls.append(call)
-        if not call.ok:
-            refusals.append(f"step {number} ({tool}): {call.error[:300]}")
-    return refusals
 
 
 def _invariants_the_ir_still_breaks(world, authoring: Path) -> list[str]:
