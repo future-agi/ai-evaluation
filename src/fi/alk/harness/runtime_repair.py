@@ -704,6 +704,11 @@ def validate_runtime_plan_patch(
         ):
             raise ValueError("runtime_repair_local_auth_source_evidence_required")
     repair_setup_auth = allowed_diagnostic_codes == {"credential_missing"} and bool(original_auth)
+    add_local_auth = (
+        allowed_diagnostic_codes == {"credential_missing"}
+        and original_auth is None
+        and auth is not None
+    )
     if allowed_diagnostic_codes == {"credential_missing"}:
         if not auth:
             raise ValueError("runtime_repair_local_auth_addition_required")
@@ -743,16 +748,27 @@ def validate_runtime_plan_patch(
                 exclude=mutable_interface
             ):
                 raise ValueError("runtime_repair_readiness_interface_changed")
-            if len(runtime.interface.setup_requests) != len(
-                original.interface.setup_requests
-            ) or any(
+            original_setup = original.interface.setup_requests
+            repaired_setup = runtime.interface.setup_requests
+            added_setup = repaired_setup[len(original_setup):]
+            setup_count_valid = len(repaired_setup) == len(original_setup) or (
+                add_local_auth and len(repaired_setup) == len(original_setup) + 1
+            )
+            if not setup_count_valid or any(
                 before.model_dump(exclude={"headers_template"} if repair_setup_auth else {"body_template"})
                 != after.model_dump(exclude={"headers_template"} if repair_setup_auth else {"body_template"})
-                for before, after in zip(
-                    original.interface.setup_requests, runtime.interface.setup_requests
-                )
+                for before, after in zip(original_setup, repaired_setup)
             ):
                 raise ValueError("runtime_repair_readiness_setup_protocol_changed")
+            if added_setup:
+                step = added_setup[0]
+                if auth.template_variable not in _runtime_template_names(
+                    [step.headers_template, step.body_template]
+                ) or not any(
+                    step.path in path.read_text(encoding="utf-8", errors="replace")
+                    for path in evidence_files if path.stat().st_size <= 1_000_000
+                ):
+                    raise ValueError("runtime_repair_local_auth_login_evidence_required")
             if repair_setup_auth:
                 for before, after in zip(
                     original.interface.setup_requests, runtime.interface.setup_requests, strict=True
@@ -771,18 +787,23 @@ def validate_runtime_plan_patch(
             if any(new_headers.get(key) != value for key, value in old_headers.items()):
                 raise ValueError("runtime_repair_readiness_header_binding_changed")
             added_headers = set(new_headers) - set(old_headers)
+            setup_captures = {
+                name for step in added_setup for name in (*step.capture, *step.capture_headers)
+            }
             if added_headers and (
                 not auth
                 or original_auth
                 or any(
-                    auth.template_variable
-                    not in _runtime_template_names(new_headers[key])
+                    not _runtime_template_names(new_headers[key])
+                    or not _runtime_template_names(new_headers[key])
+                       <= {auth.template_variable, *setup_captures}
                     for key in added_headers
                 )
             ):
                 raise ValueError("runtime_repair_readiness_header_binding_changed")
             if allowed_diagnostic_codes == {"credential_missing"} and (
-                (not repair_setup_auth and runtime.interface.setup_requests != original.interface.setup_requests)
+                (not (repair_setup_auth or add_local_auth)
+                 and runtime.interface.setup_requests != original.interface.setup_requests)
                 or runtime.interface.setup_secrets != original.interface.setup_secrets
             ):
                 raise ValueError("runtime_repair_credential_only_local_auth_allowed")
@@ -1127,16 +1148,19 @@ Inspect source manifests and the failing source branch. Retain all extras and re
 add only specifically justified source-declared dependencies. You may correct config_files public
 values or add secret bindings to supplied target aliases. Preserve existing config paths, formats
 and secret bindings. You may correct body_template in existing interface.setup_requests and add
-interface.setup_secrets bindings to supplied aliases. Preserve the setup request count and every
-other request field, including paths, accepted statuses, capture and failure rules. For a source-owned
-local HTTP server token only, you may add interface.local_auth with server_environment and
- template_variable names and add its source-required headers_template binding. Inspect and cite the
-server auth guard. ALK supplies a private random token; never write a value, disable auth, or use
+interface.setup_secrets bindings to supplied aliases. Preserve existing setup requests and every
+request field, including paths, accepted statuses, capture and failure rules. When adding local_auth
+after credential_missing, you may append one source-evidenced login request. For a source-owned
+local HTTP server credential only, you may add interface.local_auth with server_environment and
+template_variable names and add its source-required binding. Inspect and cite the server auth guard.
+ALK supplies a private random value; never write a value, disable auth, or use
 this for external account credentials. Preserve existing auth and header bindings. On
-credential_missing, add local_auth plus its chat header binding only when local_auth is absent.
+credential_missing, add local_auth plus its source-required binding only when local_auth is absent.
 If local_auth is already declared, you may instead add missing headers_template entries to
 existing setup_requests, using only that same local_auth.template_variable. Cite the setup
-route's auth guard. Preserve every existing header and every other setup field, including bodies.
+route's auth guard. A source-owned login exchange may use the generated credential in a setup
+request body and capture its returned token or cookie for chat. Never put the credential in a URL
+or the ordinary chat request body. Preserve every unrelated setup field.
 Chat headers_template applies after setup completes and is not inherited by setup requests.
 Keep existing local_auth, top-level headers, setup_secrets and all other runtime fields unchanged.
 On chat_ingress_failed for an existing HTTP json_template interface, you may also correct
