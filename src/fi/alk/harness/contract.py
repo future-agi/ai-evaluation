@@ -401,7 +401,7 @@ class RuntimeHttpSetupRequest(BaseModel):
 
 
 class LocalHttpAuth(BaseModel):
-    """Names for a source-owned server token generated privately per world."""
+    """Names for a source-owned server credential generated privately per world."""
 
     model_config = {"extra": "forbid"}
     server_environment: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -464,9 +464,10 @@ class RuntimeInterface(BaseModel):
     completed_tools: CompletedToolRows | None = None
     local_auth: LocalHttpAuth | None = Field(
         default=None,
-        description="Native HTTP only: source-declared local server token environment name and "
-        "private header template variable. ALK generates a per-world token. Never use for "
-        "external account/API credentials; never provide token values.",
+        description="Native HTTP only: source-declared local server credential environment name "
+        "and private template variable. ALK generates a per-world value for direct headers or a "
+        "source-owned login setup request. Never use for external account/API credentials; never "
+        "provide credential values.",
     )
     setup_secrets: dict[str, str] = Field(default_factory=dict)
     failure_rule: RuntimeHttpFailureRule | None = None
@@ -533,17 +534,19 @@ class RuntimeInterface(BaseModel):
                 | set(self.setup_secrets)
                 | set(self.setup_secrets.values())
             )
-            non_header_templates = [self.path, self.request_template]
-            for setup in self.setup_requests:
-                non_header_templates.extend([setup.path, setup.body_template])
+            forbidden_templates = [self.path, self.request_template]
+            forbidden_templates.extend(setup.path for setup in self.setup_requests)
             if self.local_auth.template_variable in _runtime_template_names(
-                non_header_templates
+                forbidden_templates
             ):
-                raise ValueError("runtime_local_auth_requires_header_only")
+                raise ValueError("runtime_local_auth_url_or_chat_body_forbidden")
+            auth_templates = [self.headers_template]
+            for setup in self.setup_requests:
+                auth_templates.extend([setup.headers_template, setup.body_template])
             if self.local_auth.template_variable not in _runtime_template_names(
-                self.headers_template
+                auth_templates
             ):
-                raise ValueError("runtime_local_auth_header_binding_required")
+                raise ValueError("runtime_local_auth_binding_required")
         if self.kind in {"http", "websocket"}:
             if self.port is None:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
