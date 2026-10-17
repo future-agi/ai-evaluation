@@ -707,6 +707,8 @@ class _TestRunnerAgent(Agent):
         self._session_turn_handling = turn_handling
         self._session: AgentSession | None = None
         self._end_requested = asyncio.Event()
+        # Set once whoever answered the agent's transfer has spoken: the agent's part of the call is over.
+        self._handed_over = asyncio.Event()
         self._end_speech_handle: Any | None = None
         self._hold_check: asyncio.Task | None = None
         self._answer_again: asyncio.Task | None = None
@@ -821,6 +823,10 @@ class _TestRunnerAgent(Agent):
     @property
     def end_requested(self) -> asyncio.Event:
         return self._end_requested
+
+    @property
+    def handed_over(self) -> asyncio.Event:
+        return self._handed_over
 
     @property
     def model_usage(self) -> list[dict[str, object]]:
@@ -2357,10 +2363,10 @@ class LiveKitEngine(BaseEngine):
 
                 session.on("agent_state_changed", on_simulator_state_changed)
 
-            end_requested = getattr(customer_agent, "end_requested", None)
+            handed_over = getattr(customer_agent, "handed_over", None)
             sub_actors = SubActorsOnCall(
                 self._sub_actor_voices(customer_agent, models, session, seed=run_id),
-                on_handed_over=end_requested.set if end_requested is not None else None,
+                on_handed_over=handed_over.set if handed_over is not None else None,
             )
             customer_agent._sub_actor_turn = sub_actors.agent_turn if sub_actors else None
 
@@ -4005,6 +4011,9 @@ async def _wait_for_conversation_end(
         "target_disconnected": asyncio.create_task(target_disconnected.wait()),
         "room_disconnected": asyncio.create_task(room_disconnected.wait()),
         "simulator_end_call": asyncio.create_task(customer_agent.end_requested.wait()),
+        "transferred": asyncio.create_task(
+            (getattr(customer_agent, "handed_over", None) or asyncio.Event()).wait()
+        ),
         "conversation_stalled": asyncio.create_task(
             _wait_for_conversation_silence(
                 session,
@@ -4070,6 +4079,7 @@ async def _wait_for_conversation_end(
             completed.add("provider_disconnected")
         for reason in (
             "simulator_end_call",
+            "transferred",
             "target_disconnected",
             "room_disconnected",
             "no_conversation",
@@ -5011,10 +5021,13 @@ def _reconcile_provider_observation(
     outcome.metadata["provider_tool_failure_attributed"] = True
 
 
-def _turn_requirements(min_turn_messages: int) -> tuple[int, bool]:
-    """The turn floor and whether alternation is required: a mailbox is held to its greeting alone."""
+def _turn_requirements(min_turn_messages: int, stop_reason: str = "") -> tuple[int, bool]:
+    """The turn floor and whether alternation is required: a mailbox is held to its greeting alone, and a
+    transfer to the agent and whoever answered it."""
     if _answered_by_voicemail():
         return min(min_turn_messages, _VOICEMAIL_MIN_TURN_MESSAGES), False
+    if stop_reason == "transferred":
+        return min(min_turn_messages, 2), False
     return min_turn_messages, True
 
 
@@ -5168,7 +5181,7 @@ def _conversation_outcome(
             messages=messages,
             retryable=True,
         )
-    floor, alternation_required = _turn_requirements(min_turn_messages)
+    floor, alternation_required = _turn_requirements(min_turn_messages, stop_reason)
     if len(messages) < floor or (
         alternation_required and not _has_role_alternation(messages)
     ):
