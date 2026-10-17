@@ -615,7 +615,6 @@ def cast_tools(
                     "type": "object",
                     "properties": {
                         "prompt": {"type": "string"},
-                        "voice": {"type": "string"},
                         "loudness_db": {"type": "number"},
                         "max_lines": {"type": "integer"},
                     },
