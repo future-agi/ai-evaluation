@@ -105,6 +105,22 @@ def test_it_enters_after_the_agent_turn_its_trigger_names_and_only_once():
     assert all(event["sub_actor"] == "subactor_bystander" for event in voice.events())
 
 
+def test_a_voice_the_provider_cannot_speak_falls_back_to_the_caller_s():
+    class Unknown:
+        def synthesize(self, text: str):
+            raise RuntimeError("voice not found")
+
+    async def scenario():
+        voice, played = _voice(kind="always", channel="transfer_leg")
+        voice.tts, voice.fallback_tts = Unknown(), _Tts()
+        assert await voice.on_agent_turn(1) is True
+        return voice, played
+
+    voice, played = asyncio.run(scenario())
+    assert played == [("said", "Hurry up.")]
+    assert [event["text"] for event in voice.events()] == ["Hurry up."]
+
+
 def test_always_enters_after_the_first_agent_turn():
     voice, _played = _voice(kind="always")
     assert not voice.due(0) and voice.due(1)

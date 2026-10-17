@@ -48,6 +48,7 @@ class SubActorVoice:
         model: Any,
         tts: Any,
         play: Any,
+        fallback_tts: Any = None,
         say: Any = None,
         tools_called: Any = None,
         write: Any = None,
@@ -57,6 +58,8 @@ class SubActorVoice:
         self.actor = actor
         self.model = model
         self.tts = tts
+        # The caller's voice, used when the sub-actor's own voice cannot speak.
+        self.fallback_tts = fallback_tts
         # Plays frames under the caller at a volume, returning when they have been heard.
         self.play = play
         # Speaks frames as the call's main speaker, returning when they have been heard, and leaves
@@ -107,8 +110,18 @@ class SubActorVoice:
         ]
 
     async def _voiced(self, line: str) -> list[Any]:
-        async with self.tts.synthesize(line) as stream:
-            return [item.frame async for item in stream]
+        try:
+            async with self.tts.synthesize(line) as stream:
+                return [item.frame async for item in stream]
+        except Exception as exc:
+            if self.fallback_tts is None or self.fallback_tts is self.tts:
+                raise
+            logger.warning(
+                "sub-actor %s voice failed (%s); using the caller's", self.actor.get("id"), type(exc).__name__
+            )
+            self.tts = self.fallback_tts
+            async with self.tts.synthesize(line) as stream:
+                return [item.frame async for item in stream]
 
     async def prepare(self) -> None:
         behaviour = self.actor.get("behaviour") or {}

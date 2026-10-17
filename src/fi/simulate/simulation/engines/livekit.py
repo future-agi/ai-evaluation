@@ -3451,6 +3451,7 @@ class LiveKitEngine(BaseEngine):
                 model=models.llm,
                 tts=tts,
                 play=play,
+                fallback_tts=models.tts,
                 say=say if enters(str(actor.get("channel") or "")) == "line" else None,
                 tools_called=tools_called,
                 write=write,
