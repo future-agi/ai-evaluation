@@ -1520,10 +1520,11 @@ def test_an_answer_key_is_replayed_against_the_agent_s_own_service(monkeypatch):
     contract = AgentContract(
         agent="a",
         tool_entrypoints=[
-            {"tool": "book_ride", "mode": "construct", "service": "tools-api", "endpoint": "book"},
+            {"tool": "book_ride", "mode": "construct", "endpoint": "book"},
             {"tool": "cancel", "mode": "service", "service": "tools-api", "endpoint": "cancel"},
             {"tool": "confirm", "mode": "construct"},
         ],
+        dependencies=[{"name": "tools-api", "kind": "service", "used_by": ["book_ride"]}],
     )
     solution = (
         {"tool": "confirm", "arguments": {"ok": True}},

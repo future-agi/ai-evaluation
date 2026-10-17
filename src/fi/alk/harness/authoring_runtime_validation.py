@@ -1032,7 +1032,10 @@ def _answer_key_refusals(solution, contract, base_url: str) -> list[str]:
     for number, step in enumerate(solution, start=1):
         tool = str(step.get("tool") or "")
         entry = contract.entry_for(tool)
-        if entry is None or not entry.service or not entry.endpoint or entry.method.upper() != "POST":
+        served = entry is not None and (
+            entry.service or any(one.kind == "service" and tool in one.used_by for one in contract.dependencies)
+        )
+        if not served or not entry.endpoint or entry.method.upper() != "POST":
             continue
         payload = step.get("environment_arguments") or (step.get("arguments") if entry.mode == "service" else None)
         if not payload:
