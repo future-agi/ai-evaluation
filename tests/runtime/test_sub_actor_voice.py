@@ -317,3 +317,23 @@ def test_a_line_that_cannot_be_heard_never_leaves_the_person_silent():
     voice.tts, voice.fallback_tts = Silent(), None
     held = _run(voice, (1, "Hello?"), (2, "Anyone there?"))
     assert played == [] and held == [False, False]
+
+
+def test_a_sub_actor_too_slow_to_speak_gives_the_line_back(monkeypatch):
+    from fi.simulate.simulation.engines import sub_actor_voice
+    from fi.simulate.simulation.engines.sub_actor_voice import SubActorsOnCall
+
+    monkeypatch.setattr(sub_actor_voice, "_TURN_SECONDS", 0.05)
+    voice, _played = _voice(kind="mid_journey", turn=1, channel="audio_handoff", lines="Mine now.", max_lines=3)
+
+    async def hangs(*_args, **_kwargs):
+        await asyncio.sleep(10)
+
+    voice._write_lines = hangs
+
+    async def scenario():
+        call = SubActorsOnCall([voice])
+        return [await call.agent_turn("Hello?"), await call.agent_turn("Anyone?")]
+
+    assert asyncio.run(scenario()) == [False, False]
+    assert voice.entering.turns_left == 0

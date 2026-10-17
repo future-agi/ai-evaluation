@@ -20,6 +20,8 @@ _BACKGROUND = (
     "under 15 words, in your own voice and language. Never claim to be the caller and never address the "
     "agent by a name. Output only the lines."
 )
+# The longest the person waits on a sub-actor's turn: writing, voicing and playing one line.
+_TURN_SECONDS = 30.0
 # Ends a line whose speaker gives the line back, so the person speaks next.
 _BACK = "[BACK]"
 _NEXT_LINE = (
@@ -239,7 +241,12 @@ class SubActorsOnCall:
         self.agent_turns += 1
         holding = False
         for voice in self.voices:
-            holding = await voice.on_agent_turn(self.agent_turns, text) or holding
+            try:
+                holding = await asyncio.wait_for(voice.on_agent_turn(self.agent_turns, text), _TURN_SECONDS) or holding
+            except asyncio.TimeoutError:
+                # A sub-actor too slow to speak gives the line back rather than leave the person silent.
+                logger.warning("sub-actor %s took too long and gave the line back", voice.actor.get("id"))
+                voice.entering.turns_left = 0
         return holding
 
     def events(self) -> list[dict[str, Any]]:
