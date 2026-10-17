@@ -23,7 +23,7 @@ def _failure_code(trace):
     if status in {401, 403}:
         return "credential_missing"
     if (
-        status in {408, 429}
+        status in {408, 429, 502, 503, 504}
         or trace.get("network_error")
         or (stage == "tool_events" and 500 <= status < 600)
     ):

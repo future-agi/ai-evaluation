@@ -225,6 +225,9 @@ def test_healthy_server_requires_profile_then_typed_runtime_patch_passes(
         (403, "credential_missing"),
         (408, "external_service_unavailable"),
         (429, "external_service_unavailable"),
+        (502, "external_service_unavailable"),
+        (503, "external_service_unavailable"),
+        (504, "external_service_unavailable"),
         (500, "chat_ingress_failed"),
     ],
 )
