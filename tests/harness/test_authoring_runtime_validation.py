@@ -1502,3 +1502,34 @@ def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
         )
     assert len(repairs) == RepairBudgets().scenario_patches + 1
     assert suite["value"] == "original"
+
+
+def test_an_answer_key_is_replayed_against_the_agent_s_own_service(monkeypatch):
+    from fi.alk.harness import authoring_runtime_validation as validation
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.world import provisioned
+
+    sent = []
+
+    def post(url, json, headers, timeout):
+        sent.append((url, json))
+        status, body = (200, {"booking_ref": "B1"}) if url.endswith("/book") else (404, {"detail": "no such booking"})
+        return SimpleNamespace(status_code=status, json=lambda: body, text="")
+
+    monkeypatch.setattr(provisioned.requests, "post", post)
+    contract = AgentContract(
+        agent="a",
+        tool_entrypoints=[
+            {"tool": "book_ride", "mode": "construct", "service": "tools-api", "endpoint": "book"},
+            {"tool": "cancel", "mode": "service", "service": "tools-api", "endpoint": "cancel"},
+            {"tool": "confirm", "mode": "construct"},
+        ],
+    )
+    solution = (
+        {"tool": "confirm", "arguments": {"ok": True}},
+        {"tool": "book_ride", "arguments": {}, "environment_arguments": {"rider_id": "r1"}},
+        {"tool": "cancel", "arguments": {"booking_ref": "$call.book_ride.booking_ref"}},
+    )
+    refusals = validation._answer_key_refusals(solution, contract, "http://tools")
+    assert sent == [("http://tools/book", {"rider_id": "r1"}), ("http://tools/cancel", {"booking_ref": "B1"})]
+    assert len(refusals) == 1 and refusals[0].startswith("step 3 (cancel)")

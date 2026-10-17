@@ -97,8 +97,9 @@ Find, in roughly this order:
    wording for it; what you found goes in its own fields. `effects`: what it reads, creates and
    changes, and what earlier state it clears (a later change that discards what an earlier step
    produced); which stored field and value decide what it returns, where a result appears only
-   when a record says so; and each argument whose text the agent writes itself rather than takes
-   from the person or a record. `refuses`: every refusal by value or by something outside the
+   when a record says so; each argument whose text the agent writes itself rather than takes
+   from the person or a record; and, for a tool that reaches a service, every field of the request
+   it sends and where each value comes from. `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
    argument whose value must come from an earlier tool's output, and that tool. Fill these for
    every tool that has them; a writer sees nothing else.
