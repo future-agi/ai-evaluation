@@ -21,7 +21,9 @@ _BACKGROUND = (
 )
 _FOREGROUND = {
     "audio_handoff": "You are {name}{role}. You have just taken the phone from the person who was "
-    "talking to an automated agent. Who you are and what you want: {prompt}",
+    "talking to an automated agent. Who you are and what you want: {prompt}\n\nYou do not know their "
+    "codes, numbers, account details or what they have chosen: never give one or choose for them; when "
+    "the agent asks for one, say you will hand the phone back.",
     "transfer_leg": "You are {name}{role}, and a call has just been transferred to you by an automated "
     "agent. Who you are and what you know: {prompt}",
     "ivr": "You are {name}{role}, the automated phone menu that answers this line before a person does. "
