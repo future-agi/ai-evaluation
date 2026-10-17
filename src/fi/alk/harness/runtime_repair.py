@@ -540,6 +540,104 @@ def _validate_secret_file_alias_repair(
         raise ValueError("runtime_repair_secret_file_alias_change_required")
 
 
+def _config_file_aliases_only_changed(original: Runtime, runtime: Runtime) -> bool:
+    if (
+        runtime.model_dump(exclude={"config_files"})
+        != original.model_dump(exclude={"config_files"})
+        or runtime.config_files.keys() != original.config_files.keys()
+    ):
+        return False
+    changed = False
+    for path, resource in runtime.config_files.items():
+        previous = original.config_files[path]
+        if (
+            resource.format != previous.format
+            or resource.values != previous.values
+            or resource.secret_aliases.keys() != previous.secret_aliases.keys()
+        ):
+            return False
+        changed = changed or resource.secret_aliases != previous.secret_aliases
+    return changed
+
+
+def _validate_config_file_alias_repair(
+    original: Runtime,
+    runtime: Runtime,
+    available_secret_aliases: frozenset[str],
+) -> None:
+    for path, resource in runtime.config_files.items():
+        previous = original.config_files[path]
+        for name, alias in resource.secret_aliases.items():
+            before = previous.secret_aliases[name]
+            if alias == before:
+                continue
+            if (
+                alias not in available_secret_aliases
+                or _file_secret_alias_stem(before)
+                != _file_secret_alias_stem(alias)
+            ):
+                raise ValueError("runtime_repair_config_file_alias_change_invalid")
+
+
+def _config_file_alias_candidate(
+    source_root: Path,
+    contract: AgentContract,
+    available_secret_aliases: frozenset[str],
+) -> RuntimePlanPatch | None:
+    runtime = contract.runtime
+    if (
+        runtime is None
+        or runtime.execution != "compose"
+        or not runtime.compose_file
+        or not runtime.config_files
+    ):
+        return None
+    resources = {}
+    changed = False
+    for path, resource in runtime.config_files.items():
+        aliases = {}
+        for name, alias in resource.secret_aliases.items():
+            if alias in available_secret_aliases:
+                aliases[name] = alias
+                continue
+            matches = sorted(
+                candidate
+                for candidate in available_secret_aliases
+                if _file_secret_alias_stem(candidate)
+                == _file_secret_alias_stem(alias)
+            )
+            if len(matches) != 1:
+                return None
+            aliases[name] = matches[0]
+            changed = True
+        resources[path] = resource.model_copy(update={"secret_aliases": aliases})
+    compose_file = (source_root / runtime.compose_file).resolve()
+    if (
+        not changed
+        or not compose_file.is_file()
+        or not compose_file.is_relative_to(source_root.resolve())
+    ):
+        return None
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(update={"config_files": resources}),
+        evidence_paths=(runtime.compose_file,),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Bind generated config files to the unique supplied file-secret aliases.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            available_secret_aliases=available_secret_aliases,
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
+
+
 def _secret_file_alias_candidate(
     source_root: Path,
     contract: AgentContract,
@@ -908,6 +1006,14 @@ def validate_runtime_plan_patch(
         and runtime.secret_files != contract.runtime.secret_files
     ):
         _validate_secret_file_alias_repair(
+            contract.runtime, runtime, available_secret_aliases
+        )
+    if (
+        allowed_diagnostic_codes == {"generated_runtime_plan_invalid"}
+        and contract.runtime is not None
+        and _config_file_aliases_only_changed(contract.runtime, runtime)
+    ):
+        _validate_config_file_alias_repair(
             contract.runtime, runtime, available_secret_aliases
         )
     provider_selector_repair = (
@@ -1377,6 +1483,16 @@ async def request_runtime_plan_patch(
         )
         if candidate is not None:
             print("runtime repair: supplied secret-file alias", flush=True)
+            return candidate
+    if allowed == {"generated_runtime_plan_invalid"} and any(
+        "compose_config_target_reference_required" in item.redacted_message
+        for item in diagnostics
+    ):
+        candidate = _config_file_alias_candidate(
+            source_root, contract, available_secret_aliases
+        )
+        if candidate is not None:
+            print("runtime repair: supplied config-file alias", flush=True)
             return candidate
     if allowed == {"chat_ingress_failed"}:
         candidate = _explicit_dependency_candidate(source_root, contract, guidance)
