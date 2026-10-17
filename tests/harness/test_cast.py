@@ -553,3 +553,10 @@ def test_a_grid_that_brings_in_no_level_for_a_cast_member_is_refused(tmp_path, m
     assert refused["is_error"] and "subactor_bystander" in refused["content"][0]["text"]
     axes["interface"] = ["quiet_line", "subactor_bystander_nearby"]
     assert not asyncio.run(aim({"count": 4, "axes": axes})).get("is_error")
+
+
+def test_a_sub_actor_persona_is_held_to_the_caller_persona_s_shape():
+    actor = SubActor(id="c", name="Child", channel="audio_mix", persona={"gender": "female", "languages": ["English"]})
+    assert actor.persona["languages"] == ["English"]
+    with pytest.raises(ValueError):
+        SubActor(id="c", name="Child", channel="audio_mix", persona={"languages": "English"})

@@ -89,6 +89,14 @@ class SubActor(BaseModel):
     # inbound_message: what arrives in the world mid-task, {"collection": ..., "record": {...}}.
     inbound: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _a_persona_the_caller_could_have(self) -> "SubActor":
+        if self.persona:
+            from .scenario import Persona
+
+            self.persona = Persona.model_validate(self.persona).model_dump(exclude_defaults=True)
+        return self
+
 
 class PrimaryActor(BaseModel):
     role: str = ""
