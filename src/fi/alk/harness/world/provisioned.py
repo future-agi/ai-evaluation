@@ -158,7 +158,7 @@ class ProvisionedWorld(GeneratedWorld):
             )
         return self._record(call) if record else call
 
-    def _execute(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
+    def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
         if name in self.local_runtime_tools and name not in self.endpoint_for:
             return self._record(
                 Call(

@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from .bundle import CapabilityProtocol
-from .cast import CAST_FILE, sub_actors_enabled
+from .cast import CAST_FILE
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -929,19 +929,6 @@ def _compose_path(source: Path) -> Path | None:
     return matches[0] if matches else None
 
 
-# The source service whose calls the bundle's tool proxy records, and where sub-actor faults apply.
-_TOOLS_SERVICE = "tools-api"
-
-
-def serves_tools_api(source: Path) -> bool:
-    """Whether this source's Compose project has the tools service the bundle puts its tool proxy in front of."""
-    try:
-        path = _compose_path(source)
-        return path is not None and _TOOLS_SERVICE in _load_compose(path)["services"]
-    except BundleAuthorError:
-        return False
-
-
 def _load_compose(path: Path) -> dict[str, Any]:
     try:
         body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -1805,7 +1792,7 @@ def resolve_environment_plan(
                         capability=slug, path="/health", timeout_seconds=180
                     )
                 )
-        if _TOOLS_SERVICE in source_services:
+        if "tools-api" in source_services:
             processes.append(_tool_proxy_process())
             # The target must not become eligible to start until the evidence proxy is ready.
             # Depending only on the upstream tools process leaves a race where the agent starts
@@ -2187,26 +2174,6 @@ def _files(root: Path) -> list[BundleFileV2]:
     return records
 
 
-def _seed_prefix() -> str:
-    """The harness's own tables, created before the world's seed: the tool trace, and where
-    sub-actors are on, the faults a run arms for the proxy."""
-    prefix = (
-        "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
-        "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
-        "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
-        "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
-        "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
-    )
-    if sub_actors_enabled():
-        prefix += (
-            "CREATE TABLE IF NOT EXISTS _alk_faults ("
-            "tool text NOT NULL, kind text NOT NULL, on_call int NOT NULL DEFAULT 1, "
-            "latency_ms int NOT NULL DEFAULT 0, content text NOT NULL DEFAULT '', "
-            "sub_actor text NOT NULL DEFAULT '');\n"
-        )
-    return prefix
-
-
 def author_bundle_v2(
     *,
     source: str | Path,
@@ -2431,7 +2398,13 @@ def author_bundle_v2(
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()
-        prefix = _seed_prefix()
+        prefix = (
+            "CREATE TABLE IF NOT EXISTS harness_seed_sentinel (id text PRIMARY KEY);\n"
+            "INSERT INTO harness_seed_sentinel(id) VALUES ('ready') ON CONFLICT DO NOTHING;\n"
+            "CREATE TABLE IF NOT EXISTS _alk_tool_trace ("
+            "id bigserial PRIMARY KEY, name text NOT NULL, arguments jsonb NOT NULL, "
+            "result jsonb, ok boolean NOT NULL, error text, at double precision NOT NULL);\n"
+        )
         generic_pipeline = job.metadata.get("generic_harness_v1") is True
         if generic_pipeline:
             migrations, seed_files, adopted_seed = _generic_postgres_seed_artifacts(

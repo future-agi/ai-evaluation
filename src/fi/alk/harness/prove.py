@@ -32,7 +32,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from .cast import bound_faults, load_cast, sub_actors_enabled
 from .catalogue import Catalogue
 from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
@@ -200,11 +199,6 @@ def prepared(
     # The setup's own calls are not the agent's. Clearing them keeps a check that counts calls
     # from crediting the agent with work the scenario did on its behalf.
     world.calls = []
-    # The answer key is proved with the scenario's failing services failing, as a run has them.
-    # One that may not enter at all is left out: its answer key holds either way.
-    if scenario.sub_actors and sub_actors_enabled():
-        certain = [one for one in scenario.sub_actors if one.trigger.kind != "probability"]
-        world.faults = bound_faults(certain, load_cast(world_root))
     return world, applied, ready
 
 
@@ -330,39 +324,6 @@ def _run(
                 len(scenario.solution),
             )
     return world, list(world.calls), refused, sorted(set(assumed))
-
-
-def branches_disagree(scenario: Scenario, catalogue: Catalogue, world_root: Path) -> list[str]:
-    """Sub-goals not about any sub-actor whose verdict on the answer key changes with whether a
-    sub-actor bound by probability entered: such a sub-goal grades the draw, not the agent."""
-    if not sub_actors_enabled() or not any(
-        binding.trigger.kind == "probability" for binding in scenario.sub_actors
-    ):
-        return []
-    cast = load_cast(world_root)
-    certain = [binding for binding in scenario.sub_actors if binding.trigger.kind != "probability"]
-    untagged = [
-        (name, goal)
-        for name in scenario.sub_goals
-        if (goal := catalogue.named(name)) is not None and goal.deterministic() and not goal.sub_actor
-    ]
-    reference = reference_of(scenario.solution)
-    verdicts = []
-    for faults in (bound_faults(certain, cast), bound_faults(scenario.sub_actors, cast)):
-        world, _applied, _ready = prepared(scenario, world_root)
-        try:
-            world.faults = faults
-            for step in scenario.solution:
-                play_reference_step(world, step)
-            verdicts.append(
-                {
-                    name: run_check(goal.check, world, list(world.calls), name=name, reference=reference).held
-                    for name, goal in untagged
-                }
-            )
-        finally:
-            world.close()
-    return [name for name, held in verdicts[0].items() if held != verdicts[1][name]]
 
 
 def _declared_options(world_root: Path) -> set[str]:

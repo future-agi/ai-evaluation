@@ -55,7 +55,7 @@ from fi.simulate.simulation.sub_actors import tells_person
 
 from .background_noise import place_of, scenario_source
 from .bundle_v2 import EvidenceSeam
-from .cast import Binding, Cast, bound_voices, entering_faults, load_cast, sub_actors_enabled
+from .cast import Binding, Cast, bound_voices, load_cast, sub_actors_enabled
 from .hosted_scheduler import CallAborted, CallOutcome
 from .hosted_scheduler import Scenario as HostedScenario
 from .job import ExecutionMode, FailureDomain, HarnessJob, ProviderExecutionMode
@@ -162,10 +162,9 @@ _OUTER_WAIT_FOR_PAD_SECONDS = 60.0
 # constant + two functions (`_clear_tool_trace_calls`, `_collect_tool_trace_calls`) so a real
 # producer's disagreement on the name/shape is a one-line change.
 _TOOL_TRACE_TABLE = "_alk_tool_trace"
-_FAULTS_TABLE = "_alk_faults"
 # The speaking sub-actors one call carries, as JSON. Set per call and cleared otherwise.
 SUB_ACTOR_VOICES_ALIAS = "HARNESS_SUB_ACTOR_VOICES"
-# Where the engine reads the live tool trace and writes inbound items. Set per call, never logged.
+# Where the engine reads the live tool trace. Set per call, never logged.
 SUB_ACTOR_WORLD_ALIAS = "HARNESS_SUB_ACTOR_WORLD"
 
 _RESULT_TRUNCATE_CHARS = 2000
@@ -762,32 +761,6 @@ def _clear_tool_trace_calls(dsn: str) -> None:
         )
 
 
-def _arm_faults(dsn: str, rows: list[dict[str, Any]]) -> None:
-    """Replace the faults the tool proxy applies with this call's, so none leak into the next call.
-
-    Best-effort like the trace clear above: a bundle without the table runs with no faults."""
-    try:
-        import psycopg
-
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as connection:
-            connection.execute(f'DELETE FROM "{_FAULTS_TABLE}"')  # noqa: S608 - fixed identifier
-            for row in rows:
-                connection.execute(
-                    f'INSERT INTO "{_FAULTS_TABLE}"(tool, kind, on_call, latency_ms, content, sub_actor) '  # noqa: S608
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (
-                        row["tool"],
-                        row["kind"],
-                        int(row["on_call"]),
-                        int(row["latency_ms"]),
-                        row["content"],
-                        row["sub_actor"],
-                    ),
-                )
-    except Exception as exc:  # noqa: BLE001 - never a call-blocking failure
-        logger.warning("sub-actor faults not armed: %s", type(exc).__name__)
-
-
 def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
     if not sub_actors_enabled():
         return []
@@ -867,7 +840,6 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
             # world-handle-interface.md, only the STRING form is truncated at 2000 chars.
             result = raw_result
         error = _truncate(str(record.get("error") or ""))
-        fault, sub_actor = _fault_of(error)
         raw_at = record.get("at")
         at = float(raw_at) if isinstance(raw_at, (int, float)) else 0.0
         calls.append(
@@ -877,21 +849,11 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
                 result=result,
                 ok=ok,
                 error=error,
-                refused=not ok and not fault,
+                refused=not ok,
                 at=at,
-                fault=fault,
-                sub_actor=sub_actor,
             )
         )
     return tuple(calls)
-
-
-def _fault_of(error: str) -> tuple[str, str]:
-    """The fault a sub-actor applied to a traced call, recorded by the tool proxy as `fault:<kind>:<id>`."""
-    if not error.startswith("fault:"):
-        return "", ""
-    _prefix, kind, sub_actor = (error.split(":", 2) + ["", ""])[:3]
-    return kind, sub_actor
 
 
 def _tool_trace_file(runtime: EnvironmentRuntime) -> Path | None:
@@ -1476,11 +1438,8 @@ class CallRunnerImpl:
             endpoint = _find_postgres_endpoint(runtime)
             if endpoint is not None:
                 _clear_tool_trace_calls(endpoint.address)
-                if sub_actors_enabled():
-                    _arm_faults(endpoint.address, entering_faults(bindings, cast, run_id))
                 if voices:
-                    # The engine reads the live trace for on_tool and on_escalation triggers, and
-                    # writes what an inbound_message brings into the world.
+                    # The engine reads the live trace for on_tool triggers.
                     call_environ[SUB_ACTOR_WORLD_ALIAS] = endpoint.address
 
         started_at = datetime.now(timezone.utc)
@@ -1596,7 +1555,19 @@ class CallRunnerImpl:
             calls = _collect_provider_tool_calls(case)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(call.traced(), sort_keys=True, default=str)
+                json.dumps(
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "ok": call.ok,
+                        "error": call.error,
+                        "refused": call.refused,
+                        "at": call.at,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(

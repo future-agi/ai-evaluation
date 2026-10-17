@@ -420,7 +420,7 @@ async def judge(
         for name in scenario.sub_goals
         if (goal := catalogue.named(name)) is not None
         and not goal.deterministic()
-        and (missing := absent(goal.sub_actor, messages, transcript.calls))
+        and (missing := absent(goal.sub_actor, messages))
     ]
     claims = [one for one in _claims(scenario, catalogue) if one[1] not in {j.kind for j in standing_aside}]
     if not claims:
@@ -510,7 +510,7 @@ def grade_sub_goals(
         sub_goal = catalogue.named(name)
         if sub_goal is None or not sub_goal.deterministic():
             continue
-        missing = absent(sub_goal.sub_actor, messages, calls)
+        missing = absent(sub_goal.sub_actor, messages)
         if missing:
             outcomes.append(Outcome(name=name, held=True, said=missing))
             continue

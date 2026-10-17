@@ -56,7 +56,7 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .prove import branches_disagree, executes, play_reference_step, prepared, prove
+from .prove import executes, play_reference_step, prepared, prove
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -1047,15 +1047,6 @@ def accept_scenario(
             finally:
                 world.close()
         return _err(said)
-
-    drawn_differently = branches_disagree(scenario, catalogue, world_root)
-    if drawn_differently:
-        return _err(
-            "Not kept. These sub-goals pass or fail depending on whether a sub-actor bound by "
-            "probability entered, so they would grade the draw rather than the agent: "
-            + ", ".join(drawn_differently)
-            + ". Give each the `sub_actor` it depends on, or bind that sub-actor without probability."
-        )
 
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:

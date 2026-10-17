@@ -2173,7 +2173,7 @@ class HostedScheduler:
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
-            missing = absent(str(getattr(goal, "sub_actor", "") or ""), call_outcome.messages, call_outcome.calls)
+            missing = absent(str(getattr(goal, "sub_actor", "") or ""), call_outcome.messages)
             if missing:
                 sub_goal_results.append(
                     SubGoalResult(

@@ -34,7 +34,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..cast import entering_faults, load_cast, sub_actors_enabled
 from ..contract import AgentContract
 from ..scenario import Scenario
 from ..world.runtime import Call
@@ -362,11 +361,8 @@ async def _run_one(
             )
         # The setup's own calls are not the agent's.
         world.calls = []
-        # One seed per run decides every probability binding: the faults armed here and the
-        # participants the conversation brings in.
+        # One seed per run decides whether a participant bound by probability enters.
         seed = new_run_id()
-        if sub_actors_enabled() and scenario.sub_actors:
-            world.faults = entering_faults(scenario.sub_actors, load_cast(world_root), seed)
 
         if not spoken:
             # Typed, and driven by a model rather than by ALK's chat simulator.

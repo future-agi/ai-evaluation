@@ -1,9 +1,9 @@
 """The world's cast: the primary actor the agent serves and the sub-actors around it.
 
-A sub-actor is any participant that is not the agent and not the person it serves: someone speaking
-in the background, a third-party service whose responses fail, and later a supervisor or a second
-participant in a thread. It lives in the world, so every scenario sees the same one; a scenario binds
-the ones it needs and says when each enters.
+A sub-actor is someone on the person's side who is not the person: a voice near them, someone who
+takes the phone from them, or a second participant in their chat. Never anyone on the agent's side.
+It lives in the world, so every scenario sees the same one; a scenario binds the ones it needs and
+says when each enters.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from fi.simulate.simulation.sub_actors import CHANNELS as REGISTRY
-from fi.simulate.simulation.sub_actors import TRIGGERS, drawn, enters
+from fi.simulate.simulation.sub_actors import TRIGGERS, enters
 
 CAST_FILE = "cast.json"
 SWITCH = "HARNESS_SUB_ACTORS"
@@ -29,9 +29,7 @@ def sub_actors_enabled() -> bool:
 # Which agent modalities each channel can reach a sub-actor through.
 CHANNELS: dict[str, set[str]] = {name: set(entry["modalities"]) for name, entry in REGISTRY.items()}
 
-KINDS = ("behavioral", "system", "hybrid")
 ORIGINS = ("derived", "user-added")
-FAULTS = ("timeout", "error", "rate_limit", "malformed", "latency", "content")
 
 
 class Trigger(BaseModel):
@@ -40,7 +38,7 @@ class Trigger(BaseModel):
     kind: str = "always"
     # mid_journey: after the agent's Nth turn.
     turn: int = 0
-    # on_tool: the Nth call of this tool. on_escalation: the agent's transfer or escalation tool.
+    # on_tool: the Nth call of this tool.
     tool: str = ""
     on_call: int = 1
     # on_keyword: any of these words in the last turn.
@@ -64,30 +62,15 @@ class Behaviour(BaseModel):
     max_lines: int = 2
 
 
-class FaultProfile(BaseModel):
-    """How one tool's response goes wrong when a system sub-actor is bound."""
-
-    tool: str
-    kind: str
-    on_call: int = 1
-    latency_ms: int = 0
-    content: str = ""
-
-
 class SubActor(BaseModel):
     id: str
     name: str
     role: str = ""
-    kind: str = "behavioral"
     channel: str
     origin: str = "derived"
-    depends_on: list[str] = Field(default_factory=list)
     # Who a speaking sub-actor is, in the caller persona's fields; how it sounds is chosen from it.
     persona: dict[str, Any] = Field(default_factory=dict)
     behaviour: Behaviour | None = None
-    faults: list[FaultProfile] = Field(default_factory=list)
-    # inbound_message: what arrives in the world mid-task, {"collection": ..., "record": {...}}.
-    inbound: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _a_persona_the_caller_could_have(self) -> "SubActor":
@@ -125,8 +108,7 @@ class Cast(BaseModel):
     def summary(self) -> str:
         """One line per sub-actor, for a writer's or a judge's brief."""
         lines = [
-            f"- {one.id}: {one.name} ({one.role or one.kind}), {one.channel}"
-            + (f", tools {', '.join(one.depends_on)}" if one.depends_on else "")
+            f"- {one.id}: {one.name}" + (f" ({one.role})" if one.role else "") + f", {one.channel}"
             for one in self.sub_actors
         ]
         return "\n".join(lines)
@@ -152,8 +134,6 @@ def sub_actor_problems(
     actor: SubActor,
     *,
     modality: str,
-    tools: set[str],
-    reachable: set[str],
 ) -> list[str]:
     """Why this sub-actor cannot be part of this agent's world, or nothing."""
     problems = []
@@ -171,44 +151,12 @@ def sub_actor_problems(
             f"no run in this environment can deliver {actor.channel} yet: it needs the runner "
             "for that kind of agent"
         )
-    if actor.kind not in KINDS:
-        problems.append(f"kind {actor.kind!r} is not one of {list(KINDS)}")
     if actor.origin not in ORIGINS:
         problems.append(f"origin {actor.origin!r} is not one of {list(ORIGINS)}")
     if not actor.id.strip() or not actor.name.strip():
         problems.append("a sub-actor needs an id and a name")
-    speaks = actor.kind in ("behavioral", "hybrid")
-    fails = actor.kind in ("system", "hybrid")
-    if speaks and not (actor.behaviour and actor.behaviour.prompt.strip()):
-        problems.append(f"a {actor.kind} sub-actor needs a behaviour with a prompt")
-    if fails and not actor.faults:
-        problems.append(f"a {actor.kind} sub-actor needs at least one fault")
-    if enters(actor.channel) in ("mixed", "line", "thread") and not speaks:
-        problems.append(f"{actor.channel} carries what the sub-actor says, so it must have a behaviour")
-    if actor.channel == "inbound_message" and not (
-        str(actor.inbound.get("collection") or "").strip() and isinstance(actor.inbound.get("record"), dict)
-    ):
-        problems.append("inbound_message needs inbound.collection and the inbound.record that arrives")
-    if actor.channel == "tool_response" and not fails:
-        problems.append("tool_response carries faults, so the sub-actor must have them")
-    unknown = sorted({*actor.depends_on, *(f.tool for f in actor.faults)} - tools)
-    if unknown:
-        problems.append("names tools the agent does not have: " + ", ".join(unknown))
-    for fault in actor.faults:
-        if fault.kind not in FAULTS:
-            problems.append(f"fault {fault.kind!r} on {fault.tool} is not one of {list(FAULTS)}")
-        if fault.on_call < 1:
-            problems.append(f"on_call for {fault.tool} counts from 1")
-        if fault.kind == "latency" and fault.latency_ms <= 0:
-            problems.append(f"a latency fault on {fault.tool} needs latency_ms")
-        if fault.kind == "content" and not fault.content.strip():
-            problems.append(f"a content fault on {fault.tool} needs the content to add")
-    unreachable = sorted({fault.tool for fault in actor.faults} - reachable - set(unknown))
-    if unreachable:
-        problems.append(
-            "these tools run inside the agent's own process, where nothing the run controls "
-            "stands between, so a fault could never be applied: " + ", ".join(unreachable)
-        )
+    if not (actor.behaviour and actor.behaviour.prompt.strip()):
+        problems.append("a sub-actor needs a behaviour with a prompt: what they want and what they know")
     return problems
 
 
@@ -241,11 +189,9 @@ def binding_problems(
             problems.append(
                 f"{binding.id}: mid_journey turn {trigger.turn} is outside 1..{max_turns}"
             )
-        if trigger.kind in ("on_tool", "on_escalation"):
+        if trigger.kind == "on_tool":
             if not trigger.tool.strip():
                 problems.append(f"{binding.id}: {trigger.kind} needs the `tool` it waits for")
-            elif actor.faults and trigger.tool not in {fault.tool for fault in actor.faults}:
-                problems.append(f"{binding.id}: {trigger.kind} names {trigger.tool!r}, which it has no fault for")
             elif tools is not None and trigger.tool not in tools:
                 problems.append(f"{binding.id}: {trigger.kind} names {trigger.tool!r}, which is not one of the agent's tools")
         if trigger.kind == "on_keyword" and not [one for one in trigger.words if one.strip()]:
@@ -260,36 +206,12 @@ def binding_problems(
     return problems
 
 
-def bound_faults(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
-    """The fault rows a call must apply: one per profile of every bound system sub-actor."""
-    rows = []
-    for binding in bindings:
-        actor = cast.get(binding.id)
-        if actor is None:
-            continue
-        for fault in actor.faults:
-            on_call = fault.on_call
-            if binding.trigger.kind == "on_tool" and binding.trigger.tool == fault.tool:
-                on_call = binding.trigger.on_call
-            rows.append(
-                {
-                    "tool": fault.tool,
-                    "kind": fault.kind,
-                    "on_call": on_call,
-                    "latency_ms": fault.latency_ms,
-                    "content": fault.content,
-                    "sub_actor": actor.id,
-                }
-            )
-    return rows
-
-
 def bound_participants(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
     """The sub-actors that enter a conversation, with their channel and when each enters."""
     entering = []
     for binding in bindings:
         actor = cast.get(binding.id)
-        if actor is None or enters(actor.channel) not in ("mixed", "line", "thread", "world"):
+        if actor is None or enters(actor.channel) not in ("mixed", "line", "thread"):
             continue
         entering.append(
             {
@@ -300,7 +222,6 @@ def bound_participants(bindings: list[Binding], cast: Cast) -> list[dict[str, An
                 "behaviour": actor.behaviour.model_dump() if actor.behaviour else {},
                 "persona": {**actor.persona, "name": actor.persona.get("name") or actor.name},
                 "about": _described(actor),
-                "inbound": dict(actor.inbound),
                 "trigger": binding.trigger.model_dump(),
             }
         )
@@ -321,21 +242,11 @@ def bound_voices(bindings: list[Binding], cast: Cast) -> list[dict[str, Any]]:
     return [one for one in bound_participants(bindings, cast) if "voice" in CHANNELS[one["channel"]]]
 
 
-def entering_faults(bindings: list[Binding], cast: Cast, seed: str) -> list[dict[str, Any]]:
-    """The faults one run applies: a probability binding is drawn once, from the run's own seed."""
-    skipped = {
-        binding.id
-        for binding in bindings
-        if binding.trigger.kind == "probability" and not drawn(seed, binding.id, binding.trigger.p)
-    }
-    return [row for row in bound_faults(bindings, cast) if row["sub_actor"] not in skipped]
-
-
-def absent(sub_actor_id: str, messages: Any, calls: Any) -> str:
+def absent(sub_actor_id: str, messages: Any) -> str:
     """Why a sub-goal about this sub-actor does not apply to a call it never entered, or nothing.
 
-    A sub-actor that was never heard, never wrote and failed no tool call never entered, so nothing
-    the agent did could have been a response to it.
+    A sub-actor that was never heard and never wrote never entered, so nothing the agent did could
+    have been a response to it.
     """
     if not sub_actor_id:
         return ""
@@ -345,8 +256,7 @@ def absent(sub_actor_id: str, messages: Any, calls: Any) -> str:
         and message.get("sub_actor") == sub_actor_id
         for message in messages or ()
     )
-    faulted = any(getattr(call, "sub_actor", "") == sub_actor_id for call in calls or ())
-    if heard or faulted:
+    if heard:
         return ""
     from .judge import verdict_of
 

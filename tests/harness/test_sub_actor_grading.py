@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from fi.alk.harness.catalogue import Catalogue, SubGoal, load_catalogue, save_catalogue
 from fi.alk.harness.cast import absent
-from fi.alk.harness.judge import _call, _others_present, _transcript
-from fi.alk.harness.world.runtime import Call
+from fi.alk.harness.judge import _others_present, _transcript
 
 
 
@@ -24,22 +23,13 @@ def test_a_sub_actor_turn_is_named_and_marked_as_not_the_customer():
     assert _others_present([{"role": "user", "content": "hi"}]) == ""
 
 
-def test_the_judge_sees_a_fault_a_sub_actor_put_on_a_call():
-    faulted = Call(name="book", arguments={}, ok=False, error="upstream error", fault="error", sub_actor="s")
-    assert _call(faulted)["fault"] == "error"
-    assert "fault" not in _call(Call(name="book", arguments={}))
-
-
 def test_a_sub_goal_about_a_sub_actor_that_never_entered_holds_with_the_reason():
-    said = absent("subactor_bystander", [{"role": "user", "content": "hi"}], [])
+    said = absent("subactor_bystander", [{"role": "user", "content": "hi"}])
     assert said.startswith("Not applicable") and "subactor_bystander" in said
 
     heard = [{"role": "sub_actor", "sub_actor": "subactor_bystander", "content": "Add one."}]
-    assert absent("subactor_bystander", heard, []) == ""
-
-    faulted = [Call(name="book", arguments={}, ok=False, fault="timeout", sub_actor="subactor_service")]
-    assert absent("subactor_service", [], faulted) == ""
-    assert absent("", [], []) == ""
+    assert absent("subactor_bystander", heard) == ""
+    assert absent("", []) == ""
 
 
 def test_the_catalogue_names_a_sub_actor_only_when_one_is_named(tmp_path):
@@ -80,15 +70,15 @@ def test_local_grading_lets_a_sub_goal_about_an_absent_sub_actor_stand_aside(tmp
 
     catalogue = Catalogue(
         sub_goals=[
-            SubGoal(name="about", what="w", check="def check(world, calls):\n    return 'never reached'\n", sub_actor="subactor_service")
+            SubGoal(name="about", what="w", check="def check(world, calls):\n    return 'never reached'\n", sub_actor="subactor_bystander")
         ]
     )
     scenario = Scenario(name="s", instruction="x", sub_goals=["about"])
     outcome = grade_sub_goals(None, scenario, catalogue, [], [])[0]
     assert outcome.held and outcome.said.startswith("Not applicable")
 
-    faulted = [Call(name="book", arguments={}, ok=False, fault="error", sub_actor="subactor_service")]
-    assert not grade_sub_goals(None, scenario, catalogue, faulted, [])[0].held
+    heard = [{"role": "sub_actor", "sub_actor": "subactor_bystander", "content": "Add one."}]
+    assert not grade_sub_goals(None, scenario, catalogue, [], heard)[0].held
 
 
 def test_a_sub_actor_turn_keeps_its_name_in_the_spoken_transcript():

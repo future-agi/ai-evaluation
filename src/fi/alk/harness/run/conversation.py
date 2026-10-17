@@ -196,7 +196,7 @@ def customer_prompt(
 
 
 class _ChatSubActors:
-    """The scenario's sub-actors that enter a chat: a second participant, or something that arrives."""
+    """The scenario's sub-actors that enter a chat: a second participant on the person's side."""
 
     def __init__(self, scenario: Scenario, world_root: Any, model: str | None, seed: str) -> None:
         from fi.simulate.simulation.sub_actors import enters
@@ -208,12 +208,12 @@ class _ChatSubActors:
             self.entering = [
                 one
                 for one in bound_participants(scenario.sub_actors, load_cast(world_root))
-                if enters(one["channel"]) in ("thread", "world")
+                if enters(one["channel"]) == "thread"
             ]
         self.model = model
         from fi.simulate.simulation.sub_actors import Entering
 
-        # The run's own seed, shared with its fault arming, so one draw decides a probability binding.
+        # The run's own seed, so one draw decides a probability binding.
         self.states = {one["id"]: Entering(one, seed) for one in self.entering}
 
     async def after_agent(self, turns: int, reply: str, target: Any) -> list[Exchange]:
@@ -238,15 +238,6 @@ class _ChatSubActors:
         return entered
 
     async def _enter(self, one: dict[str, Any], reply: str, target: Any) -> Exchange | None:
-        if one["channel"] == "inbound_message":
-            from fi.simulate.simulation.sub_actors import arrival
-
-            inbound = one.get("inbound") or {}
-            world = getattr(target, "world", None)
-            if world is None or not hasattr(world, "add"):
-                return None
-            world.add(str(inbound.get("collection") or ""), dict(inbound.get("record") or {}))
-            return Exchange("sub_actor", arrival(inbound), name=one["name"], sub_actor=one["id"])
         from fi.simulate.simulation.sub_actors import speaking_as
 
         async with Stage(

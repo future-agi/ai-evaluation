@@ -1,4 +1,4 @@
-"""Sub-actors in a chat: a second participant the agent and the person both see, or a record arriving."""
+"""Sub-actors in a chat: a second participant the agent and the person both see."""
 
 from __future__ import annotations
 
@@ -55,7 +55,6 @@ def test_a_second_participant_writes_after_the_agent_turn_its_trigger_names(tmp_
     actor = SubActor(
         id="subactor_friend",
         name="Friend",
-        kind="behavioral",
         channel="thread_message",
         behaviour=Behaviour(prompt="wants an extra item", max_lines=1),
     )
@@ -74,29 +73,8 @@ def test_a_second_participant_writes_after_the_agent_turn_its_trigger_names(tmp_
     assert target.heard == [("Friend", "Can you add one more for me?")]
 
 
-def test_a_record_arrives_in_the_world_when_its_trigger_fires(tmp_path, monkeypatch):
-    actor = SubActor(
-        id="subactor_inbox",
-        name="Inbox",
-        kind="behavioral",
-        channel="inbound_message",
-        behaviour=Behaviour(prompt="a message arrives"),
-        inbound={"collection": "messages", "record": {"body": "Your order changed"}},
-    )
-    others = _setup(tmp_path, monkeypatch, actor, Trigger(kind="on_keyword", words=["confirm"]))
-    target = _Target()
-
-    async def scenario():
-        return await others.after_agent(1, "Let me look.", target), await others.after_agent(2, "Please confirm.", target)
-
-    before, after = asyncio.run(scenario())
-    assert before == []
-    assert target.world.added == [("messages", {"body": "Your order changed"})]
-    assert after[0].speaker == "sub_actor" and after[0].sub_actor == "subactor_inbox"
-
-
 def test_a_sub_actor_that_cannot_speak_is_skipped_and_the_call_goes_on(tmp_path, monkeypatch):
-    actor = SubActor(id="subactor_friend", name="Friend", kind="behavioral", channel="thread_message", behaviour=Behaviour(prompt="x"))
+    actor = SubActor(id="subactor_friend", name="Friend", channel="thread_message", behaviour=Behaviour(prompt="x"))
     others = _setup(tmp_path, monkeypatch, actor, Trigger(kind="mid_journey", turn=1))
 
     async def refused(self, _text):
@@ -108,7 +86,7 @@ def test_a_sub_actor_that_cannot_speak_is_skipped_and_the_call_goes_on(tmp_path,
 
 
 def test_with_the_switch_off_nobody_else_enters(tmp_path, monkeypatch):
-    actor = SubActor(id="subactor_friend", name="Friend", kind="behavioral", channel="thread_message", behaviour=Behaviour(prompt="x"))
+    actor = SubActor(id="subactor_friend", name="Friend", channel="thread_message", behaviour=Behaviour(prompt="x"))
     others = _setup(tmp_path, monkeypatch, actor, Trigger())
     monkeypatch.delenv("HARNESS_SUB_ACTORS")
     scenario = Scenario(name="s", instruction="x", sub_actors=[Binding(id="subactor_friend")])

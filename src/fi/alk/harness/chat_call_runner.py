@@ -20,13 +20,10 @@ from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 from .call_runner import (
     ArtifactUploader,
     CallRunnerContext,
-    _arm_faults,
     _clear_file_tool_calls,
     _collect_file_tool_calls,
-    _sub_actor_bindings,
     _with_scenario_edits,
 )
-from .cast import entering_faults, load_cast
 from .contract import AgentContract
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .outbound import ArtifactKind, format_rfc3339_millis
@@ -305,7 +302,7 @@ class _HostedChatTarget:
         seed: str = "",
     ) -> None:
         self._wrapper = wrapper
-        # The call's own seed: one draw decides a probability binding for faults and participants.
+        # The call's own seed: one draw decides whether a participant bound by probability enters.
         self.seed = seed
         self._contract = contract
         self.world = world
@@ -547,13 +544,6 @@ class HostedChatCallRunner:
         _clear_file_tool_calls(runtime)
         # Drawn once per call, so a probability binding varies across runs and agrees within one.
         seed = secrets.token_hex(8)
-        bindings = _sub_actor_bindings(document)
-        if bindings:
-            faults = entering_faults(bindings, load_cast(self._context.bundle_dir), seed)
-            target_world.faults = faults
-            world_db = runtime.endpoints.get("world_db")
-            if world_db is not None:
-                _arm_faults(world_db.address, faults)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -607,7 +597,19 @@ class HostedChatCallRunner:
         calls = tuple(transcript.calls)
         if calls:
             tool_trace = "\n".join(
-                json.dumps(call.traced(), sort_keys=True, default=str)
+                json.dumps(
+                    {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                        "result": call.result,
+                        "ok": call.ok,
+                        "error": call.error,
+                        "refused": call.refused,
+                        "at": call.at,
+                    },
+                    sort_keys=True,
+                    default=str,
+                )
                 for call in calls
             ).encode("utf-8")
             await self._adapter.upload_artifact(

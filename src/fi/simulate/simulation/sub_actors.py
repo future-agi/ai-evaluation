@@ -15,8 +15,7 @@ from typing import Any
 # words the build is shown, how a runner carries it (`enters`), and the one line the simulated person
 # is told about it, if any.
 #   enters: mixed  a voice under the person      line   holds the line instead of the person
-#           thread a second participant in chat  world  a record written into the world
-#           tools  failures on the agent's tools
+#           thread a second participant in chat
 CHANNELS: dict[str, dict[str, Any]] = {
     "audio_mix": {
         "modalities": {"voice"},
@@ -38,16 +37,6 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "You do not know their codes, numbers, account details or what they have chosen: never give one "
         "or choose for them; when the agent asks for one, say you will hand the phone back.",
     },
-    "transfer_leg": {
-        "modalities": {"voice"},
-        "delivered": True,
-        "enters": "line",
-        "about": "whoever answers when the agent hands the call over",
-        "tells_person": "If the agent transfers you, {who} answers and the call ends once they have "
-        "spoken. Say nothing while they speak.",
-        "setting": "A call has just been transferred to you by an automated agent.",
-        "enters_on": (("on_escalation",), "whoever answers a transfer enters only when the agent hands over"),
-    },
     "ivr": {
         "modalities": {"voice"},
         "delivered": True,
@@ -57,16 +46,6 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "tells_person": "{who} answers first. Say nothing until it has put the call through to you.",
         "setting": "You are the automated phone menu that answers this line before a person does.",
     },
-    "tool_response": {
-        "modalities": {"voice", "chat", "browser"},
-        "delivered": True,
-        "enters": "tools",
-        "about": "a service behind the agent's tools whose responses fail as its `faults` say",
-        "enters_on": (
-            ("always", "on_tool", "probability"),
-            "a failing service is set up before the call, so it enters always, on_tool or by probability",
-        ),
-    },
     "thread_message": {
         "modalities": {"chat"},
         "delivered": True,
@@ -74,12 +53,6 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "about": "a second participant in the conversation, seen by the agent and the person",
         "setting": "You are a second person in a chat between someone and an automated agent. Never claim "
         "to be the other person.",
-    },
-    "inbound_message": {
-        "modalities": {"voice", "chat"},
-        "delivered": True,
-        "enters": "world",
-        "about": "a record that arrives in the world mid-task: `inbound.collection` and `inbound.record`",
     },
     "ui_event": {"modalities": {"computer_use"}, "delivered": False, "enters": "screen", "about": "an event on the screen"},
     "page_content": {"modalities": {"browser"}, "delivered": False, "enters": "page", "about": "content on a page"},
@@ -93,12 +66,11 @@ TRIGGER_ABOUT: dict[str, str] = {
     "mid_journey": "after the agent's turn `turn`",
     "on_tool": "on call `on_call` of the agent's tool `tool`",
     "on_keyword": "after a turn containing one of `words`",
-    "on_escalation": "when the agent hands over through its tool `tool`",
     "probability": "with chance `p`, drawn once per run; only with a sub-goal whose `sub_actor` names it",
 }
 TRIGGERS = tuple(TRIGGER_ABOUT)
 # Triggers decided from the tools the agent has called.
-NEEDS_TOOLS = frozenset({"on_tool", "on_escalation"})
+NEEDS_TOOLS = frozenset({"on_tool"})
 
 
 def enters(channel: str) -> str:
@@ -151,7 +123,7 @@ def due(trigger: dict[str, Any], moment: Moment, *, seed: str = "", sub_actor_id
         return moment.agent_turns == int(trigger.get("turn") or 0)
     if kind in NEEDS_TOOLS:
         tool = str(trigger.get("tool") or "")
-        wanted = int(trigger.get("on_call") or 1) if kind == "on_tool" else 1
+        wanted = int(trigger.get("on_call") or 1)
         return bool(tool) and moment.tools_called.count(tool) >= wanted
     if kind == "on_keyword":
         words = [str(one).strip().lower() for one in trigger.get("words") or [] if str(one).strip()]
@@ -195,7 +167,3 @@ class Entering:
         self.turns_left -= 1
         return True
 
-
-def arrival(inbound: dict[str, Any]) -> str:
-    """What the transcript says when a record arrives in the world."""
-    return f"(a new {inbound.get('collection')} record arrived)"

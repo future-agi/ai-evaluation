@@ -367,29 +367,6 @@ def _binding(
     )
 
 
-def _faults_reach(contract: AgentContract, source_root: str, world: Any) -> set[str]:
-    """The agent's tools a run can stand in front of, so a fault can be applied to their calls.
-
-    A tool the world executes itself is reached in its own `call`. A tool the agent's code runs is
-    reached only when it is a service tool served by a `tools-api` service, whose calls pass through
-    the bundle's tool proxy; one running inside the agent's own process is reached by nothing.
-    """
-    owned_elsewhere = set(getattr(world, "runtime_tools", set()) or set())
-    proxied = _serves_tools_api(source_root)
-    reachable = set()
-    for name in contract.tool_names():
-        entry = contract.entry_for(name)
-        if name not in owned_elsewhere or (proxied and entry is not None and entry.mode == "service"):
-            reachable.add(name)
-    return reachable
-
-
-def _serves_tools_api(source_root: str) -> bool:
-    from ..bundle_author_v2 import serves_tools_api
-
-    return bool(source_root) and Path(source_root).is_dir() and serves_tools_api(Path(source_root))
-
-
 def _bound_anywhere(destination: Path, sub_actor_id: str) -> list[str]:
     """The scenarios already written that bind this sub-actor."""
     found = []
@@ -571,35 +548,26 @@ def _tables_the_source_lacks(
     return problems
 
 
-def cast_tools(
-    contract: AgentContract, destination: Path, *, source_root: str = "", world: Any = None, origin: str = "derived"
-) -> list[Any]:
+def cast_tools(contract: AgentContract, destination: Path, *, origin: str = "derived") -> list[Any]:
     """The tools that keep the world's cast: shared by the build stage and the builder session."""
     from ..scenario_tools import persona_properties
 
     @tool(
         "add_sub_actor",
-        "Add or replace a participant in this agent's world that is neither the agent nor the "
-        "person it serves. The cast is shared by every scenario; a scenario binds the ones it "
-        "needs and says when each enters.\n\n"
-        "`kind`: `behavioral` speaks (needs a `persona`, who they are, in the same fields as the "
-        "person's, and `behaviour.prompt`: what they want and what they know; how they sound is "
-        "chosen from the persona), `system` is a service whose responses fail (needs `faults`), `hybrid` "
-        "has both. `channel`, which this agent must be reachable on: "
+        "Add or replace someone on the person's side who is not the person: someone with them "
+        "who may speak or take over, never anyone on the agent's side. The cast is shared by every "
+        "scenario; a scenario binds the ones it needs and says when each enters.\n\n"
+        "Give a `persona`, who they are, in the same fields as the person's, and `behaviour.prompt`: "
+        "what they want and what they know; how they sound is chosen from the persona. `channel`, "
+        "which this agent must be reachable on: "
         + described({name: CHANNEL_REGISTRY[name]["about"] for name in delivered_channels()})
-        + ". Each fault names a `tool`, a `kind` "
-        "(timeout, error, rate_limit, malformed, latency with `latency_ms`, content with "
-        "`content` added to the result) and `on_call`, which call of that tool it hits (from "
-        "1). `depends_on` lists the agent's tools the sub-actor is about. `primary_role` "
-        "describes the person the agent serves, once.",
+        + ". `primary_role` describes the person the agent serves, once.",
         schema(
             {
                 "id": str,
                 "name": str,
                 "role": str,
-                "kind": {"type": "string", "enum": ["behavioral", "system", "hybrid"]},
                 "channel": {"type": "string", "enum": delivered_channels()},
-                "depends_on": {"type": "array", "items": {"type": "string"}},
                 "persona": {"type": "object", "properties": persona_properties()},
                 "behaviour": {
                     "type": "object",
@@ -609,27 +577,9 @@ def cast_tools(
                         "max_lines": {"type": "integer"},
                     },
                 },
-                "faults": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tool": {"type": "string"},
-                            "kind": {"type": "string"},
-                            "on_call": {"type": "integer"},
-                            "latency_ms": {"type": "integer"},
-                            "content": {"type": "string"},
-                        },
-                        "required": ["tool", "kind"],
-                    },
-                },
-                "inbound": {
-                    "type": "object",
-                    "properties": {"collection": {"type": "string"}, "record": {"type": "object"}},
-                },
                 "primary_role": str,
             },
-            ["id", "name", "kind", "channel"],
+            ["id", "name", "channel", "behaviour"],
         ),
     )
     async def add_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
@@ -646,12 +596,7 @@ def cast_tools(
             )
         except Exception as invalid:  # noqa: BLE001 - the model is told what was wrong
             return _err(f"Not added. {invalid}"[:600])
-        problems = sub_actor_problems(
-            actor,
-            modality=str(contract.modality or ""),
-            tools=set(contract.tool_names()),
-            reachable=_faults_reach(contract, source_root, world),
-        )
+        problems = sub_actor_problems(actor, modality=str(contract.modality or ""))
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         cast = load_cast(destination)
@@ -1890,7 +1835,7 @@ def world_tools(
             save_world,
         ]
         + (
-            cast_tools(contract, destination, source_root=source_root, world=world)
+            cast_tools(contract, destination)
             if sub_actors_enabled()
             else []
         ),

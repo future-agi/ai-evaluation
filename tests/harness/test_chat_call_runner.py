@@ -733,18 +733,15 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
     assert result.result == {"account_id": "ACC-2048", "status": "active"}
 
 
-def test_hosted_chat_arms_the_faults_its_scenario_binds(tmp_path: Path, monkeypatch: Any) -> None:
-    from fi.alk.harness.cast import Cast, FaultProfile, SubActor, save_cast
+def test_hosted_chat_gives_each_call_its_own_seed(tmp_path: Path, monkeypatch: Any) -> None:
+    from fi.alk.harness.cast import Behaviour, Cast, SubActor, save_cast
 
     monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     tool_world = _ToolWorld()
     monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
-    armed: list = []
-    monkeypatch.setattr(chat, "_arm_faults", lambda dsn, rows: armed.append((dsn, rows)))
     seen: dict = {}
 
     async def remember(target: Any, scenario: Any, _contract: Any, _bundle_dir: Path) -> Transcript:
-        seen["faults"] = list(target.world.faults)
         seen["seed"] = target.seed
         return Transcript()
 
@@ -756,18 +753,17 @@ def test_hosted_chat_arms_the_faults_its_scenario_binds(tmp_path: Path, monkeypa
         Cast(
             sub_actors=[
                 SubActor(
-                    id="subactor_service",
-                    name="Service",
-                    kind="system",
-                    channel="tool_response",
-                    faults=[FaultProfile(tool="lookup_account", kind="error")],
+                    id="subactor_friend",
+                    name="Friend",
+                    channel="thread_message",
+                    behaviour=Behaviour(prompt="asks for one more"),
                 )
             ]
         ),
     )
     document = context.bundle_dir / "scenarios" / "one" / "scenario.json"
     body = json.loads(document.read_text())
-    body["sub_actors"] = [{"id": "subactor_service", "trigger": {"kind": "always"}}]
+    body["sub_actors"] = [{"id": "subactor_friend", "trigger": {"kind": "always"}}]
     document.write_text(json.dumps(body))
     runtime = EnvironmentRuntime(
         runtime_id="runtime-1",
@@ -781,7 +777,4 @@ def test_hosted_chat_arms_the_faults_its_scenario_binds(tmp_path: Path, monkeypa
     )
     asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
 
-    wanted = [{"tool": "lookup_account", "kind": "error", "on_call": 1, "latency_ms": 0, "content": "", "sub_actor": "subactor_service"}]
-    assert seen["faults"] == wanted
-    assert armed == [("postgresql://u:p@localhost/w", wanted)]
     assert seen["seed"]

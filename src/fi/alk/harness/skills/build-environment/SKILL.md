@@ -719,24 +719,17 @@ these the first time.
 ## The cast
 
 Only when `add_sub_actor` is offered. The person the agent serves is the primary actor; a sub-actor is
-anyone or anything else in the world the agent has to cope with: someone speaking in the background of
-a call, or a service behind one of the agent's tools whose responses fail. Real use has them, so a
-world without them tests only the easy case. Read the contract and give each slot below that this agent
-has one sub-actor:
+someone on the person's side who is not the person, whom the agent has to cope with: someone with them
+who speaks up or takes over. Never anyone on the agent's side: the agent, its staff and its systems are
+what is being tested, so the run never plays them. Real use has these people, so a world without them
+tests only the easy case. Read the contract and give each slot below that this agent has one sub-actor:
 
-- a tool backed by a third-party service gets a `system` sub-actor on `tool_response`, with one
-  fault per way that service can fail the call (a timeout, an error, a rate limit, a malformed or
-  padded response, a slow one);
-- a voice agent gets a `behavioral` sub-actor on `audio_mix` (someone near the person), and one on
+- a voice agent gets a sub-actor on `audio_mix` (someone near the person), and one on
   `audio_handoff` (someone who takes the line from them) where the person could hand the phone over;
-- a transfer or escalation tool gets a `behavioral` sub-actor on `transfer_leg`: whoever answers
-  the handover;
-- an agent that places calls gets an `ivr`: a menu that answers before the person does;
-- a conversation the agent shares with more than one person gets a `thread_message` participant;
-- a record the agent reads that can change while it works gets an `inbound_message`, whose
-  `inbound` names the collection and the record that arrives.
+- an agent that places calls gets an `ivr`: the person's own menu that answers before they do;
+- a conversation the agent shares with more than one person gets a `thread_message` participant.
 
-A behavioural sub-actor is a person, so give it a `persona` in the same fields as the person the
+A sub-actor is a person, so give it a `persona` in the same fields as the person the
 agent serves: gender, age group, the language it speaks, its accent, personality and communication
 style, each true to who it is in this world. Every channel uses what applies to it, so how it sounds or writes is chosen from the
 persona and never set by you. Its `behaviour.prompt` says what it wants and what it knows, and
@@ -745,8 +738,7 @@ someone louder.
 
 The cast belongs to the world, so every scenario sees the same one, and a scenario binds the ones it
 needs. Only an agent with none of these slots has an empty cast; never add a sub-actor for a slot the
-agent does not have. `add_sub_actor` refuses a channel this agent cannot be reached on and a fault on a tool
-whose calls nothing in the run stands between.
+agent does not have. `add_sub_actor` refuses a channel this agent cannot be reached on.
 
 ## If the contract is wrong
 

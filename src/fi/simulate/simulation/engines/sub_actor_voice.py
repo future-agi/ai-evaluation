@@ -1,5 +1,5 @@
-"""Sub-actors on a voice call: a voice near the caller, someone who takes the line, a menu that answers
-first, a supervisor on a transfer, or something arriving in the world mid-call."""
+"""Sub-actors on a voice call: a voice near the caller, someone who takes the line from them, or the
+caller's own menu that answers first."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from fi.simulate.simulation.engines.caller_barge_in import complete_text, synthesize_frames
-from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Entering, Moment, arrival, enters, speaking_as
+from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Entering, Moment, enters, speaking_as
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,6 @@ class SubActorVoice:
         fallback_tts: Any = None,
         say: Any = None,
         tools_called: Any = None,
-        write: Any = None,
         seed: str = "",
         clock: Any = time.time,
     ):
@@ -56,8 +55,6 @@ class SubActorVoice:
         self.say = say
         # The names of the tools the agent has called so far, read from the run's live trace.
         self.tools_called = tools_called
-        # Adds a record to the world: (collection, record).
-        self.write = write
         self.seed = seed
         self.clock = clock
         self.channel = str(actor.get("channel") or "audio_mix")
@@ -155,11 +152,7 @@ class SubActorVoice:
             return False
 
     async def deliver(self, last_text: str = "") -> bool:
-        way = enters(self.channel)
-        if way == "world":
-            await self._arrive()
-            return False
-        if way == "line":
+        if enters(self.channel) == "line":
             return await self._speak_next(last_text)
         self._tasks.append(asyncio.create_task(self._play_next()))
         return False
@@ -196,13 +189,6 @@ class SubActorVoice:
         self._record("spoke", lines[0], started)
         return True
 
-    async def _arrive(self) -> None:
-        inbound = self.actor.get("inbound") or {}
-        if self.write is None or not inbound.get("collection"):
-            return
-        await asyncio.to_thread(self.write, str(inbound["collection"]), dict(inbound.get("record") or {}))
-        self._record("arrived", arrival(inbound), self.clock(), record=inbound.get("record"))
-
     def _record(self, kind: str, text: str, started: float, **extra: Any) -> None:
         self._events.append(
             {
@@ -220,12 +206,6 @@ class SubActorVoice:
     def events(self) -> list[dict[str, Any]]:
         return list(self._events)
 
-    @property
-    def handed_over(self) -> bool:
-        """Whoever answered a transfer has said all they say: the agent's part of the call is over."""
-        done = self.entering.entered and self.entering.turns_left == 0
-        return self.channel == "transfer_leg" and done and bool(self._events)
-
     async def close(self) -> None:
         pending = [task for task in (self._preparation, *self._tasks) if task is not None]
         for task in pending:
@@ -237,11 +217,9 @@ class SubActorVoice:
 class SubActorsOnCall:
     """Every sub-actor on one call, told about each committed agent turn exactly once."""
 
-    def __init__(self, voices: list[SubActorVoice], on_handed_over: Any = None) -> None:
+    def __init__(self, voices: list[SubActorVoice]) -> None:
         self.voices = voices
         self.agent_turns = 0
-        # Ends the call once a transfer has been answered.
-        self.on_handed_over = on_handed_over
 
     def __bool__(self) -> bool:
         return bool(self.voices)
@@ -260,8 +238,6 @@ class SubActorsOnCall:
         holding = False
         for voice in self.voices:
             holding = await voice.on_agent_turn(self.agent_turns, text) or holding
-        if self.on_handed_over is not None and any(voice.handed_over for voice in self.voices):
-            self.on_handed_over()
         return holding
 
     def events(self) -> list[dict[str, Any]]:
@@ -287,7 +263,7 @@ def sub_actor_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "e2e_latency": None,
         }
         for event in events
-        if event.get("kind") in ("spoke", "arrived") and event.get("text")
+        if event.get("kind") == "spoke" and event.get("text")
     ]
 
 
@@ -311,17 +287,13 @@ def with_sub_actor_turns(
     return ordered
 
 
-def world_access(dsn: str) -> tuple[Any, Any]:
-    """Read the run's live tool trace and add records to its world, both through the world's database."""
+def world_access(dsn: str) -> Any:
+    """Read the run's live tool trace through the world's database: the tools the agent has called."""
     if not dsn:
-        return None, None
+        return None
     from fi.alk.harness.call_runner import read_tool_trace
-    from fi.alk.harness.world.stores.postgres import AttachedPostgresStore
 
     def tools_called() -> list[str]:
         return [str(record.get("name")) for record in read_tool_trace(dsn)]
 
-    def write(collection: str, record: dict[str, Any]) -> None:
-        AttachedPostgresStore(dsn).add(collection, record)
-
-    return tools_called, write
+    return tools_called

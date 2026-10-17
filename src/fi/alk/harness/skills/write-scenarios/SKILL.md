@@ -642,12 +642,9 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 Only when `inspect_world` lists sub-actors in the cast. A coordinate whose level is named for a
 sub-actor binds that sub-actor. Bind one with `sub_actors` when the scenario is about how the agent
 copes with it, and say when it enters: `always`, `mid_journey` after the agent's
-turn N, `on_tool` on the Nth call of a tool, `on_keyword` after a turn containing one of its words, or
-`on_escalation` when the agent hands over through its tool. Use `probability` only when the scenario
+turn N, `on_tool` on the Nth call of a tool, or `on_keyword` after a turn containing one of its words. Use `probability` only when the scenario
 is about the agent coping whether or not the sub-actor shows up, and only with a sub-goal whose
-`sub_actor` names it, since a sub-goal about something that did not happen cannot be graded. A
-service that fails is set up before the call, so it enters `always`, `on_tool` or by `probability`.
-Most scenarios bind none; presence is a condition on some scenarios, not on every one.
+`sub_actor` names it, since a sub-goal about something that did not happen cannot be graded. Most scenarios bind none; presence is a condition on some scenarios, not on every one.
 
 A sub-actor speaks from its behaviour in the cast; a scenario binds it and says when it enters, and
 cannot script its words. So nothing the person needs, and nothing in the answer key, depends on what
@@ -656,8 +653,7 @@ something the agent has to cope with whatever it says.
 
 The answer key is the correct behaviour with the sub-actor present. A request from someone who is not
 the person being served is not that person's request: the agent ignores it or checks it with them, and
-the solution never acts on it. A failed response from a system sub-actor is recovered from exactly as
-in the section above. Name a sub-goal whose check finds the forbidden effect in the world where the
+the solution never acts on it. Name a sub-goal whose check finds the forbidden effect in the world where the
 world can show it (nothing the sub-actor asked for was done), and a judged one for how the agent handled
 the interruption. The run tells the person who else is there; the instruction does not repeat it.
 

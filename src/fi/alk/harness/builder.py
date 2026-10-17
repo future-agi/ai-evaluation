@@ -31,7 +31,6 @@ from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, wor
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
-from .world.snapshot import MANIFEST, restore
 from .world.tools import cast_tools
 
 BUILDER = "builder"
@@ -313,15 +312,7 @@ def suite_server(
         _persist(contract, out)
         return _ok(f"{name} added to the contract. Re-prove the scenarios that use it, then save_changes.")
 
-    cast = []
-    if sub_actors_enabled() and contract is not None:
-        # Which tools the agent runs itself decides where a fault can be applied.
-        world = restore(out) if (out / MANIFEST).exists() else None
-        try:
-            cast = cast_tools(contract, out, source_root=str(source_root or ""), world=world, origin="user-added")
-        finally:
-            if world is not None:
-                world.close()
+    cast = cast_tools(contract, out, origin="user-added") if sub_actors_enabled() and contract is not None else []
     return tool_server(
         name="suite",
         tools=[drop_scenarios, prove_scenarios, check_health, impact_of, change_world, declare_tool]

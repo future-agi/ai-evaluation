@@ -620,7 +620,6 @@ def _call(call: Any) -> dict[str, Any]:
         "ok": bool(getattr(call, "ok", False)),
         "refused": bool(getattr(call, "refused", False)),
         "error": str(getattr(call, "error", "") or ""),
-        **({"fault": call.fault} if getattr(call, "fault", "") else {}),
     }
 
 

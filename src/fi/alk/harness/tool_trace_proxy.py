@@ -8,21 +8,17 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import error, request
 
-# Read with defaults so the world runtime can share this file's fault rules; the bundle always sets them.
-PORT = int(os.environ.get("PORT") or 0)
-UPSTREAM = os.environ.get("UPSTREAM_URL", "").rstrip("/")
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+import psycopg
 
-# A call a bound sub-actor fails outright: the status it answers with and what it says.
-FAILED = {"timeout": (504, "upstream timed out"), "error": (500, "upstream error"), "rate_limit": (429, "too many requests")}
+PORT = int(os.environ["PORT"])
+UPSTREAM = os.environ["UPSTREAM_URL"].rstrip("/")
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 
 def _record(
     name: str, arguments: object, result: object, ok: bool, failure: str = ""
 ) -> None:
     try:
-        import psycopg
-
         with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
             connection.execute(
                 "INSERT INTO _alk_tool_trace(name, arguments, result, ok, error, at) "
@@ -39,67 +35,6 @@ def _record(
     except Exception:
         # Evidence persistence must never alter the target tool response.
         pass
-
-
-# How long a timed-out response holds the agent before it is told the upstream timed out.
-FAULT_TIMEOUT_SECONDS = float(os.environ.get("ALK_FAULT_TIMEOUT_SECONDS") or 10)
-
-
-# Whether this world was sealed with sub-actor faults at all, asked once rather than per call.
-_FAULTS: list[bool] = []
-
-
-def _faults_sealed() -> bool:
-    if not _FAULTS:
-        try:
-            import psycopg
-
-            with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-                found = connection.execute("SELECT to_regclass('_alk_faults') IS NOT NULL").fetchone()
-            _FAULTS.append(bool(found and found[0]))
-        except Exception:
-            return False
-    return _FAULTS[0]
-
-
-def _fault_for(name: str) -> dict[str, object] | None:
-    """The fault a bound sub-actor applies to this call of this tool, counted from 1, or none."""
-    if not _faults_sealed():
-        return None
-    try:
-        import psycopg
-
-        with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
-            faults = connection.execute(
-                "SELECT kind, on_call, latency_ms, content, sub_actor FROM _alk_faults WHERE tool = %s",
-                (name,),
-            ).fetchall()
-            if not faults:
-                return None
-            made = connection.execute(
-                "SELECT count(*) FROM _alk_tool_trace WHERE name = %s", (name,)
-            ).fetchone()[0]
-    except Exception:
-        return None
-    number = int(made) + 1
-    for kind, on_call, latency_ms, content, sub_actor in faults:
-        if int(on_call) == number:
-            return {
-                "kind": kind,
-                "latency_ms": int(latency_ms or 0),
-                "content": content or "",
-                "label": f"fault:{kind}:{sub_actor}",
-            }
-    return None
-
-
-def with_content(result: object, content: str) -> object:
-    """A result with a bound sub-actor's content added to what the agent reads."""
-    if isinstance(result, dict):
-        return {**result, "note": content}
-    if isinstance(result, list):
-        return [*result, content]
-    return f"{result} {content}".strip() if result is not None else content
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -132,16 +67,6 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
         name = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or "unknown"
-        fault = _fault_for(name)
-        if fault and fault["kind"] in FAILED:
-            if fault["kind"] == "timeout":
-                time.sleep(FAULT_TIMEOUT_SECONDS)
-            status, detail = FAILED[str(fault["kind"])]
-            _record(name, arguments, None, False, str(fault["label"]))
-            self._reply(status, json.dumps({"detail": detail}).encode())
-            return
-        if fault and fault["kind"] == "latency":
-            time.sleep(int(fault["latency_ms"]) / 1000)
         try:
             with request.urlopen(outgoing, timeout=30) as response:
                 content = response.read()
@@ -151,17 +76,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = json.loads(content) if content else None
             except ValueError:
                 result = content.decode("utf-8", errors="replace")
-            if fault and status >= 400 and fault["kind"] != "latency":
-                fault = None
-            if fault and fault["kind"] == "malformed":
-                _record(name, arguments, None, False, str(fault["label"]))
-                self._reply(status, content[: max(1, len(content) // 2)] or b"{", response_type)
-                return
-            if fault and fault["kind"] == "content":
-                result = with_content(result, str(fault["content"]))
-                content = json.dumps(result).encode()
-                response_type = "application/json"
-            _record(name, arguments, result, status < 400, str(fault["label"]) if fault else "")
+            _record(name, arguments, result, status < 400)
             self.send_response(status)
             self.send_header("content-type", response_type)
             self.send_header("content-length", str(len(content)))
@@ -170,9 +85,6 @@ class Handler(BaseHTTPRequestHandler):
         except error.HTTPError as exc:
             content = exc.read()
             failure = content.decode("utf-8", errors="replace")[:2000]
-            # A response that already failed has nothing left to corrupt; only a delay still applied.
-            if fault and fault["kind"] == "latency":
-                failure = str(fault["label"])
             _record(name, arguments, None, False, failure)
             self.send_response(exc.code)
             self.send_header("content-length", str(len(content)))
@@ -186,13 +98,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
-
-    def _reply(self, status: int, content: bytes, content_type: str = "application/json") -> None:
-        self.send_response(status)
-        self.send_header("content-type", content_type)
-        self.send_header("content-length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
 
 
 if __name__ == "__main__":

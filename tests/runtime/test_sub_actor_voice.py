@@ -67,14 +67,12 @@ def _voice(
             "behaviour": {"prompt": "impatient", "loudness_db": -20, "max_lines": max_lines},
             "trigger": {"kind": kind, "turn": turn, **trigger},
             "channel": channel,
-            "inbound": {"collection": "messages", "record": {"body": "a new message"}},
         },
         model=_Model(lines),
         tts=_Tts(),
         play=play,
         say=lambda frames, text, name: _said(played, frames, text),
-        tools_called=lambda: ["lookup", "transfer"],
-        write=lambda collection, record: played.append(("wrote", collection, record)),
+        tools_called=lambda: ["lookup", "book"],
         seed="run-1",
         clock=lambda: float(next(ticks)),
     )
@@ -112,7 +110,7 @@ def test_a_voice_the_provider_cannot_speak_falls_back_to_its_second_voice():
             raise RuntimeError("voice not found")
 
     async def scenario():
-        voice, played = _voice(kind="always", channel="transfer_leg")
+        voice, played = _voice(kind="always", channel="audio_handoff")
         voice.tts, voice.fallback_tts = Unknown(), _Tts()
         assert await voice.on_agent_turn(1) is True
         return voice, played
@@ -120,22 +118,6 @@ def test_a_voice_the_provider_cannot_speak_falls_back_to_its_second_voice():
     voice, played = asyncio.run(scenario())
     assert played == [("said", "Hurry up.")]
     assert [event["text"] for event in voice.events()] == ["Hurry up."]
-
-
-def test_a_transfer_ends_the_call_once_whoever_answered_has_spoken():
-    from fi.simulate.simulation.engines.sub_actor_voice import SubActorsOnCall
-
-    async def scenario():
-        voice, _played = _voice(kind="always", channel="transfer_leg", max_lines=2)
-        ended: list[bool] = []
-        on_call = SubActorsOnCall([voice], on_handed_over=lambda: ended.append(True))
-        await on_call.agent_turn("transferring you now")
-        first = list(ended)
-        await on_call.agent_turn("you are connected")
-        return first, ended
-
-    first, ended = asyncio.run(scenario())
-    assert first == [] and ended
 
 
 def test_a_background_voice_says_one_line_per_agent_turn_not_all_at_once():
@@ -219,13 +201,13 @@ def test_a_keyword_brings_a_sub_actor_in_only_when_it_is_said():
     assert played == [("said", "I can help.")]
 
 
-def test_an_escalation_brings_in_who_answers_the_transfer():
-    voice, played = _voice(kind="on_escalation", channel="transfer_leg", lines="Supervisor here.", max_lines=1, tool="transfer")
-    _run(voice, (1, "Transferring you now."))
-    assert played == [("said", "Supervisor here.")]
+def test_a_tool_call_brings_in_a_sub_actor_waiting_for_it():
+    voice, played = _voice(kind="on_tool", channel="audio_handoff", lines="Add mine too.", max_lines=1, tool="book")
+    _run(voice, (1, "Booking that now."))
+    assert played == [("said", "Add mine too.")]
 
-    voice, played = _voice(kind="on_escalation", channel="transfer_leg", lines="Supervisor here.", max_lines=1, tool="refund")
-    _run(voice, (1, "Transferring you now."))
+    voice, played = _voice(kind="on_tool", channel="audio_handoff", lines="Add mine too.", max_lines=1, tool="refund")
+    _run(voice, (1, "Booking that now."))
     assert played == []
 
 
@@ -239,13 +221,6 @@ def test_a_probability_trigger_is_drawn_once_from_the_run_seed():
     assert voice.due(1)
     voice, _played = _voice(kind="probability", turn=1, p=0.000001)
     assert not voice.due(1)
-
-
-def test_an_inbound_message_arrives_in_the_world_when_due():
-    voice, played = _voice(kind="mid_journey", turn=1, channel="inbound_message")
-    _run(voice, (1, "One moment."))
-    assert played == [("wrote", "messages", {"body": "a new message"})]
-    assert voice.events()[0]["kind"] == "arrived"
 
 
 def test_each_committed_agent_turn_is_counted_once_across_the_call():

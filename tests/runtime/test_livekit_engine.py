@@ -4669,14 +4669,3 @@ def test_caller_mood_rises_on_refusals_and_repeats_and_eases_on_progress() -> No
     assert "edge goes out" in mood.brief(_Ctx(turns)).messages()[-1].text_content
     turns += [("assistant", "Thanks."), ("user", "Anything else?")]
     assert mood.brief(_Ctx(turns)).messages()[-1].text_content == "Anything else?"
-
-
-def test_a_transfer_answered_by_a_sub_actor_is_a_completed_call_however_short():
-    messages = [
-        {"role": "assistant", "content": "Your account is on hold, so I am transferring you."},
-        {"role": "assistant", "content": "You are connected with support."},
-    ]
-    outcome = livekit._conversation_outcome("transferred", messages, min_turn_messages=6)
-    assert outcome.status is livekit.TestCaseStatus.COMPLETED
-    assert outcome.metadata["stop_reason"] == "transferred"
-    assert livekit._turn_requirements(6) == (6, True)
