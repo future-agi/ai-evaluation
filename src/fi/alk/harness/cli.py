@@ -415,6 +415,11 @@ async def _build(args: argparse.Namespace) -> int:
         print("\nNo world was saved.", file=sys.stderr)
         return 1
     if native_runtime:
+        if deferred_runtime:
+            print(f"\nworld: {destination}")
+            print("Native source admission and runtime validation follow authoring.")
+            print(f"spent: ${stage.spent_usd:.4f}")
+            return 0
         from .bundle import BundleError
         from .certified_compose_runtime import ComposeRuntimeError
         from .compose_integration import validate_source

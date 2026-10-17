@@ -32,6 +32,13 @@ class ComposeRuntimeError(RuntimeError):
     pass
 
 
+def _bundle_context_excludes(bundle: EnvironmentBundleV2) -> tuple[str, ...]:
+    value = getattr(bundle, "metadata", {}).get("context_excludes") or []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ComposeRuntimeError("compose_source_context_exclude_invalid")
+    return tuple(value)
+
+
 _SERVICE_KEYS = {
     "image",
     "platform",
@@ -747,7 +754,12 @@ class CertifiedComposeRuntimeProvider:
         document = yaml.safe_load(
             _within(bundle_dir, bundle.runtime.document).read_text()
         )
-        inputs = source_inputs(source, document, capabilities=bundle.capabilities)
+        inputs = source_inputs(
+            source,
+            document,
+            capabilities=bundle.capabilities,
+            context_excludes=_bundle_context_excludes(bundle),
+        )
         validate_source(
             source, bundle.provenance.public_material_admissions,
             fixtures=bundle.provenance.public_test_fixture_admissions,
@@ -799,7 +811,12 @@ class CertifiedComposeRuntimeProvider:
         from .compose_source import source_inputs
         from .compose_integration import validate_source
 
-        inputs = source_inputs(self._source, self._document, capabilities=bundle.capabilities)
+        inputs = source_inputs(
+            self._source,
+            self._document,
+            capabilities=bundle.capabilities,
+            context_excludes=_bundle_context_excludes(bundle),
+        )
         validate_source(
             self._source, bundle.provenance.public_material_admissions,
             fixtures=bundle.provenance.public_test_fixture_admissions,

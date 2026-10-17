@@ -1129,6 +1129,8 @@ Use runtime.context_excludes only for paths unnecessary for the selected runtime
 component directory. Retain required modules, manifests, assets and tool implementations. Never
 approve credential-like material, rewrite it, or disable scanning. Every retained file is rescanned;
 the packaged context must build and answer a real chat before the plan is accepted.
+Simple * and ** patterns may exclude repeated test-only files when the diagnostic proves exact
+paths would be impractical. Patterns cannot exclude a required command or dependency manifest.
 Call the tool once the smallest complete correction is known, then stop."""
     if allowed == {"generated_runtime_plan_invalid"}:
         from .compose_integration import runtime_capability_briefing

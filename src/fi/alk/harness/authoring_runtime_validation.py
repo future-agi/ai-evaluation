@@ -449,6 +449,7 @@ def _looks_like_runtime_plan_failure(detail: str) -> bool:
         marker in detail
         for marker in (
             "generated_runtime_",
+            "bundle_secret_material_detected",
             "no runnable shipped entrypoint",
             "dependency manifest",
             "failed to build",

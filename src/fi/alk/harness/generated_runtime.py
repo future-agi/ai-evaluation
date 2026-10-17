@@ -1064,9 +1064,9 @@ def _context_excludes(
             continue
     values: set[str] = set()
     for raw in getattr(runtime, "context_excludes", None) or []:
-        if any(char in str(raw) for char in "*?[]"):
+        if any(char in str(raw) for char in "?[]"):
             raise GeneratedRuntimeError(
-                f"generated_runtime_context_exclude_glob_unsupported: {raw}"
+                f"generated_runtime_context_exclude_pattern_unsupported: {raw}"
             )
         relative = Path(str(raw))
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
@@ -1074,23 +1074,21 @@ def _context_excludes(
                 f"generated_runtime_context_exclude_invalid: {raw}"
             )
         normalized = relative.as_posix().removeprefix("./")
-        target = (component / normalized).resolve()
-        try:
-            target.relative_to(component.resolve())
-        except ValueError as exc:
-            raise GeneratedRuntimeError(
-                f"generated_runtime_context_exclude_invalid: {raw}"
-            ) from exc
-        if not target.exists():
+        matched = list(component.glob(normalized)) if "*" in normalized else [component / normalized]
+        matched = [target for target in matched if target.exists() or target.is_symlink()]
+        if not matched:
             # Generated/local state files are commonly listed even before the
             # first run creates them. A missing exclusion is already excluded
             # from the immutable build context and is therefore safe to ignore.
             continue
-        excluded_path = Path(normalized)
-        if any(
-            excluded_path == required_path or excluded_path in required_path.parents
-            for required_path in required
-        ):
+        try:
+            for target in matched:
+                target.resolve().relative_to(component.resolve())
+        except ValueError as exc:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_invalid: {raw}"
+            ) from exc
+        if any(_context_path_excluded(path, (normalized,)) for path in required):
             raise GeneratedRuntimeError(
                 f"generated_runtime_context_exclude_required: {normalized}"
             )
@@ -1099,8 +1097,15 @@ def _context_excludes(
 
 
 def _context_path_excluded(relative: Path, exclusions: tuple[str, ...]) -> bool:
+    def matches(value: str) -> bool:
+        return relative.match(value) or (
+            value.startswith("**/") and relative.match(value.removeprefix("**/"))
+        )
+
     return any(
-        relative == Path(value) or Path(value) in relative.parents
+        relative == Path(value)
+        or Path(value) in relative.parents
+        or ("*" in value and matches(value))
         for value in exclusions
     )
 
