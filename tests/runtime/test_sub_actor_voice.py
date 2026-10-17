@@ -121,6 +121,22 @@ def test_a_voice_the_provider_cannot_speak_falls_back_to_the_caller_s():
     assert [event["text"] for event in voice.events()] == ["Hurry up."]
 
 
+def test_a_transfer_ends_the_call_once_whoever_answered_has_spoken():
+    from fi.simulate.simulation.engines.sub_actor_voice import SubActorsOnCall
+
+    async def scenario():
+        voice, _played = _voice(kind="always", channel="transfer_leg", max_lines=2)
+        ended: list[bool] = []
+        on_call = SubActorsOnCall([voice], on_handed_over=lambda: ended.append(True))
+        await on_call.agent_turn("transferring you now")
+        first = list(ended)
+        await on_call.agent_turn("you are connected")
+        return first, ended
+
+    first, ended = asyncio.run(scenario())
+    assert first == [] and ended
+
+
 def test_always_enters_after_the_first_agent_turn():
     voice, _played = _voice(kind="always")
     assert not voice.due(0) and voice.due(1)

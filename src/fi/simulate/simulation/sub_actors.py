@@ -38,8 +38,8 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "delivered": True,
         "enters": "line",
         "about": "whoever answers when the agent hands the call over",
-        "tells_person": "If the agent transfers you, {who} answers. Say nothing while they speak; "
-        "carry on once they are done.",
+        "tells_person": "If the agent transfers you, {who} answers and the call ends once they have "
+        "spoken. Say nothing while they speak.",
     },
     "ivr": {
         "modalities": {"voice"},

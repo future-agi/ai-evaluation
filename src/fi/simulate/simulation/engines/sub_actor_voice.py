@@ -246,6 +246,11 @@ class SubActorVoice:
     def events(self) -> list[dict[str, Any]]:
         return list(self._events)
 
+    @property
+    def handed_over(self) -> bool:
+        """Whoever answered a transfer has said all they say: the agent's part of the call is over."""
+        return self.channel == "transfer_leg" and self._delivered and self._turns_left == 0 and bool(self._events)
+
     async def close(self) -> None:
         pending = [task for task in (self._preparation, *self._tasks) if task is not None]
         for task in pending:
@@ -257,9 +262,11 @@ class SubActorVoice:
 class SubActorsOnCall:
     """Every sub-actor on one call, told about each committed agent turn exactly once."""
 
-    def __init__(self, voices: list[SubActorVoice]) -> None:
+    def __init__(self, voices: list[SubActorVoice], on_handed_over: Any = None) -> None:
         self.voices = voices
         self.agent_turns = 0
+        # Ends the call once a transfer has been answered.
+        self.on_handed_over = on_handed_over
 
     def __bool__(self) -> bool:
         return bool(self.voices)
@@ -278,6 +285,8 @@ class SubActorsOnCall:
         holding = False
         for voice in self.voices:
             holding = await voice.on_agent_turn(self.agent_turns, text) or holding
+        if self.on_handed_over is not None and any(voice.handed_over for voice in self.voices):
+            self.on_handed_over()
         return holding
 
     def events(self) -> list[dict[str, Any]]:
