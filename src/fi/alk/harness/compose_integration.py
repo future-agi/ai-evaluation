@@ -55,6 +55,8 @@ def runtime_capability_briefing() -> str:
         "with runtime.compose_overrides; additional source-declared workflow roots use "
         "runtime.additional_services. Use runtime.compose_image_services only for an already "
         "selected service's source-declared image. Never invent deployment files or images. "
+        "When startup exceeds available resources, inspect and prefer a source-declared minimal "
+        "or development deployment that still provides the selected chat service and its dependencies. "
         "Auto selection discovers conventional Compose filenames only at the repository root; "
         "nested or ambiguous deployment files require an explicit selection. Explicit native "
         "execution does not auto-select Compose. This capability does not add standalone "

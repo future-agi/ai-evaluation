@@ -669,6 +669,8 @@ class CertifiedComposeRuntimeProvider:
         if timed_out:
             raise ComposeRuntimeError(f"compose_command_timeout: {operation}")
         if process.returncode:
+            if "no space left on device" in text.casefold():
+                raise ComposeRuntimeError("compose_resource_exhausted")
             raise ComposeRuntimeError(
                 f"compose_command_failed: {operation} exit={process.returncode}"
             )
