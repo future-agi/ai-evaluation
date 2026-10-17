@@ -96,7 +96,9 @@ Find, in roughly this order:
 5. **What each tool does to the rest of the call.** The tool's `description` is the agent's own
    wording for it; what you found goes in its own fields. `effects`: what it reads, creates and
    changes, and what earlier state it clears (a later change that discards what an earlier step
-   produced). `refuses`: every refusal by value or by something outside the
+   produced); which stored field and value decide what it returns, where a result appears only
+   when a record says so; and each argument whose text the agent writes itself rather than takes
+   from the person or a record. `refuses`: every refusal by value or by something outside the
    call, and every refusal returned as an ordinary value rather than an error. `inputs_from`: an
    argument whose value must come from an earlier tool's output, and that tool. Fill these for
    every tool that has them; a writer sees nothing else.
