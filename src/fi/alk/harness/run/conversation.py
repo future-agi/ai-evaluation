@@ -211,33 +211,27 @@ class _ChatSubActors:
                 if enters(one["channel"]) in ("thread", "world")
             ]
         self.model = model
+        from fi.simulate.simulation.sub_actors import Entering
+
         # The run's own seed, shared with its fault arming, so one draw decides a probability binding.
-        self.seed = seed
-        self.fired: set[str] = set()
-        self.turns_left: dict[str, int] = {}
+        self.states = {one["id"]: Entering(one, seed) for one in self.entering}
 
     async def after_agent(self, turns: int, reply: str, target: Any) -> list[Exchange]:
-        from fi.simulate.simulation.sub_actors import Moment, due
+        from fi.simulate.simulation.sub_actors import Moment
 
         entered: list[Exchange] = []
         tools = [call.name for call in getattr(getattr(target, "world", None), "calls", [])]
         for one in self.entering:
-            ident = one["id"]
-            speaking_on = self.turns_left.get(ident, 0) > 0
-            if not speaking_on:
-                if ident in self.fired:
+            state = self.states[one["id"]]
+            if not state.holding():
+                if not state.due(Moment(agent_turns=turns, last_text=reply, tools_called=tools)):
                     continue
-                moment = Moment(agent_turns=turns, last_text=reply, tools_called=tools)
-                if not due(one["trigger"], moment, seed=self.seed, sub_actor_id=ident):
-                    continue
-                self.fired.add(ident)
-                self.turns_left[ident] = max(1, int((one.get("behaviour") or {}).get("max_lines") or 1))
-            self.turns_left[ident] -= 1
+                state.enter()
             try:
                 exchange = await self._enter(one, reply, target)
             except Exception as exc:  # noqa: BLE001 - a quiet sub-actor is a weaker test, never a failed call
-                logger.warning("sub-actor %s could not enter: %s: %s", ident, type(exc).__name__, exc)
-                self.turns_left[ident] = 0
+                logger.warning("sub-actor %s could not enter: %s: %s", one["id"], type(exc).__name__, exc)
+                state.turns_left = 0
                 continue
             if exchange is not None:
                 entered.append(exchange)
@@ -245,18 +239,14 @@ class _ChatSubActors:
 
     async def _enter(self, one: dict[str, Any], reply: str, target: Any) -> Exchange | None:
         if one["channel"] == "inbound_message":
-            self.turns_left[one["id"]] = 0
+            from fi.simulate.simulation.sub_actors import arrival
+
             inbound = one.get("inbound") or {}
             world = getattr(target, "world", None)
             if world is None or not hasattr(world, "add"):
                 return None
             world.add(str(inbound.get("collection") or ""), dict(inbound.get("record") or {}))
-            return Exchange(
-                "sub_actor",
-                f"(a new {inbound.get('collection')} record arrived)",
-                name=one["name"],
-                sub_actor=one["id"],
-            )
+            return Exchange("sub_actor", arrival(inbound), name=one["name"], sub_actor=one["id"])
         from fi.simulate.simulation.sub_actors import speaking_as
 
         async with Stage(

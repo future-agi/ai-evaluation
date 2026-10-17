@@ -157,3 +157,40 @@ def due(trigger: dict[str, Any], moment: Moment, *, seed: str = "", sub_actor_id
             seed, sub_actor_id, float(trigger.get("p") or 0)
         )
     return False
+
+
+class Entering:
+    """Whether one bound sub-actor acts on this agent turn, on any channel: it enters once, when its trigger
+    is due, and one that speaks then keeps the line for the rest of its `max_lines`."""
+
+    def __init__(self, actor: dict[str, Any], seed: str = "") -> None:
+        self.actor = actor
+        self.seed = seed
+        self.trigger = dict(actor.get("trigger") or {"kind": "always"})
+        self.lines = max(1, int((actor.get("behaviour") or {}).get("max_lines") or 1))
+        self.entered = False
+        self.turns_left = 0
+
+    @property
+    def kind(self) -> str:
+        return str(self.trigger.get("kind") or "always")
+
+    def due(self, moment: Moment) -> bool:
+        return not self.entered and due(self.trigger, moment, seed=self.seed, sub_actor_id=str(self.actor.get("id") or ""))
+
+    def enter(self) -> None:
+        self.entered = True
+        speaks = enters(str(self.actor.get("channel") or "")) in ("line", "thread")
+        self.turns_left = self.lines - 1 if speaks else 0
+
+    def holding(self) -> bool:
+        """Whether it still has the line this turn, counting the turn."""
+        if self.turns_left <= 0:
+            return False
+        self.turns_left -= 1
+        return True
+
+
+def arrival(inbound: dict[str, Any]) -> str:
+    """What the transcript says when a record arrives in the world."""
+    return f"(a new {inbound.get('collection')} record arrived)"

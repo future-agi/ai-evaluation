@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from fi.simulate.simulation.engines.caller_barge_in import complete_text, synthesize_frames
-from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Moment, due, enters, speaking_as
+from fi.simulate.simulation.sub_actors import CHANNELS, NEEDS_TOOLS, Entering, Moment, arrival, enters, speaking_as
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +62,12 @@ class SubActorVoice:
         self.clock = clock
         self.channel = str(actor.get("channel") or "audio_mix")
         behaviour = actor.get("behaviour") or {}
-        self.max_lines = max(1, int(behaviour.get("max_lines") or 1))
         self.volume = 10 ** (float(behaviour.get("loudness_db", -12.0)) / 20)
-        self.trigger = dict(actor.get("trigger") or {"kind": "always"})
+        self.entering = Entering(actor, seed)
+        self.max_lines = self.entering.lines
         self._lines: list[tuple[str, list[Any]]] = []
         self._preparation: asyncio.Task[None] | None = None
         self._tasks: list[asyncio.Task[None]] = []
-        self._delivered = False
-        self._turns_left = 0
         self._events: list[dict[str, Any]] = []
         # A background voice says one line at a time, a moment into the person's reply, and not on every
         # turn, so its lines fall through the call as someone nearby would say them.
@@ -82,7 +80,7 @@ class SubActorVoice:
     # Kept for the background voice, whose lines do not depend on the conversation.
     @property
     def kind(self) -> str:
-        return str(self.trigger.get("kind") or "always")
+        return self.entering.kind
 
     def start(self) -> None:
         if self.channel == "audio_mix":
@@ -120,10 +118,7 @@ class SubActorVoice:
 
     def due(self, agent_turns: int, last_text: str = "", tools_called: list[str] | None = None) -> bool:
         """Whether the agent has now reached the moment this sub-actor enters at."""
-        if self._delivered:
-            return False
-        moment = Moment(agent_turns=agent_turns, last_text=last_text, tools_called=list(tools_called or []))
-        return due(self.trigger, moment, seed=self.seed, sub_actor_id=str(self.actor.get("id") or ""))
+        return self.entering.due(Moment(agent_turns=agent_turns, last_text=last_text, tools_called=list(tools_called or [])))
 
     @property
     def answers_first(self) -> bool:
@@ -131,20 +126,18 @@ class SubActorVoice:
         return bool((CHANNELS.get(self.channel) or {}).get("first")) and self.kind == "always"
 
     async def enter_first(self) -> None:
-        self._delivered = True
-        self._turns_left = self.max_lines - 1
+        self.entering.enter()
         await self._speak_next("(the call has just been answered)")
 
     async def on_agent_turn(self, agent_turns: int, last_text: str = "") -> bool:
         """React to one committed agent turn. True while this sub-actor holds the line."""
         try:
-            if self._turns_left > 0:
-                self._turns_left -= 1
+            if self.entering.holding():
                 await self._speak_next(last_text)
                 return True
             if self.answers_first:
                 return False
-            if self._delivered and enters(self.channel) == "mixed":
+            if self.entering.entered and enters(self.channel) == "mixed":
                 if self._random.random() < self.chance:
                     self._tasks.append(asyncio.create_task(self._play_next()))
                 return False
@@ -153,7 +146,7 @@ class SubActorVoice:
                 tools = list(await asyncio.to_thread(self.tools_called))
             if not self.due(agent_turns, last_text, tools):
                 return False
-            self._delivered = True
+            self.entering.enter()
             return await self.deliver(last_text)
         except asyncio.CancelledError:
             raise
@@ -167,7 +160,6 @@ class SubActorVoice:
             await self._arrive()
             return False
         if way == "line":
-            self._turns_left = self.max_lines - 1
             return await self._speak_next(last_text)
         self._tasks.append(asyncio.create_task(self._play_next()))
         return False
@@ -209,9 +201,7 @@ class SubActorVoice:
         if self.write is None or not inbound.get("collection"):
             return
         await asyncio.to_thread(self.write, str(inbound["collection"]), dict(inbound.get("record") or {}))
-        self._record(
-            "arrived", f"(a new {inbound['collection']} record arrived)", self.clock(), record=inbound.get("record")
-        )
+        self._record("arrived", arrival(inbound), self.clock(), record=inbound.get("record"))
 
     def _record(self, kind: str, text: str, started: float, **extra: Any) -> None:
         self._events.append(
@@ -233,7 +223,8 @@ class SubActorVoice:
     @property
     def handed_over(self) -> bool:
         """Whoever answered a transfer has said all they say: the agent's part of the call is over."""
-        return self.channel == "transfer_leg" and self._delivered and self._turns_left == 0 and bool(self._events)
+        done = self.entering.entered and self.entering.turns_left == 0
+        return self.channel == "transfer_leg" and done and bool(self._events)
 
     async def close(self) -> None:
         pending = [task for task in (self._preparation, *self._tasks) if task is not None]
