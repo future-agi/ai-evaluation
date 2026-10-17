@@ -71,6 +71,11 @@ def _failure(code: str) -> BrokerError:
     return BrokerError("compose_bootstrap_" + code)
 
 
+def _public_error_code(error: Exception) -> str:
+    code = str(error).split(":", 1)[0]
+    return code if re.fullmatch(r"compose_[a-z_]+", code) else "compose_bootstrap_request_failed"
+
+
 @contextmanager
 def _directory(path: Path):
     if not path.is_absolute() or ".." in path.parts:
@@ -525,13 +530,7 @@ def serve_hosted_compose(profile: HostedComposeProfile) -> None:
                                 and registration.failures == failures_before
                             ):
                                 registration.failures += 1
-                            code = (
-                                str(error)
-                                if isinstance(error, BrokerError)
-                                else "compose_bootstrap_request_failed"
-                            )
-                            if not re.fullmatch(r"compose_[a-z_]+", code):
-                                code = "compose_bootstrap_request_failed"
+                            code = _public_error_code(error)
                             print(
                                 json.dumps(
                                     {"event": "compose_bootstrap_error", "code": code}

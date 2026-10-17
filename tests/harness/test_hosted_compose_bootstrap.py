@@ -521,6 +521,15 @@ def test_failed_broker_validation_does_not_poison_retry(setup, monkeypatch):
     assert registration.initialize(request)["initialized"] is True
 
 
+def test_public_error_code_preserves_only_safe_compose_codes():
+    assert module._public_error_code(
+        RuntimeError("compose_resource_exhausted: private detail")
+    ) == "compose_resource_exhausted"
+    assert module._public_error_code(
+        RuntimeError("private failure: secret")
+    ) == "compose_bootstrap_request_failed"
+
+
 def test_admission_for_different_source_fails_before_broker_creation(setup):
     from fi.alk.harness.public_material import PublicMaterialAdmission
 
