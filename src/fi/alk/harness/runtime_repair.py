@@ -21,7 +21,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .backends import SessionSpec, tool, tool_server
 from .backends.base import ToolSpec
 from .backends.files import file_tools
-from .contract import AgentContract, Dependency, Runtime, generated_chat_interface_problem
+from .contract import (
+    AgentContract,
+    Dependency,
+    Runtime,
+    RuntimeConfigFile,
+    generated_chat_interface_problem,
+)
 from .diagnostics import HarnessDiagnostic
 from .session import DONE, RESULT, TOOL, Event, Stage
 
@@ -300,6 +306,120 @@ def _explicit_dependency_candidate(
         evidence_paths=(manifest.relative_to(source_root.resolve()).as_posix(),),
         diagnostic_codes=("chat_ingress_failed",),
         summary="Select the source-declared optional dependency requested by the failing target.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
+
+
+def _provider_selector_candidate(
+    source_root: Path, contract: AgentContract, guidance: str
+) -> RuntimePlanPatch | None:
+    """Select a source-declared provider when the target reports none is configured."""
+    marker = "<untrusted_current_target_process_logs>"
+    closing = "</untrusted_current_target_process_logs>"
+    runtime = contract.runtime
+    interface = runtime.interface if runtime else None
+    if (
+        marker not in guidance
+        or closing not in guidance
+        or not interface
+        or not interface.model
+    ):
+        return None
+    logs = guidance.rsplit(marker, 1)[1].split(closing, 1)[0]
+    if not re.search(
+        r"(?:no_provider_configured|provider.{0,40}(?:not|isn't).{0,20}configured|"
+        r"not connected to any AI provider)",
+        logs,
+        re.I,
+    ):
+        return None
+
+    namespace = interface.model.split("/", 1)[0].strip().lower()
+
+    def canonical(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+    namespace_key = canonical(namespace)
+    providers = [
+        value
+        for value in runtime.extras
+        if canonical(value) in namespace_key or namespace_key in canonical(value)
+    ]
+    providers.extend((namespace, namespace_key, re.sub(r"-?ai$", "", namespace_key)))
+    providers = list(dict.fromkeys(value for value in providers if value))
+
+    evidence: list[tuple[Path, str, str, int]] = []
+    for raw in re.findall(r'File "([^"]+)", line \d+', logs):
+        parts = Path(raw).parts
+        for index in range(len(parts)):
+            path = source_root.joinpath(*parts[index:])
+            try:
+                resolved = path.resolve()
+                if (
+                    resolved.is_relative_to(source_root.resolve())
+                    and resolved.is_file()
+                    and resolved.stat().st_size <= 1_000_000
+                ):
+                    text = resolved.read_text(encoding="utf-8", errors="replace")
+                    names = set(
+                        re.findall(
+                            r"(?:getenv|get_secret_str|environ\.get|env::var)"
+                            r"\(\s*[\"']([A-Z][A-Z0-9_]*)[\"']",
+                            text,
+                        )
+                    ) | set(re.findall(r"process\.env\.([A-Z][A-Z0-9_]*)", text))
+                    for name in names:
+                        if "PROVIDER" not in name:
+                            continue
+                        for provider_rank, provider in enumerate(providers):
+                            if re.search(
+                                rf"[\"']{re.escape(provider)}[\"']", text, re.I
+                            ):
+                                score = (
+                                    (20 if name.endswith("INFERENCE_PROVIDER") else 0)
+                                    + (10 if name.endswith("MODEL_PROVIDER") else 0)
+                                    + text.count(name)
+                                    + len(providers)
+                                    - provider_rank
+                                )
+                                evidence.append((resolved, name, provider, score))
+                    break
+            except (OSError, RuntimeError, ValueError):
+                continue
+    if not evidence:
+        return None
+    evidence.sort(key=lambda item: (-item[3], item[1], item[2], str(item[0])))
+    selected = evidence[0]
+    if (
+        len(evidence) > 1
+        and evidence[1][3] == selected[3]
+        and evidence[1][1:3] != selected[1:3]
+    ):
+        return None
+    path, name, provider, _score = selected
+    resources = dict(runtime.config_files)
+    config_path = ".env" if not (source_root / ".env").exists() else ".alk-runtime.env"
+    previous = resources.get(config_path, RuntimeConfigFile())
+    if previous.values.get(name) == provider:
+        return None
+    resources[config_path] = previous.model_copy(
+        update={"values": {**previous.values, name: provider}}
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(update={"config_files": resources}),
+        evidence_paths=(path.relative_to(source_root.resolve()).as_posix(),),
+        diagnostic_codes=("chat_ingress_failed",),
+        summary="Select the source-declared model provider requested by the submitted runtime.",
     )
     try:
         validate_runtime_plan_patch(
@@ -1058,6 +1178,10 @@ async def request_runtime_plan_patch(
     allowed = {item.code for item in diagnostics}
     setup_investigation = allowed in ({"chat_ingress_failed"}, {"credential_missing"})
     if allowed == {"chat_ingress_failed"}:
+        candidate = _provider_selector_candidate(source_root, contract, guidance)
+        if candidate is not None:
+            print("runtime repair: source-declared provider selector", flush=True)
+            return candidate
         candidate = _explicit_dependency_candidate(source_root, contract, guidance)
         if candidate is not None:
             print("runtime repair: source-declared dependency candidate", flush=True)
