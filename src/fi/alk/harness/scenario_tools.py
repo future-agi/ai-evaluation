@@ -1395,9 +1395,7 @@ def scenario_tools(
                 if not executes(world, call.name):
                     lines.append(
                         f"{call.name}: NOT RUN, it runs only inside the agent, so what it "
-                        "returns and changes is unknown until a real call. If the contract shows "
-                        "it reaching a service, give the step the request the agent sends it, "
-                        "read from the tool's code, in environment_arguments: the build replays it"
+                        "returns and changes is unknown until a real call"
                     )
                 elif call.refused:
                     lines.append(f"{call.name}: refused — {call.error}")
@@ -1711,9 +1709,9 @@ def scenario_tools(
                             },
                             "environment_arguments": {
                                 "type": "object",
-                                "description": "For a tool the contract shows reaching a "
-                                "service: the complete request the agent sends that service, "
-                                "replayed against it to prove the real state effect. This "
+                                "description": "Only for a source-provisioned tool whose raw "
+                                "dependency needs fields the worker injects: the complete raw "
+                                "dependency payload used to prove the real state effect. This "
                                 "is never shown to or credited to the agent. Omit for local "
                                 "tools and when the two payloads are identical. A value like "
                                 "`$call.book_ride.booking_ref` resolves that field from the "
