@@ -938,6 +938,124 @@ def test_generated_runtime_repair_rejects_unrelated_secret_file_alias(
         )
 
 
+def test_missing_compose_config_alias_uses_unique_supplied_file_alias(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n    ports: ['8080:8080']\n"
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            execution="compose",
+            compose_file="compose.yaml",
+            service="app",
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            config_files={
+                ".env": RuntimeConfigFile(
+                    values={"REGION": "global"},
+                    secret_aliases={
+                        "GOOGLE_APPLICATION_CREDENTIALS": (
+                            "GOOGLE_APPLICATION_CREDENTIALS"
+                        )
+                    },
+                )
+            },
+        ),
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.BUILDING_ENVIRONMENT,
+        component="runtime_validation",
+        code="generated_runtime_plan_invalid",
+        message="ValueError: compose_config_target_reference_required",
+    )
+    monkeypatch.setattr(
+        runtime_repair,
+        "Stage",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unique supplied config alias should bypass model repair"
+        ),
+    )
+    patch = asyncio.run(
+        runtime_repair.request_runtime_plan_patch(
+            tmp_path,
+            contract,
+            (diagnostic,),
+            available_secret_aliases=frozenset(
+                {"GOOGLE_APPLICATION_CREDENTIALS_JSON"}
+            ),
+        )
+    )
+    assert patch is not None
+    assert patch.runtime.config_files[".env"].values == {"REGION": "global"}
+    assert patch.runtime.config_files[".env"].secret_aliases == {
+        "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+    }
+
+
+def test_generated_runtime_repair_rejects_unrelated_config_alias(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  app:\n    image: example/app\n    ports: ['8080:8080']\n"
+    )
+    original = RuntimeConfigFile(
+        secret_aliases={
+            "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS"
+        }
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            execution="compose",
+            compose_file="compose.yaml",
+            service="app",
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+            config_files={".env": original},
+        ),
+    )
+    runtime = contract.runtime.model_copy(
+        update={
+            "config_files": {
+                ".env": original.model_copy(
+                    update={
+                        "secret_aliases": {
+                            "GOOGLE_APPLICATION_CREDENTIALS": "UNRELATED_JSON"
+                        }
+                    }
+                )
+            }
+        }
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime,
+        evidence_paths=("compose.yaml",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Use a supplied config-file secret alias.",
+    )
+    with pytest.raises(
+        ValueError, match="runtime_repair_config_file_alias_change_invalid"
+    ):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            available_secret_aliases=frozenset(
+                {"GOOGLE_APPLICATION_CREDENTIALS_JSON", "UNRELATED_JSON"}
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     "code,install",
     [
