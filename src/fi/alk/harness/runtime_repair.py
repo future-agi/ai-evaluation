@@ -1110,6 +1110,9 @@ approve credential-like material, rewrite it, or disable scanning. Every retaine
 the packaged context must build and answer a real chat before the plan is accepted.
 Call the tool once the smallest complete correction is known, then stop."""
     if allowed == {"generated_runtime_plan_invalid"}:
+        from .compose_integration import runtime_capability_briefing
+
+        system_prompt += runtime_capability_briefing()
         system_prompt += """ You may also submit runtime_dependencies only to fill a missing
 reached.loader_module on existing entries with a nonempty engine and empty dsn_env, host,
 config_key, and loader_module. Preserve the complete list, its order, and every other field.

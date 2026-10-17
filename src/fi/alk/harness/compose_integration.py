@@ -32,6 +32,37 @@ def enabled() -> bool:
     )
 
 
+def runtime_capability_briefing() -> str:
+    heading = (
+        "\n\n## Available execution capabilities\n\n"
+        "Generated native process execution supports Python or source-declared pinned Bun, "
+        "not arbitrary native Node.js startup. Do not translate a Node.js project to Bun "
+        "without source evidence or invent a replacement entrypoint or runtime. "
+    )
+    if not enabled():
+        return heading + (
+            "Managed source-owned Compose deployment is not enabled in this session. "
+            "Inspect deployment files as evidence for supported native source startup; "
+            "do not assume container execution or select published Compose images."
+        )
+    return heading + (
+        "Managed source-owned Compose deployment is available for chat agents with an HTTP ingress. "
+        "Choose supported native startup or Compose from repository deployment evidence; "
+        "neither mode is required. For Compose, "
+        "declare runtime.execution=compose, the repository-relative runtime.compose_file, "
+        "and runtime.service. ALK runs the selected service and its declared dependency closure, "
+        "including source-defined startup and migrations. Source-owned overlays may be selected "
+        "with runtime.compose_overrides; additional source-declared workflow roots use "
+        "runtime.additional_services. Use runtime.compose_image_services only for an already "
+        "selected service's source-declared image. Never invent deployment files or images. "
+        "Auto selection discovers conventional Compose filenames only at the repository root; "
+        "nested or ambiguous deployment files require an explicit selection. Explicit native "
+        "execution does not auto-select Compose. This capability does not add standalone "
+        "Dockerfile execution. Source validation, deployment policy, and real chat readiness "
+        "still must pass; capability availability is not evidence that an agent works."
+    )
+
+
 def provider(values, artifact_root):
     from .certified_compose_runtime import CertifiedComposeRuntimeProvider
 
