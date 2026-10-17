@@ -697,6 +697,97 @@ def test_explicit_install_hint_rejects_excluded_or_external_manifest(tmp_path):
     assert _explicit_dependency_candidate(source, contract, guidance) is None
 
 
+def test_unconfigured_provider_selects_source_declared_runtime_provider(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+    from fi.alk.harness.runtime_repair import _provider_selector_candidate
+
+    (tmp_path / "server.py").write_text(
+        'provider = os.getenv("AGENT_INFERENCE_PROVIDER", "auto")\n'
+        'SUPPORTED_PROVIDERS = ("vertex", "openai")\n'
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            extras=["messaging", "vertex"],
+            command=["python", "server.py"],
+            interface=RuntimeInterface(
+                kind="http",
+                protocol="openai_chat",
+                model="vertex_ai/gemini-flash",
+                port=8080,
+                path="/chat",
+            ),
+        ),
+    )
+    guidance = (
+        "<untrusted_current_target_process_logs>\n"
+        'RuntimeError: agent is not connected to any AI provider; provider is not configured\n'
+        '  File "/work/runtime/build/agent/server.py", line 1, in resolve_provider\n'
+        "</untrusted_current_target_process_logs>"
+    )
+    patch = _provider_selector_candidate(tmp_path, contract, guidance)
+    assert patch is not None
+    assert patch.runtime.config_files[".env"].values == {
+        "AGENT_INFERENCE_PROVIDER": "vertex"
+    }
+    assert patch.evidence_paths == ("server.py",)
+    monkeypatch.setattr(
+        runtime_repair,
+        "Stage",
+        lambda *_args, **_kwargs: pytest.fail(
+            "source-declared provider candidate should bypass model repair"
+        ),
+    )
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="HTTP 500",
+    )
+    assert asyncio.run(
+        runtime_repair.request_runtime_plan_patch(
+            tmp_path, contract, (diagnostic,), guidance=guidance
+        )
+    ) == patch
+
+
+def test_provider_selector_requires_explicit_failure_and_unambiguous_source(tmp_path):
+    from fi.alk.harness.runtime_repair import _provider_selector_candidate
+
+    source = (
+        'first = os.getenv("FIRST_MODEL_PROVIDER", "auto")\n'
+        'second = os.getenv("SECOND_MODEL_PROVIDER", "auto")\n'
+        'SUPPORTED_PROVIDERS = ("vertex",)\n'
+    )
+    (tmp_path / "server.py").write_text(source)
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            extras=["vertex"],
+            interface=RuntimeInterface(
+                kind="http", model="vertex_ai/gemini-flash", port=8080, path="/chat"
+            ),
+        ),
+    )
+    guidance = (
+        "<untrusted_current_target_process_logs>\n"
+        'provider is not configured\nFile "/work/agent/server.py", line 1\n'
+        "</untrusted_current_target_process_logs>"
+    )
+    assert _provider_selector_candidate(tmp_path, contract, guidance) is None
+    assert _provider_selector_candidate(
+        tmp_path, contract, guidance.replace("provider is not configured", "HTTP 500")
+    ) is None
+
+
 @pytest.mark.parametrize(
     "code,install",
     [
