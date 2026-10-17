@@ -23,9 +23,10 @@ from .backends import (
     tool,
     tool_server,
 )
+from .catalogue import Catalogue
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
-from .scenario import voicemail_enabled
+from .scenario import Scenario, voicemail_enabled
 from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
 from .scenarios import writer_worker
 from .session import Stage
@@ -161,6 +162,7 @@ def suite_server(
 ) -> ToolServer:
     """Whole-suite operations the single-scenario tools would take one call per scenario to do."""
     from .catalogue import load_catalogue
+    from .proofs import record_proof
     from .prove import prove
     from .scenario_tools import write_scenarios
 
@@ -205,6 +207,7 @@ def suite_server(
             proof = prove(
                 scenario, catalogue, out, allow_judged_only_with_state=not scenario.solution
             )
+            record_proof(out, scenario.scenario_key, proof)
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"
@@ -391,6 +394,22 @@ def dependents(out: Path, kept: list, name: str) -> str:
     )
 
 
+def scenario_problems(scenario: Scenario, defined: set[str], tools: set[str]) -> list[str]:
+    """What one scenario names that the catalogue or the contract lacks."""
+    problems: list[str] = []
+    missing = [goal for goal in scenario.sub_goals if goal not in defined]
+    if missing:
+        problems.append(f"names sub-goals the catalogue lacks: {', '.join(missing)}")
+    unknown = sorted(
+        {step.tool for step in scenario.solution if tools and step.tool not in tools}
+    )
+    if unknown:
+        problems.append(
+            f"its solution calls tools the contract lacks: {', '.join(unknown)}"
+        )
+    return problems
+
+
 def suite_health(
     contract: AgentContract | None,
     out: Path,
@@ -407,12 +426,10 @@ def suite_health(
     defined = {one.name for one in catalogue.sub_goals}
     tools = contract.tool_names() if contract is not None else set()
     for scenario in kept:
-        missing = [goal for goal in scenario.sub_goals if goal not in defined]
-        if missing:
-            problems.append(f"{scenario.name}: names sub-goals the catalogue lacks: {', '.join(missing)}")
-        unknown = sorted({step.tool for step in scenario.solution if tools and step.tool not in tools})
-        if unknown:
-            problems.append(f"{scenario.name}: its solution calls tools the contract lacks: {', '.join(unknown)}")
+        problems.extend(
+            f"{scenario.name}: {one}"
+            for one in scenario_problems(scenario, defined, tools)
+        )
     folders = {path.name for path in (out / "scenarios").iterdir() if path.is_dir()} if (out / "scenarios").is_dir() else set()
     names = {scenario.name for scenario in kept}
     if folders != names:
@@ -611,9 +628,12 @@ def open_builder(
     brief: str = "",
     sealed: bool = True,
     more_servers: dict[str, ToolServer] | None = None,
+    catalogue: Catalogue | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
-    ``sealed`` is False while the environment is still being built and has no sealed bundle yet."""
+    ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
+    ``catalogue`` is shared with the caller's servers; the stage's ``kept`` is the suite list.
+    """
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -622,6 +642,7 @@ def open_builder(
         wanted=max(len(existing), 1),
         can_grow=True,
         scenario_problem=scenario_problem,
+        catalogue=catalogue,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
@@ -670,4 +691,5 @@ def open_builder(
     )
     stage = Stage(spec, name=BUILDER)
     stage.health_at_open = health
+    stage.kept = kept
     return stage

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .backends import SessionSpec
+from .catalogue import Catalogue
 from .config import artifact_dir, chosen_model, load_skill, provisioning
 from .contract import AgentContract
 from .session import Stage
@@ -159,6 +160,7 @@ def open_stage(
     max_turns: int = 0,
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    catalogue: Catalogue | None = None,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
     destination = out or artifact_dir(contract.agent)
@@ -266,6 +268,7 @@ def open_stage(
         source_root=source_root,
         deferred_runtime=deferred_runtime,
         external_runtime=external_runtime,
+        catalogue=catalogue,
     )
     spec = SessionSpec(
         system_prompt=(

@@ -30,6 +30,7 @@ from ..catalogue import (
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
+    Catalogue,
     SubGoal,
     catalogue_problems,
     load_catalogue,
@@ -523,12 +524,16 @@ def world_tools(
     source_root: str = "",
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    catalogue: Catalogue | None = None,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
     ``source_root`` is where the agent's own code lives. With it, a tool can be bound to the
     agent's own implementation; without it the agent was given as a specification and its
     tools have to be written here.
+
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
     """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
@@ -605,7 +610,7 @@ def world_tools(
     if source_root:
         world.reach(source_root)
     kind = for_contract(contract)
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     scores: list[float] = []
     # The checks that decide whether this world is usable, written here rather than fixed in
     # advance, because what makes a world usable is a judgement about this agent.

@@ -585,3 +585,546 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     assert ".env" not in run("Glob", pattern="*", path="..")
     assert "a.json" in run("Glob", pattern="*.json")
     assert "kept out of this session" in run("Grep", pattern="x", path="/")
+
+
+class RebuildClient(BuilderClient):
+    def __init__(self, workspace: Path):
+        super().__init__()
+        self.workspace = workspace
+        self.results: list[dict | None] = []
+
+    async def overview(self):
+        return {}
+
+    async def checkpoint(self, workspace):
+        from fi.alk.harness.nudge import NUDGE_RESULT
+
+        path = self.workspace / NUDGE_RESULT
+        self.results.append(json.loads(path.read_text()) if path.is_file() else None)
+        return await super().checkpoint(workspace)
+
+
+class RebuildConversation(BuilderConversation):
+    """A builder whose model turn is ``act``, run against the stage the runtime opens."""
+
+    def __init__(self, runtime: HostedChatRuntime, act):
+        super().__init__(runtime._open_builder)
+        self.act = act
+        self.messages: list[str] = []
+
+    async def say(self, message, on_event=None):
+        self.messages.append(message)
+        self.stage = await self._open_stage(resume=True)
+        self.stage.emit_event = on_event
+        await self.act(self.stage)
+        on_event(
+            RuntimeEvent(kind="text", text="Updated.", detail={"stage": "builder"})
+        )
+
+    async def resume(self, invocation_id, on_event=None):
+        await self.say("", on_event)
+
+
+def _rebuild(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+    act,
+    *,
+    stale_result: bool = False,
+    draft_keys: tuple[str, ...] = (),
+    journal: dict | None = None,
+    redeliver: bool = False,
+    resumed: bool = False,
+):
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness import spend
+
+    monkeypatch.setenv("ALK_HARNESS", "vertex-gemini" if resumed else "claude")
+    monkeypatch.setattr(spend, "_stages", {})
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    _suite(workspace, "adds-a-big-mac")
+    if stale_result:
+        from fi.alk.harness.nudge import NUDGE_RESULT
+
+        (workspace / NUDGE_RESULT).write_text('{"nudge_id": "an-older-turn"}')
+    if journal is not None:
+        (workspace / ".futureagi-conversation.json").write_text(json.dumps(journal))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(
+        "schema_version: 1\nharness_chat:\n  enabled: true\n  stages:\n    builder:\n"
+        "      enabled: true\n",
+        encoding="utf-8",
+    )
+    client = RebuildClient(workspace)
+    if resumed:
+        client.turn_context = {**client.turn_context, "active_invocation_id": "inv-1"}
+    runtime = HostedChatRuntime(
+        client=client,  # type: ignore[arg-type]
+        policy=load_chat_policy(policy),
+        workspace=workspace,
+        source=tmp_path / "source",
+        job={"metadata": {"agent_name": "cart"}, "scenario_count": 1},
+    )
+    asked: list[str] = []
+
+    async def ask(tool, payload, context):
+        asked.append(tool)
+        return {"content": [{"type": "text", "text": "No"}]}
+
+    runtime._ask = ask
+    conversation = RebuildConversation(runtime, act)
+    runtime.conversation = conversation
+    command = {
+        "sequence": 3,
+        "message_id": "m-3",
+        "kind": "nudge",
+        "payload": {
+            "content": "The agent moved to v2: add was renamed.",
+            "nudge_id": "n-1",
+            "stage": stage,
+            "user_draft_keys": list(draft_keys),
+        },
+    }
+    asyncio.run(runtime._handle(command))
+    if redeliver:
+        # The turn_completed was lost: the same command reaches the restored workspace.
+        client.redelivered_at = len(client.events)
+        asyncio.run(runtime._handle(command))
+    return runtime, client, conversation, asked
+
+
+def _tool(stage, server: str, name: str):
+    return next(one for one in stage.spec.servers[server].tools if one.name == name)
+
+
+def _called(stage, name: str) -> None:
+    stage.emit_event(
+        RuntimeEvent(kind="tool", tool=f"mcp__x__{name}", detail={"call_id": name})
+    )
+
+
+def test_an_environment_rebuild_turn_runs_its_own_tools_and_ends_the_sandbox(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import spend
+    from fi.alk.harness.catalogue import load_catalogue
+    from fi.alk.harness.nudge import NUDGE_RESULT
+    from fi.alk.harness.source_data_invariants import ARTIFACT
+
+    seen: dict = {}
+
+    async def act(stage):
+        seen["result_at_start"] = (tmp_path / "work" / NUDGE_RESULT).exists()
+        seen["granted"] = set(stage.spec.granted())
+        seen["workers"] = dict(stage.spec.workers)
+        seen["rule"] = await _tool(stage, "scenarios", "add_rule").handler(
+            {"rule": "Always read the item back.", "why": "v2 says so in agent.py"}
+        )
+        await _tool(stage, "nudge", "retire_sub_goal").handler(
+            {"name": "right-item", "why": "gone in v2"}
+        )
+        seen["added"] = await _tool(stage, "world", "add_sub_goal").handler(
+            {
+                "name": "cart-exists",
+                "what": "the cart table is still there",
+                "check": "def check(world, calls):\n    return None if 'cart' in world.state() else 'no cart'\n",
+            }
+        )
+        seen["added_too"] = await _tool(stage, "scenarios", "add_sub_goal").handler(
+            {
+                "name": "one-row",
+                "what": "the cart holds at most one row",
+                "check": "def check(world, calls):\n    return None if len(world.state()['cart']) <= 1 else 'more'\n",
+            }
+        )
+        spend.record(
+            "builder", 0.25, turns=1, models={"m2"}, tokens_in=40, tokens_out=6
+        )
+        (tmp_path / "source").mkdir()
+        (tmp_path / "source" / "agent.py").write_text("def add_item(item_id):\n")
+        review = {
+            "name": "items-exist",
+            "evidence": [{"path": "agent.py", "quote": "def add("}],
+        }
+        (tmp_path / "work" / ARTIFACT).write_text(json.dumps({"checks": [review]}))
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "rule added"}
+        )
+
+    runtime, client, conversation, asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act, stale_result=True
+    )
+
+    granted = seen["granted"]
+    assert seen["result_at_start"] is False
+    assert {
+        "mcp__nudge__report_update",
+        "mcp__nudge__retire_sub_goal",
+        "mcp__world__save_world",
+    } <= granted
+    assert (
+        not {
+            "mcp__scenarios__submit_scenario",
+            "mcp__platform__save_changes",
+            "Delegate",
+        }
+        & granted
+    )
+    # One world writer: change_world would bypass the world save_world keeps.
+    assert not any(name.endswith("__change_world") for name in granted)
+    assert seen["workers"] == {}
+    # No confirmation in a rebuild turn: nobody is there to answer.
+    assert asked == [] and not seen["rule"].get("is_error"), seen["rule"]
+    assert not seen["added"].get("is_error"), seen["added"]
+    assert not seen["added_too"].get("is_error"), seen["added_too"]
+    assert load_catalogue(tmp_path / "work").names() == {
+        "item-added",
+        "cart-exists",
+        "one-row",
+    }
+    assert "add was renamed" in conversation.messages[0]
+    assert "builder/agent-update" in conversation.messages[0]
+
+    kinds = [one["kind"] for one in client.events]
+    committed = kinds.index("checkpoint_committed")
+    completed = client.events[-1]
+    assert kinds[-1] == "turn_completed" and committed < len(kinds) - 1
+    assert client.events[committed]["invocation_id"] == completed["invocation_id"]
+    result = client.results[-1]
+    assert result["nudge_id"] == "n-1" and result["checks"]["passed"]
+    # The agent's source at /work/source is what the stale-review warning reads.
+    assert "items-exist" in result["checks"]["warnings"][0]
+    assert client.published, "the turn's changes are published before turn_completed"
+    assert completed["payload"]["outcome"] == "success"
+    assert completed["payload"]["usage"] == {
+        "tokens_in": 40,
+        "tokens_out": 6,
+        "tokens_cached": 0,
+        "usd": 0.25,
+        "unpriced_turns": 0,
+        "models": ["m2"],
+    }
+    assert runtime.stopping.is_set()
+
+
+def test_a_suite_rebuild_turn_cannot_amend_the_contract_or_rename(
+    tmp_path, monkeypatch
+):
+    from test_nudge_turn import _scenario
+
+    from fi.alk.harness.proofs import PROOFS, load_proofs
+
+    seen: dict = {}
+
+    async def act(stage):
+        seen["granted"] = set(stage.spec.granted())
+        (tmp_path / "work" / PROOFS).unlink(missing_ok=True)
+        seen["renamed"] = await _tool(stage, "scenarios", "submit_scenario").handler(
+            _scenario("orders-a-big-mac", scenario_key="adds-a-big-mac")
+        )
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+
+    runtime, client, _conversation, asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    granted = seen["granted"]
+    assert {"mcp__scenarios__submit_scenario", "mcp__suite__prove_scenarios"} <= granted
+    assert not {"mcp__scenarios__amend_contract", "mcp__world__save_world"} & granted
+    assert (
+        seen["renamed"]["is_error"]
+        and "rename" in seen["renamed"]["content"][0]["text"]
+    )
+    assert load_proofs(tmp_path / "work")["adds-a-big-mac"]["holds"] is True
+    assert client.results[-1]["stage"] == "suite" and asked == []
+    assert client.events[-1]["payload"]["usage"]["tokens_in"] == 0
+    assert runtime.stopping.is_set()
+
+
+def test_a_failed_rebuild_turn_still_reports_usage_and_ends_the_sandbox(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness import spend
+
+    async def act(stage):
+        spend.record("builder", 0.1, turns=1, models={"m2"}, tokens_in=5)
+        raise RuntimeError("model unavailable")
+
+    runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    completed = client.events[-1]
+    assert (
+        completed["kind"] == "turn_completed"
+        and completed["payload"]["outcome"] == "failed"
+    )
+    assert completed["payload"]["usage"]["tokens_in"] == 5
+    assert runtime.stopping.is_set()
+
+
+def test_a_chat_turn_carries_no_usage_and_keeps_the_sandbox(tmp_path, monkeypatch):
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    runtime.conversation = EditingConversation(tmp_path, writes=False)
+
+    _turn(runtime, {"content": "hello"})
+
+    assert "usage" not in client.events[-1]["payload"]
+    assert not runtime.stopping.is_set()
+
+
+def test_prove_scenarios_records_each_proof(tmp_path):
+    from test_nudge_turn import _suite
+
+    from fi.alk.harness.proofs import PROOFS, load_proofs
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    root = _suite(tmp_path, "adds-a-big-mac", "adds-one-big-mac")
+    (root / PROOFS).unlink(missing_ok=True)
+    server = builder.suite_server(root, load_scenarios(root))
+    prove = next(one for one in server.tools if one.name == "prove_scenarios")
+
+    said = asyncio.run(prove.handler({"names": ["adds-a-big-mac", "not-there"]}))
+
+    proofs = load_proofs(root)
+    assert "adds-a-big-mac: holds" in said["content"][0]["text"]
+    assert set(proofs) == {"adds-a-big-mac"}
+    assert (
+        proofs["adds-a-big-mac"]["holds"] is True
+        and proofs["adds-a-big-mac"]["proved_at"]
+    )
+
+
+def test_a_write_after_the_last_report_runs_the_checks_again(tmp_path, monkeypatch):
+    from test_nudge_turn import _break_scenario
+
+    async def act(stage):
+        _called(stage, "report_update")
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+        _called(stage, "submit_scenario")
+        _break_scenario(tmp_path / "work", "adds-a-big-mac")
+        _called(stage, "find_scenarios")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    result = client.results[-1]
+    assert result["checks"]["passed"] is False
+    assert [one["item"] for one in result["checks"]["problems"]] == ["adds-a-big-mac"]
+    assert result["changed"] is True and result["notes"] == (
+        "fits (changed after this report; checks re-run at the end of the turn)"
+    )
+
+
+def test_a_report_after_the_last_write_stands(tmp_path, monkeypatch):
+    async def act(stage):
+        _called(stage, "submit_scenario")
+        _called(stage, "report_update")
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+        _called(stage, "check_health")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    result = client.results[-1]
+    assert result["checks"]["passed"] is True and result["changed"] is False
+
+
+def test_a_late_write_whose_checks_cannot_run_lands_no_result(tmp_path, monkeypatch):
+    from fi.alk.harness import nudge
+
+    async def act(stage):
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "fits"}
+        )
+        _called(stage, "submit_scenario")
+
+        def broken(*_args, **_kwargs):
+            raise RuntimeError("gate failed")
+
+        monkeypatch.setattr(nudge, "report_update", broken)
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    assert client.results[-1] is None
+    assert client.events[-1]["payload"]["outcome"] == "success"
+
+
+def test_a_suite_rebuild_is_told_which_scenarios_are_the_persons(tmp_path, monkeypatch):
+    async def act(stage):
+        return None
+
+    _runtime, _client, conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act, draft_keys=("adds-a-big-mac",)
+    )
+
+    assert conversation.messages[0].endswith(
+        "Scenarios the person is still editing (leave them as they are): "
+        "adds-a-big-mac"
+    )
+
+
+def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):
+    from test_nudge_turn import _scenario
+
+    from fi.alk.harness.scenario_tools import load_scenarios
+
+    seen: dict = {}
+
+    async def act(stage):
+        await _tool(stage, "scenarios", "aim_for").handler({"count": 2})
+        seen["added"] = await _tool(stage, "scenarios", "submit_scenario").handler(
+            _scenario("adds-one-big-mac")
+        )
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    assert not seen["added"].get("is_error"), seen["added"]
+    assert {one.name for one in load_scenarios(tmp_path / "work")} == {
+        "adds-a-big-mac",
+        "adds-one-big-mac",
+    }
+
+
+def test_a_replayed_rebuild_commits_the_workspace_holding_its_result(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.nudge import NUDGE_RESULT
+
+    async def act(stage):
+        raise AssertionError("a replayed turn does not run again")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path,
+        monkeypatch,
+        "suite",
+        act,
+        stale_result=True,
+        journal={"m-3": "completed"},
+    )
+
+    kinds = [one["kind"] for one in client.events]
+    assert kinds[-2:] == ["checkpoint_committed", "turn_completed"]
+    assert client.events[-1]["payload"]["replayed"] is True
+    assert client.events[-2]["payload"]["digest"]
+    assert client.results[-1] == {"nudge_id": "an-older-turn"}
+    assert (tmp_path / "work" / NUDGE_RESULT).is_file()
+
+
+@pytest.mark.parametrize("ending", ["raised", "turn_failures", "interrupted"])
+def test_a_rebuild_turn_that_did_not_succeed_replays_as_failed(
+    tmp_path, monkeypatch, ending
+):
+    async def act(stage):
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": False, "notes": "fits"}
+        )
+        _called(stage, "submit_scenario")
+        if ending == "raised":
+            raise RuntimeError("model unavailable")
+        if ending == "turn_failures":
+            stage.emit_event(
+                RuntimeEvent(kind="done", detail={"outcome": "failed", "error": "x"})
+            )
+
+    async def interrupted(self, turn, *, command_sequence):
+        await turn
+        return {"kind": "interrupt", "message_id": "m-4", "sequence": 4}
+
+    if ending == "interrupted":
+        monkeypatch.setattr(HostedChatRuntime, "_turn_until_interrupted", interrupted)
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act, redeliver=True
+    )
+
+    journal = json.loads(
+        (tmp_path / "work" / ".futureagi-conversation.json").read_text()
+    )
+    assert journal == {"m-3": "ended"}
+    # The turn's last workspace holds no result, so nothing of it can land.
+    assert client.results[-1] is None
+    replay = client.events[client.redelivered_at :]
+    assert [one["kind"] for one in replay] == ["turn_completed"]
+    assert replay[0]["payload"] == {"command_message_id": "m-3", "outcome": "failed"}
+
+
+def test_a_cut_off_rebuild_turn_keeps_no_result(tmp_path, monkeypatch):
+    async def act(stage):
+        raise AssertionError("a retried rebuild turn does not run again")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path,
+        monkeypatch,
+        "suite",
+        act,
+        stale_result=True,
+        journal={"m-3": "retried"},
+    )
+
+    journal = json.loads(
+        (tmp_path / "work" / ".futureagi-conversation.json").read_text()
+    )
+    assert journal == {"m-3": "ended"} and client.results[-1] is None
+    assert client.events[-1]["payload"]["interrupted"] is True
+
+
+def test_a_resumed_rebuild_turn_starts_without_its_earlier_result(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.nudge import NUDGE_RESULT
+
+    seen: dict = {}
+
+    async def act(stage):
+        seen["result_at_start"] = (tmp_path / "work" / NUDGE_RESULT).exists()
+        _called(stage, "submit_scenario")
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path,
+        monkeypatch,
+        "suite",
+        act,
+        stale_result=True,
+        journal={"m-3": "started"},
+        resumed=True,
+    )
+
+    assert client.events[0]["payload"]["resumed"] is True
+    # The report lived in the lost process: without a new one nothing lands.
+    assert seen["result_at_start"] is False
+    assert client.results[-1] is None
+
+
+def test_aim_for_in_a_suite_rebuild_only_raises_the_count(tmp_path, monkeypatch):
+    from fi.alk.harness.nudge import REBUILD_ADDS_AT_MOST, aim_refusal
+
+    said: dict = {}
+
+    async def act(stage):
+        aim = _tool(stage, "scenarios", "aim_for").handler
+        said["alike"] = await aim({"count": 2, "people": "alike"})
+        said["asked"] = await aim({"count": 2, "asked_for": {"task": ["add"]}})
+        said["far"] = await aim({"count": 2 + REBUILD_ADDS_AT_MOST})
+        said["near"] = await aim({"count": 1 + REBUILD_ADDS_AT_MOST})
+
+    _rebuild(tmp_path, monkeypatch, "suite", act)
+
+    for refused in ("alike", "asked", "far"):
+        assert said[refused].get("is_error"), said[refused]
+    assert not said["near"].get("is_error"), said["near"]
+    assert aim_refusal({"count": 2}, 3, 3)

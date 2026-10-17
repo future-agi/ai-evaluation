@@ -1030,6 +1030,7 @@ def scenario_tools(
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
+    catalogue: Catalogue | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
 
@@ -1041,6 +1042,9 @@ def scenario_tools(
     ``start_from`` seeds that list. A parallel writer starts empty rather than from disk, so it
     is never counted as already having what a sibling wrote.
 
+    ``catalogue`` shares one catalogue object with the session's other servers; without it the
+    catalogue is read from disk.
+
     ``can_grow`` lets ``aim_for`` move the cap. Only chat sets it: "add five" reopens a finished
     suite, so the size it was opened with is exactly what the person asked to go past. Authoring
     keeps the cap it was given, because a model raising its own target is how 200 became 559.
@@ -1051,7 +1055,7 @@ def scenario_tools(
     kept: list[Scenario] = (
         list(start_from) if start_from is not None else load_scenarios(destination)
     )
-    catalogue = load_catalogue(destination)
+    catalogue = catalogue if catalogue is not None else load_catalogue(destination)
     simulator_prompt = load_simulator_prompt(destination)
     target = {"count": wanted}
 
