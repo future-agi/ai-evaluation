@@ -792,11 +792,19 @@ def validate_runtime_plan_patch(
             }
             if added_headers and (
                 not auth
-                or original_auth
                 or any(
                     not _runtime_template_names(new_headers[key])
                     or not _runtime_template_names(new_headers[key])
                        <= {auth.template_variable, *setup_captures}
+                    for key in added_headers
+                )
+                or any(
+                    not any(
+                        key.lower()
+                        in path.read_text(encoding="utf-8", errors="replace").lower()
+                        for path in evidence_files
+                        if path.stat().st_size <= 1_000_000
+                    )
                     for key in added_headers
                 )
             ):

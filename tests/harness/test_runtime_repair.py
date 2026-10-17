@@ -1096,6 +1096,67 @@ def test_readiness_patch_rejects_unsupplied_alias(tmp_path, setup_patch):
         )
 
 
+def test_readiness_patch_can_apply_existing_local_auth_to_source_backed_header(tmp_path):
+    from fi.alk.harness.contract import LocalHttpAuth
+
+    (tmp_path / "server.py").write_text(
+        "SESSION_API_KEY = 'private'\nSESSION_HEADER = 'X-Session-API-Key'\n"
+    )
+    interface = RuntimeInterface(
+        kind="http",
+        protocol="openai_chat",
+        port=8080,
+        path="/v1/chat/completions",
+        local_auth=LocalHttpAuth(
+            server_environment="SESSION_API_KEY",
+            template_variable="session_api_key",
+        ),
+        headers_template={"Authorization": "Bearer {{session_api_key}}"},
+    )
+    contract = AgentContract(
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "server.py"],
+            interface=interface,
+        )
+    )
+    repaired_interface = interface.model_copy(
+        update={
+            "headers_template": {
+                **interface.headers_template,
+                "X-Session-API-Key": "{{session_api_key}}",
+            }
+        }
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(update={"interface": repaired_interface}),
+        evidence_paths=("server.py",),
+        diagnostic_codes=("chat_ingress_failed",),
+        summary="Apply the existing local credential to the protected event route.",
+    )
+
+    repaired = validate_runtime_plan_patch(
+        tmp_path,
+        contract,
+        patch,
+        allowed_diagnostic_codes={"chat_ingress_failed"},
+    )
+    assert repaired.runtime.interface.headers_template["X-Session-API-Key"] == (
+        "{{session_api_key}}"
+    )
+
+    patch.runtime.interface.headers_template["X-Invented"] = "{{session_api_key}}"
+    with pytest.raises(ValueError, match="readiness_header_binding_changed"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+
+
 @pytest.mark.parametrize("surface", ["config", "setup"])
 def test_readiness_patch_cannot_rebind_existing_secret(tmp_path, setup_patch, surface):
     contract, patch = setup_patch
