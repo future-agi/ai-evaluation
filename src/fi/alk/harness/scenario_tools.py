@@ -1395,7 +1395,9 @@ def scenario_tools(
                 if not executes(world, call.name):
                     lines.append(
                         f"{call.name}: NOT RUN, it runs only inside the agent, so what it "
-                        "returns and changes is unknown until a real call"
+                        "returns and changes is unknown until a real call. If the contract shows "
+                        "it reaching a service, give the step the request the agent sends it, "
+                        "read from the tool's code, in environment_arguments: the build replays it"
                     )
                 elif call.refused:
                     lines.append(f"{call.name}: refused — {call.error}")
