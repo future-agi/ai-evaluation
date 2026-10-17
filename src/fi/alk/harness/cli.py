@@ -241,6 +241,7 @@ async def _understand(args: argparse.Namespace) -> int:
         ask=permission_gate(_ask_operator) if args.interactive else None,
         available_evals=offered if isinstance(offered, list) else None,
         require_setup_contract=generic and not args.interactive,
+        max_turns=140 if generic and not args.interactive else 70,
     )
 
     print(f"agent: {source.name}  ({source.kind})")

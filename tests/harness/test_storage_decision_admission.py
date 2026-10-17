@@ -120,6 +120,7 @@ def test_cli_requires_setup_only_for_autonomous_generic_discovery(
     )
     assert asyncio.run(cli._understand(args)) == 1
     assert captured["require_setup_contract"] is required
+    assert captured["max_turns"] == (140 if required else 70)
 
 
 @pytest.mark.parametrize(
