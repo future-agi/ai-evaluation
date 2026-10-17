@@ -369,8 +369,9 @@ gets one fixed value wrong at a time.
 
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
-supposedly chose. Put them in `environment_arguments` on the same step, which the proof passes to the
-service and the agent never sees.
+supposedly chose. Where the contract shows a step's tool reaching a service, put the whole request
+the agent sends it in `environment_arguments` on the same step, built from the contract's request
+fields; the build replays it against the agent's own service and the agent never sees it.
 
 ## The coordinate you were dealt
 

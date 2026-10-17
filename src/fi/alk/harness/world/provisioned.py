@@ -122,40 +122,7 @@ class ProvisionedWorld(GeneratedWorld):
                 error=f"the submitted service has no endpoint /{endpoint}",
             )
             return self._record(call) if record else call
-        try:
-            response = requests.post(
-                f"{self.base_url}/{endpoint}",
-                json=args,
-                headers={"x-session-id": session_id},
-                timeout=15,
-            )
-            body: Any
-            try:
-                body = response.json()
-            except ValueError:
-                body = response.text
-            refused = response.status_code >= 400
-            call = Call(
-                name=name,
-                arguments=args,
-                result=body,
-                ok=not refused,
-                refused=refused,
-                error=(
-                    json.dumps(body, default=str)
-                    if refused and not isinstance(body, str)
-                    else str(body)
-                    if refused
-                    else ""
-                ),
-            )
-        except requests.RequestException as exc:
-            call = Call(
-                name=name,
-                arguments=args,
-                ok=False,
-                error=f"{type(exc).__name__}: {exc}",
-            )
+        call = post_tool(self.base_url, endpoint, args, name=name, session_id=session_id)
         return self._record(call) if record else call
 
     def call(self, name: str, arguments: Mapping[str, Any] | None = None) -> Call:
@@ -176,6 +143,41 @@ class ProvisionedWorld(GeneratedWorld):
             (tool for tool, path in self.endpoint_for.items() if path == name), name
         )
         return self.forward(endpoint, arguments, record_as=semantic_name)
+
+
+def post_tool(
+    base_url: str, endpoint: str, arguments: dict[str, Any], *, name: str, session_id: str = "harness"
+) -> Call:
+    """One POST to a submitted service's tool endpoint, as the call it records; a 4xx or 5xx is a refusal."""
+    try:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/{endpoint.strip('/')}",
+            json=arguments,
+            headers={"x-session-id": session_id},
+            timeout=15,
+        )
+        body: Any
+        try:
+            body = response.json()
+        except ValueError:
+            body = response.text
+        refused = response.status_code >= 400
+        return Call(
+            name=name,
+            arguments=arguments,
+            result=body,
+            ok=not refused,
+            refused=refused,
+            error=(
+                json.dumps(body, default=str)
+                if refused and not isinstance(body, str)
+                else str(body)
+                if refused
+                else ""
+            ),
+        )
+    except requests.RequestException as exc:
+        return Call(name=name, arguments=arguments, ok=False, error=f"{type(exc).__name__}: {exc}")
 
 
 def open_provisioned_world(
