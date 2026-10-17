@@ -156,6 +156,21 @@ class Call:
     fault: str = ""
     sub_actor: str = ""
 
+    def traced(self) -> dict[str, Any]:
+        """This call as a line of the uploaded tool trace; the fault only where a sub-actor applied one."""
+        line = {
+            "name": self.name,
+            "arguments": self.arguments,
+            "result": self.result,
+            "ok": self.ok,
+            "error": self.error,
+            "refused": self.refused,
+            "at": self.at,
+        }
+        if self.fault:
+            line.update(fault=self.fault, sub_actor=self.sub_actor)
+        return line
+
 
 class GeneratedWorld(EnvironmentAdapter):
     """A database-backed world whose tools are generated per agent.
