@@ -252,11 +252,9 @@ def binding_problems(
             problems.append(f"{binding.id}: on_keyword needs the words that bring it in")
         if trigger.kind == "probability" and not 0 < trigger.p < 1:
             problems.append(f"{binding.id}: probability needs p between 0 and 1")
-        if actor.channel == "tool_response" and trigger.kind not in ("always", "on_tool", "probability"):
-            problems.append(
-                f"{binding.id}: a failing service is set up before the call, so it enters always, "
-                "on_tool or by probability"
-            )
+        allowed, why = (REGISTRY.get(actor.channel) or {}).get("enters_on") or ((), "")
+        if allowed and trigger.kind not in allowed:
+            problems.append(f"{binding.id}: {why}")
         if modality and actor.channel in CHANNELS and modality not in CHANNELS[actor.channel]:
             problems.append(f"{binding.id} arrives through {actor.channel}, which a {modality} scenario cannot carry")
     return problems

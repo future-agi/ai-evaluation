@@ -560,3 +560,12 @@ def test_a_sub_actor_persona_is_held_to_the_caller_persona_s_shape():
     assert actor.persona["languages"] == ["English"]
     with pytest.raises(ValueError):
         SubActor(id="c", name="Child", channel="audio_mix", persona={"languages": "English"})
+
+
+def test_whoever_answers_a_transfer_enters_only_on_the_handover():
+    answerer = SubActor(id="rep", name="Rep", kind="behavioral", channel="transfer_leg")
+    cast = Cast(sub_actors=[answerer])
+    always = binding_problems([Binding(id="rep", trigger=Trigger(kind="always"))], cast, modality="voice", max_turns=10)
+    assert always and "hands over" in always[0]
+    handover = Binding(id="rep", trigger=Trigger(kind="on_escalation", tool="transfer"))
+    assert not binding_problems([handover], cast, modality="voice", max_turns=10, tools={"transfer"})

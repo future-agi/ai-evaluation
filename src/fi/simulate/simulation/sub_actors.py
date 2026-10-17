@@ -46,6 +46,7 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "tells_person": "If the agent transfers you, {who} answers and the call ends once they have "
         "spoken. Say nothing while they speak.",
         "setting": "A call has just been transferred to you by an automated agent.",
+        "enters_on": (("on_escalation",), "whoever answers a transfer enters only when the agent hands over"),
     },
     "ivr": {
         "modalities": {"voice"},
@@ -61,6 +62,10 @@ CHANNELS: dict[str, dict[str, Any]] = {
         "delivered": True,
         "enters": "tools",
         "about": "a service behind the agent's tools whose responses fail as its `faults` say",
+        "enters_on": (
+            ("always", "on_tool", "probability"),
+            "a failing service is set up before the call, so it enters always, on_tool or by probability",
+        ),
     },
     "thread_message": {
         "modalities": {"chat"},
