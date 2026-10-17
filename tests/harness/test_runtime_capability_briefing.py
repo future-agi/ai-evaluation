@@ -66,6 +66,8 @@ def test_authoring_receives_actual_execution_capabilities(
             assert "runtime.execution=compose" in prompt
             assert "runtime.compose_file" in prompt and "runtime.service" in prompt
             assert "migration steps that the repository already assembles" in prompt
+            assert "forwarding provider credentials alone is not configuration" in prompt
+            assert "secret_aliases" in prompt
             assert "source-declared minimal" in prompt
             assert "nested or ambiguous deployment files require an explicit selection" in prompt
             assert "Explicit native execution does not auto-select Compose" in prompt
