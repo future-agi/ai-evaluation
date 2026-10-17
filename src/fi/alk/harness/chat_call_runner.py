@@ -554,6 +554,11 @@ class HostedChatCallRunner:
             failure = exc
             transcript = getattr(exc, "partial_transcript", None) or Transcript()
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
+            status = (
+                exc.trace.get("status_code")
+                if isinstance(exc, HTTPCallFailure)
+                else None
+            )
             wrapped = CallAborted(
                 f"chat_target_failed: {type(exc).__name__}: "
                 + sanitize_diagnostic(
@@ -563,7 +568,12 @@ class HostedChatCallRunner:
                         **getattr(runtime, "_local_auth_values", {}),
                     },
                 ),
-                code="target_agent_failed",
+                code=(
+                    "call_failed"
+                    if isinstance(status, int)
+                    and (status in {408, 429} or 500 <= status < 600)
+                    else "target_agent_failed"
+                ),
             )
             partial = getattr(exc, "partial_transcript", None)
             if partial is not None:
