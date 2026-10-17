@@ -657,7 +657,7 @@ def test_hosted_chat_target_timeout_is_configurable(
 
 def test_hosted_chat_target_timeout_rejects_invalid_values(monkeypatch: Any) -> None:
     monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "not-a-duration")
-    assert chat._chat_target_timeout_seconds() == 120.0
+    assert chat._chat_target_timeout_seconds() == 300.0
 
 
 def test_hosted_chat_attributes_target_runtime_failure_to_agent(
@@ -694,7 +694,7 @@ def test_hosted_chat_attributes_target_runtime_failure_to_agent(
 
     assert error.value.code == "target_agent_failed"
     monkeypatch.setenv("ALK_CHAT_TARGET_TIMEOUT_SECONDS", "0")
-    assert chat._chat_target_timeout_seconds() == 120.0
+    assert chat._chat_target_timeout_seconds() == 300.0
 
 
 def test_hosted_chat_continues_when_agent_asks_customer_for_account_id(

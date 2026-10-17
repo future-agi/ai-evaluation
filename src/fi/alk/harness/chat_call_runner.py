@@ -86,7 +86,7 @@ async def _record_text_usage(
         )
 
 
-DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
+DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 
 
 def _chat_target_timeout_seconds() -> float:
