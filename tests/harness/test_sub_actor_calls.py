@@ -91,13 +91,9 @@ def test_with_the_switch_off_nothing_is_carried(tmp_path, monkeypatch):
 
 
 def test_the_caller_is_told_who_else_is_there():
-    environ = {
-        cr.SUB_ACTOR_VOICES_ALIAS: json.dumps(
-            [{"name": "Bystander", "role": "someone near the caller", "channel": "audio_mix"}]
-        )
-    }
-    assert "Bystander (someone near the caller)" in cr._with_sub_actors("Book it.", environ)
-    assert cr._with_sub_actors("Book it.", {}) == "Book it."
+    voices = [{"name": "Bystander", "role": "someone near the caller", "channel": "audio_mix"}]
+    assert "Bystander (someone near the caller)" in cr._with_sub_actors("Book it.", voices)
+    assert cr._with_sub_actors("Book it.", []) == "Book it."
 
 
 def test_a_traced_fault_is_read_back_onto_its_call():
@@ -159,10 +155,9 @@ def test_a_service_bound_by_probability_is_armed_only_when_its_draw_says():
 
 
 def test_the_caller_is_told_what_to_do_when_someone_takes_the_line():
-    environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Partner", "channel": "audio_handoff"}])}
-    assert "say nothing" in cr._with_sub_actors("Book it.", environ)
-    environ = {cr.SUB_ACTOR_VOICES_ALIAS: json.dumps([{"name": "Supervisor", "channel": "transfer_leg"}])}
-    assert "If the agent transfers you, Supervisor answers" in cr._with_sub_actors("Book it.", environ)
+    assert "say nothing" in cr._with_sub_actors("Book it.", [{"name": "Partner", "channel": "audio_handoff"}])
+    supervisor = [{"name": "Supervisor", "channel": "transfer_leg"}]
+    assert "If the agent transfers you, Supervisor answers" in cr._with_sub_actors("Book it.", supervisor)
 
 
 def test_a_fault_leaves_a_call_that_already_failed_as_it_was():

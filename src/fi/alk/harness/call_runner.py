@@ -565,6 +565,7 @@ def _build_spec(
     environ: Mapping[str, str],
     connector: str = "livekit",
     provider_target_id: str | None = None,
+    sub_actors: list[dict[str, Any]] | None = None,
 ) -> SimulationSpec:
     """The hosted lane: values come from job config and the bundle's scenario document.
 
@@ -663,7 +664,7 @@ def _build_spec(
         scenario=caller_scenario(
             name=str(doc.get("scenario_key") or doc.get("name") or "harness-voice"),
             persona=doc.get("persona"),
-            situation=_with_sub_actors(doc["instruction"], environ),
+            situation=_with_sub_actors(doc["instruction"], sub_actors or []),
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
@@ -799,12 +800,8 @@ def _sub_actor_bindings(doc: Mapping[str, Any]) -> list[Binding]:
     return bindings
 
 
-def _with_sub_actors(instruction: str, environ: Mapping[str, str]) -> str:
+def _with_sub_actors(instruction: str, voices: list[dict[str, Any]]) -> str:
     """The person's situation, saying who else is part of the call and what the person does then."""
-    try:
-        voices = json.loads(environ.get(SUB_ACTOR_VOICES_ALIAS) or "[]")
-    except ValueError:
-        return instruction
     lines = [
         tells_person(
             str(one.get("channel") or ""),
@@ -1467,6 +1464,7 @@ class CallRunnerImpl:
             doc=doc,
             simulator_config=self._context.job.agent.config,
             environ=call_environ,
+            sub_actors=voices,
             livekit_url=self._livekit_url,
             call_timeout_seconds=call_timeout_seconds,
             run_seconds=run_seconds,

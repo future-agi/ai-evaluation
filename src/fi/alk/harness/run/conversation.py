@@ -21,6 +21,7 @@ from ..backends import SessionSpec
 
 from ..config import chosen_model
 from ..contract import AgentContract
+from ..judge import someone_else
 from ..scenario import Scenario
 from ..session import Stage
 from ..world.runtime import Call
@@ -71,7 +72,7 @@ class Transcript:
 
     def spoken(self) -> str:
         return "\n".join(
-            f"{turn.name} (not the customer): {turn.text}"
+            f"{someone_else(turn.name)}: {turn.text}"
             if turn.speaker == "sub_actor"
             else f"{turn.speaker}: {turn.text}"
             for turn in self.exchanges
@@ -309,11 +310,13 @@ async def converse(
         name="customer",
     )
 
-    def record(speaker: str, text: str) -> None:
-        exchange = Exchange(speaker, text)
+    def keep(exchange: Exchange) -> None:
         transcript.exchanges.append(exchange)
         if on_exchange:
             on_exchange(exchange)
+
+    def record(speaker: str, text: str) -> None:
+        keep(Exchange(speaker, text))
 
     others = _ChatSubActors(scenario, world_root, model, seed or secrets.token_hex(8))
     await target.open()
@@ -346,9 +349,7 @@ async def converse(
             record("agent", reply or "(said nothing)")
             heard = []
             for entered in await others.after_agent(_turn + 1, reply or "", target):
-                transcript.exchanges.append(entered)
-                if on_exchange:
-                    on_exchange(entered)
+                keep(entered)
                 heard.append(f"[{entered.name}]: {entered.text}")
             # The thread is shared: the person sees the other participant's message too.
             turn = await customer.say("\n\n".join([reply or "(no response)", *heard]))

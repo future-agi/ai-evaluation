@@ -497,10 +497,15 @@ def _reference_solution(scenario: Any) -> str:
 _SPEAKERS = {"user": "Customer", "assistant": "Agent"}
 
 
+def someone_else(name: str) -> str:
+    """How a sub-actor's turn is labelled wherever grading reads a conversation."""
+    return f"{name or 'Someone else'} (not the customer)"
+
+
 def _speaker(message: dict[str, Any]) -> str:
     role = str(message.get("role") or "")
     if role == "sub_actor":
-        return f"{message.get('name') or 'Someone else'} (not the customer)"
+        return someone_else(str(message.get("name") or ""))
     return _SPEAKERS.get(role, role or "unknown")
 
 

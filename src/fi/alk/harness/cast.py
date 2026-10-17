@@ -342,7 +342,10 @@ def absent(sub_actor_id: str, messages: Any, calls: Any) -> str:
     faulted = any(getattr(call, "sub_actor", "") == sub_actor_id for call in calls or ())
     if heard or faulted:
         return ""
-    return f"Not applicable: {sub_actor_id} did not enter this call, so there was nothing to respond to."
+    from .judge import verdict_of
+
+    explanation = f"{sub_actor_id} did not enter this call, so there was nothing to respond to."
+    return verdict_of({"verdict": "not_applicable", "explanation": explanation})[1]
 
 
 def sub_goal_subject_problems(sub_actor_id: str, root: Path) -> list[str]:
