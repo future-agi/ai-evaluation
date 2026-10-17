@@ -144,7 +144,8 @@ class Proof:
                 "them wrong:\n  - "
                 + "\n  - ".join(self.unchecked)
                 + "\n\nA value is fixed so that something checks it. Fix the check that should "
-                "compare it, or take it out of `fixed` if only what is said settles it."
+                "compare it, or take it out of `fixed` if only what is said settles it or the agent words it "
+                "itself (a reason, a note, a message), which no check compares as text."
             )
         if self.too_strict:
             return (
