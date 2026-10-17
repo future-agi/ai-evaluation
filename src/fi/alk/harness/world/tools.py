@@ -23,8 +23,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from fi.simulate.simulation.sub_actors import CHANNELS as CHANNEL_REGISTRY
 from fi.simulate.simulation.sub_actors import delivered_channels, described
 
@@ -387,20 +385,9 @@ def _faults_reach(contract: AgentContract, source_root: str, world: Any) -> set[
 
 
 def _serves_tools_api(source_root: str) -> bool:
-    root = Path(source_root) if source_root else None
-    if not root or not root.is_dir():
-        return False
-    for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
-        compose = root / name
-        if not compose.is_file():
-            continue
-        try:
-            services = (yaml.safe_load(compose.read_text(encoding="utf-8")) or {}).get("services")
-        except (OSError, yaml.YAMLError):
-            continue
-        if isinstance(services, dict) and "tools-api" in services:
-            return True
-    return False
+    from ..bundle_author_v2 import serves_tools_api
+
+    return bool(source_root) and Path(source_root).is_dir() and serves_tools_api(Path(source_root))
 
 
 def _bound_anywhere(destination: Path, sub_actor_id: str) -> list[str]:

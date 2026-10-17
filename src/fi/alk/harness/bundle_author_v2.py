@@ -929,6 +929,19 @@ def _compose_path(source: Path) -> Path | None:
     return matches[0] if matches else None
 
 
+# The source service whose calls the bundle's tool proxy records, and where sub-actor faults apply.
+_TOOLS_SERVICE = "tools-api"
+
+
+def serves_tools_api(source: Path) -> bool:
+    """Whether this source's Compose project has the tools service the bundle puts its tool proxy in front of."""
+    try:
+        path = _compose_path(source)
+        return path is not None and _TOOLS_SERVICE in _load_compose(path)["services"]
+    except BundleAuthorError:
+        return False
+
+
 def _load_compose(path: Path) -> dict[str, Any]:
     try:
         body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -1792,7 +1805,7 @@ def resolve_environment_plan(
                         capability=slug, path="/health", timeout_seconds=180
                     )
                 )
-        if "tools-api" in source_services:
+        if _TOOLS_SERVICE in source_services:
             processes.append(_tool_proxy_process())
             # The target must not become eligible to start until the evidence proxy is ready.
             # Depending only on the upstream tools process leaves a race where the agent starts
