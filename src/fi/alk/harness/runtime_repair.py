@@ -320,7 +320,13 @@ def _explicit_dependency_candidate(
 
 
 def _provider_selector_candidate(
-    source_root: Path, contract: AgentContract, guidance: str
+    source_root: Path,
+    contract: AgentContract,
+    guidance: str,
+    *,
+    diagnostic_code: Literal[
+        "chat_ingress_failed", "chat_tool_evidence_unverified"
+    ] = "chat_ingress_failed",
 ) -> RuntimePlanPatch | None:
     """Select a source-declared provider when the target reports none is configured."""
     marker = "<untrusted_current_target_process_logs>"
@@ -343,19 +349,7 @@ def _provider_selector_candidate(
     ):
         return None
 
-    namespace = interface.model.split("/", 1)[0].strip().lower()
-
-    def canonical(value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-
-    namespace_key = canonical(namespace)
-    providers = [
-        value
-        for value in runtime.extras
-        if canonical(value) in namespace_key or namespace_key in canonical(value)
-    ]
-    providers.extend((namespace, namespace_key, re.sub(r"-?ai$", "", namespace_key)))
-    providers = list(dict.fromkeys(value for value in providers if value))
+    providers = _provider_values(runtime)
 
     evidence: list[tuple[Path, str, str, int]] = []
     for raw in re.findall(r'File "([^"]+)", line \d+', logs):
@@ -418,7 +412,7 @@ def _provider_selector_candidate(
         base_contract_hash=_contract_hash(contract),
         runtime=runtime.model_copy(update={"config_files": resources}),
         evidence_paths=(path.relative_to(source_root.resolve()).as_posix(),),
-        diagnostic_codes=("chat_ingress_failed",),
+        diagnostic_codes=(diagnostic_code,),
         summary="Select the source-declared model provider requested by the submitted runtime.",
     )
     try:
@@ -426,7 +420,176 @@ def _provider_selector_candidate(
             source_root,
             contract,
             patch,
-            allowed_diagnostic_codes={"chat_ingress_failed"},
+            allowed_diagnostic_codes={diagnostic_code},
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
+
+
+def _provider_values(runtime: Runtime) -> tuple[str, ...]:
+    interface = runtime.interface
+    if not interface or not interface.model:
+        return ()
+    namespace = interface.model.split("/", 1)[0].strip().lower()
+
+    def canonical(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+    namespace_key = canonical(namespace)
+    providers = [
+        value
+        for value in runtime.extras
+        if canonical(value) in namespace_key or namespace_key in canonical(value)
+    ]
+    providers.extend((namespace, namespace_key, re.sub(r"-?ai$", "", namespace_key)))
+    return tuple(dict.fromkeys(value for value in providers if value))
+
+
+def _source_backed_provider_selector_update(
+    original: Runtime | None,
+    runtime: Runtime,
+    evidence_files: list[Path],
+) -> bool:
+    if (
+        original is None
+        or runtime.model_dump(exclude={"config_files"})
+        != original.model_dump(exclude={"config_files"})
+        or not original.config_files.keys() <= runtime.config_files.keys()
+    ):
+        return False
+    changes: list[tuple[str, str]] = []
+    for path, resource in runtime.config_files.items():
+        previous = original.config_files.get(path)
+        if previous is None:
+            if path not in {".env", ".alk-runtime.env"} or resource.secret_aliases:
+                return False
+            before = {}
+        else:
+            if (
+                resource.format != previous.format
+                or resource.secret_aliases != previous.secret_aliases
+                or not previous.values.keys() <= resource.values.keys()
+            ):
+                return False
+            before = previous.values
+        changes.extend(
+            (name, value)
+            for name, value in resource.values.items()
+            if before.get(name) != value
+        )
+    if len(changes) != 1:
+        return False
+    name, provider = changes[0]
+    if "PROVIDER" not in name or provider not in _provider_values(runtime):
+        return False
+    return any(
+        path.stat().st_size <= 1_000_000
+        and re.search(
+            rf"(?:getenv|get_secret_str|environ\.get|env::var)\(\s*[\"']{re.escape(name)}[\"']|"
+            rf"process\.env\.{re.escape(name)}",
+            text := path.read_text(encoding="utf-8", errors="replace"),
+        )
+        and re.search(rf"[\"']{re.escape(provider)}[\"']", text, re.I)
+        for path in evidence_files
+    )
+
+
+_FILE_SECRET_ALIAS_SUFFIXES = ("_JSON", "_FILE", "_PATH")
+
+
+def _file_secret_alias_stem(alias: str) -> str:
+    stem = alias
+    while suffix := next(
+        (suffix for suffix in _FILE_SECRET_ALIAS_SUFFIXES if stem.endswith(suffix)),
+        None,
+    ):
+        stem = stem[: -len(suffix)]
+    return stem
+
+
+def _validate_secret_file_alias_repair(
+    original: Runtime,
+    runtime: Runtime,
+    available_secret_aliases: frozenset[str],
+) -> None:
+    if (
+        runtime.model_dump(exclude={"secret_files"})
+        != original.model_dump(exclude={"secret_files"})
+        or runtime.secret_files.keys() != original.secret_files.keys()
+    ):
+        raise ValueError("runtime_repair_secret_file_alias_change_invalid")
+    changed = False
+    for service, bindings in runtime.secret_files.items():
+        previous = original.secret_files[service]
+        if len(bindings) != len(previous):
+            raise ValueError("runtime_repair_secret_file_alias_change_invalid")
+        for before, after in zip(previous, bindings, strict=True):
+            if before == after:
+                continue
+            if (
+                before.model_dump(exclude={"alias"})
+                != after.model_dump(exclude={"alias"})
+                or after.alias not in available_secret_aliases
+                or _file_secret_alias_stem(before.alias)
+                != _file_secret_alias_stem(after.alias)
+            ):
+                raise ValueError("runtime_repair_secret_file_alias_change_invalid")
+            changed = True
+    if not changed:
+        raise ValueError("runtime_repair_secret_file_alias_change_required")
+
+
+def _secret_file_alias_candidate(
+    source_root: Path,
+    contract: AgentContract,
+    available_secret_aliases: frozenset[str],
+) -> RuntimePlanPatch | None:
+    runtime = contract.runtime
+    if (
+        runtime is None
+        or runtime.execution != "compose"
+        or not runtime.compose_file
+        or not runtime.secret_files
+    ):
+        return None
+    repaired = {}
+    changed = False
+    for service, bindings in runtime.secret_files.items():
+        repaired[service] = []
+        for binding in bindings:
+            if binding.alias in available_secret_aliases:
+                repaired[service].append(binding)
+                continue
+            matches = sorted(
+                alias
+                for alias in available_secret_aliases
+                if _file_secret_alias_stem(alias)
+                == _file_secret_alias_stem(binding.alias)
+            )
+            if len(matches) != 1:
+                return None
+            repaired[service].append(
+                binding.model_copy(update={"alias": matches[0]})
+            )
+            changed = True
+    compose_file = (source_root / runtime.compose_file).resolve()
+    if not changed or not compose_file.is_file() or not compose_file.is_relative_to(source_root.resolve()):
+        return None
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(update={"secret_files": repaired}),
+        evidence_paths=(runtime.compose_file,),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Bind generated secret-file mounts to the unique supplied file-secret aliases.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            available_secret_aliases=available_secret_aliases,
         )
     except (OSError, ValueError):
         return None
@@ -739,9 +902,26 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_dependency_requires_missing_loader")
 
     runtime = patch.runtime
+    if (
+        allowed_diagnostic_codes == {"generated_runtime_plan_invalid"}
+        and contract.runtime is not None
+        and runtime.secret_files != contract.runtime.secret_files
+    ):
+        _validate_secret_file_alias_repair(
+            contract.runtime, runtime, available_secret_aliases
+        )
+    provider_selector_repair = (
+        allowed_diagnostic_codes == {"chat_tool_evidence_unverified"}
+        and _source_backed_provider_selector_update(
+            contract.runtime, runtime, evidence_files
+        )
+    )
     from .contract import _runtime_template_names
 
-    if allowed_diagnostic_codes == {"chat_tool_evidence_unverified"}:
+    if (
+        allowed_diagnostic_codes == {"chat_tool_evidence_unverified"}
+        and not provider_selector_repair
+    ):
         original = contract.runtime
         transport_fields = {"path", "protocol", "request_template", "response_path", "failure_rule"}
         observation_fields = {"completed_tools", "completed_tool_events"}
@@ -1177,11 +1357,28 @@ async def request_runtime_plan_patch(
 
     allowed = {item.code for item in diagnostics}
     setup_investigation = allowed in ({"chat_ingress_failed"}, {"credential_missing"})
-    if allowed == {"chat_ingress_failed"}:
-        candidate = _provider_selector_candidate(source_root, contract, guidance)
+    if allowed in ({"chat_ingress_failed"}, {"chat_tool_evidence_unverified"}):
+        diagnostic_code = next(iter(allowed))
+        candidate = _provider_selector_candidate(
+            source_root,
+            contract,
+            guidance,
+            diagnostic_code=diagnostic_code,
+        )
         if candidate is not None:
             print("runtime repair: source-declared provider selector", flush=True)
             return candidate
+    if allowed == {"generated_runtime_plan_invalid"} and any(
+        "compose_secret_file_target_reference_required" in item.redacted_message
+        for item in diagnostics
+    ):
+        candidate = _secret_file_alias_candidate(
+            source_root, contract, available_secret_aliases
+        )
+        if candidate is not None:
+            print("runtime repair: supplied secret-file alias", flush=True)
+            return candidate
+    if allowed == {"chat_ingress_failed"}:
         candidate = _explicit_dependency_candidate(source_root, contract, guidance)
         if candidate is not None:
             print("runtime repair: source-declared dependency candidate", flush=True)
