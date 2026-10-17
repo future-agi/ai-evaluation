@@ -40,12 +40,33 @@ class SourceInputs:
         shutil.copystat(self.source, destination)
 
 
-def source_inputs(source: Path, document: dict, *, capabilities: dict) -> SourceInputs:
+def source_inputs(
+    source: Path,
+    document: dict,
+    *,
+    capabilities: dict,
+    context_excludes: tuple[str, ...] = (),
+) -> SourceInputs:
     from .certified_compose_runtime import (
         ComposeRuntimeError, normalize_compose, validate_source_tree,
     )
+    from .generated_runtime import _context_path_excluded
 
     source = source.resolve()
+    for value in context_excludes:
+        if not isinstance(value, str):
+            raise ComposeRuntimeError("compose_source_context_exclude_invalid")
+        relative = Path(value)
+        if (
+            not relative.parts
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or "\\" in value
+            or "$" in value
+            or any(ord(char) < 32 for char in value)
+            or any(char in value for char in "?[]")
+        ):
+            raise ComposeRuntimeError("compose_source_context_exclude_invalid")
     validate_source_tree(source)
     normalized = normalize_compose(document, source, capabilities=capabilities)
     roots = set()
@@ -76,6 +97,11 @@ def source_inputs(source: Path, document: dict, *, capabilities: dict) -> Source
     def add(path: Path, descend=True):
         try:
             relative = path.relative_to(source)
+        except ValueError:
+            relative = Path()
+        if relative.parts and _context_path_excluded(relative, context_excludes):
+            return
+        try:
             resolved = path.resolve(strict=True)
             resolved.relative_to(source)
         except (OSError, RuntimeError, ValueError):
@@ -116,5 +142,8 @@ def source_inputs(source: Path, document: dict, *, capabilities: dict) -> Source
     for value in sorted(roots):
         path = source / value
         if path.exists() or path.is_symlink():
+            relative = path.resolve().relative_to(source)
+            if _context_path_excluded(relative, context_excludes):
+                raise ComposeRuntimeError("compose_source_required_path_excluded")
             add(path)
     return SourceInputs(source, tuple(sorted(entries, key=lambda p: (len(p.parts), p.as_posix()))))

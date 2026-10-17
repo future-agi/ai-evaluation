@@ -281,11 +281,20 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
                 adopted_files=(["scenarios/"] if include_scenarios else []) + ["contract.json"],
                 generated_files=["compose.json", "manifest.json"],
             ),
-            metadata={"observation_mode": "native", "generic_harness": "v1"},
+            metadata={
+                "observation_mode": "native",
+                "generic_harness": "v1",
+                "context_excludes": list(runtime.get("context_excludes") or ()),
+            },
         )
         from .compose_source import source_inputs
 
-        inputs = source_inputs(source, document, capabilities=manifest.capabilities)
+        inputs = source_inputs(
+            source,
+            document,
+            capabilities=manifest.capabilities,
+            context_excludes=tuple(runtime.get("context_excludes") or ()),
+        )
         validate_source(
             source, job.public_material_admissions,
             fixtures=job.public_test_fixture_admissions,

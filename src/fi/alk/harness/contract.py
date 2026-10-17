@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -905,8 +906,21 @@ class Runtime(BaseModel):
                 )
             ):
                 raise ValueError("runtime_required_environment_invalid")
-        if any(any(char in path for char in "*?[]") for path in self.context_excludes):
-            raise ValueError("runtime_context_excludes_glob_unsupported")
+        if len(self.context_excludes) != len(set(self.context_excludes)):
+            raise ValueError("runtime_context_excludes_duplicate")
+        for path in self.context_excludes:
+            relative = Path(path)
+            if (
+                not relative.parts
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in path
+                or "$" in path
+                or any(ord(char) < 32 for char in path)
+            ):
+                raise ValueError("runtime_context_exclude_invalid")
+            if any(char in path for char in "?[]"):
+                raise ValueError("runtime_context_excludes_pattern_unsupported")
         return self
 
     @field_validator("command", mode="before")
