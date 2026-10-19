@@ -28,3 +28,30 @@ PLAIN_DOCUMENTS: list[Any] = [
 @pytest.mark.parametrize("document", PLAIN_DOCUMENTS)
 def test_redaction_equals_safe_profile_value_on_plain_documents(document: Any) -> None:
     assert _redact(document) == _safe_profile_value(document)
+
+
+def test_added_markers_headers_and_parameters() -> None:
+    document = {
+        "Cookie": "session=abc",
+        "passphrase": "correct horse",
+        "x-api-key": "k-1",
+        "private_key": "-----BEGIN-----",
+        "PrivateKeyPath": "kept",
+        "nested": {"Set-Cookie": "id=1", "keep": "me"},
+        "headers": {"X-Trace": "t-1", "Accept": "application/json"},
+        "server": {"headers": ["a", "b"], "url": "https://example.com/x"},
+    }
+
+    redacted = _redact(document)
+
+    assert redacted["Cookie"] == "[redacted]"
+    assert redacted["passphrase"] == "[redacted]"
+    assert redacted["x-api-key"] == "[redacted]"
+    assert redacted["private_key"] == "[redacted]"
+    assert redacted["PrivateKeyPath"] == "kept"
+    assert redacted["nested"] == {"Set-Cookie": "[redacted]", "keep": "me"}
+    assert redacted["headers"] == {"X-Trace": "[redacted]", "Accept": "[redacted]"}
+    assert redacted["server"] == {
+        "headers": "[redacted]",
+        "url": "https://example.com/x",
+    }

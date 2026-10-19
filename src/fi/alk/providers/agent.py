@@ -237,7 +237,12 @@ def _redact(value: Any, key: str = "") -> Any:
         parsed = urlsplit(value)
         if parsed.scheme and parsed.netloc:
             hostname = parsed.hostname or ""
-            port = f":{parsed.port}" if parsed.port else ""
+            try:
+                port = f":{parsed.port}" if parsed.port else ""
+            except ValueError:
+                # A template such as http://{HOST}:{PORT} has no numeric port;
+                # keep the host rather than failing the whole document.
+                port = ""
             return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
     return value
 

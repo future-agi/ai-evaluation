@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import copy
 import json
 from collections.abc import Callable
@@ -72,3 +73,37 @@ def test_rejects_a_setup_hash_that_does_not_match() -> None:
 
     with pytest.raises(ValidationError, match="setup_hash_mismatch"):
         Agent.model_validate(agent)
+
+
+FORBIDDEN_IMPORTS = ("django", "fi.simulate", "fi.alk.harness", "fi.alk.episode")
+
+
+def _imported_names(source: Path) -> set[str]:
+    package = ["fi", "alk", "providers"]
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module.split(".") if node.module else []
+            if node.level:
+                base = package[: len(package) - node.level + 1] + base
+            names.add(".".join(base))
+            names.update(".".join([*base, alias.name]) for alias in node.names)
+    return names
+
+
+def test_no_import_of_simulate_harness_or_episode() -> None:
+    providers = Path(__file__).parents[2] / "src" / "fi" / "alk" / "providers"
+    sources = sorted(providers.glob("*.py"))
+
+    forbidden = {
+        f"{source.name}: {name}"
+        for source in sources
+        for name in _imported_names(source)
+        for module in FORBIDDEN_IMPORTS
+        if name == module or name.startswith(module + ".")
+    }
+
+    assert {source.name for source in sources} >= {"agent.py", "setup_hash.py"}
+    assert not forbidden

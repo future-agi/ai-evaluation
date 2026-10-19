@@ -149,3 +149,20 @@ def test_authored_reads_the_redacted_document() -> None:
     }
     assert "base_environment" not in stored
     assert "hunter2" not in json.dumps(agent)
+
+
+def test_authored_keeps_the_host_of_a_url_with_a_placeholder_port() -> None:
+    agent = build_authored_agent(
+        _contract(
+            data_schema={
+                "braces": "http://{HOST}:{PORT}/v1?token=abc",
+                "shell": "http://localhost:${PORT}/v1#frag",
+                "numeric": "http://localhost:8080/v1",
+            }
+        )
+    )
+    stored = agent["extension"]["contract"]["data_schema"]
+
+    assert stored["braces"] == "http://{host}/v1"
+    assert stored["shell"] == "http://localhost/v1"
+    assert stored["numeric"] == "http://localhost:8080/v1"
