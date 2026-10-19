@@ -8982,13 +8982,28 @@ def test_export_environment_order_our_project_name_wins_and_mark_wins(
     assert env["FI_BASE_URL"] == "https://collector.example"
     assert env["FI_SIMULATION_EXPORT"] == "our_keys"
 
-    # The dict sets no base URL and no endpoint, so theirs survive.
-    env = _spawn(tmp_path / "no-endpoint", process, _EXPORT)["env"]
+    # Their own OpenTelemetry setup: the dict names our traces endpoint but no base URL, so
+    # the endpoint is ours and their FI_BASE_URL survives.
+    opentelemetry = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    env = _spawn(tmp_path / "no-base-url", process, opentelemetry)["env"]
+    assert env["FI_BASE_URL"] == "https://their.example"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+
+    # Their own configuration (the platform set the mark alone): both of theirs survive.
+    mark_only = {"OTEL_RESOURCE_ATTRIBUTES": _MARK}
+    env = _spawn(tmp_path / "mark-only", process, mark_only)["env"]
     assert env["FI_BASE_URL"] == "https://their.example"
     assert (
         env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://localhost:4318/v1/traces"
     )
-    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+    assert "FI_SIMULATION_EXPORT" not in env
 
     # A name they never rendered is simply added.
     env = _spawn(tmp_path / "unrendered", _source_process(name="agent"), export)["env"]

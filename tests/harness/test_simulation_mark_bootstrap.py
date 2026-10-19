@@ -917,12 +917,17 @@ def test_grpc_gets_lower_case_names_and_http_keeps_the_names_it_was_given(
 endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
 print(json.dumps({
     "grpc": sent_exact(Grpc(endpoint="collector.test:4318", insecure=True)),
+    "grpc_text": sent_exact(Grpc(
+        endpoint="collector.test:4318", insecure=True, headers="X-Team=a,X-Api-Key=c",
+    )),
     "http": sent_exact(Http(endpoint=endpoint, headers={"X-Team": "a"})),
 }))
 """
     reported = _reported(_export_run(tmp_path, script))
 
     assert set(reported["grpc"]) == set(OUR_AUTH)
+    # A customer's mixed-case name reaches gRPC lower-cased, which gRPC requires.
+    assert reported["grpc_text"] == {"x-team": "a", **OUR_AUTH}
     assert reported["http"] == {"X-Team": "a", **OUR_AUTH}
 
 
@@ -938,6 +943,7 @@ print(json.dumps({"http": sent(Http()), "grpc": sent(Grpc(insecure=True))}))
     reported = _reported(_export_run(tmp_path, script, extra))
 
     assert {key: reported["http"].get(key) for key in OUR_AUTH} == OUR_AUTH
+    assert {key: reported["grpc"].get(key) for key in OUR_AUTH} == OUR_AUTH
 
 
 def test_traces_headers_win_over_the_generic_ones_and_ours_win_over_both(
