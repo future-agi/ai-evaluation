@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
-from fi import simulate
+from fi import agentcc, simulate
 from fi.simulate.runtime import (
     SimulationSpec,
     new_run_id,
@@ -358,7 +358,9 @@ def _check_config(
 
     missing_aliases = [alias for alias in required if not credential(alias)]
 
-    if llm_provider == "google":
+    # Through the gateway the model is reached on the gateway's credentials, not the caller's.
+    direct = agentcc.gateway() is None
+    if direct and llm_provider == "google":
         has_api_key = bool(
             simulator_value(GEMINI_API_KEY_ALIAS)
             or simulator_value(GOOGLE_API_KEY_ALIAS)
@@ -374,7 +376,11 @@ def _check_config(
             missing_aliases.append(
                 f"{GEMINI_API_KEY_ALIAS}_or_{GOOGLE_API_KEY_ALIAS}_or_VERTEX_ADC"
             )
-    elif llm_provider == "openai" and not simulator_value(OPENAI_API_KEY_ALIAS):
+    elif (
+        direct
+        and llm_provider == "openai"
+        and not simulator_value(OPENAI_API_KEY_ALIAS)
+    ):
         missing_aliases.append(OPENAI_API_KEY_ALIAS)
 
     has_livekit_url = bool(
@@ -394,13 +400,16 @@ def _canonical_simulator_secrets(values: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _dispatch_agent_name(runtime: EnvironmentRuntime) -> str | None:
+def _dispatch_agent_name(runtime: EnvironmentRuntime, job: HarnessJob) -> str | None:
     """The ONLY place this repo reads the dispatch-identity metadata key, so a
     change to the key name/convention is a one-line adapt. The provisioner
     mirrors the agent process's rendered LIVEKIT_AGENT_NAME here; a bundle
     that declares none (or an ambiguous set) leaves the key absent and the
     caller's typed `CallAborted` below fires."""
-    value = runtime.metadata.get("livekit_agent_name")
+    if job.agent.mode is ProviderExecutionMode.CONNECT_ONLY:
+        value = job.agent.config.get("agent_name")
+    else:
+        value = runtime.metadata.get("livekit_agent_name")
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
@@ -447,7 +456,7 @@ def _read_scenario_document(bundle_dir: Path, scenario_key: str) -> dict[str, An
 
 
 # Edits a call actually plays; everything else is as sealed.
-_EDITABLE_FIELDS = ("background_noise",)
+_EDITABLE_FIELDS = ("background_noise", "max_turns")
 _EDITABLE_PERSONA_FIELDS = (
     "personality",
     "communication_style",
@@ -1168,7 +1177,11 @@ class CallRunnerImpl:
         connector = _resolve_connector(
             self._context.job, self._context.target_provider_secret_values
         )
-        agent_name = _dispatch_agent_name(runtime) if connector == "livekit" else None
+        agent_name = (
+            _dispatch_agent_name(runtime, self._context.job)
+            if connector == "livekit"
+            else None
+        )
         if connector == "livekit" and agent_name is None:
             raise CallAborted(
                 "voice_dispatch_identity_unavailable: runtime.metadata['livekit_agent_name'] is "

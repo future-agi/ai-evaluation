@@ -214,6 +214,39 @@ def _missing_scenario_adjustments(
     ]
 
 
+def after_contract(destination: Path, source_path: Path, job: Any) -> None:
+    """What follows a saved contract: the source model a generic-harness job also records."""
+    contract = load(destination)
+    generic = bool(
+        contract is not None
+        and job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
+    if generic:
+        from .certification import GenericHarnessArtifactStore
+        from .provision import source_fingerprint
+        from .source_discovery import discover_code_source_model
+
+        digest = source_fingerprint(Path(source_path).resolve())
+        if not digest.startswith("sha256:"):
+            digest = f"sha256:{digest}"
+        source_model = discover_code_source_model(
+            Path(source_path), contract, source_digest=digest
+        )
+        GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
+            source_model
+        )
+
+
+def after_world(source_root: Any, destination: Path, contract: Any) -> Any:
+    """Seal the exact environment once its world exists. Local and hosted execution consume
+    this same internal bundle; the source repository is never a special runtime path after it."""
+    from .bundle import export_session_bundle
+
+    return export_session_bundle(source_root, destination, name=f"{contract.agent}-environment")
+
+
 async def _understand(args: argparse.Namespace) -> int:
     if args.kind == "provider":
         source = resolve(
@@ -256,25 +289,7 @@ async def _understand(args: argparse.Namespace) -> int:
     if contract is None:
         print("\nNo contract was submitted.", file=sys.stderr)
         return 1
-    generic = bool(
-        job is not None
-        and isinstance(getattr(job, "metadata", None), dict)
-        and job.metadata.get("generic_harness_v1") is True
-    )
-    if generic:
-        from .certification import GenericHarnessArtifactStore
-        from .provision import source_fingerprint
-        from .source_discovery import discover_code_source_model
-
-        digest = source_fingerprint(Path(args.path).resolve())
-        if not digest.startswith("sha256:"):
-            digest = f"sha256:{digest}"
-        source_model = discover_code_source_model(
-            Path(args.path), contract, source_digest=digest
-        )
-        GenericHarnessArtifactStore(destination / "generic-harness").write_source_model(
-            source_model
-        )
+    after_contract(destination, Path(args.path), job)
     print(
         f"\ncontract: {len(contract.tools)} tools, "
         f"{len(contract.hard_constraints)} rules, "
@@ -388,18 +403,10 @@ async def _build(args: argparse.Namespace) -> int:
     if not world_saved(destination):
         print("\nNo world was saved.", file=sys.stderr)
         return 1
-    # Seal the exact environment now that its generated world exists. Local and hosted
-    # execution consume this same internal bundle; the source repository is never a special
-    # runtime path after this boundary.
-    from .bundle import BundleError, export_session_bundle
+    from .bundle import BundleError
 
     try:
-        bundle_path, bundle = await asyncio.to_thread(
-            export_session_bundle,
-            source_root,
-            destination,
-            name=f"{contract.agent}-environment",
-        )
+        bundle_path, bundle = await asyncio.to_thread(after_world, source_root, destination, contract)
     except BundleError as failed:
         print(f"Cannot seal the environment bundle: {failed}", file=sys.stderr)
         return 1
@@ -869,7 +876,10 @@ async def _auto(args: argparse.Namespace) -> int:
         if args.out
         else artifact_dir(new_id(name))
     )
-    destination.mkdir(parents=True, exist_ok=False)
+    # A chat started beside this run may already have put its hidden state here.
+    if destination.is_dir() and any(not item.name.startswith(".") for item in destination.iterdir()):
+        raise FileExistsError(f"authoring destination is not empty: {destination}")
+    destination.mkdir(parents=True, exist_ok=True)
     from fi.simulate.runtime.events import CanonicalEvent
 
     from .events import BufferedEventSink, EventOutbox

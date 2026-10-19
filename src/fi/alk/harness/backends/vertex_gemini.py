@@ -8,7 +8,8 @@ event stream is translated into the neutral reply vocabulary. The loop itself is
 
 The Gemini 3.x models this exists for are served from the ``global`` endpoint only, which is
 why ``ALK_VERTEX_LOCATION`` defaults to ``global`` rather than to a region. Regional Vertex
-deployments of older models can point it elsewhere.
+deployments of older models can point it elsewhere. With Agent Command Center configured
+(``AGENTCC_API_KEY``) the same requests go to the gateway instead, which reaches Vertex itself.
 
 Read, Glob and Grep come from files.py when a stage grants them. AskUserQuestion is offered only
 when an attended session supplies an operator callback; unattended authoring keeps the tool absent.
@@ -24,6 +25,8 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import date
 from typing import Any
+
+from fi import agentcc
 
 from .base import (
     ASK_TOOL,
@@ -212,6 +215,20 @@ def _project() -> str:
 
 def _location() -> str:
     return os.environ.get("ALK_VERTEX_LOCATION", "global").strip() or "global"
+
+
+def _llm(model: str) -> Any:
+    """What an agent runs on: the model name for Vertex, or a Gemini aimed at the gateway."""
+    gateway = agentcc.gateway()
+    if gateway is None:
+        return agentcc.vendor_model(model)
+    from google.adk.models import Gemini
+
+    return Gemini(
+        model=model,
+        base_url=gateway.base_url,
+        client_kwargs={"vertexai": False, "api_key": gateway.api_key},
+    )
 
 
 def _flattened(result: Any) -> str:
@@ -472,7 +489,7 @@ class VertexGeminiSession:
                 LlmAgent(
                     name=re.sub(r"[^0-9A-Za-z_]", "_", name),
                     description=worker.description,
-                    model=worker.model or self._model,
+                    model=_llm(worker.model or self._model),
                     mode="single_turn",
                     static_instruction=types.Content(
                         role="user", parts=[types.Part(text=worker.instructions)]
@@ -493,12 +510,13 @@ class VertexGeminiSession:
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
-        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
-        os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
-        os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
+        if agentcc.gateway() is None:
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+            os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
+            os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
         agent = LlmAgent(
             name=self.session_id.replace("-", "_"),
-            model=self._model,
+            model=_llm(self._model),
             static_instruction=types.Content(
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]
             ),
@@ -575,7 +593,9 @@ class VertexGeminiSession:
 
     async def replies(self) -> AsyncIterator[Any]:
         from google.adk.agents.run_config import RunConfig, StreamingMode
-        from google.adk.sessions import GetSessionConfig
+
+        # google.adk.sessions does not re-export it in the locked ADK (2.7.1).
+        from google.adk.sessions.base_session_service import GetSessionConfig
         from google.genai import types
 
         if self._runner is None or (
@@ -775,7 +795,7 @@ class VertexGeminiBackend:
     default_model = DEFAULT_MODEL
 
     def can_drive(self, model: str) -> bool:
-        return (model or "").lower().startswith("gemini")
+        return agentcc.vendor_model(model or "").lower().startswith("gemini")
 
     def create(self, spec: SessionSpec) -> VertexGeminiSession:
         return VertexGeminiSession(spec, model=spec.model or self.default_model)

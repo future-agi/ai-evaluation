@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import traceback
 import json
+import os
 import signal
+import time
 import uuid
 from collections.abc import Awaitable
 from contextlib import suppress
@@ -20,7 +23,8 @@ from .backends import (
     tool,
     tool_server,
 )
-from .chat import Conversation, open_conversation
+from .authoring_entrypoint import _load_provider_import_profile, agent_source_kind
+from .understand import PROVIDER_IMPORT_PROFILE_PATH_ENV
 from .chat_policy import EffectiveChatPolicy, apply_chat_policy, load_chat_policy
 from .hosted_conversation import (
     ConversationClient,
@@ -31,9 +35,69 @@ from .hosted_conversation import (
 from .tools import schema
 from .session import ARTIFACT, DONE, RESULT, TEXT, TOOL, Event, Stage
 
+_NUMBERS = {"type": "array", "items": {"type": "integer"}}
+_RANGES = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"from": {"type": "integer"}, "to": {"type": "integer"}},
+        "required": ["from", "to"],
+    },
+}
+# Commands that steer the conversation rather than say something to it.
+_NOT_MESSAGES = {"interrupt", "cancel_operation", "user_response", "approval"}
 _PENDING_QUESTION = ".futureagi-pending-question.json"
+_BUILD_FINISHED = ".futureagi-build-finished.json"
+_PROVIDER_PROFILE = "provider-import-profile.json"
 _JOURNAL = ".futureagi-conversation.json"
 _PROVIDER_SESSIONS = ".futureagi-provider-sessions.json"
+_AUTHORING_BASIS = ".futureagi-authoring-basis.json"
+_PUBLISHED = ".futureagi-published.json"
+_LEDGER = ".futureagi-ledger.json"
+_LEDGER_NOTES = 40
+# Tools whose effect the person confirms before it happens.
+_NEEDS_CONFIRMATION = frozenset(
+    {
+        "submit_scenario",
+        "drop_scenario",
+        "drop_scenarios",
+        "change_world",
+        "declare_tool",
+        "fix_tool",
+        "amend_contract",
+        "add_rule",
+        "drop_rule",
+        "add_sub_goal",
+    }
+)
+_CONFIRM = "Yes, make this change"
+# What the environment is made of, for telling whether anything is left unsaved.
+_PUBLISHED_PARTS = (
+    "scenarios",
+    "scenarios.json",
+    "sub_goals.json",
+    "contract.json",
+    "simulator_prompt.md",
+    "world.sqlite",
+)
+# Only these change the workspace, so only these are worth a checkpoint before they run.
+_WRITING_TOOLS = frozenset(
+    {
+        "submit_scenario",
+        "drop_scenario",
+        "drop_scenarios",
+        "save_scenarios",
+        "add_sub_goal",
+        "amend_contract",
+        "add_rule",
+        "drop_rule",
+        "fix_tool",
+        "save_changes",
+        "change_world",
+        "declare_tool",
+        "remember",
+    }
+)
 
 # Both the foreground coordinator and resumed stage conversations need this boundary:
 # authoring tools can edit harness artifacts, but cannot update the target configuration
@@ -111,6 +175,62 @@ class CoordinatorConversation:
             self.opened = False
 
 
+class BuilderConversation:
+    """The one builder session, opened on the first message and kept for the conversation."""
+
+    stage_name = "builder"
+
+    def __init__(self, open_stage: Any) -> None:
+        self._open_stage = open_stage
+        self.stage: Stage | None = None
+        self._said = False
+        self.on_health: Any = None
+
+    async def _opened(self, *, resume: bool = True) -> Stage:
+        if self.stage is None:
+            self.stage = await self._open_stage(resume=resume)
+            await self.stage.__aenter__()
+        return self.stage
+
+    async def say(self, message: str, on_event: Any | None = None) -> Any:
+        opening = self.stage is None
+        stage = await self._opened()
+        health = list(getattr(stage, "health_at_open", None) or []) if opening else []
+        if health and not message.lstrip().startswith("/"):
+            # Put first, so a resumed session that remembers an older, healthy suite cannot miss it.
+            listed = "\n- ".join(health[:40]) + ("\n- and more" if len(health) > 40 else "")
+            message = (
+                "[The health check taken as this conversation opened found these broken:"
+                f"\n- {listed}]\n\n" + message
+            )
+            if self.on_health is not None:
+                self.on_health("\n".join(health))
+        try:
+            said = await stage.say(message, on_event=on_event)
+        except Exception:
+            if self._said:
+                raise
+            # A stored session that cannot be resumed (its transcript never reached the
+            # platform) must not cost the conversation: start a fresh session; the kept
+            # references still arrive with every message.
+            traceback.print_exc()
+            await self.close()
+            said = await (await self._opened(resume=False)).say(message, on_event=on_event)
+        self._said = True
+        return said
+
+    async def resume(self, invocation_id: str, on_event: Any | None = None) -> Any:
+        return await (await self._opened()).resume_turn(invocation_id, on_event=on_event)
+
+    async def interrupt_response(self) -> bool:
+        return await self.stage.interrupt_response() if self.stage is not None else False
+
+    async def close(self) -> None:
+        if self.stage is not None:
+            await self.stage.__aexit__()
+            self.stage = None
+
+
 class HostedChatRuntime:
     def __init__(
         self,
@@ -140,26 +260,593 @@ class HostedChatRuntime:
         self.stopping = asyncio.Event()
         self._turn_acknowledged_through = 0
         self._tool_names: dict[str, str] = {}
+        self._checkpoint_lock = asyncio.Lock()
+        self._restart_after_turn = False
+        self._last_health = ""
+        # Set when the person answered a question in this turn, or when the opening health check
+        # asked for a small repair: then consequential writes are allowed.
+        self._opened_with: tuple[bool, bool] | None = None
+        self._last_progress: Any = None
+        self._idle_turns = 0
         self.conversation = self._conversation()
+        if isinstance(self.conversation, BuilderConversation):
+            # What the sandbox started from is what the environment holds, unless an earlier
+            # sandbox of this conversation already recorded otherwise.
+            self._published_fingerprint()
 
-    def _conversation(self) -> Conversation | CoordinatorConversation:
+    def _conversation(self) -> BuilderConversation | CoordinatorConversation:
+        if self._side_chat():
+            return self._coordinator()
+        # One harness for the environment's whole life: it builds, talks, changes and repairs.
+        builder = BuilderConversation(self._open_builder)
+        builder.on_health = self._note_health
+        return builder
+
+    async def _open_builder(self, *, resume: bool = True) -> Stage:
+        from .builder import BUILDER
+        from .poc_guest_booking import guest_booking_policy_job
+        from .understand import load as load_contract
+
+        policy_job = guest_booking_policy_job(self.job)
+        contract = load_contract(self.workspace)
+        self._opened_with = self._what_exists()
+        if not self._opened_with[1]:
+            stage = self._open_for_building(contract)
+        else:
+            try:
+                overview = await self.client.overview()
+            except ConversationTransportError:
+                overview = None
+            stage = self._open_built(contract, overview, policy_job)
+        if not self._control_only():
+            self._guard(stage.spec)
+        capabilities = self.client.capabilities
+        stage.configure(
+            apply_chat_policy(
+                replace(
+                    stage.spec,
+                    conversation=ConversationSession(
+                        app_name=capabilities.identity.app_name,
+                        user_id=capabilities.identity.user_id,
+                        session_id=f"{capabilities.conversation_id}-{BUILDER}",
+                        event_store=self.event_store,
+                        transcript_store=self.transcript_store,
+                        resume_session_id=(
+                            self._provider_sessions().get(f"{self.backend_name}:{BUILDER}")
+                            if resume
+                            else None
+                        ),
+                        config_dir=str(self.workspace / ".claude"),
+                        turn_context={**self.client.turn_context, "stage": BUILDER},
+                        streaming=True,
+                    ),
+                ),
+                stage=BUILDER,
+                policy=self.policy,
+            )
+        )
+        return stage
+
+    def _hosted_prompt(self) -> str:
+        return (
+            "\n\n## Hosted conversation behavior\n"
+            "Reply directly to the user in this conversation. First check the capability "
+            "boundaries below. Refuse unsupported changes immediately. Never describe "
+            "requested work as completed until a tool result proves it."
+            + _HOSTED_CHAT_CAPABILITIES
+        )
+
+    def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
+        from .builder import environment_brief, open_builder
+        from .poc_guest_booking import guest_booking_pin_scenario_problem
+
+        return open_builder(
+            contract,
+            brief=environment_brief(contract, self.workspace, overview),
+            out=self.workspace,
+            source_root=self.source if self.source.is_dir() else None,
+            platform=self._builder_platform_server(),
+            ask=self._ask,
+            scenario_problem=(
+                (lambda args: guest_booking_pin_scenario_problem(policy_job, args))
+                if policy_job is not None
+                else None
+            ),
+            hosted_prompt=self._hosted_prompt(),
+            sealed=not self._control_only(),
+            # While building, the world itself (tools, data, caller prompt) can still change.
+            more_servers=self._world_servers(contract) if self._control_only() else None,
+        )
+
+    def _world_servers(self, contract: Any) -> dict[str, Any]:
+        from .build import open_stage as build_stage
+
+        stage, _ = build_stage(
+            contract,
+            out=self.workspace,
+            source_root=str(self.source if self.source.is_dir() else ""),
+            deferred_runtime=True,
+        )
+        return dict(stage.spec.servers)
+
+    def _open_for_building(self, contract: Any) -> Stage:
+        from .builder import open_for_building
+        from .job import HarnessJob
+        from .sources import resolve
+
         metadata = self.job.get("metadata") or {}
         name = str(metadata.get("agent_name") or self.job.get("name") or "agent")
-        if not self._control_only():
-            from .poc_guest_booking import guest_booking_policy_job
+        kind = str(metadata.get("source_kind") or "repo")
+        try:
+            job = HarnessJob.model_validate(self.job)
+        except Exception:  # noqa: BLE001 - the evals offered are optional context
+            job = None
+        profile = self._provider_profile(job) if job is not None else None
+        if job is not None and agent_source_kind(job, profile) == "provider":
+            source = resolve("provider", name=name, profile=profile or {}, scratch=str(self.source))
+        else:
+            source = resolve(kind if kind in {"repo", "spec"} else "repo", name=name, root=str(self.source))
+        return open_for_building(
+            contract,
+            out=self.workspace,
+            source=source,
+            job=job,
+            platform=self._builder_platform_server(),
+            ask=self._ask,
+            hosted_prompt=self._hosted_prompt(),
+        )
 
-            return open_conversation(
-                name=name,
-                path=str(self.source),
-                kind="repo",
-                out=self.workspace,
-                wanted=int(self.job.get("scenario_count") or 10),
-                workspace=self.source,
-                ask=self._ask,
-                configure_stage=self._configure_stage,
-                control_only=False,
-                job=guest_booking_policy_job(self.job),
+    def _provider_profile(self, job: Any) -> dict[str, Any] | None:
+        """The provider's definition the build process fetched, shared with this one through its cache.
+
+        The fetch needs the provider credential, which only the build process holds, so this
+        waits briefly for its cache rather than opening without the agent's definition.
+        """
+        cache = self.source.parent / _PROVIDER_PROFILE
+        for _ in range(60):
+            try:
+                profile = _load_provider_import_profile(job, None, cache)
+                break
+            except RuntimeError:
+                time.sleep(1)
+        else:
+            raise RuntimeError("the provider's definition was not fetched by the build process")
+        if profile is not None:
+            if not cache.is_file():
+                cache.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = str(cache)
+        return profile
+
+    def _what_exists(self) -> tuple[bool, bool]:
+        """Whether the workspace has a contract, and a world: what the harness's tools follow."""
+        from .understand import load as load_contract
+        from .world.snapshot import saved as world_saved
+
+        return load_contract(self.workspace) is not None, bool(world_saved(self.workspace))
+
+    def _guard(self, spec: SessionSpec) -> None:
+        """Once the environment is published, consequential changes wait for the person's yes,
+        whoever makes them: the builder or a sub-agent it briefed."""
+
+        def guarded(servers: dict[str, Any]) -> dict[str, Any]:
+            return {
+                name: replace(server, tools=[self._confirmed(one) for one in server.tools])
+                for name, server in servers.items()
+            }
+
+        spec.servers = guarded(spec.servers)
+        spec.workers = {
+            name: replace(worker, servers=guarded(worker.servers))
+            for name, worker in spec.workers.items()
+        }
+
+    def _confirmed(self, spec: Any) -> Any:
+        """A consequential tool that runs only once the person has said yes to this very call.
+
+        A change to what a scenario tests, a removal, a replaced sub-goal, or a change to the world
+        or contract does not run on the strength of the request alone: the person is asked to
+        confirm the exact call, and only that answer runs it. Adding scenarios and surface edits
+        do not ask.
+        """
+        if spec.name not in _NEEDS_CONFIRMATION:
+            return spec
+        handler = spec.handler
+
+        async def guarded(args: dict[str, Any]) -> Any:
+            if spec.name == "submit_scenario" and not self._changes_meaning(args):
+                return await handler(args)
+            if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
+                return await handler(args)
+            answer = await self._ask(
+                spec.name,
+                {
+                    "question": f"Confirm this change: {spec.name} "
+                    + json.dumps(args, sort_keys=True, default=str)[:600],
+                    "options": [_CONFIRM, "No"],
+                },
+                None,
             )
+            said = " ".join(
+                str(part.get("text") or "") for part in (answer.get("content") or [])
+            ).strip() if isinstance(answer, dict) else ""
+            if said == _CONFIRM:
+                return await handler(args)
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Not done: the person did not confirm this change (they said: "
+                        f"{said or 'nothing'}). Leave it undone and follow what they said.",
+                    }
+                ],
+                "is_error": True,
+            }
+
+        return replace(spec, handler=guarded)
+
+    def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
+        from .catalogue import load_catalogue
+
+        return any(one.name == args.get("name") for one in load_catalogue(self.workspace).sub_goals)
+
+    def _changes_meaning(self, args: dict[str, Any]) -> bool:
+        """Whether a submission rewrites an existing scenario's test rather than its surface."""
+        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
+        try:
+            held = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        for field in ("instruction", "use_case", "branch", "sub_goals", "solution"):
+            if field in args and args.get(field) != held.get(field):
+                return True
+        persona, before = args.get("persona") or {}, held.get("persona") or {}
+        return any(
+            key in persona and persona.get(key) != before.get(key)
+            for key in ("name", "gender", "age_group")
+        )
+
+    def _builder_platform_server(self):
+        def text(value: Any, *, error: bool = False) -> dict[str, Any]:
+            body = value if isinstance(value, str) else json.dumps(value, indent=1, sort_keys=True)
+            return {"content": [{"type": "text", "text": body}], "is_error": error}
+
+        async def call(request: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+            try:
+                return text(await request)
+            except ConversationTransportError as exc:
+                return text(str(exc), error=True)
+
+        @tool(
+            "find_scenarios",
+            "Read the environment's scenarios exactly as the Scenarios tab shows them, with each "
+            "one's tab number. Returns total_scenarios (the whole suite), matching (how many fit "
+            "what you asked) and one page of rows. Narrow with any of: `numbers` (tab numbers, "
+            "e.g. [12, 250, 499]), `ranges` (e.g. [{\"from\": 3, \"to\": 7}]), `names`, `search` (every word must match a "
+            "scenario's name, situation, use case or branch), `filters` (field to a list of "
+            "values, e.g. {\"persona.accent\": [\"Indian\"]}; fields: use_case, persona.name, "
+            "persona.accent, persona.languages, persona.age_group, persona.gender, "
+            "persona.location, persona.personality, persona.communication_style, "
+            "background_noise, coverage.overlay, coverage.overlay_intensity, coverage.task, "
+            "sub_goals, keywords; append _not to exclude). `full` returns every field. Pages "
+            "hold up to 100 rows.",
+            schema(
+                {
+                    "numbers": _NUMBERS,
+                    "ranges": _RANGES,
+                    "names": {"type": "array", "items": {"type": "string"}},
+                    "search": str,
+                    "filters": {"type": "object"},
+                    "page": int,
+                    "page_size": int,
+                    "full": bool,
+                },
+                [],
+            ),
+        )
+        async def find_scenarios(args: dict[str, Any]) -> dict[str, Any]:
+            query = {key: value for key, value in args.items() if value not in (None, "", [], {})}
+            return await call(self.client.scenarios(query))
+
+        @tool(
+            "save_changes",
+            "Put every change made in this conversation into the environment: scenarios added, "
+            "rewritten or dropped, sub-goals and contract corrections. Seals them so runs play "
+            "them, and returns exactly what changed by tab number. Until this says applied, "
+            "nothing you changed is in the environment. `force` reseals and publishes even when "
+            "nothing changed here, to repair a sealed bundle or index out of step.",
+            schema({"force": bool}, []),
+        )
+        async def save_changes(args: dict[str, Any]) -> dict[str, Any]:
+            result = await self._save_changes(force=bool(args.get("force")))
+            return text(result, error=not result.get("applied"))
+
+        @tool(
+            "read_runs",
+            "The environment's runs, newest first, or with `run_id` one run's calls: each "
+            "scenario's number and name, pass or fail, every sub-goal with whether it held and "
+            "why, turns, duration and how the call ended.",
+            schema({"run_id": str, "limit": int}, []),
+        )
+        async def read_runs(args: dict[str, Any]) -> dict[str, Any]:
+            return await call(
+                self.client.runs(str(args.get("run_id") or ""), int(args.get("limit") or 10))
+            )
+
+        @tool(
+            "run_scenarios",
+            "Start a run of the numbered scenarios against the agent, each played `repeats` times "
+            "(1 to 20). Every call costs time and money: confirm the numbers and repeats with the "
+            "person first unless they said exactly what to run. Unsaved changes are saved first.",
+            schema({"numbers": _NUMBERS, "ranges": _RANGES, "repeats": int}, []),
+        )
+        async def run_scenarios(args: dict[str, Any]) -> dict[str, Any]:
+            if not args.get("numbers") and not args.get("ranges"):
+                return text({"started": False, "because": "name the scenarios by `numbers` or `ranges`"}, error=True)
+            saved = await self._save_changes()
+            if not saved.get("applied"):
+                return text({"started": False, "because_not_saved": saved}, error=True)
+            return await call(
+                self.client.start_run(
+                    [int(one) for one in args.get("numbers") or []],
+                    list(args.get("ranges") or []),
+                    max(1, int(args.get("repeats") or 1)),
+                )
+            )
+
+        @tool(
+            "remember",
+            "Record something this conversation must not lose when it is summarised: a decision "
+            "taken, a confirmation you are waiting for, an open question, or a fact the person "
+            "told you. Kept notes come back at the start of every message. `resolve` takes the "
+            "number of a note that no longer applies.",
+            schema(
+                {
+                    "kind": {"type": "string", "enum": ["decision", "pending", "question", "fact"]},
+                    "note": str,
+                    "resolve": int,
+                },
+                [],
+            ),
+        )
+        async def remember(args: dict[str, Any]) -> dict[str, Any]:
+            ledger = self._ledger()
+            notes = ledger.setdefault("notes", [])
+            if args.get("resolve"):
+                index = int(args["resolve"]) - 1
+                if not 0 <= index < len(notes):
+                    return text(f"there is no note {args['resolve']}", error=True)
+                notes.pop(index)
+            if str(args.get("note") or "").strip():
+                notes.append({"kind": str(args.get("kind") or "fact"), "note": str(args["note"]).strip()})
+                del notes[:-_LEDGER_NOTES]
+            await self._keep_ledger(ledger)
+            return text(self._ledger_note() or "no notes kept")
+
+        @tool(
+            "finish_build",
+            "Say the build is finished. It checks what a finished environment must have (a "
+            "contract, a world, the scenarios, every one proved against the world and its "
+            "sub-goals) and lists what is still missing; only when nothing is does it hand the "
+            "environment on to be validated against the running agent and sealed. `note` says "
+            "anything the person should know. The build finishes with exactly the number of "
+            "scenarios it was asked for.",
+            schema({"note": str}, []),
+        )
+        async def finish_build(args: dict[str, Any]) -> dict[str, Any]:
+            from .builder import suite_health
+            from .scenario_tools import load_scenarios
+            from .understand import load as load_contract
+
+            contract = load_contract(self.workspace)
+            has_contract, has_world = self._what_exists()
+            kept = load_scenarios(self.workspace) if has_world else []
+            asked = int(self.job.get("scenario_count") or 0)
+            missing = (
+                ["no contract is saved"] if not has_contract
+                else ["no world is saved"] if not has_world
+                else ["no scenarios are saved"] if not kept
+                else suite_health(contract, self.workspace, kept, prove_all=True, sealed=False)
+            )
+            if not missing and len(kept) < asked:
+                missing = [
+                    f"{len(kept)} of the {asked} scenarios the build asked for are saved; "
+                    "write and prove the rest"
+                ]
+            if not missing and asked and len(kept) > asked:
+                missing = [
+                    f"{len(kept)} scenarios are saved but the build asked for {asked}; drop the "
+                    "extra ones, keeping the spread, then finish"
+                ]
+            if missing:
+                return text("Not finished:\n- " + "\n- ".join(missing[:60]), error=True)
+            # The bundle is sealed from the world as it is now, after every change made during the build.
+            await asyncio.to_thread(self._after_saved, world_changed=True)
+            (self.workspace / _BUILD_FINISHED).write_text(
+                json.dumps({"scenarios": len(kept), "asked": asked, "note": str(args.get("note") or "")}),
+                encoding="utf-8",
+            )
+            return text(
+                f"Finished: {len(kept)} scenarios (the build asked for {asked}). It is now being "
+                "validated against the running agent and sealed; the environment opens when that "
+                "is done, and this conversation carries on there."
+            )
+
+        tools = [find_scenarios, save_changes, read_runs, run_scenarios, remember]
+        if self._control_only():
+            tools.append(finish_build)
+        return tool_server(name="platform", version="0.1.0", tools=tools)
+
+    def _note_health(self, problems: str) -> None:
+        self._last_health = problems
+
+    def _ledger(self) -> dict[str, Any]:
+        try:
+            body = json.loads((self.workspace / _LEDGER).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            body = {}
+        return body if isinstance(body, dict) else {}
+
+    def _ledger_note(self) -> str:
+        """The conversation's kept references, put at the head of every message so a summary
+        of the history can never lose them."""
+        ledger = self._ledger()
+        touched = ledger.get("touched") or {}
+        notes = ledger.get("notes") or []
+        if not touched and not notes:
+            return ""
+        parts = [f"environment {self.client.capabilities.job_id}"]
+        if touched:
+            shown = sorted(touched.items(), key=lambda pair: int(pair[0]))[-40:]
+            parts.append(
+                "scenarios changed so far: "
+                + ", ".join(f"#{number} {name} ({what})" for number, (name, what) in shown)
+            )
+        parts.extend(
+            f"{index}. {one.get('kind')}: {one.get('note')}" for index, one in enumerate(notes, 1)
+        )
+        return "[Kept from earlier in this conversation: " + "; ".join(parts) + "]\n\n"
+
+    async def _record_touched(self, result: dict[str, Any]) -> None:
+        ledger = self._ledger()
+        touched = ledger.setdefault("touched", {})
+        for what in ("added", "removed", "changed"):
+            for row in result.get(what) or []:
+                if row.get("number") is not None:
+                    touched[str(row["number"])] = [row.get("name"), what]
+        await self._keep_ledger(ledger)
+
+    async def _keep_ledger(self, ledger: dict[str, Any]) -> None:
+        """Write the ledger locally and to the platform, so a fresh workspace still has it."""
+        self._write_dotfile(_LEDGER, ledger)
+        key = {**self._provider_sessions_key(), "project_key": "futureagi-ledger"}
+        try:
+            await self.client.append_session(
+                key, [{"type": "ledger", "uuid": str(uuid.uuid4()), "ledger": ledger}]
+            )
+        except ConversationTransportError:
+            pass
+
+    def _environment_fingerprint(self) -> str:
+        digest = hashlib.sha256()
+        for part in _PUBLISHED_PARTS:
+            root = self.workspace / part
+            paths = sorted(root.rglob("*")) if root.is_dir() else [root]
+            for path in paths:
+                if path.is_file() and "__pycache__" not in path.parts:
+                    digest.update(path.relative_to(self.workspace).as_posix().encode())
+                    digest.update(path.read_bytes())
+        return digest.hexdigest()
+
+    def _published_fingerprint(self) -> str:
+        path = self.workspace / _PUBLISHED
+        try:
+            return str(json.loads(path.read_text(encoding="utf-8")).get("fingerprint") or "")
+        except (OSError, ValueError):
+            fingerprint = self._environment_fingerprint()
+            self._write_dotfile(_PUBLISHED, {"fingerprint": fingerprint})
+            return fingerprint
+
+    def _write_dotfile(self, name: str, body: dict[str, Any]) -> None:
+        path = self.workspace / name
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+
+    async def _save_changes(self, *, force: bool = False) -> dict[str, Any]:
+        """Seal and publish the workspace now, and return what the platform says changed."""
+        fingerprint = self._environment_fingerprint()
+        if fingerprint == self._published_fingerprint() and not force:
+            return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
+        from .bundle_author_v2 import reseal_scenarios
+
+        try:
+            await asyncio.to_thread(reseal_scenarios, self.workspace)
+        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+            traceback.print_exc()
+            return {
+                "applied": False,
+                "code": "reseal_failed",
+                "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
+            }
+        result: dict[str, Any] = {}
+        for _attempt in range(3):
+            try:
+                async with self._checkpoint_lock:
+                    stored = await self.client.checkpoint(self.workspace)
+                    result = await self.client.publish(str(stored.get("digest") or ""))
+            except ConversationTransportError as exc:
+                return {"applied": False, "code": "publish_unreachable", "message": str(exc)}
+            if result.get("code") != "conversation_checkpoint_not_latest":
+                break
+        if result.get("code") == "conversation_checkpoint_stale":
+            # The environment moved on underneath this copy; a fresh one comes after this turn.
+            self._restart_after_turn = True
+            result["message"] = (
+                "The environment was changed outside this chat after this working copy was "
+                "loaded, so these changes were not saved. The chat reloads the current "
+                "environment after this reply; the change has to be made again on it."
+            )
+        if result.get("applied"):
+            await self._record_touched(result)
+            if result.get("revision"):
+                self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+        return result
+
+    async def _publish_if_changed(self) -> str:
+        """A line for the reply when the turn left changes the model did not save itself."""
+        if self._control_only():
+            # While building, the build's own sealing publishes; there is nothing to save yet.
+            return ""
+        if self._environment_fingerprint() == self._published_fingerprint():
+            return ""
+        result = await self._save_changes()
+        if not result.get("applied"):
+            return (
+                "These changes were NOT saved to the environment: "
+                f"{result.get('message') or result.get('code') or 'unknown reason'}."
+            )
+
+        def named(rows: list[dict[str, Any]]) -> str:
+            return ", ".join(f"#{one.get('number')} {one.get('name')}" for one in rows)
+
+        parts = [
+            f"{label} {named(result.get(key) or [])}"
+            for label, key in (("added", "added"), ("removed", "removed"), ("changed", "changed"))
+            if result.get(key)
+        ]
+        return (
+            "Saved to the environment: "
+            + ("; ".join(parts) or "no scenario changed")
+            + f". It now has {result.get('scenario_count')} scenarios."
+        )
+
+    async def _selection_note(self, payload: dict[str, Any]) -> str:
+        ids = [str(one) for one in payload.get("scenario_ids") or [] if str(one)]
+        if not ids or not isinstance(self.conversation, BuilderConversation):
+            return ""
+        try:
+            found = await self.client.scenarios({"ids": ids, "page_size": 100})
+        except ConversationTransportError:
+            return f"[{len(ids)} scenarios are selected on the Scenarios tab; they could not be read]\n\n"
+        rows = ", ".join(f"#{row.get('number')} {row.get('name')}" for row in found.get("rows") or [])
+        more = len(ids) - len(found.get("rows") or [])
+        return (
+            f"[Selected on the Scenarios tab ({len(ids)}): {rows}"
+            + (f", and {more} more" if more > 0 else "")
+            + "]\n\n"
+        )
+
+    def _control_only(self) -> bool:
+        capabilities = self.client.turn_context.get("capabilities") or {}
+        return bool(capabilities.get("control_only"))
+
+    def _side_chat(self) -> bool:
+        capabilities = self.client.turn_context.get("capabilities") or {}
+        return self._control_only() and capabilities.get("builder_session") is False
+
+    def _coordinator(self) -> CoordinatorConversation:
+        # Without the builder session, the build sandbox keeps the side chat it has on dev.
         identity = self.client.capabilities.identity
         spec = SessionSpec(
             system_prompt=(
@@ -191,10 +878,6 @@ class HostedChatRuntime:
         )
         configured = apply_chat_policy(spec, stage="reception", policy=self.policy)
         return CoordinatorConversation(Stage(configured, name="coordinator"))
-
-    def _control_only(self) -> bool:
-        capabilities = self.client.turn_context.get("capabilities") or {}
-        return bool(capabilities.get("control_only"))
 
     def _control_server(self):
         @tool(
@@ -245,79 +928,6 @@ class HostedChatRuntime:
             tools=[get_run_status, request_adjustment],
         )
 
-    def _configure_stage(self, stage: str, spec: SessionSpec) -> SessionSpec:
-        capabilities = self.client.capabilities
-        turn_context = {**self.client.turn_context, "stage": stage}
-        session_id = f"{capabilities.conversation_id}-{stage}"
-        resume_session_id = self._provider_sessions().get(
-            f"{self.backend_name}:{stage}"
-        )
-        control_only = self._control_only()
-        hosted_prompt = (
-            "\n\n## Hosted conversation behavior\n"
-            "Reply directly to the user in this conversation. First check the capability "
-            "boundaries below. For a supported actionable request, say one short truthful "
-            "acknowledgement before calling a tool. Refuse unsupported changes immediately. "
-            "Never describe requested work as completed until its tool result proves "
-            "completion. Ask one concise question only when a required fact cannot be "
-            "derived from the workspace. Use route_to_stage when another harness "
-            "stage owns a supported request; stages are an internal detail."
-            + _HOSTED_CHAT_CAPABILITIES
-        )
-        if control_only:
-            hosted_prompt += (
-                "\n\nThe initial authoring run is active. This is a side conversation: "
-                "answer questions without interrupting or changing the authoring workspace. "
-                "When the user explicitly requests a supported authoring change, call "
-                "request_adjustment; the active runner can apply it at a safe stage boundary. "
-                "A pending adjustment has not been applied yet. Use get_run_status for "
-                "current progress. Never treat a question as an adjustment."
-            )
-        servers = spec.servers
-        builtins = tuple(dict.fromkeys((*spec.builtins, ASK_TOOL)))
-        if control_only:
-            servers = {"platform-control": self._control_server()}
-            builtins = tuple(
-                name for name in builtins if name in {"Read", "Glob", "Grep", ASK_TOOL}
-            )
-        elif stage == "run":
-            servers = {
-                server_name: replace(
-                    server,
-                    tools=[
-                        (
-                            replace(tool, handler=self._run_platform_simulation)
-                            if tool.name == "run_simulation"
-                            else replace(tool, handler=self._read_platform_results)
-                            if tool.name in {"read_run", "read_results"}
-                            else tool
-                        )
-                        for tool in server.tools
-                        if tool.name != "run_scenario"
-                    ],
-                )
-                for server_name, server in spec.servers.items()
-            }
-        configured = replace(
-            spec,
-            servers=servers,
-            system_prompt=spec.system_prompt + hosted_prompt,
-            builtins=builtins,
-            ask=self._ask,
-            conversation=ConversationSession(
-                app_name=capabilities.identity.app_name,
-                user_id=capabilities.identity.user_id,
-                session_id=session_id,
-                event_store=self.event_store,
-                transcript_store=self.transcript_store,
-                resume_session_id=resume_session_id,
-                config_dir=str(self.workspace / ".claude"),
-                turn_context=turn_context,
-                streaming=True,
-            ),
-        )
-        return apply_chat_policy(configured, stage=stage, policy=self.policy)
-
     async def _pump_authoring_activity(self) -> None:
         """Forward the active harness's safe observable events through this same lease."""
         path = self.workspace / "harness-events.jsonl"
@@ -348,7 +958,7 @@ class HostedChatRuntime:
                         "authoring_activity",
                         stage=str(payload.get("stage") or "authoring"),
                         payload={
-                            "event_type": event.get("event_type"),
+                            "event_type": event.get("type") or event.get("event_type"),
                             "event": payload,
                         },
                     )
@@ -361,6 +971,7 @@ class HostedChatRuntime:
                 continue
 
     async def run(self) -> None:
+        await self._restore_provider_sessions()
         if self._control_only():
             await self._restore_coordinator_state()
         activity_task = asyncio.create_task(self._pump_authoring_activity())
@@ -373,6 +984,8 @@ class HostedChatRuntime:
                     if int(command["sequence"]) > self.client.command_watermark
                 ]
                 if not pending:
+                    if await self._carry_on():
+                        continue
                     try:
                         await asyncio.wait_for(self.stopping.wait(), timeout=0.5)
                     except TimeoutError:
@@ -385,6 +998,61 @@ class HostedChatRuntime:
             with suppress(asyncio.CancelledError):
                 await activity_task
             await self.conversation.close()
+
+    async def _carry_on(self) -> bool:
+        """While the environment is being built, keep the harness at it until it calls
+        finish_build: when it has saved something that opens more tools, it is reopened with
+        them and resumes; otherwise it is told the build is not finished. Waits on the person
+        while a question is open, and gives up after a few turns that change nothing."""
+        if not self._control_only() or self._side_chat() or (self.workspace / _BUILD_FINISHED).is_file():
+            return False
+        if (self.workspace / _PENDING_QUESTION).is_file():
+            return False
+        exists = self._what_exists()
+        progress = (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        if progress != self._last_progress:
+            self._last_progress, self._idle_turns = progress, 0
+        elif self._idle_turns >= 3:
+            return False
+        self._idle_turns += 1
+        await asyncio.to_thread(self._after_saved)
+        if self._opened_with is not None and exists != self._opened_with:
+            await self.conversation.close()
+            said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
+        else:
+            asked = int(self.job.get("scenario_count") or 0)
+            said = (
+                f"[The build is not finished: the test environment for this agent, with {asked} "
+                "scenarios. Carry on, and call finish_build when it is.]"
+                if asked
+                else "[The build is not finished. Carry on, and call finish_build when it is.]"
+            )
+        await self._handle(
+            {
+                "sequence": self.client.command_watermark,
+                "message_id": str(uuid.uuid4()),
+                "kind": "continue",
+                "payload": {"content": said},
+            }
+        )
+        return True
+
+    def _after_saved(self, *, world_changed: bool = False) -> None:
+        """The work that follows a saved contract or world, the same as a staged build does it,
+        done for whatever exists and has not had it yet, so a restart in between loses nothing."""
+        from .cli import after_contract, after_world
+        from .job import HarnessJob
+        from .understand import load as load_contract
+
+        has_contract, has_world = self._what_exists()
+        try:
+            job = HarnessJob.model_validate(self.job)
+        except Exception:  # noqa: BLE001 - only a generic-harness job needs it
+            job = None
+        if has_contract and not (self.workspace / "generic-harness" / "source-model.json").is_file():
+            after_contract(self.workspace, self.source, job)
+        if has_world and (world_changed or not (self.workspace / "environment-bundle" / "manifest.json").is_file()):
+            after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
 
     async def _handle(self, command: dict[str, Any]) -> None:
         sequence = int(command["sequence"])
@@ -429,28 +1097,39 @@ class HostedChatRuntime:
             if self.backend_name != "vertex-gemini":
                 resume_invocation_id = None
             if resume_invocation_id is None:
-                await self.client.emit(
-                    "turn_interrupted",
-                    stage=self.conversation.stage_name,
-                    payload={
-                        "command_message_id": message_id,
-                        "reason": "previous sandbox stopped before the turn committed",
-                    },
-                )
-                journal[message_id] = "completed"
+                # Answer once more; the cut-off attempt may already have changed things.
+                journal[message_id] = "retried"
                 self._write_journal(journal)
                 await self._checkpoint()
-                await self.client.emit(
-                    "turn_completed",
-                    stage=self.conversation.stage_name,
-                    payload={"command_message_id": message_id, "interrupted": True},
-                    acknowledge_through=sequence,
-                )
-                return
-        else:
+        if state == "retried":
+            await self.client.emit(
+                "turn_interrupted",
+                stage=self.conversation.stage_name,
+                payload={
+                    "command_message_id": message_id,
+                    "reason": "previous sandbox stopped before the turn committed",
+                },
+            )
+            journal[message_id] = "completed"
+            self._write_journal(journal)
+            await self._checkpoint()
+            await self.client.emit(
+                "turn_completed",
+                stage=self.conversation.stage_name,
+                payload={"command_message_id": message_id, "interrupted": True},
+                acknowledge_through=sequence,
+            )
+            return
+        elif state != "started":
             journal[message_id] = "started"
             self._write_journal(journal)
             await self._checkpoint()
+        retry_note = (
+            "[Your earlier attempt at this message was cut off when the sandbox restarted. "
+            "Tools it called may already have taken effect: check before repeating a change.]\n\n"
+            if state == "started" and resume_invocation_id is None
+            else ""
+        )
         invocation_id = resume_invocation_id or f"turn-{uuid.uuid4().hex}"
         assistant_message_id = str(uuid.uuid4())
         self._turn_acknowledged_through = sequence
@@ -492,7 +1171,15 @@ class HostedChatRuntime:
             turn = (
                 self.conversation.resume(resume_invocation_id, receive)
                 if resume_invocation_id is not None
-                else self.conversation.say(str(payload.get("content") or ""), receive)
+                else self.conversation.say(
+                    str(payload.get("content") or "")
+                    if str(payload.get("content") or "").lstrip().startswith("/")
+                    else retry_note
+                    + self._ledger_note()
+                    + await self._selection_note(payload)
+                    + str(payload.get("content") or ""),
+                    receive,
+                )
             )
             interrupted_by = await self._turn_until_interrupted(
                 turn,
@@ -542,7 +1229,11 @@ class HostedChatRuntime:
                 invocation_id=invocation_id,
                 payload={
                     "command_message_id": message_id,
-                    "interrupt_message_id": str(interrupted_by["message_id"]),
+                    **(
+                        {"interrupt_message_id": str(interrupted_by["message_id"])}
+                        if str(interrupted_by["kind"]) == "interrupt"
+                        else {}
+                    ),
                 },
             )
             journal[message_id] = "completed"
@@ -584,6 +1275,17 @@ class HostedChatRuntime:
             )
             return
         final_text = "".join(emitted_text).strip()
+        saved = await self._publish_if_changed()
+        if saved:
+            final_text = f"{final_text}\n\n{saved}".strip()
+        if self._last_health and not self._last_health.startswith("Healthy") and not self._control_only():
+            problems = [line for line in self._last_health.splitlines() if line.strip()]
+            final_text = (
+                f"{final_text}\n\nStill open from the last health check ({len(problems)}): "
+                + "; ".join(problems[:3])
+                + ("; and more" if len(problems) > 3 else "")
+            ).strip()
+        self._last_health = ""
         if final_text:
             await self.client.emit(
                 "assistant_message",
@@ -608,6 +1310,8 @@ class HostedChatRuntime:
             payload={"command_message_id": message_id, "outcome": "success"},
             acknowledge_through=self._turn_acknowledged_through,
         )
+        if self._restart_after_turn:
+            self.stopping.set()
 
     async def _turn_until_interrupted(
         self,
@@ -629,7 +1333,12 @@ class HostedChatRuntime:
                 ]
             except ConversationTransportError:
                 continue
-            if not pending or str(pending[0]["kind"]) != "interrupt":
+            if not pending:
+                continue
+            said = str(pending[0]["kind"]) not in _NOT_MESSAGES
+            # While building, the person speaking stops the turn so they are answered now;
+            # the build carries on after. Afterwards a new message waits for the turn to end.
+            if str(pending[0]["kind"]) != "interrupt" and not (said and self._control_only()):
                 continue
             interrupt = pending[0]
             interrupt_response = getattr(self.conversation, "interrupt_response", None)
@@ -648,9 +1357,10 @@ class HostedChatRuntime:
                 with suppress(asyncio.CancelledError):
                     await turn
                 await self.conversation.close()
-            self._turn_acknowledged_through = max(
-                self._turn_acknowledged_through, int(interrupt["sequence"])
-            )
+            if not said:
+                self._turn_acknowledged_through = max(
+                    self._turn_acknowledged_through, int(interrupt["sequence"])
+                )
             return interrupt
 
     async def _pump_events(
@@ -705,16 +1415,21 @@ class HostedChatRuntime:
                         function_call_id=call_id or None,
                         payload={"tool": tool, "label": event.detail.get("label")},
                     )
-                    checkpoint = await self._checkpoint()
-                    await self.client.emit(
-                        "checkpoint_committed",
-                        stage=stage,
-                        invocation_id=invocation_id,
-                        payload=checkpoint,
-                    )
+                    if tool in _WRITING_TOOLS or not isinstance(
+                        self.conversation, BuilderConversation
+                    ):
+                        checkpoint = await self._checkpoint()
+                        await self.client.emit(
+                            "checkpoint_committed",
+                            stage=stage,
+                            invocation_id=invocation_id,
+                            payload=checkpoint,
+                        )
                 elif event.kind == RESULT:
                     call_id = str(event.detail.get("call_id") or "")
                     tool = self._tool_names.get(call_id, "")
+                    if tool == "check_health":
+                        self._last_health = str(event.text or "")
                     failed = bool(event.detail.get("is_error"))
                     await self.client.emit(
                         "tool_result",
@@ -764,9 +1479,23 @@ class HostedChatRuntime:
 
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
-    ) -> dict[str, Any]:
-        question = str(payload.get("question") or "What information should I use?")
-        options = [str(option) for option in payload.get("options") or []]
+    ) -> Any:
+        asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
+        question = str(
+            payload.get("question")
+            or "\n".join(str(one.get("question") or "") for one in asked if one.get("question"))
+            or "What information should I use?"
+        )
+        options = [
+            (
+                f"{option.get('label')}: {option.get('description')}"
+                if option.get("description")
+                else str(option.get("label"))
+            )
+            if isinstance(option, dict)
+            else str(option)
+            for option in (payload.get("options") or (asked[0].get("options") if asked else None) or [])
+        ]
         pending_path = self.workspace / _PENDING_QUESTION
         try:
             pending = json.loads(pending_path.read_text(encoding="utf-8"))
@@ -811,6 +1540,7 @@ class HostedChatRuntime:
                     pass
                 await self._checkpoint()
                 answer_sequence = int(command["sequence"])
+                answered = answer
                 if not any(
                     self._turn_acknowledged_through
                     < int(queued["sequence"])
@@ -819,6 +1549,18 @@ class HostedChatRuntime:
                 ):
                     self._turn_acknowledged_through = max(
                         self._turn_acknowledged_through, answer_sequence
+                    )
+                if asked and self.backend_name == "claude":
+                    # The CLI's own question tool takes its answers as an allowed, rewritten input.
+                    from claude_agent_sdk.types import PermissionResultAllow
+
+                    return PermissionResultAllow(
+                        updated_input={
+                            "questions": asked,
+                            "answers": {
+                                str(one.get("question") or ""): answered for one in asked
+                            },
+                        }
                     )
                 return {
                     "content": [{"type": "text", "text": answer}],
@@ -830,8 +1572,53 @@ class HostedChatRuntime:
             "is_error": True,
         }
 
+    def _provider_sessions_key(self) -> dict[str, str]:
+        return {
+            "project_key": "futureagi-provider-sessions",
+            "session_id": self.client.capabilities.conversation_id,
+            "subpath": "",
+        }
+
+    async def _restore_provider_sessions(self) -> None:
+        """Bring back the model sessions when a fresh workspace arrived without them."""
+        if (self.workspace / _PROVIDER_SESSIONS).is_file():
+            return
+        try:
+            body = await self.client.load_session(self._provider_sessions_key())
+        except ConversationTransportError:
+            return
+        entries = body.get("entries") or []
+        sessions = entries[-1].get("sessions") if entries and isinstance(entries[-1], dict) else None
+        if isinstance(sessions, dict) and sessions:
+            self._write_dotfile(_PROVIDER_SESSIONS, sessions)
+        if (self.workspace / _LEDGER).is_file():
+            return
+        try:
+            kept = await self.client.load_session(
+                {**self._provider_sessions_key(), "project_key": "futureagi-ledger"}
+            )
+        except ConversationTransportError:
+            return
+        entries = kept.get("entries") or []
+        ledger = entries[-1].get("ledger") if entries and isinstance(entries[-1], dict) else None
+        if isinstance(ledger, dict):
+            self._write_dotfile(_LEDGER, ledger)
+
     async def _checkpoint(self) -> dict[str, Any]:
-        self._record_provider_session()
+        if self._record_provider_session():
+            try:
+                await self.client.append_session(
+                    self._provider_sessions_key(),
+                    [
+                        {
+                            "type": "provider_sessions",
+                            "uuid": str(uuid.uuid4()),
+                            "sessions": self._provider_sessions(),
+                        }
+                    ],
+                )
+            except ConversationTransportError:
+                pass
         if self._control_only():
             files = {}
             for name in (_JOURNAL, _PENDING_QUESTION):
@@ -849,7 +1636,8 @@ class HostedChatRuntime:
                 ],
             )
             return {"control_only": True, "stored": True}
-        return await self.client.checkpoint(self.workspace)
+        async with self._checkpoint_lock:
+            return await self.client.checkpoint(self.workspace)
 
     def _coordinator_state_key(self) -> dict[str, str]:
         return {
@@ -886,14 +1674,14 @@ class HostedChatRuntime:
             if isinstance(value, str) and value
         }
 
-    def _record_provider_session(self) -> None:
+    def _record_provider_session(self) -> bool:
         stage = self.conversation.stage
         if stage is None or not stage.session_id:
-            return
+            return False
         sessions = self._provider_sessions()
         key = f"{self.backend_name}:{self.conversation.stage_name}"
         if sessions.get(key) == stage.session_id:
-            return
+            return False
         sessions[key] = stage.session_id
         path = self.workspace / _PROVIDER_SESSIONS
         temporary = path.with_suffix(".tmp")
@@ -902,6 +1690,7 @@ class HostedChatRuntime:
             encoding="utf-8",
         )
         temporary.replace(path)
+        return True
 
     def _read_journal(self) -> dict[str, str]:
         path = self.workspace / _JOURNAL

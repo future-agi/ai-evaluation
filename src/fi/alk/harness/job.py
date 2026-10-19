@@ -156,6 +156,15 @@ class AgentConnection(BaseModel):
                 if not prompt or len(prompt) > 65536:
                     raise ValueError("phone_connect_only_requires_target_system_prompt")
                 return self
+            if connector == "livekit":
+                prompt = str(self.config.get("target_system_prompt") or "").strip()
+                if not str(self.config.get("agent_name") or "").strip():
+                    raise ValueError("livekit_connect_only_requires_agent_name")
+                if not prompt or len(prompt) > 65536:
+                    raise ValueError(
+                        "livekit_connect_only_requires_target_system_prompt"
+                    )
+                return self
             target_key = {"vapi": "assistant_id", "retell": "agent_id"}.get(
                 provider_connector
             )

@@ -524,6 +524,36 @@ def test_a_target_provider_ref_no_process_lists_is_rejected(tmp_path: Path) -> N
         )
 
 
+@pytest.mark.parametrize("connector", ["vapi", "retell", "retell_chat", "livekit"])
+def test_connect_only_provider_claims_the_customer_target_secret(
+    tmp_path: Path, connector: str
+) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["secret_purposes"] = []
+        body["metadata"] = {"provider_connect_only": {"connector": connector}}
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    preflight_bundle(
+        tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+    )
+
+
+def test_connect_only_phone_does_not_claim_a_customer_target_secret(
+    tmp_path: Path,
+) -> None:
+    def mutate(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["secret_purposes"] = []
+        body["metadata"] = {"provider_connect_only": {"connector": "phone"}}
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=mutate)
+    with pytest.raises(PreflightError, match="secret_unclaimed"):
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=TARGET_PROVIDER_REFS
+        )
+
+
 def test_customer_process_cannot_claim_simulator_provider_secrets(
     tmp_path: Path,
 ) -> None:

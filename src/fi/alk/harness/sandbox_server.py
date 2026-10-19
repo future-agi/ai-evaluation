@@ -18,7 +18,7 @@ import shutil
 import signal
 import sys
 import time
-from typing import Any
+from typing import Any, Literal
 import uuid
 
 from fastapi import (
@@ -98,7 +98,7 @@ class LocalSandboxRequest(BaseModel):
         ):
             raise ValueError("exactly_one_source_required")
         if self.provider_only and (
-            self.connector not in {"retell", "retell_chat", "vapi"}
+            self.connector not in {"retell", "retell_chat", "vapi", "livekit"}
             or self.connector_mode is not ProviderExecutionMode.CONNECT_ONLY
         ):
             raise ValueError("provider_only_requires_connect_only_provider")
@@ -173,6 +173,8 @@ class SandboxJobResponse(BaseModel):
 class SandboxAdjustmentRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=2_000)
     client_request_id: str | None = Field(default=None, max_length=128)
+    target_stage: Literal["understand", "environment", "scenarios"] | None = None
+    scenario_delta: int | None = Field(default=None, ge=1)
 
 
 class UploadedSourceResponse(BaseModel):
@@ -1377,8 +1379,8 @@ class LocalSandbox:
             "adjustment_id": str(uuid.uuid4()),
             "client_request_id": request.client_request_id,
             "instruction": instruction,
-            "target_stage": _adjustment_stage(instruction, response.status.stage.value),
-            "scenario_delta": _scenario_delta(instruction),
+            "target_stage": request.target_stage or _adjustment_stage(response.status.stage.value),
+            "scenario_delta": request.scenario_delta,
             "status": "pending",
             "created_at": _now(),
         }
@@ -1706,28 +1708,8 @@ def _adjustments(directory: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _scenario_delta(instruction: str) -> int | None:
-    match = re.search(
-        r"\b(?:add|create|generate|write)\s+(\d{1,3})\s+(?:more\s+)?scenarios?\b",
-        instruction,
-        re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return min(100, int(match.group(1)))
-
-
-def _adjustment_stage(instruction: str, current_stage: str) -> str:
-    lowered = instruction.lower()
-    if any(word in lowered for word in ("scenario", "persona", "test case")):
-        return "scenarios"
-    if any(
-        word in lowered
-        for word in ("environment", "database", "service", "seed", "test data")
-    ):
-        return "environment"
-    if any(word in lowered for word in ("contract", "tool", "capability")):
-        return "understand"
+def _adjustment_stage(current_stage: str) -> str:
+    """The stage running now, for a change that does not name the stage it belongs to."""
     return {
         HarnessStage.UNDERSTANDING_AGENT.value: "understand",
         HarnessStage.GENERATING_ENVIRONMENT.value: "environment",

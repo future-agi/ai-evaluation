@@ -17,6 +17,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+# Main thread only: with livekit installed this import registers plugins.
+from fi.simulate import AgentInput
+
 
 def _load_callback() -> Any:
     target = os.environ["ALK_CALLBACK_ENTRYPOINT"]
@@ -46,8 +49,6 @@ def _json_body(value: Any) -> dict[str, Any]:
 
 
 def _invoke(payload: dict[str, Any]) -> dict[str, Any]:
-    from fi.simulate import AgentInput
-
     result = CALLBACK(AgentInput.model_validate(payload))
     if inspect.isawaitable(result):
         result = asyncio.run(result)
