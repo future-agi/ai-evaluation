@@ -12,7 +12,7 @@ from enum import Enum
 import re
 from typing import Protocol
 
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
@@ -235,6 +235,21 @@ class HarnessExecutionManifestEntry(BaseModel):
     dataset_row_id: str | None = None
     trial_index: int = Field(ge=1, le=20)
     call_execution_id: str = Field(min_length=1)
+
+
+class HarnessJobMetadata(BaseModel):
+    """The entries of `HarnessJob.metadata` the SDK reads by name, typed.
+
+    The platform writes `customer_code_environment` (future-agi
+    `simulate/services/hosted_harness_gateway.py`, `_with_simulation_mark`) as a map of text to
+    text. `HarnessJob.metadata` itself stays a loose JSON map on purpose, so a bad value here can
+    never fail the whole job at `load_job`; readers validate this entry through this model and
+    fall back to `{}`.
+    """
+
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    customer_code_environment: dict[str, str] = Field(default_factory=dict)
 
 
 class HarnessJob(BaseModel):
@@ -481,6 +496,7 @@ __all__ = [
     "HarnessFailure",
     "HarnessExecutionManifestEntry",
     "HarnessJob",
+    "HarnessJobMetadata",
     "HarnessJobStatus",
     "HarnessRetryPolicy",
     "HarnessStage",

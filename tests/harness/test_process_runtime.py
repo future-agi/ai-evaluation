@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from pydantic import ValidationError
 
 from fi.alk.harness.bundle import CapabilityProtocol
 from fi.alk.harness.bundle_v2 import (
@@ -59,6 +60,7 @@ from fi.alk.harness.job import (
     ExecutionMode,
     FailureDomain,
     HarnessJob,
+    HarnessJobMetadata,
     RepositorySource,
     SourceKind,
     SourceVisibility,
@@ -9721,7 +9723,9 @@ def test_mark_read_from_job_json_reaches_every_source_process(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    "malformed", [[], {"FI_SIMULATION_EXPORT": 1}], ids=["list", "non_string_value"]
+    "malformed",
+    [[], None, {"FI_SIMULATION_EXPORT": 1}],
+    ids=["list", "null", "non_string_value"],
 )
 def test_a_malformed_customer_code_environment_in_job_json_injects_no_export_key(
     tmp_path: Path, malformed: object
@@ -9735,6 +9739,10 @@ def test_a_malformed_customer_code_environment_in_job_json_injects_no_export_key
         assert _EXPORT_HEADERS not in env
         assert "FI_SIMULATION_EXPORT" not in env
         assert "OTEL_RESOURCE_ATTRIBUTES" not in env
+        # No hook either: nothing on the path holds the files that would mark the process.
+        for entry in filter(None, env.get("PYTHONPATH", "").split(os.pathsep)):
+            assert not (Path(entry) / "sitecustomize.py").exists()
+            assert not (Path(entry) / "simulation_mark_bootstrap.py").exists()
 
 
 @pytest.mark.parametrize(
@@ -9793,6 +9801,10 @@ def test_a_malformed_customer_code_environment_is_ignored_with_one_warning_that_
     warnings = [record for record in caplog.records if record.name == pr.logger.name]
     assert len(warnings) == 1
     message = warnings[0].getMessage()
+    assert (
+        message
+        == "the job's customer code environment is not a map of text to text; ignored"
+    )
     # Neither the key of the setting nor anything the customer's environment held is logged.
     for forbidden in (
         "customer_code_environment",
@@ -9821,6 +9833,88 @@ def test_a_missing_file_metadata_or_key_is_not_worth_a_warning(
 ) -> None:
     if document is not None:
         (tmp_path / "job.json").write_bytes(document)
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == {}
+    assert [record for record in caplog.records if record.name == pr.logger.name] == []
+
+
+def test_the_job_metadata_model_types_the_customer_code_environment() -> None:
+    typed = HarnessJobMetadata.model_validate({"customer_code_environment": {"A": "x"}})
+    assert typed.customer_code_environment == {"A": "x"}
+    assert HarnessJobMetadata.model_validate({}).customer_code_environment == {}
+    # An entry the model does not name is not its business.
+    assert (
+        HarnessJobMetadata.model_validate(
+            {"execution_manifest": [1]}
+        ).customer_code_environment
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], None, "text", {"A": 1}, {"A": None}],
+    ids=["list", "null", "text", "non_string_value", "null_value"],
+)
+def test_the_job_metadata_model_rejects_a_customer_code_environment_of_the_wrong_shape(
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        HarnessJobMetadata.model_validate({"customer_code_environment": value})
+
+
+def _platform_write(payload: dict[str, Any], mark: dict[str, str]) -> dict[str, Any]:
+    """The platform's write of the mark into a job document.
+
+    A line-for-line copy of `_with_simulation_mark` in future-agi
+    `futureagi/simulate/services/hosted_harness_gateway.py`. This repository cannot see that
+    file, so a change there must be mirrored here by hand; a change on this side (the key, the
+    model, the reader) fails `test_the_platforms_job_json_write_is_read_as_written`.
+    """
+    document = dict(payload)
+    metadata = dict(document.get("metadata") or {})
+    metadata["customer_code_environment"] = dict(mark)
+    document["metadata"] = metadata
+    return document
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"job_id": "job-1", "metadata": {"execution_manifest": "x"}},
+        {"job_id": "job-1"},
+    ],
+    ids=["with_metadata", "no_metadata"],
+)
+def test_the_platforms_job_json_write_is_read_as_written(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, payload: dict[str, Any]
+) -> None:
+    mark = {
+        "OTEL_RESOURCE_ATTRIBUTES": _MARK,
+        "FI_SIMULATION_EXPORT": "our_keys",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    (tmp_path / "job.json").write_text(json.dumps(_platform_write(payload, mark)))
+
+    with caplog.at_level("WARNING", logger=pr.logger.name):
+        assert pr._read_customer_code_environment(tmp_path) == mark
+    assert [record for record in caplog.records if record.name == pr.logger.name] == []
+    # The write left the rest of the document's metadata as it was.
+    written = json.loads((tmp_path / "job.json").read_text())
+    assert written["job_id"] == "job-1"
+    assert {
+        key: value
+        for key, value in written["metadata"].items()
+        if key != "customer_code_environment"
+    } == (payload.get("metadata") or {})
+
+
+def test_the_platforms_unmarked_job_json_write_is_read_as_no_environment(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "job.json").write_text(
+        json.dumps(_platform_write({"job_id": "job-1"}, {}))
+    )
     with caplog.at_level("WARNING", logger=pr.logger.name):
         assert pr._read_customer_code_environment(tmp_path) == {}
     assert [record for record in caplog.records if record.name == pr.logger.name] == []

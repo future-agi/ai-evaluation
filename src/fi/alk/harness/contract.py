@@ -631,6 +631,7 @@ class AgentContract(BaseModel):
     # the agent verifiably is, so when the harness widens it the difference is recorded rather
     # than blended in, and whoever reads it later can tell the two apart.
     amendments: list[str] = Field(default_factory=list)
+    instrumentation: str = "none"
 
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self.tools}

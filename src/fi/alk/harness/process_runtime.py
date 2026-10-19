@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import quote as urlquote, urlsplit
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from .bundle import CapabilityProtocol
 from .bundle_v2 import (
@@ -64,6 +64,7 @@ from .bundle_v2 import (
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .job import FailureDomain
+from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
 from .provider_import import (
@@ -5474,8 +5475,9 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
     ``/work/job.json`` as ``metadata.customer_code_environment``. A missing file, metadata or
     key leaves the run exactly as it would be without the feature, silently. A value of the wrong
     shape does too, but with one warning that names neither the key nor the value, so that
-    someone can find out why the run is neither marked nor exporting. Nothing here raises and nothing is re-validated: the platform already checked the
-    names and the values.
+    someone can find out why the run is neither marked nor exporting. Nothing here raises. The
+    shape is checked through `HarnessJobMetadata` (job.py); the names and the values are not
+    re-checked, the platform already did.
     """
     try:
         raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
@@ -5488,15 +5490,16 @@ def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
         return {}
     if "customer_code_environment" not in metadata:
         return {}
-    value = metadata["customer_code_environment"]
-    if not isinstance(value, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in value.items()
-    ):
+    try:
+        typed = HarnessJobMetadata.model_validate(
+            {"customer_code_environment": metadata["customer_code_environment"]}
+        )
+    except ValidationError:
         logger.warning(
             "the job's customer code environment is not a map of text to text; ignored"
         )
         return {}
-    return dict(value)
+    return dict(typed.customer_code_environment)
 
 
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
