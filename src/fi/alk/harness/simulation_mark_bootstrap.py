@@ -341,6 +341,26 @@ class _CallFile:
         return self._call
 
 
+def _restamp_at_end(span, call: str) -> None:
+    """Set the call id again just before the span ends. It is the span's first attribute, so a
+    span that outgrows its attribute limit drops it first; the last one set is the last dropped."""
+    original = span.end
+    if getattr(original, _PATCHED, False):
+        return
+
+    @functools.wraps(original)
+    def end(*args, **kwargs):
+        try:
+            if span.end_time is None:
+                span.set_attribute(_CALL_KEY, call)
+        except Exception:
+            pass
+        return original(*args, **kwargs)
+
+    setattr(end, _PATCHED, True)
+    span.end = end
+
+
 def _patch_tracer(module, path: str) -> None:
     cls = module.Tracer
     original = cls.start_span
@@ -356,6 +376,7 @@ def _patch_tracer(module, path: str) -> None:
             call = call_file.current()
             if call and span.is_recording():
                 span.set_attribute(_CALL_KEY, call)
+                _restamp_at_end(span, call)
         except Exception:
             pass
         return span

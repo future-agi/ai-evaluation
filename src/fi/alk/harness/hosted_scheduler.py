@@ -1874,7 +1874,8 @@ class HostedScheduler:
             rng = random.Random(self._job_seed + scenario_index)
             outcome: ResultReceipt | _Retry
             call_file = _write_call_file(
-                self._pool.call_file(world_index), scenario.call_execution_id
+                self._pool.call_file(world_index),
+                getattr(scenario, "call_execution_id", None),
             )
             try:
                 try:

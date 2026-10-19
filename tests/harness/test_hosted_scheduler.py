@@ -221,6 +221,24 @@ class FakeScenario:
         return self.ready_fn(world)
 
 
+@dataclass
+class FakeScenarioWithoutCall:
+    """A scenario object from a source that has no notion of a call id."""
+
+    scenario_key: str
+    scenario_id: str
+    sub_goals: list[FakeSubGoal] = field(default_factory=list)
+    setup_fn: Any = lambda world: None
+    ready_fn: Any = lambda world: None
+    requires_tool_evidence: bool = True
+
+    def setup(self, world: Any) -> object:
+        return self.setup_fn(world)
+
+    def ready(self, world: Any) -> object:
+        return self.ready_fn(world)
+
+
 class FakeCallRunner:
     def __init__(self, outcomes: dict[str, Any]) -> None:
         self.outcomes = outcomes
@@ -4192,7 +4210,8 @@ class _FirstCreateFails:
 
 
 @pytest.mark.parametrize(
-    "case", ["passed", "errored", "retried", "cancelled", "no_call_id"]
+    "case",
+    ["passed", "errored", "retried", "cancelled", "no_call_id", "no_call_attribute"],
 )
 def test_call_file_written_before_setup_and_removed_after_each_scenario(
     tmp_path: Path, case: str
@@ -4236,15 +4255,26 @@ def test_call_file_written_before_setup_and_removed_after_each_scenario(
             outbound=outbound,
             job_seed=1,
         )
-        scenarios = [
-            FakeScenario(
-                "s1",
-                "id-1",
-                setup_fn=setup,
-                sub_goals=[FakeSubGoal("g", lambda w, c: None)],
-                call_execution_id=None if case == "no_call_id" else "call-1",
-            )
-        ]
+        if case == "no_call_attribute":
+            scenarios = [
+                FakeScenarioWithoutCall(
+                    "s1",
+                    "id-1",
+                    setup_fn=setup,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                )
+            ]
+            assert not hasattr(scenarios[0], "call_execution_id")
+        else:
+            scenarios = [
+                FakeScenario(
+                    "s1",
+                    "id-1",
+                    setup_fn=setup,
+                    sub_goals=[FakeSubGoal("g", lambda w, c: None)],
+                    call_execution_id=None if case == "no_call_id" else "call-1",
+                )
+            ]
 
         if case == "cancelled":
             run = asyncio.create_task(scheduler.run(scenarios))
@@ -4261,9 +4291,10 @@ def test_call_file_written_before_setup_and_removed_after_each_scenario(
                 "errored": "errored",
                 "retried": "passed",
                 "no_call_id": "passed",
+                "no_call_attribute": "passed",
             }[case]
             assert receipt.status == expected
-            if case == "no_call_id":
+            if case in ("no_call_id", "no_call_attribute"):
                 assert seen_at_setup == [{}]
             else:
                 world = f"w{receipt.world_index}"
