@@ -59,3 +59,7 @@ jobs:
           tests/test_retell_transport_validation.py
           tests/test_call_originator_factory.py
           tests/test_retell_evidence.py
+          tests/providers
+          tests/harness/test_scenario_source_provision_agent.py
+          tests/harness/test_hosted_entrypoint_provision_retry.py
+          tests/harness/test_instrumentation_evidence.py

@@ -1,0 +1,262 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": "You are the front desk of Riverside Clinic. Book, move or cancel appointments.",
+        "shape": "external",
+        "tools": [
+          "find_slots",
+          "book_slot"
+        ],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "clinic-receptionist",
+        "agent_languages": [
+          "en"
+        ],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {
+          "appointments": {
+            "columns": [
+              "slot_id",
+              "patient_name"
+            ]
+          }
+        },
+        "data_store": null,
+        "dependencies": [],
+        "hard_constraints": [],
+        "implementation": "present",
+        "instrumentation": "none",
+        "modality": "voice",
+        "notes": "",
+        "one_liner": "Books clinic appointments by phone.",
+        "open_questions": [],
+        "real_use_cases": [],
+        "refusal_signature": "",
+        "runtime": null,
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "You are the front desk of Riverside Clinic. Book, move or cancel appointments.",
+        "tool_entrypoints": [
+          {
+            "callable": "find_slots",
+            "endpoint": "",
+            "factory": "",
+            "first_arg": "",
+            "method": "POST",
+            "mode": "import",
+            "module": "clinic.tools",
+            "notes": "",
+            "service": "",
+            "tool": "find_slots"
+          },
+          {
+            "callable": "Receptionist.book_slot",
+            "endpoint": "",
+            "factory": "Receptionist()",
+            "first_arg": "",
+            "method": "POST",
+            "mode": "construct",
+            "module": "clinic.agent",
+            "notes": "",
+            "service": "",
+            "tool": "book_slot"
+          }
+        ],
+        "tools": [
+          {
+            "arg_types": {
+              "date": "str",
+              "doctor": "str"
+            },
+            "arg_values": {
+              "doctor": [
+                "Dr. Rao",
+                "Dr. Kim"
+              ]
+            },
+            "args": [
+              "date",
+              "doctor"
+            ],
+            "description": "List open slots for a day.",
+            "name": "find_slots",
+            "requires": []
+          },
+          {
+            "arg_types": {},
+            "arg_values": {},
+            "args": [
+              "slot_id",
+              "patient_name"
+            ],
+            "description": "Book one slot.",
+            "name": "book_slot",
+            "requires": []
+          }
+        ]
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "none",
+    "kind": "source",
+    "model": null,
+    "name": "clinic-receptionist",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:40f814b7e1736aa50c5273d64924c4436b0b4701c7d7ab3c5a9abead703c6dbe",
+    "supports": [],
+    "telephony": [],
+    "tools": [
+      {
+        "description": "List open slots for a day.",
+        "endpoint": null,
+        "kind": "builtin",
+        "name": "find_slots",
+        "parameters": {
+          "properties": {
+            "date": {},
+            "doctor": {
+              "enum": [
+                "Dr. Rao",
+                "Dr. Kim"
+              ]
+            }
+          },
+          "required": [
+            "date",
+            "doctor"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Book one slot.",
+        "endpoint": null,
+        "kind": "builtin",
+        "name": "book_slot",
+        "parameters": {
+          "properties": {
+            "patient_name": {},
+            "slot_id": {}
+          },
+          "required": [
+            "slot_id",
+            "patient_name"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "type": "voice",
+    "voice": null
+  },
+  "contract": {
+    "agent": "clinic-receptionist",
+    "agent_languages": [
+      "en"
+    ],
+    "amendments": [],
+    "base_environment": {
+      "appointments": [
+        {
+          "patient_name": "Ana",
+          "slot_id": "s1"
+        }
+      ]
+    },
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {
+      "appointments": {
+        "columns": [
+          "slot_id",
+          "patient_name"
+        ]
+      }
+    },
+    "data_store": null,
+    "dependencies": [],
+    "hard_constraints": [],
+    "implementation": "present",
+    "instrumentation": "none",
+    "modality": "voice",
+    "notes": "",
+    "one_liner": "Books clinic appointments by phone.",
+    "open_questions": [],
+    "real_use_cases": [],
+    "refusal_signature": "",
+    "runtime": null,
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "You are the front desk of Riverside Clinic. Book, move or cancel appointments.",
+    "tool_entrypoints": [
+      {
+        "callable": "find_slots",
+        "endpoint": "",
+        "factory": "",
+        "first_arg": "",
+        "method": "POST",
+        "mode": "import",
+        "module": "clinic.tools",
+        "notes": "",
+        "service": "",
+        "tool": "find_slots"
+      },
+      {
+        "callable": "Receptionist.book_slot",
+        "endpoint": "",
+        "factory": "Receptionist()",
+        "first_arg": "",
+        "method": "POST",
+        "mode": "construct",
+        "module": "clinic.agent",
+        "notes": "",
+        "service": "",
+        "tool": "book_slot"
+      }
+    ],
+    "tools": [
+      {
+        "arg_types": {
+          "date": "str",
+          "doctor": "str"
+        },
+        "arg_values": {
+          "doctor": [
+            "Dr. Rao",
+            "Dr. Kim"
+          ]
+        },
+        "args": [
+          "date",
+          "doctor"
+        ],
+        "description": "List open slots for a day.",
+        "name": "find_slots",
+        "requires": []
+      },
+      {
+        "arg_types": {},
+        "arg_values": {},
+        "args": [
+          "slot_id",
+          "patient_name"
+        ],
+        "description": "Book one slot.",
+        "name": "book_slot",
+        "requires": []
+      }
+    ]
+  }
+}
