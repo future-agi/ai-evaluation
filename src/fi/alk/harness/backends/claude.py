@@ -417,6 +417,8 @@ class ClaudeBackend:
                     tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
                 )
         environment = dict(provider_env(spec.model))
+        # A whole skill with its references is one tool result; the default cap refuses it.
+        environment.setdefault("MAX_MCP_OUTPUT_TOKENS", "60000")
         context = spec.conversation
         if context is not None:
             environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
@@ -462,7 +464,7 @@ class ClaudeBackend:
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            options.disallowed_tools = list(UNWANTED)
+            options.disallowed_tools = [name for name in UNWANTED if name not in spec.builtins]
             options.hooks = gate_hooks(allowed)
             options.can_use_tool = spec.permission_override or permission_gate(
                 spec.ask, allowed

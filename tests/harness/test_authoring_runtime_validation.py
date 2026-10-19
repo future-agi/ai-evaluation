@@ -8,6 +8,7 @@ from fi.alk.harness.authoring_runtime_validation import (
     _fallback_diagnostic,
     _make_local_seed_files_readable,
     RuntimeValidationError,
+    _setup_check_keys,
     _generic_candidate_hash,
     _world_isolation_status,
     _write_generic_certificate,
@@ -1339,12 +1340,165 @@ def test_a_store_only_reset_is_offered_only_where_nothing_needs_respawning() -> 
     assert not _stores_reset_in_place(_Manifest(None))
 
 
-def test_declared_invariants_survive_a_review_that_forgot_to_finish() -> None:
-    from pathlib import Path as _P
+def test_declared_invariants_survive_a_review_that_forgot_to_finish(
+    tmp_path, monkeypatch
+) -> None:
+    import sqlite3
 
     import fi.alk.harness.source_data_invariants as invariants
 
-    source = _P(invariants.__file__).read_text(encoding="utf-8")
-    assert "if not saved and checks:" in source
-    assert "declared no executable check" in source
-    assert "did not finish; not certified" not in source
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "lookup.py").write_text("return records[alias.target]\n")
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    database = sqlite3.connect(":memory:", check_same_thread=False)
+    database.execute("CREATE TABLE aliases (target TEXT)")
+
+    class World:
+        def query(self, sql):
+            return database.execute(sql).fetchall()
+
+    class Stage:
+        def __init__(self, spec, **kwargs):
+            self.tools = {tool.name: tool.handler for tool in spec.servers["source_data"].tools}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def say(self, *args):
+            await self.tools["declare_invariant"](
+                {
+                    "name": "aliases resolve",
+                    "violations_sql": "SELECT target FROM aliases",
+                    "evidence": [{"path": "lookup.py", "quote": "return records[alias.target]"}],
+                }
+            )
+
+    monkeypatch.setattr(invariants, "Stage", Stage)
+    checks = asyncio.run(invariants.author_invariants(source, authoring, World()))
+    assert [check["name"] for check in checks] == ["aliases resolve"]
+
+
+def test_setup_check_keys_change_only_with_what_a_check_depends_on(tmp_path):
+    bundle = tmp_path / "bundle"
+    for name in ("a", "b"):
+        (bundle / "scenarios" / name).mkdir(parents=True)
+        (bundle / "scenarios" / name / "setup.py").write_text(f"# {name}\n")
+    (bundle / "seed").mkdir()
+    (bundle / "seed" / "rows.sql").write_text("insert 1;\n")
+    (bundle / "manifest.json").write_text("{}")
+
+    def keys(invariants=(), baseline="sha256:0"):
+        return _setup_check_keys(bundle, list(invariants), baseline)
+
+    first = keys()
+    assert len(set(first)) == 2
+    (bundle / "manifest.json").write_text('{"digest": "new"}')
+    assert keys() == first
+    (bundle / "scenarios" / "b" / "setup.py").write_text("# b changed\n")
+    changed = keys()
+    assert changed[0] == first[0] and changed[1] != first[1]
+    assert not set(keys([{"name": "x"}])) & set(changed)
+    assert not set(keys(baseline="sha256:1")) & set(changed)
+    (bundle / "seed" / "rows.sql").write_text("insert 2;\n")
+    assert not set(keys()) & set(changed)
+
+
+def test_rejected_scenario_repair_is_undone_and_repaired_again(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import scenario_repair, scenario_tools
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    suite = {"value": "original"}
+    restored = []
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: suite["value"])
+    monkeypatch.setattr(
+        scenario_tools,
+        "write_scenarios",
+        lambda scenarios, path: restored.append(scenarios) or suite.update(value=scenarios),
+    )
+
+    def certify(before, after, **kwargs):
+        if after == "weakened":
+            raise ValueError("scenario_repair_weakened_checks: s1: check")
+        return scenario_repair.ScenarioRepairReceipt.model_construct()
+
+    monkeypatch.setattr(scenario_repair, "certify_scenario_repair", certify)
+    monkeypatch.setattr(
+        GenericHarnessArtifactStore, "write_scenario_repair", lambda *a, **k: None
+    )
+    attempts = iter(["weakened", "fixed"])
+    guidance_seen = []
+
+    async def repair(phase, guidance):
+        assert phase == "scenarios"
+        guidance_seen.append(guidance)
+        suite["value"] = next(attempts)
+        (authoring / "scenarios.txt").write_text(suite["value"], encoding="utf-8")
+        return 0
+
+    validations = []
+
+    async def validate(*args):
+        validations.append(suite["value"])
+        if len(validations) == 1:
+            raise RuntimeValidationError("scenarios", "bad setup")
+        return 3
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=3)
+    asyncio.run(
+        validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+    )
+
+    assert restored == ["original"]
+    assert len(guidance_seen) == 2
+    assert "scenario_repair_weakened_checks" in guidance_seen[1]
+    assert validations == ["original", "fixed"]
+
+
+def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
+    tmp_path, monkeypatch
+) -> None:
+    from fi.alk.harness import scenario_repair, scenario_tools
+
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    (source / "agent.py").write_text("agent", encoding="utf-8")
+    suite = {"value": "original"}
+    monkeypatch.setattr(scenario_tools, "load_scenarios", lambda path: suite["value"])
+    monkeypatch.setattr(
+        scenario_tools, "write_scenarios", lambda scenarios, path: suite.update(value=scenarios)
+    )
+
+    def certify(before, after, **kwargs):
+        raise ValueError("scenario_repair_weakened_checks: s1: check")
+
+    monkeypatch.setattr(scenario_repair, "certify_scenario_repair", certify)
+    repairs = []
+
+    async def repair(phase, guidance):
+        repairs.append(guidance)
+        suite["value"] = "weakened"
+        return 0
+
+    async def validate(*args):
+        raise RuntimeValidationError("scenarios", "bad setup")
+
+    job = SimpleNamespace(metadata={"generic_harness_v1": True}, scenario_count=3)
+    with pytest.raises(ValueError, match="scenario_repair_weakened_checks"):
+        asyncio.run(
+            validate_and_repair(job, source, authoring, validate=validate, repair=repair)
+        )
+    assert len(repairs) == RepairBudgets().scenario_patches + 1
+    assert suite["value"] == "original"
