@@ -16,8 +16,10 @@ and whether it is sealed.
 1. Read the brief: the environment's tools and policy, the world's tables, the agent's admitted
    tools, and every scenario with its reference solution and checks. Read rows with `world_rows`
    whenever you need the real formats of names, dates, identifiers or enum values.
-2. When the agent's tools are the environment's own (the brief says the mode is `canonical`) or it
-   has none (`conversation_only`), there is no binding to write: go to step 4.
+2. When the agent calls the environment's own tools with the environment's own arguments (the
+   brief says the mode is `canonical`) or has no tools (`conversation_only`), there is no binding
+   to write: go to step 4. A tool with the environment's name but other arguments is listed under
+   "same name, different arguments" and is mapped like any other.
 3. Write the binding and a trajectory for every scenario it can reach, and submit them with
    `submit_binding`. A refusal lists exactly what is wrong; fix it and submit again. Then
    `run_proof`. It replays every trajectory through the binding on a fresh PostgreSQL world and

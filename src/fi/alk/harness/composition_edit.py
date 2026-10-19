@@ -43,6 +43,7 @@ from .releases import (
     _contract,
     apply_policy_profile,
     environment_directory,
+    graded_rules,
     load_agent_binding,
     load_environment_release,
     load_policy,
@@ -469,6 +470,15 @@ def seal_change(plan: ChangePlan, *, postgres_dsn: str) -> dict[str, Any]:
         source = composition.workspace / name
         if source.is_file():
             shutil.copyfile(source, staging / name)
+    # A rule whose grading scenarios were all removed stops being scored, and the change says so.
+    profile = graded_rules(
+        composition.suite.policy_profile,
+        [
+            folder.sub_goals
+            for entry in plan.entries
+            if (folder := read_folder(staging, Path(entry.path).name)) is not None
+        ],
+    )
     try:
         suite = seal_suite_release(
             staging,
@@ -476,7 +486,7 @@ def seal_change(plan: ChangePlan, *, postgres_dsn: str) -> dict[str, Any]:
             environment_root=composition.environment_root,
             scenarios=plan.entries,
             parent_root=composition.suite_root,
-            policy_profile=composition.suite.policy_profile,
+            policy_profile=profile,
             postgres_dsn=postgres_dsn,
         )
     except ReleaseError as exc:
@@ -527,6 +537,10 @@ def seal_change(plan: ChangePlan, *, postgres_dsn: str) -> dict[str, Any]:
             for key, one in sorted((proof.scenarios if proof else {}).items())
             if one.status == "unscorable"
         },
+        "no_longer_scored": sorted(
+            set(composition.suite.policy_profile.scored_agent_rules)
+            - set(profile.scored_agent_rules)
+        ),
     }
     _write_json(change / CHANGE_MANIFEST, summary)
     return summary

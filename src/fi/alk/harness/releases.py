@@ -266,7 +266,9 @@ class SuiteScenario(_Strict):
 
 class PolicyProfile(_Strict):
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    scored_agent_rules: list[str] = Field(default_factory=list)
+    # Each scored agent_policy rule and the sub-goals that grade it. A rule the policy declares
+    # but this map leaves out is not scored by the suite, and the report says so.
+    scored_agent_rules: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class SuiteReleaseV1(_Strict):
@@ -302,10 +304,18 @@ Connector = Literal["livekit", "vapi", "retell", "retell_chat", "phone"]
 
 
 class AgentRef(_Strict):
+    """Who a binding is for: the platform's agent version and the connection it supplied, plus
+    the provider agent as adaptation inspected it. Any of them changing is another binding."""
+
     agent_definition_id: str = Field(min_length=1)
     agent_version_id: str = Field(min_length=1)
     configuration_digest: str = Field(pattern=_DIGEST_PATTERN)
     connector: Connector
+    # The connection's non-secret config (provider target id, dynamic variables).
+    agent_config_digest: str = Field(pattern=_DIGEST_PATTERN)
+    provider_target_id: str = Field(min_length=1)
+    # `provider_profile_digest` of the inspected, redacted provider agent.
+    provider_digest: str = Field(pattern=_DIGEST_PATTERN)
 
 
 class BindingMode(str, Enum):
@@ -850,16 +860,50 @@ def _check_profile(profile: PolicyProfile, policy: Policy) -> None:
         except ValueError as exc:
             problems.append(str(exc))
     agent_rules = policy.rule_ids(RuleClass.AGENT_POLICY)
-    scored = profile.scored_agent_rules
-    if len(scored) != len(set(scored)):
-        problems.append("scored_agent_rules repeats a rule")
-    problems.extend(
-        f"{rule} is not an agent_policy rule"
-        for rule in scored
-        if rule not in agent_rules
-    )
+    for rule, sub_goals in profile.scored_agent_rules.items():
+        if rule not in agent_rules:
+            problems.append(f"{rule} is not an agent_policy rule")
+        if not sub_goals:
+            problems.append(f"{rule} is scored but names no sub-goal that grades it")
     if problems:
         raise ReleaseError("suite_policy_profile_invalid", "; ".join(problems))
+
+
+def _check_rule_coverage(
+    root: Path, profile: PolicyProfile, loaded: Sequence[tuple[SuiteScenario, Any]]
+) -> None:
+    """Every scored rule is graded by a catalogue sub-goal that a scenario in this suite names."""
+    from .catalogue import load_catalogue
+
+    catalogue = load_catalogue(root)
+    named = {name for _entry, scenario in loaded for name in scenario.sub_goals}
+    problems: list[str] = []
+    for rule, sub_goals in profile.scored_agent_rules.items():
+        unknown = [name for name in sub_goals if catalogue.named(name) is None]
+        if unknown:
+            problems.append(
+                f"{rule}: {', '.join(unknown)} not in the sub-goal catalogue"
+            )
+        elif not set(sub_goals) & named:
+            problems.append(f"{rule}: no scenario names {', '.join(sub_goals)}")
+    if problems:
+        raise ReleaseError("suite_policy_profile_invalid", "; ".join(problems))
+
+
+def graded_rules(
+    profile: PolicyProfile, scenario_sub_goals: Sequence[Sequence[str]]
+) -> PolicyProfile:
+    """The profile restricted to rules some remaining scenario still grades."""
+    named = {name for sub_goals in scenario_sub_goals for name in sub_goals}
+    return profile.model_copy(
+        update={
+            "scored_agent_rules": {
+                rule: sub_goals
+                for rule, sub_goals in profile.scored_agent_rules.items()
+                if set(sub_goals) & named
+            }
+        }
+    )
 
 
 def _scenario_files(root: Path, path: str) -> dict[str, str]:
@@ -1267,6 +1311,7 @@ def seal_suite_release(
     if parent_root is not None:
         parent = (Path(parent_root), load_suite_release(parent_root))
     loaded = _check_suite_contents(root, entries, parent=parent)
+    _check_rule_coverage(root, profile, loaded)
     (root / PROOFS).unlink(missing_ok=True)
     proofs = _prove_all(root, environment_root, policy, profile, loaded)
     runtime = (
@@ -1659,6 +1704,12 @@ def compose_bundle(
         raise ReleaseError(
             "compose_job_invalid", f"agent.config.{target_key} is required"
         )
+    if target_id != binding.agent.provider_target_id:
+        raise ReleaseError(
+            "run_inputs_mismatch",
+            f"the run calls provider agent {target_id}, the binding was adapted for "
+            f"{binding.agent.provider_target_id}",
+        )
     if output.exists():
         raise ReleaseError("compose_output_exists", str(output))
 
@@ -1789,6 +1840,7 @@ def compose_bundle(
                     target_modality=modality,
                     admission="per_tool",
                     request_binding=True,
+                    profile_digest=binding.agent.provider_digest,
                 ).model_dump(mode="json"),
                 "release": {
                     "run_manifest": manifest.digest,

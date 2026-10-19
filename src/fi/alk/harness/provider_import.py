@@ -7,6 +7,7 @@ resource is returned in a validated lifecycle receipt so cleanup is exact and re
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ class ProviderImportSpec(BaseModel):
     target_modality: Literal["voice", "chat"] = "voice"
     admission: Literal["legacy", "per_tool"] = "legacy"
     request_binding: bool = False
+    # The inspected profile the agent was adapted as; a run refuses an assistant that differs.
+    profile_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _provider_api_origin_is_fixed(self) -> "ProviderImportSpec":
@@ -1096,6 +1099,14 @@ def _clone_retell(
     )
 
 
+def provider_profile_digest(profile: Mapping[str, Any]) -> str:
+    """The identity of an inspected (redacted) provider profile: prompt, model, voice and tools."""
+    encoded = json.dumps(
+        profile, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def clone_provider_target(
     spec: ProviderImportSpec,
     *,
@@ -1105,6 +1116,23 @@ def clone_provider_target(
 ) -> ProviderProvisionReceipt:
     if not api_key:
         raise ProviderImportError(f"{spec.type.value}_api_key_missing")
+    if spec.profile_digest is not None:
+        # Inspected exactly as adaptation inspected it, so an untouched assistant digests the same.
+        current = provider_profile_digest(
+            inspect_provider_target(
+                spec.type,
+                source_target_id=spec.source_target_id,
+                api_key=api_key,
+                api_base_url=spec.api_base_url,
+                target_modality=spec.target_modality,
+                request=request,
+            )
+        )
+        if current != spec.profile_digest:
+            raise ProviderImportError(
+                "provider_configuration_changed: the provider agent's prompt, model, voice or "
+                "tools changed after it was adapted; adapt this agent version again"
+            )
     result = (
         _clone_vapi(spec, context, api_key, request)
         if spec.type is ProviderType.VAPI

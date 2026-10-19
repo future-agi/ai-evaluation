@@ -29,7 +29,13 @@ from ..releases import (
     seal_suite_release,
 )
 from .errors import AdaptationFailure
-from .profile import AgentProfile, build_profile, seal_binding, select_mode
+from .profile import (
+    AgentProfile,
+    argument_mismatches,
+    build_profile,
+    seal_binding,
+    select_mode,
+)
 from .proofs import Candidate, binding_verdicts, prove_binding_on, write_suite_tree
 
 RESULT_SCHEMA = "futureagi.adaptation-result.v1"
@@ -277,6 +283,22 @@ class Workbench:
             "\nSCENARIOS (reference solutions in environment vocabulary):\n"
             + json.dumps(scenarios, indent=1, ensure_ascii=False),
         ]
+        environment = {tool.name: tool.parameters for tool in self.environment_tools}
+        mismatched = {
+            str(tool["name"]): problems
+            for tool in self.profile.agent_tools
+            if str(tool.get("name")) in environment
+            and (
+                problems := argument_mismatches(
+                    tool.get("parameters") or {}, environment[str(tool["name"])]
+                )
+            )
+        }
+        if mismatched:
+            lines.append(
+                "\nSAME NAME, DIFFERENT ARGUMENTS (these need a mapping like any other tool):\n"
+                + json.dumps(mismatched, indent=1)
+            )
         return "\n".join(lines)
 
     def _world_database(self) -> Path:

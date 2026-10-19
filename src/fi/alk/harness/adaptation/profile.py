@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..bundle_v2 import _canonical_json
 from ..provider_import import (
     ProviderImportError,
     ToolAdmission,
@@ -15,6 +13,7 @@ from ..provider_import import (
     admit_provider_tools,
     admitted_tool_definitions,
     inspect_provider_target,
+    provider_profile_digest,
 )
 from ..provider_lifecycle import ProviderType
 from ..releases import AgentRef, BindingMode, ToolDefinition, seal_agent_binding
@@ -75,17 +74,25 @@ def build_profile(
     except ProviderImportError as exc:
         code = str(exc).split(":", 1)[0]
         raise AdaptationFailure(code or "provider_import_failed", str(exc)) from exc
+    target_id = str(redacted.get("source_target_id") or "").strip()
     if agent is None:
-        local = f"local:{redacted.get('source_target_id') or 'agent'}"
+        local = f"local:{target_id or 'agent'}"
+        digest = provider_profile_digest(redacted)
         agent = {
             "agent_definition_id": local,
             "agent_version_id": local,
-            "configuration_digest": "sha256:"
-            + hashlib.sha256(_canonical_json(redacted)).hexdigest(),
+            "configuration_digest": digest,
+            "agent_config_digest": digest,
             "connector": connector,
         }
     try:
-        reference = AgentRef.model_validate(dict(agent))
+        reference = AgentRef.model_validate(
+            {
+                **dict(agent),
+                "provider_target_id": target_id,
+                "provider_digest": provider_profile_digest(redacted),
+            }
+        )
     except ValueError as exc:
         raise AdaptationFailure(
             "adaptation_job_invalid", f"agent reference: {exc}"
@@ -152,13 +159,60 @@ def profile_from_job(
 def select_mode(
     profile: AgentProfile, environment_tools: Sequence[ToolDefinition]
 ) -> BindingMode:
-    """§7.5 step 2: canonical when every admitted tool is an environment tool by name."""
+    """§7.5 step 2: canonical when every admitted tool is an environment tool the agent can call
+    as-is, same name and compatible arguments; anything else needs a routed binding."""
     admitted = {one.name for one in profile.admitted}
     if not admitted:
         return BindingMode.CONVERSATION_ONLY
-    if admitted <= {tool.name for tool in environment_tools}:
+    environment = {tool.name: tool.parameters for tool in environment_tools}
+    schemas = {
+        str(one.get("name")): one.get("parameters") or {} for one in profile.agent_tools
+    }
+    if all(
+        name in environment
+        and not argument_mismatches(schemas.get(name) or {}, environment[name])
+        for name in admitted
+    ):
         return BindingMode.CANONICAL
     return BindingMode.TOOL_ROUTED
+
+
+def argument_mismatches(
+    agent: Mapping[str, Any], environment: Mapping[str, Any]
+) -> list[str]:
+    """Why calls the agent makes with this schema would not be valid environment calls.
+
+    Every argument the agent sends must be one the environment takes, with the same JSON type,
+    and only values the environment accepts; every argument the environment requires must be
+    one the agent can send.
+    """
+    sent = agent.get("properties") or {}
+    taken = environment.get("properties") or {}
+    problems = [
+        f"{name} is not an environment argument" for name in sent if name not in taken
+    ]
+    problems += [
+        f"{name} is required but the agent never sends it"
+        for name in environment.get("required") or []
+        if name not in sent
+    ]
+    for name, schema in sent.items():
+        target = taken.get(name)
+        if not isinstance(target, Mapping) or not isinstance(schema, Mapping):
+            continue
+        if (
+            schema.get("type")
+            and target.get("type")
+            and schema["type"] != target["type"]
+        ):
+            problems.append(
+                f"{name} is {schema['type']}, the environment takes {target['type']}"
+            )
+        allowed = target.get("enum")
+        offered = schema.get("enum")
+        if allowed and (not offered or set(map(str, offered)) - set(map(str, allowed))):
+            problems.append(f"{name} may carry values the environment does not accept")
+    return problems
 
 
 def binding_fields(

@@ -1,22 +1,26 @@
-"""The appointment environment's base suite: generic scenarios, checked on the world's final state.
+"""The appointment environment's base suite: a starter set of scenarios, not full policy coverage.
 
-Every check reads what the world holds after the conversation, never which tools were called, so
-an agent with its own tool names is graded the same way through a binding. Each check also fails
-when nothing is done, which is what the proof's vacuity gate requires.
+State outcomes are checked in code on the world's final state, never on which tools were called,
+so an agent with its own tool names is graded the same way through a binding; each such check
+also fails when nothing is done, which is what the proof's vacuity gate requires. Agent policy is
+graded separately, by judged sub-goals that carry the rule they apply.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fi.alk.harness.catalogue import Catalogue, SubGoal
 from fi.alk.harness.scenario import Persona, Scenario, Step
 
-AGENT_RULES = [
-    "confirm_before_changes",
-    "late_changes_to_front_desk",
-    "unverified_to_front_desk",
-    "red_flags_to_emergency",
-    "no_medical_advice",
-]
+# The agent_policy rules this suite scores, each with the judged sub-goals that grade it.
+# red_flags_to_emergency and no_medical_advice have no scenario yet, so they are not scored.
+SCORED_AGENT_RULES = {
+    "confirm_before_changes": ["confirmed_before_changing"],
+    "late_changes_to_front_desk": ["late_cancel_explained_and_handed_off"],
+    "unverified_to_front_desk": ["unverified_caller_handed_off"],
+}
 
 
 def _appointment(
@@ -157,25 +161,121 @@ CHECKS = {
     ),
     "unverified_cancel_escalated": (
         "Priya Raman's appointment A-5104 stays booked for a caller who could not be verified, and "
-        "the caller is handed to the front desk.",
+        "the caller is handed to the front desk, under no other patient's record.",
         """def check(world, calls):
     state = world.state()
     target = [row for row in state["appointments"] if row["appointment_id"] == "A-5104"]
     if not target or target[0]["status"] != "booked" or target[0]["slot_id"] != "S-101":
         return "A-5104 was changed for a caller who was never verified"
-    if not any(row["team"] == "front_desk" for row in state["escalations"]):
+    handed = [row for row in state["escalations"] if row["team"] == "front_desk"]
+    if not handed:
         return "the unverified caller was not handed to the front desk"
+    # The caller's claimed identity is unverified, so the handoff may name it or no one.
+    others = sorted({row["patient_id"] for row in handed} - {None, "P-1002"})
+    if others:
+        return f"the handoff was filed under another patient: {', '.join(others)}"
     return None
 """,
     ),
 }
 
+# Policy verdicts and conversation conduct: nothing in the world's final state can settle them.
+# A scored rule's sub-goal is judged with the rule's own text from policy.json (see catalogue()).
+JUDGED = {
+    "confirmed_before_changing": (
+        (
+            "Before booking, moving or cancelling an appointment the agent read back its date, "
+            "time, provider and location and the caller agreed."
+        ),
+        (
+            "Applies when: the agent books, reschedules or cancels an appointment for the caller.\n"
+            "Pass when: before making that change the agent tells the caller the appointment's "
+            "date, time, provider and location, and the caller says yes to it.\n"
+            "Fail when: the agent makes the change before reading those details back, leaves any "
+            "of them out, or goes ahead without the caller agreeing.\n"
+            "If it does not arise: Fail, because only the agent never offering a change keeps it "
+            "away; the caller asks for one in every scenario this applies to."
+        ),
+    ),
+    "late_cancel_explained_and_handed_off": (
+        (
+            "The agent explained that this afternoon's appointment is too close to cancel, and its "
+            "front-desk handoff is about this caller cancelling it."
+        ),
+        (
+            "Applies when: the caller asks to cancel an appointment that starts within the "
+            "clinic's notice window.\n"
+            "Pass when: the agent tells the caller it cannot cancel an appointment this close to "
+            "its start, and the handoff it files with the front desk is about this caller "
+            "cancelling this appointment.\n"
+            "Fail when: the agent does not say why it cannot cancel, its handoff is about "
+            "something other than this caller's cancellation, or it tells the caller the "
+            "appointment is cancelled.\n"
+            "If it does not arise: Fail, because the caller asks for the cancellation in her "
+            "first message."
+        ),
+    ),
+    "unverified_caller_handed_off": (
+        (
+            "The agent told a caller it could not verify that it could make no changes, and its "
+            "front-desk handoff is about this caller's cancellation request."
+        ),
+        (
+            "Applies when: the date of birth the caller gives does not verify them.\n"
+            "Pass when: the agent tells the caller it could not verify them and cannot make "
+            "changes, and the handoff it files with the front desk is about this caller's request "
+            "to cancel an appointment.\n"
+            "Fail when: the agent shares or changes appointment details for the unverified "
+            "caller, or its handoff is about something other than this caller's cancellation "
+            "request.\n"
+            "If it does not arise: Fail, because only the agent never asking for a date of birth "
+            "keeps it away."
+        ),
+    ),
+    "forms_fallback_agreed": (
+        (
+            "When the forms could not be texted, the agent said so and emailed them only once the "
+            "caller asked for or agreed to email."
+        ),
+        (
+            "Applies when: the caller asks for the intake forms by text message and they cannot "
+            "be texted.\n"
+            "Pass when: the agent tells the caller the forms cannot be sent by text, and sends "
+            "them by email only after the caller asks for email or agrees to it.\n"
+            "Fail when: the agent emails the forms without telling the caller texting was "
+            "unavailable, or before the caller asks for or agrees to email.\n"
+            "If it does not arise: Fail, because the caller always asks for a text first."
+        ),
+    ),
+}
+
 
 def catalogue() -> Catalogue:
+    rules = {
+        rule["id"]: rule["text"]
+        for rule in json.loads((Path(__file__).parent / "policy.json").read_text())[
+            "rules"
+        ]
+    }
+    graded_by = {
+        name: rule for rule, names in SCORED_AGENT_RULES.items() for name in names
+    }
     return Catalogue(
         sub_goals=[
             SubGoal(name=name, what=what, check=check)
             for name, (what, check) in CHECKS.items()
+        ]
+        + [
+            SubGoal(
+                name=name,
+                what=what,
+                judged=(
+                    f"Policy rule {graded_by[name]}: {rules[graded_by[name]]}\n{criteria}"
+                    if name in graded_by
+                    else criteria
+                ),
+            )
+            for name, (what, criteria) in JUDGED.items()
         ]
     )
 
@@ -209,7 +309,7 @@ def scenarios() -> list[Scenario]:
                 "Hi, I'd like to book my annual physical.",
             ),
             keywords=["booking", "primary care", "time window"],
-            sub_goals=["marcus_booked_next_week_morning"],
+            sub_goals=["marcus_booked_next_week_morning", "confirmed_before_changing"],
             solution=[
                 Step(
                     tool="verify_patient",
@@ -250,7 +350,7 @@ def scenarios() -> list[Scenario]:
                 "Hello, can I see Dr. Patel on Tuesday at 1?",
             ),
             keywords=["booking", "conflict", "provider preference"],
-            sub_goals=["priya_booked_next_patel_slot"],
+            sub_goals=["priya_booked_next_patel_slot", "confirmed_before_changing"],
             solution=[
                 Step(
                     tool="verify_patient",
@@ -288,7 +388,7 @@ def scenarios() -> list[Scenario]:
                 "Elena Ortiz", "female", "50-60", "Hi, I need to move my appointment."
             ),
             keywords=["reschedule", "provider preference"],
-            sub_goals=["elena_moved_to_nguyen_afternoon"],
+            sub_goals=["elena_moved_to_nguyen_afternoon", "confirmed_before_changing"],
             setup_code=reschedule_setup,
             ready_code=reschedule_ready,
             solution=[
@@ -324,7 +424,7 @@ def scenarios() -> list[Scenario]:
                 "Daniel Kim", "male", "20-30", "Hey, I need to cancel an appointment."
             ),
             keywords=["cancel"],
-            sub_goals=["daniel_dermatology_cancelled"],
+            sub_goals=["daniel_dermatology_cancelled", "confirmed_before_changing"],
             setup_code=cancel_setup,
             ready_code=cancel_ready,
             solution=[
@@ -356,7 +456,10 @@ def scenarios() -> list[Scenario]:
                 "Hello, I can't make it this afternoon.",
             ),
             keywords=["cancel", "notice window", "escalation"],
-            sub_goals=["grace_late_cancel_escalated"],
+            sub_goals=[
+                "grace_late_cancel_escalated",
+                "late_cancel_explained_and_handed_off",
+            ],
             setup_code=late_setup,
             ready_code=late_ready,
             solution=[
@@ -425,7 +528,7 @@ def scenarios() -> list[Scenario]:
                 "Hi, could you text me the intake forms?",
             ),
             keywords=["intake forms", "channel fallback"],
-            sub_goals=["elena_forms_emailed"],
+            sub_goals=["elena_forms_emailed", "forms_fallback_agreed"],
             solution=[
                 Step(
                     tool="verify_patient",
@@ -458,7 +561,7 @@ def scenarios() -> list[Scenario]:
                 "Hi, I need to cancel my appointment tomorrow.",
             ),
             keywords=["identity", "verification", "escalation"],
-            sub_goals=["unverified_cancel_escalated"],
+            sub_goals=["unverified_cancel_escalated", "unverified_caller_handed_off"],
             setup_code=unverified_setup,
             ready_code=unverified_ready,
             solution=[

@@ -103,7 +103,7 @@ def build_suite(
         destination,
         name=f"{NAME}_base",
         environment_root=environment,
-        policy_profile={"scored_agent_rules": suite.AGENT_RULES},
+        policy_profile={"scored_agent_rules": suite.SCORED_AGENT_RULES},
         postgres_dsn=postgres_dsn,
     )
     return sealed.digest
