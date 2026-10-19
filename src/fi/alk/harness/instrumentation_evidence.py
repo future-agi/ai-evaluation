@@ -61,7 +61,9 @@ def _python_imports(root: Path) -> set[str]:
         subdirectories[:] = [
             name for name in subdirectories if name not in _SKIPPED_DIRECTORIES
         ]
-        if Path(directory) != root and "__init__.py" in files:
+        if Path(directory).parent == root and "__init__.py" in files:
+            # Only a package at the top of the repository sits ahead of the
+            # installed one; app/opentelemetry is imported as app.opentelemetry.
             local.add(Path(directory).name)
         for file_name in files:
             if not file_name.endswith(".py"):

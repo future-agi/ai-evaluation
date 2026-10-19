@@ -205,12 +205,21 @@ def test_the_detectors_word_replaces_the_models(tmp_path: Path) -> None:
         ),
         (
             {
+                "opentelemetry/__init__.py": "",
+                "opentelemetry/sdk/__init__.py": "",
+                "opentelemetry/sdk/trace.py": "",
+                "agent.py": "from opentelemetry.sdk.trace import TracerProvider\n",
+            },
+            "none",
+        ),
+        (
+            {
                 "app/opentelemetry/__init__.py": "",
                 "app/opentelemetry/sdk/__init__.py": "",
                 "app/opentelemetry/sdk/trace.py": "",
                 "agent.py": "from opentelemetry.sdk.trace import TracerProvider\n",
             },
-            "none",
+            "opentelemetry",
         ),
         (
             {
@@ -281,7 +290,8 @@ def test_the_detectors_word_replaces_the_models(tmp_path: Path) -> None:
     ],
     ids=[
         "local_module_named_like_traceai",
-        "local_package_shadowing_opentelemetry",
+        "top_level_package_shadowing_opentelemetry",
+        "nested_package_named_like_opentelemetry_shadows_nothing",
         "top_level_module_shadowing_opentelemetry",
         "nested_module_named_like_opentelemetry_shadows_nothing",
         "plain_folder_named_like_a_package_is_not_local",
