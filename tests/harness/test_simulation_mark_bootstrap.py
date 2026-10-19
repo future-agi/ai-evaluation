@@ -1106,3 +1106,227 @@ print(json.dumps({}))
     assert set(result.stderr.splitlines(keepends=True)) == {APPLIED, FAILED}
     for secret in ("ingest-key", "ingest-secret", "customer-key", "customer-secret"):
         assert secret not in result.stderr
+
+
+CALL_SPANS_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+tracer = provider.get_tracer("agent")
+
+def span(name):
+    with tracer.start_as_current_span(name):
+        pass
+
+def write(value):
+    staged = path + ".tmp"
+    with open(staged, "w") as handle:
+        handle.write(value)
+    os.replace(staged, path)
+
+write("call-1")
+span("first")
+write("call-2")
+span("second")
+os.remove(path)
+span("between")
+os.mkdir(path)
+span("unreadable")
+os.rmdir(path)
+print(json.dumps({
+    "calls": {
+        finished.name: finished.attributes.get("fi.simulator.call_execution_id")
+        for finished in exporter.get_finished_spans()
+    },
+    "origin": provider.resource.attributes.get("fi.simulation.origin"),
+}))
+"""
+
+
+def test_spans_are_stamped_with_the_call_id_from_the_file(tmp_path: Path) -> None:
+    result = _run(
+        CALL_SPANS_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    reported = _reported(result)
+    assert reported["calls"] == {
+        "first": "call-1",
+        "second": "call-2",
+        "between": None,
+        "unreadable": None,
+    }
+    assert reported["origin"] == "simulation"
+    assert FAILED not in result.stderr
+
+
+IN_PLACE_REWRITE_SCRIPT = """
+import json, os
+import simulation_mark_bootstrap
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+reader = simulation_mark_bootstrap._CallFile(path)
+
+def rewrite(value, mtime_ns):
+    with open(path, "w") as handle:
+        handle.write(value)
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+    return os.stat(path).st_ino
+
+first = rewrite("call-1", 1_000_000_000_000_000_000)
+one = reader.current()
+second = rewrite("call-2", 1_000_000_000_000_000_000 + 5_000_000_000)
+two = reader.current()
+print(json.dumps({"same_inode": first == second, "one": one, "two": two}))
+"""
+
+
+def test_a_call_file_rewritten_in_place_is_read_again(tmp_path: Path) -> None:
+    result = _run(
+        IN_PLACE_REWRITE_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    assert _reported(result) == {"same_inode": True, "one": "call-1", "two": "call-2"}
+
+
+LONG_SPAN_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+with open(path, "w") as handle:
+    handle.write("call-1")
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+tracer = provider.get_tracer("agent")
+
+with tracer.start_as_current_span("long") as span:
+    for index in range(130):
+        span.set_attribute("attr.%d" % index, index)
+with tracer.start_as_current_span("short") as span:
+    span.set_attribute("attr.0", 0)
+    with open(path + ".next", "w") as handle:
+        handle.write("call-2")
+    os.replace(path + ".next", path)
+ended = tracer.start_span("ended-twice")
+ended.end()
+ended.end()
+
+def describe(finished):
+    attributes = finished.attributes
+    return {
+        "call": attributes.get("fi.simulator.call_execution_id"),
+        "count": len(attributes),
+        "last": list(attributes)[-1],
+    }
+
+print(json.dumps({
+    finished.name: describe(finished) for finished in exporter.get_finished_spans()
+}))
+"""
+
+
+def test_a_span_that_outgrows_its_attribute_limit_keeps_the_call_id(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        LONG_SPAN_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    reported = _reported(result)
+    assert reported["long"] == {
+        "call": "call-1",
+        "count": 128,
+        "last": "fi.simulator.call_execution_id",
+    }
+    # An ordinary span carries the id it started with, once, even if the file changes mid-span.
+    assert reported["short"] == {
+        "call": "call-1",
+        "count": 2,
+        "last": "fi.simulator.call_execution_id",
+    }
+    assert reported["ended-twice"]["call"] == "call-2"
+    assert "Setting attribute on ended span" not in result.stderr
+    assert FAILED not in result.stderr
+
+
+TRACEAI_SHAPED_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+
+class TracerProvider(_TracerProvider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._default_processor = False
+        self.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        self._default_processor = True
+
+    def add_span_processor(self, *args, **kwargs):
+        if self._default_processor:
+            self._active_span_processor.shutdown()
+            self._active_span_processor._span_processors = tuple()
+            self._default_processor = False
+        return super().add_span_processor(*args, **kwargs)
+
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+with open(path, "w") as handle:
+    handle.write("call-1")
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+with provider.get_tracer("agent").start_as_current_span("turn"):
+    pass
+print(json.dumps({
+    "calls": [
+        finished.attributes.get("fi.simulator.call_execution_id")
+        for finished in exporter.get_finished_spans()
+    ],
+}))
+"""
+
+
+def test_a_provider_that_drops_processors_still_stamps_the_call(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        TRACEAI_SHAPED_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    assert _reported(result)["calls"] == ["call-1"]
+    assert FAILED not in result.stderr
+
+
+def test_no_call_file_variable_leaves_the_tracer_alone(tmp_path: Path) -> None:
+    script = """
+import json
+from opentelemetry.sdk.trace import Tracer
+
+print(json.dumps({"patched": hasattr(Tracer.start_span, "_alk_simulation_mark")}))
+"""
+    reported = _reported(_run(script, path=[_world(tmp_path)], cwd=tmp_path))
+
+    assert reported["patched"] is False

@@ -17,6 +17,10 @@ instead of the customer's own ``FI_API_KEY``: only the Future AGI authentication
 replaced, only on exports to the collector, and the customer's key stays in the environment for
 the rest of their code.
 
+When the sandbox names a call file, every span the process starts is also stamped with the id of
+the call the sandbox is running at that moment. The stamp rides on the SDK tracer rather than a
+span processor, because a provider subclass such as traceAI's may drop processors it did not add.
+
 It never reads or writes the customer's files and never imports their modules on its own. It does
 run the next ``sitecustomize`` on the path, which is theirs, so a repository's own startup hook is
 not lost behind this one; a failure of that hook is reported as Python reports it, never as ours.
@@ -36,6 +40,9 @@ import sys
 import urllib.parse
 
 _RESOURCES = "opentelemetry.sdk.resources"
+_TRACE = "opentelemetry.sdk.trace"
+_CALL_FILE = "FI_SIMULATION_CALL_FILE"
+_CALL_KEY = "fi.simulator.call_execution_id"
 _EXPORTERS = {
     "opentelemetry.exporter.otlp.proto.http.trace_exporter": False,
     "opentelemetry.exporter.otlp.proto.grpc.trace_exporter": True,
@@ -315,6 +322,70 @@ def _patch_exporter(module, ingest, lower: bool) -> None:
     _write("applied")
 
 
+class _CallFile:
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._seen = None
+        self._call = None
+
+    def current(self):
+        try:
+            stat = os.stat(self._path)
+        except FileNotFoundError:
+            return None
+        seen = (stat.st_ino, stat.st_mtime_ns)
+        if seen != self._seen:
+            with open(self._path, encoding="utf-8") as handle:
+                self._call = handle.read().strip() or None
+            self._seen = seen
+        return self._call
+
+
+def _restamp_at_end(span, call: str) -> None:
+    """Set the call id again just before the span ends. It is the span's first attribute, so a
+    span that outgrows its attribute limit drops it first; the last one set is the last dropped."""
+    original = span.end
+    if getattr(original, _PATCHED, False):
+        return
+
+    @functools.wraps(original)
+    def end(*args, **kwargs):
+        try:
+            if span.end_time is None:
+                span.set_attribute(_CALL_KEY, call)
+        except Exception:
+            pass
+        return original(*args, **kwargs)
+
+    setattr(end, _PATCHED, True)
+    span.end = end
+
+
+def _patch_tracer(module, path: str) -> None:
+    cls = module.Tracer
+    original = cls.start_span
+    if getattr(original, _PATCHED, False):
+        return
+
+    call_file = _CallFile(path)
+
+    @functools.wraps(original)
+    def wrapper(self, *args, **kwargs):
+        span = original(self, *args, **kwargs)
+        try:
+            call = call_file.current()
+            if call and span.is_recording():
+                span.set_attribute(_CALL_KEY, call)
+                _restamp_at_end(span, call)
+        except Exception:
+            pass
+        return span
+
+    setattr(wrapper, _PATCHED, True)
+    cls.start_span = wrapper
+    _write("applied")
+
+
 def _report_chained_failure(err: Exception) -> None:
     """Say what Python itself says when a ``sitecustomize`` fails, in its words, so the owner of
     that hook still learns of the failure. It is theirs, not a failure of our patch, so it is
@@ -383,6 +454,9 @@ def install() -> None:
         pairs = _read_pairs()
         if pairs is not None:
             _PATCHES[_RESOURCES] = functools.partial(_patch, pairs=pairs)
+        call_file = os.environ.get(_CALL_FILE)
+        if call_file:
+            _PATCHES[_TRACE] = functools.partial(_patch_tracer, path=call_file)
         ingest = None
         try:
             ingest = _read_ingest()
