@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import random
+import re
 import signal
 import time
 import uuid
@@ -817,6 +818,18 @@ class ScenarioPreallocationError(RuntimeError):
         )
 
 
+_AGENT_FIELD = re.compile(r"(?<!\w)agent(?!\w)")
+
+
+def _names_agent_field(error: ob.ChannelError | None) -> bool:
+    return (
+        error is not None
+        and error.status_code == 400
+        and isinstance(error.message, str)
+        and _AGENT_FIELD.search(error.message) is not None
+    )
+
+
 class ScenariosClient:
     """RESOLVED (p13-worker-r2, reports/p13-worker-r2.md CONTRACT NOTES): the Scenario
     Generation Contract (PR #63) documented two paths (`run-tests/provision/` +
@@ -950,7 +963,16 @@ class ScenariosClient:
     def provision(
         self, payload: dict[str, Any], *, deadline: float | None = None
     ) -> dict[str, Any]:
-        return self._post(self._provision_path, payload, deadline=deadline)
+        try:
+            return self._post(self._provision_path, payload, deadline=deadline)
+        except ScenarioPreallocationError as exc:
+            if "agent" not in payload or not _names_agent_field(exc.error):
+                raise
+            logger.warning(
+                "provision refused the agent field: class=%s", type(exc).__name__
+            )
+        without_agent = {key: value for key, value in payload.items() if key != "agent"}
+        return self._post(self._provision_path, without_agent, deadline=deadline)
 
     def begin(
         self, payload: dict[str, Any], *, deadline: float | None = None

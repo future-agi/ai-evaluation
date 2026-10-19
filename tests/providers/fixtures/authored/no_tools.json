@@ -1,0 +1,82 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": "Chat politely about the weather.",
+        "shape": "external",
+        "tools": [],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "smalltalk-agent",
+        "agent_languages": [],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {},
+        "data_store": null,
+        "dependencies": [],
+        "hard_constraints": [],
+        "implementation": "",
+        "instrumentation": "none",
+        "modality": "voice",
+        "notes": "",
+        "one_liner": "",
+        "open_questions": [],
+        "real_use_cases": [],
+        "refusal_signature": "",
+        "runtime": null,
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "Chat politely about the weather.",
+        "tool_entrypoints": [],
+        "tools": []
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "none",
+    "kind": "source",
+    "model": null,
+    "name": "smalltalk-agent",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:dd00285e8aecc155e6fc8e87d5ba0a75e53004ba481a3bb8fcb84ce551032976",
+    "supports": [],
+    "telephony": [],
+    "tools": [],
+    "type": "voice",
+    "voice": null
+  },
+  "contract": {
+    "agent": "smalltalk-agent",
+    "agent_languages": [],
+    "amendments": [],
+    "base_environment": {},
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {},
+    "data_store": null,
+    "dependencies": [],
+    "hard_constraints": [],
+    "implementation": "",
+    "instrumentation": "none",
+    "modality": "voice",
+    "notes": "",
+    "one_liner": "",
+    "open_questions": [],
+    "real_use_cases": [],
+    "refusal_signature": "",
+    "runtime": null,
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "Chat politely about the weather.",
+    "tool_entrypoints": [],
+    "tools": []
+  }
+}

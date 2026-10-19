@@ -1,0 +1,192 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": "Tell customers where their order is.",
+        "shape": "external",
+        "tools": [
+          "check_status"
+        ],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "order-status-agent",
+        "agent_languages": [],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {},
+        "data_store": null,
+        "dependencies": [
+          {
+            "engine": "postgres",
+            "kind": "database",
+            "name": "orders-db",
+            "reached": {
+              "config_key": "",
+              "database": "",
+              "dsn_env": "ORDERS_DSN",
+              "host": "",
+              "loader_function": "",
+              "loader_module": "",
+              "password_from": "[redacted]",
+              "port": null,
+              "user": ""
+            },
+            "used_by": [
+              "check_status"
+            ],
+            "version": "",
+            "what": ""
+          }
+        ],
+        "hard_constraints": [],
+        "implementation": "",
+        "instrumentation": "none",
+        "modality": "chat",
+        "notes": "",
+        "one_liner": "",
+        "open_questions": [],
+        "real_use_cases": [],
+        "refusal_signature": "",
+        "runtime": null,
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "Tell customers where their order is.",
+        "tool_entrypoints": [
+          {
+            "callable": "",
+            "endpoint": "/get_status",
+            "factory": "",
+            "first_arg": "",
+            "method": "GET",
+            "mode": "service",
+            "module": "",
+            "notes": "",
+            "service": "orders-api",
+            "tool": "check_status"
+          }
+        ],
+        "tools": [
+          {
+            "arg_types": {},
+            "arg_values": {},
+            "args": [
+              "order_id"
+            ],
+            "description": "Order status by id.",
+            "name": "check_status",
+            "requires": []
+          }
+        ]
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "none",
+    "kind": "source",
+    "model": null,
+    "name": "order-status-agent",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:4e99d00281b806c269c5334663b9f7626c20c7e3d8fc52cb6bcb420f2ea9de1f",
+    "supports": [],
+    "telephony": [],
+    "tools": [
+      {
+        "description": "Order status by id.",
+        "endpoint": null,
+        "kind": "http",
+        "name": "check_status",
+        "parameters": {
+          "properties": {
+            "order_id": {}
+          },
+          "required": [
+            "order_id"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "type": "chat",
+    "voice": null
+  },
+  "contract": {
+    "agent": "order-status-agent",
+    "agent_languages": [],
+    "amendments": [],
+    "base_environment": {},
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {},
+    "data_store": null,
+    "dependencies": [
+      {
+        "engine": "postgres",
+        "kind": "database",
+        "name": "orders-db",
+        "reached": {
+          "config_key": "",
+          "database": "",
+          "dsn_env": "ORDERS_DSN",
+          "host": "",
+          "loader_function": "",
+          "loader_module": "",
+          "password_from": "ORDERS_DB_PASSWORD",
+          "port": null,
+          "user": ""
+        },
+        "used_by": [
+          "check_status"
+        ],
+        "version": "",
+        "what": ""
+      }
+    ],
+    "hard_constraints": [],
+    "implementation": "",
+    "instrumentation": "none",
+    "modality": "chat",
+    "notes": "",
+    "one_liner": "",
+    "open_questions": [],
+    "real_use_cases": [],
+    "refusal_signature": "",
+    "runtime": null,
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "Tell customers where their order is.",
+    "tool_entrypoints": [
+      {
+        "callable": "",
+        "endpoint": "/get_status",
+        "factory": "",
+        "first_arg": "",
+        "method": "GET",
+        "mode": "service",
+        "module": "",
+        "notes": "",
+        "service": "orders-api",
+        "tool": "check_status"
+      }
+    ],
+    "tools": [
+      {
+        "arg_types": {},
+        "arg_values": {},
+        "args": [
+          "order_id"
+        ],
+        "description": "Order status by id.",
+        "name": "check_status",
+        "requires": []
+      }
+    ]
+  }
+}

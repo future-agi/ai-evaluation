@@ -1,0 +1,174 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": null,
+        "shape": "external",
+        "tools": [
+          "lookup_account"
+        ],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "account-support-chat-agent",
+        "agent_languages": [],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {},
+        "data_store": null,
+        "dependencies": [],
+        "hard_constraints": [],
+        "implementation": "present",
+        "instrumentation": "none",
+        "modality": "chat",
+        "notes": "",
+        "one_liner": "Look up an account and report its support status.",
+        "open_questions": [],
+        "real_use_cases": [
+          "Look up an account and report its support status."
+        ],
+        "refusal_signature": "",
+        "runtime": {
+          "command": [],
+          "compose_file": "compose.yml",
+          "context_excludes": [],
+          "dockerfile": "Dockerfile",
+          "extras": [],
+          "install": "",
+          "interface": {
+            "health_path": "/health",
+            "include_tools": true,
+            "kind": "http",
+            "path": "/v1/chat/completions",
+            "port": 8080,
+            "protocol": "openai_chat",
+            "request_template": null,
+            "response_path": "",
+            "setup_requests": []
+          },
+          "language": "python",
+          "platform": "",
+          "version": "",
+          "workdir": ""
+        },
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "",
+        "tool_entrypoints": [],
+        "tools": [
+          {
+            "arg_types": {
+              "account_id": "str"
+            },
+            "arg_values": {},
+            "args": [
+              "account_id"
+            ],
+            "description": "Look up a customer account.",
+            "name": "lookup_account",
+            "requires": []
+          }
+        ]
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "none",
+    "kind": "source",
+    "model": null,
+    "name": "account-support-chat-agent",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:3ad4b0a4739633d2218f23e307f844df45d7ab970bccc05c5ce50f370c00ccdd",
+    "supports": [],
+    "telephony": [],
+    "tools": [
+      {
+        "description": "Look up a customer account.",
+        "endpoint": null,
+        "kind": "unknown",
+        "name": "lookup_account",
+        "parameters": {
+          "properties": {
+            "account_id": {}
+          },
+          "required": [
+            "account_id"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "type": "chat",
+    "voice": null
+  },
+  "contract": {
+    "agent": "account-support-chat-agent",
+    "agent_languages": [],
+    "amendments": [],
+    "base_environment": {},
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {},
+    "data_store": null,
+    "dependencies": [],
+    "hard_constraints": [],
+    "implementation": "present",
+    "instrumentation": "none",
+    "modality": "chat",
+    "notes": "",
+    "one_liner": "Look up an account and report its support status.",
+    "open_questions": [],
+    "real_use_cases": [
+      "Look up an account and report its support status."
+    ],
+    "refusal_signature": "",
+    "runtime": {
+      "command": [],
+      "compose_file": "compose.yml",
+      "context_excludes": [],
+      "dockerfile": "Dockerfile",
+      "extras": [],
+      "install": "",
+      "interface": {
+        "health_path": "/health",
+        "include_tools": true,
+        "kind": "http",
+        "path": "/v1/chat/completions",
+        "port": 8080,
+        "protocol": "openai_chat",
+        "request_template": null,
+        "response_path": "",
+        "setup_requests": []
+      },
+      "language": "python",
+      "platform": "",
+      "version": "",
+      "workdir": ""
+    },
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "",
+    "tool_entrypoints": [],
+    "tools": [
+      {
+        "arg_types": {
+          "account_id": "str"
+        },
+        "arg_values": {},
+        "args": [
+          "account_id"
+        ],
+        "description": "Look up a customer account.",
+        "name": "lookup_account",
+        "requires": []
+      }
+    ]
+  }
+}
