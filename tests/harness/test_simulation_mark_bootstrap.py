@@ -109,7 +109,7 @@ NO_SDK_SCRIPT = """
 import json, sys
 print(json.dumps({
     "sdk_modules": sorted(n for n in sys.modules if n.split(".")[0] == "opentelemetry"),
-    "finder_installed": any(type(f).__name__ == "_ResourceFinder" for f in sys.meta_path),
+    "finder_installed": any(type(f).__name__ == "_MarkFinder" for f in sys.meta_path),
 }))
 """
 
@@ -315,7 +315,7 @@ def _scenario_dormant(variable: str | None):
         result = _run(DORMANT_SCRIPT, path=[world], cwd=tmp_path, variable=variable)
         reported = _reported(result)
         assert reported["attributes"] == {"project_name": "theirs"}
-        assert "_ResourceFinder" not in reported["finders"]
+        assert "_MarkFinder" not in reported["finders"]
         assert result.stderr == ""
 
     return scenario
@@ -338,7 +338,7 @@ def _scenario_reload(tmp_path: Path, world: Path) -> None:
     reported = _reported(result)
     assert reported["first"] == OURS
     assert reported["second"] == OURS
-    assert reported["first_finder"] == "_ResourceFinder"
+    assert reported["first_finder"] == "_MarkFinder"
     assert result.stderr == APPLIED * 2
 
 
@@ -680,7 +680,7 @@ import simulation_mark_bootstrap
 simulation_mark_bootstrap.install()
 simulation_mark_bootstrap.install()
 finders = sum(
-    type(finder) is simulation_mark_bootstrap._ResourceFinder for finder in sys.meta_path
+    type(finder) is simulation_mark_bootstrap._MarkFinder for finder in sys.meta_path
 )
 spec = importlib.util.spec_from_file_location(
     "second_copy", os.path.join(os.environ["WORLD"], "simulation_mark_bootstrap.py")
@@ -725,7 +725,8 @@ def test_two_copies_of_the_finder_never_call_each_other(
         spec = importlib.util.spec_from_file_location(name, HOOK)
         copy = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(copy)
-        return copy._ResourceFinder(OURS)
+        copy._PATCHES["opentelemetry.sdk.resources"] = lambda module: None
+        return copy._MarkFinder()
 
     first = finder_of_a_fresh_copy("mark_hook_copy_one")
     second = finder_of_a_fresh_copy("mark_hook_copy_two")
@@ -761,7 +762,571 @@ def test_hook_module_imports_only_the_standard_library_and_uses_python_39_syntax
         "functools",
         "importlib.machinery",
         "importlib.util",
+        "inspect",
         "os",
         "sys",
         "urllib.parse",
     }
+
+
+COLLECTOR = "http://collector.test:4318"
+INGEST = {
+    "FI_SIMULATION_INGEST_API_KEY": "ingest-key",
+    "FI_SIMULATION_INGEST_SECRET_KEY": "ingest-secret",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": f"{COLLECTOR}/v1/traces",
+}
+CUSTOMER_KEYS = {"FI_API_KEY": "customer-key", "FI_SECRET_KEY": "customer-secret"}
+OUR_AUTH = {"x-api-key": "ingest-key", "x-secret-key": "ingest-secret"}
+
+EXPORTER_HEADERS = """
+import json, os, sys
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as Http
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as Grpc
+
+def sent(exporter):
+    return {name.lower(): value for name, value in dict(exporter._headers).items()}
+
+def sent_exact(exporter):
+    return dict(exporter._headers)
+"""
+
+
+def _export_run(
+    tmp_path: Path, script: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    return _run(
+        EXPORTER_HEADERS + script,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={**INGEST, **CUSTOMER_KEYS, **(extra_env or {})},
+    )
+
+
+def test_declared_fi_key_stays_in_the_environment_and_the_exporter_sends_with_the_ingest_key(
+    tmp_path: Path,
+) -> None:
+    script = """
+from fi_instrumentation.otel import GRPCSpanExporter, HTTPSpanExporter
+
+print(json.dumps({
+    "http": sent(Http(endpoint=os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"])),
+    "grpc": sent(Grpc(endpoint="collector.test:4318", insecure=True)),
+    "traceai_http": sent(HTTPSpanExporter()),
+    "traceai_grpc": sent(GRPCSpanExporter()),
+    "keys": [os.environ.get("FI_API_KEY"), os.environ.get("FI_SECRET_KEY")],
+}))
+"""
+    reported = _reported(
+        _export_run(
+            tmp_path,
+            script,
+            {"FI_BASE_URL": COLLECTOR, "FI_GRPC_URL": "elsewhere.test:4317"},
+        )
+    )
+
+    for name in ("http", "grpc", "traceai_http"):
+        assert {key: reported[name].get(key) for key in OUR_AUTH} == OUR_AUTH, name
+    assert reported["keys"] == ["customer-key", "customer-secret"]
+    assert reported["traceai_grpc"]["x-api-key"] == "customer-key"
+
+
+def test_explicit_headers_in_code_keep_their_other_entries_and_lose_only_fi_auth(
+    tmp_path: Path,
+) -> None:
+    script = """
+endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+print(json.dumps({
+    "dict": sent(Http(endpoint=endpoint, headers={"X-Api-Key": "c", "X-Team": "a"})),
+    "pairs": sent(Grpc(
+        endpoint="collector.test:4318",
+        insecure=True,
+        headers=[("x-secret-key", "c"), ("x-team", "a")],
+    )),
+    "text": sent(Grpc(
+        endpoint="collector.test:4318", insecure=True, headers="X-API-KEY=c,x-team=a"
+    )),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    for form in ("dict", "pairs", "text"):
+        assert reported[form] == {"x-team": "a", **OUR_AUTH}, form
+
+
+def test_exporter_aimed_at_another_host_is_untouched(tmp_path: Path) -> None:
+    script = """
+theirs = {"x-api-key": "c", "x-team": "a"}
+print(json.dumps({
+    "host": sent(Http(endpoint="http://elsewhere.test:4318/v1/traces", headers=theirs)),
+    "port": sent(Http(endpoint="http://collector.test:9999/v1/traces", headers=theirs)),
+    "grpc": sent(Grpc(endpoint="elsewhere.test:4317", insecure=True, headers=theirs)),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    for case in ("host", "port", "grpc"):
+        assert reported[case] == {"x-api-key": "c", "x-team": "a"}, case
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-team=a,X-Api-Key=c"},
+        {"OTEL_EXPORTER_OTLP_HEADERS": "x-team=b,x-secret-key=c"},
+        {},
+    ],
+    ids=["traces_value", "generic_value_only", "neither"],
+)
+def test_the_headers_variables_are_never_written(
+    tmp_path: Path, before: dict[str, str]
+) -> None:
+    script = """
+print(json.dumps({
+    "traces": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
+    "generic": os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script, before))
+
+    assert reported["traces"] == before.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
+    assert reported["generic"] == before.get("OTEL_EXPORTER_OTLP_HEADERS")
+
+
+def test_an_exporter_built_without_headers_for_another_vendor_gets_no_ingest_key(
+    tmp_path: Path,
+) -> None:
+    script = """
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = "x-team=a"
+print(json.dumps({
+    "http": sent(Http(endpoint="http://elsewhere.test:4318/v1/traces")),
+    "grpc": sent(Grpc(endpoint="elsewhere.test:4317", insecure=True)),
+    "traces": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    assert reported["http"] == {"x-team": "a"}
+    assert reported["grpc"] == {"x-team": "a"}
+    assert reported["traces"] is None
+
+
+def test_grpc_gets_lower_case_names_and_http_keeps_the_names_it_was_given(
+    tmp_path: Path,
+) -> None:
+    script = """
+endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+print(json.dumps({
+    "grpc": sent_exact(Grpc(endpoint="collector.test:4318", insecure=True)),
+    "grpc_text": sent_exact(Grpc(
+        endpoint="collector.test:4318", insecure=True, headers="X-Team=a,X-Api-Key=c",
+    )),
+    "http": sent_exact(Http(endpoint=endpoint, headers={"X-Team": "a"})),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    assert set(reported["grpc"]) == set(OUR_AUTH)
+    # A customer's mixed-case name reaches gRPC lower-cased, which gRPC requires.
+    assert reported["grpc_text"] == {"x-team": "a", **OUR_AUTH}
+    assert reported["http"] == {"X-Team": "a", **OUR_AUTH}
+
+
+def test_an_exporter_built_with_no_endpoint_argument_reads_the_environment(
+    tmp_path: Path,
+) -> None:
+    script = """
+print(json.dumps({"http": sent(Http()), "grpc": sent(Grpc(insecure=True))}))
+"""
+    extra = {
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://collector.test:4318/v1/traces"
+    }
+    reported = _reported(_export_run(tmp_path, script, extra))
+
+    assert {key: reported["http"].get(key) for key in OUR_AUTH} == OUR_AUTH
+    assert {key: reported["grpc"].get(key) for key in OUR_AUTH} == OUR_AUTH
+
+
+def test_traces_headers_win_over_the_generic_ones_and_ours_win_over_both(
+    tmp_path: Path,
+) -> None:
+    script = """
+print(json.dumps(sent(Http(endpoint=os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]))))
+"""
+    before = {
+        "OTEL_EXPORTER_OTLP_HEADERS": "x-team=generic,x-only-generic=1,x-api-key=g",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-team=traces,X-Secret-Key=t",
+    }
+    reported = _reported(_export_run(tmp_path, script, before))
+
+    assert reported == {"x-team": "traces", "x-only-generic": "1", **OUR_AUTH}
+
+
+def test_a_generic_header_written_after_install_reaches_an_exporter_built_without_headers(
+    tmp_path: Path,
+) -> None:
+    script = """
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = "x-late=1,x-api-key=c"
+print(json.dumps(sent(Http(endpoint=os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]))))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    assert reported == {"x-late": "1", **OUR_AUTH}
+
+
+def test_exporter_module_imported_before_the_hook_is_patched_at_once(
+    tmp_path: Path,
+) -> None:
+    lib = _world(tmp_path, "lib", sitecustomize=False)
+    script = """
+import json, os
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as Http
+import simulation_mark_bootstrap
+
+simulation_mark_bootstrap.install()
+exporter = Http(
+    endpoint=os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"], headers={"x-api-key": "c"}
+)
+print(json.dumps({name.lower(): value for name, value in exporter._headers.items()}))
+"""
+    result = _run(
+        script, path=[lib], cwd=tmp_path, extra_env={**INGEST, **CUSTOMER_KEYS}
+    )
+
+    assert _reported(result) == OUR_AUTH
+    assert APPLIED in result.stderr
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "FI_SIMULATION_INGEST_API_KEY",
+        "FI_SIMULATION_INGEST_SECRET_KEY",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    ],
+)
+def test_no_ingest_variables_no_export_patch(tmp_path: Path, missing: str) -> None:
+    script = """
+print(json.dumps({
+    "headers": sent(Http(endpoint="http://collector.test:4318/v1/traces", headers={"x-api-key": "c"})),
+    "patched": getattr(Http.__init__, "_alk_simulation_mark", False),
+    "traces": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
+}))
+"""
+    environment = {**INGEST, **CUSTOMER_KEYS}
+    del environment[missing]
+    result = _run(
+        EXPORTER_HEADERS + script,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env=environment,
+    )
+
+    assert _reported(result) == {
+        "headers": {"x-api-key": "c"},
+        "patched": False,
+        "traces": None,
+    }
+
+
+def test_wrapper_failure_runs_the_original_constructor(tmp_path: Path) -> None:
+    script = """
+import simulation_mark_bootstrap
+
+def boom(*args, **kwargs):
+    raise RuntimeError("ingest-key")
+
+simulation_mark_bootstrap._with_ingest = boom
+exporter = Http(
+    endpoint=os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"],
+    headers={"x-api-key": "c", "x-team": "a"},
+)
+print(json.dumps(sent(exporter)))
+"""
+    result = _export_run(tmp_path, script)
+
+    assert _reported(result) == {"x-api-key": "", "x-secret-key": "", "x-team": "a"}
+    assert result.stderr.count(FAILED) == 1
+
+
+def test_a_failed_patch_never_sends_the_customers_own_key_to_our_collector(
+    tmp_path: Path,
+) -> None:
+    script = """
+endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+print(json.dumps({
+    "unreadable": sent(Http(endpoint=endpoint, headers=(pair for pair in [("x-api-key", "c"), ("x-team", "a")]))),
+    "from_environment": sent(Http(endpoint=endpoint, headers=(p for p in []))),
+    "elsewhere": sent(Http(endpoint="http://elsewhere.test:4318/v1/traces", headers={"x-api-key": "c"})),
+}))
+"""
+    reported = _reported(_export_run(tmp_path, script))
+
+    for name in ("unreadable", "from_environment"):
+        assert reported[name].get("x-api-key") == "", name
+        assert reported[name].get("x-secret-key") == "", name
+    assert reported["elsewhere"] == {"x-api-key": "c"}
+
+
+def test_a_bad_collector_port_does_not_cost_the_process_its_resource_marks(
+    tmp_path: Path,
+) -> None:
+    script = """
+from opentelemetry.sdk.resources import Resource
+
+attributes = dict(Resource(attributes={"a": "b"}).attributes)
+print(json.dumps({"marked": attributes.get("fi.simulation.origin")}))
+"""
+    bad = {
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://collector.test:notaport/v1/traces"
+    }
+    result = _export_run(tmp_path, script, bad)
+
+    assert _reported(result) == {"marked": "simulation"}
+    assert result.stderr.count(FAILED) == 1
+
+
+def test_no_key_in_stderr(tmp_path: Path) -> None:
+    script = """
+import simulation_mark_bootstrap
+
+endpoint = os.environ["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+Http(endpoint=endpoint)
+Grpc(endpoint="collector.test:4318", insecure=True)
+
+def boom(*args, **kwargs):
+    raise RuntimeError(os.environ["FI_SIMULATION_INGEST_SECRET_KEY"])
+
+simulation_mark_bootstrap._with_ingest = boom
+Http(endpoint=endpoint)
+print(json.dumps({}))
+"""
+    result = _export_run(tmp_path, script)
+
+    _reported(result)
+    assert set(result.stderr.splitlines(keepends=True)) == {APPLIED, FAILED}
+    for secret in ("ingest-key", "ingest-secret", "customer-key", "customer-secret"):
+        assert secret not in result.stderr
+
+
+CALL_SPANS_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+tracer = provider.get_tracer("agent")
+
+def span(name):
+    with tracer.start_as_current_span(name):
+        pass
+
+def write(value):
+    staged = path + ".tmp"
+    with open(staged, "w") as handle:
+        handle.write(value)
+    os.replace(staged, path)
+
+write("call-1")
+span("first")
+write("call-2")
+span("second")
+os.remove(path)
+span("between")
+os.mkdir(path)
+span("unreadable")
+os.rmdir(path)
+print(json.dumps({
+    "calls": {
+        finished.name: finished.attributes.get("fi.simulator.call_execution_id")
+        for finished in exporter.get_finished_spans()
+    },
+    "origin": provider.resource.attributes.get("fi.simulation.origin"),
+}))
+"""
+
+
+def test_spans_are_stamped_with_the_call_id_from_the_file(tmp_path: Path) -> None:
+    result = _run(
+        CALL_SPANS_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    reported = _reported(result)
+    assert reported["calls"] == {
+        "first": "call-1",
+        "second": "call-2",
+        "between": None,
+        "unreadable": None,
+    }
+    assert reported["origin"] == "simulation"
+    assert FAILED not in result.stderr
+
+
+IN_PLACE_REWRITE_SCRIPT = """
+import json, os
+import simulation_mark_bootstrap
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+reader = simulation_mark_bootstrap._CallFile(path)
+
+def rewrite(value, mtime_ns):
+    with open(path, "w") as handle:
+        handle.write(value)
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+    return os.stat(path).st_ino
+
+first = rewrite("call-1", 1_000_000_000_000_000_000)
+one = reader.current()
+second = rewrite("call-2", 1_000_000_000_000_000_000 + 5_000_000_000)
+two = reader.current()
+print(json.dumps({"same_inode": first == second, "one": one, "two": two}))
+"""
+
+
+def test_a_call_file_rewritten_in_place_is_read_again(tmp_path: Path) -> None:
+    result = _run(
+        IN_PLACE_REWRITE_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    assert _reported(result) == {"same_inode": True, "one": "call-1", "two": "call-2"}
+
+
+LONG_SPAN_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+with open(path, "w") as handle:
+    handle.write("call-1")
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+tracer = provider.get_tracer("agent")
+
+with tracer.start_as_current_span("long") as span:
+    for index in range(130):
+        span.set_attribute("attr.%d" % index, index)
+with tracer.start_as_current_span("short") as span:
+    span.set_attribute("attr.0", 0)
+    with open(path + ".next", "w") as handle:
+        handle.write("call-2")
+    os.replace(path + ".next", path)
+ended = tracer.start_span("ended-twice")
+ended.end()
+ended.end()
+
+def describe(finished):
+    attributes = finished.attributes
+    return {
+        "call": attributes.get("fi.simulator.call_execution_id"),
+        "count": len(attributes),
+        "last": list(attributes)[-1],
+    }
+
+print(json.dumps({
+    finished.name: describe(finished) for finished in exporter.get_finished_spans()
+}))
+"""
+
+
+def test_a_span_that_outgrows_its_attribute_limit_keeps_the_call_id(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        LONG_SPAN_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    reported = _reported(result)
+    assert reported["long"] == {
+        "call": "call-1",
+        "count": 128,
+        "last": "fi.simulator.call_execution_id",
+    }
+    # An ordinary span carries the id it started with, once, even if the file changes mid-span.
+    assert reported["short"] == {
+        "call": "call-1",
+        "count": 2,
+        "last": "fi.simulator.call_execution_id",
+    }
+    assert reported["ended-twice"]["call"] == "call-2"
+    assert "Setting attribute on ended span" not in result.stderr
+    assert FAILED not in result.stderr
+
+
+TRACEAI_SHAPED_SCRIPT = """
+import json, os
+from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+
+class TracerProvider(_TracerProvider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._default_processor = False
+        self.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        self._default_processor = True
+
+    def add_span_processor(self, *args, **kwargs):
+        if self._default_processor:
+            self._active_span_processor.shutdown()
+            self._active_span_processor._span_processors = tuple()
+            self._default_processor = False
+        return super().add_span_processor(*args, **kwargs)
+
+
+path = os.environ["FI_SIMULATION_CALL_FILE"]
+with open(path, "w") as handle:
+    handle.write("call-1")
+exporter = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(SimpleSpanProcessor(exporter))
+with provider.get_tracer("agent").start_as_current_span("turn"):
+    pass
+print(json.dumps({
+    "calls": [
+        finished.attributes.get("fi.simulator.call_execution_id")
+        for finished in exporter.get_finished_spans()
+    ],
+}))
+"""
+
+
+def test_a_provider_that_drops_processors_still_stamps_the_call(
+    tmp_path: Path,
+) -> None:
+    result = _run(
+        TRACEAI_SHAPED_SCRIPT,
+        path=[_world(tmp_path)],
+        cwd=tmp_path,
+        extra_env={"FI_SIMULATION_CALL_FILE": str(tmp_path / "call")},
+    )
+
+    assert _reported(result)["calls"] == ["call-1"]
+    assert FAILED not in result.stderr
+
+
+def test_no_call_file_variable_leaves_the_tracer_alone(tmp_path: Path) -> None:
+    script = """
+import json
+from opentelemetry.sdk.trace import Tracer
+
+print(json.dumps({"patched": hasattr(Tracer.start_span, "_alk_simulation_mark")}))
+"""
+    reported = _reported(_run(script, path=[_world(tmp_path)], cwd=tmp_path))
+
+    assert reported["patched"] is False

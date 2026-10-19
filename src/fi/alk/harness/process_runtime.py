@@ -2320,6 +2320,8 @@ def spawn_source_process(
             env[name] = f"{existing},{value}" if existing else value
         else:
             env[name] = value
+    if mark_hook_due:
+        env["FI_SIMULATION_CALL_FILE"] = str(world_dir.parent / SIMULATION_CALL_FILE)
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
@@ -2388,6 +2390,13 @@ def build_tree_dir(work_directory: Path, process_name: str) -> Path:
         process_name=process_name,
         stage="build",
     )
+
+
+SIMULATION_CALL_FILE = "simulation_call_execution_id"
+
+
+def simulation_call_file(work_directory: Path, world_index: int) -> Path:
+    return work_directory / "worlds" / f"w{world_index}" / SIMULATION_CALL_FILE
 
 
 def world_scratch_dir(
