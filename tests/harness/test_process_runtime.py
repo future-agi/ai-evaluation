@@ -8936,7 +8936,7 @@ def test_mark_appends_to_the_customers_resource_attributes(
 
     # A dict without the name leaves their value exactly as rendered.
     captured = _spawn(
-        tmp_path / "no-name", process, {"FI_SIMULATION_EXPORT": "customer_keys"}
+        tmp_path / "no-name", process, {"FI_SIMULATION_EXPORT": "our_keys"}
     )
     assert captured["env"]["OTEL_RESOURCE_ATTRIBUTES"] == theirs
 
@@ -8984,17 +8984,28 @@ def test_export_environment_order_our_project_name_wins_and_mark_wins(
     assert env["FI_BASE_URL"] == "https://collector.example"
     assert env["FI_SIMULATION_EXPORT"] == "our_keys"
 
-    # Customer keys: the dict sets no base URL and no endpoint, so theirs survive.
-    env = _spawn(
-        tmp_path / "customer-keys",
-        process,
-        {**_EXPORT, "FI_SIMULATION_EXPORT": "customer_keys"},
-    )["env"]
+    # Their own OpenTelemetry setup: the dict names our traces endpoint but no base URL, so
+    # the endpoint is ours and their FI_BASE_URL survives.
+    opentelemetry = {
+        **_EXPORT,
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+    }
+    env = _spawn(tmp_path / "no-base-url", process, opentelemetry)["env"]
+    assert env["FI_BASE_URL"] == "https://their.example"
+    assert (
+        env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"]
+        == "https://collector.example/v1/traces"
+    )
+    assert env["FI_SIMULATION_EXPORT"] == "our_keys"
+
+    # Their own configuration (the platform set the mark alone): both of theirs survive.
+    mark_only = {"OTEL_RESOURCE_ATTRIBUTES": _MARK}
+    env = _spawn(tmp_path / "mark-only", process, mark_only)["env"]
     assert env["FI_BASE_URL"] == "https://their.example"
     assert (
         env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == "http://localhost:4318/v1/traces"
     )
-    assert env["FI_SIMULATION_EXPORT"] == "customer_keys"
+    assert "FI_SIMULATION_EXPORT" not in env
 
     # A name they never rendered is simply added.
     env = _spawn(tmp_path / "unrendered", _source_process(name="agent"), export)["env"]
@@ -9096,13 +9107,18 @@ def test_observability_export_secrets_wait_for_a_mode(tmp_path: Path) -> None:
     }
     process = _source_process(name="agent")
 
-    # Our key goes only where the platform decided a mode; the default is none.
-    assert (
-        pr.select_process_secrets(
-            process, secret_values=secret_values, secret_purposes=secret_purposes
-        )
-        == {}
+    # Our key goes only where the platform decided a mode; the default is none, and a bundle
+    # that claims the purpose itself (preflight refuses that) gets none either.
+    claiming = _source_process(
+        name="agent", secret_purposes=[SecretPurpose.OBSERVABILITY_EXPORT]
     )
+    for candidate in (process, claiming):
+        assert (
+            pr.select_process_secrets(
+                candidate, secret_values=secret_values, secret_purposes=secret_purposes
+            )
+            == {}
+        )
 
     # A dict that holds other names but not the mode is no decision to export.
     for environment in (
@@ -9124,31 +9140,30 @@ def test_observability_export_secrets_wait_for_a_mode(tmp_path: Path) -> None:
 def test_mark_hook_written_with_its_module_first_on_pythonpath_for_every_exporting_process(
     tmp_path: Path,
 ) -> None:
-    # Either mode of the platform's decision places the hook, for every customer process.
-    for mode in ("our_keys", "customer_keys"):
-        for name in ("agent", "tools-api"):
-            process = _source_process(
-                name=name, environment={"PYTHONPATH": "/customer/lib"}
-            )
-            captured = _spawn(
-                tmp_path / mode / name,
-                process,
-                {**_EXPORT, "FI_SIMULATION_EXPORT": mode},
-            )
-            world = captured["world_dir"]
-            assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
-                str(world),
-                "/customer/lib",
-            ]
-            assert sorted(path.name for path in world.iterdir()) == [
-                "simulation_mark_bootstrap.py",
-                "sitecustomize.py",
-            ]
-            assert (
-                world / "simulation_mark_bootstrap.py"
-            ).read_bytes() == _MARK_HOOK.read_bytes()
-            for written in world.iterdir():
-                assert stat.S_IMODE(written.stat().st_mode) == 0o444
+    # The platform's decision places the hook, for every customer process.
+    for name in ("agent", "tools-api"):
+        process = _source_process(
+            name=name, environment={"PYTHONPATH": "/customer/lib"}
+        )
+        captured = _spawn(
+            tmp_path / name,
+            process,
+            _EXPORT,
+        )
+        world = captured["world_dir"]
+        assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+            str(world),
+            "/customer/lib",
+        ]
+        assert sorted(path.name for path in world.iterdir()) == [
+            "simulation_mark_bootstrap.py",
+            "sitecustomize.py",
+        ]
+        assert (
+            world / "simulation_mark_bootstrap.py"
+        ).read_bytes() == _MARK_HOOK.read_bytes()
+        for written in world.iterdir():
+            assert stat.S_IMODE(written.stat().st_mode) == 0o444
 
     # No mode, no hook and no path change: not for an empty dict, not for the customer's own
     # configuration (the platform set the mark alone), not for any name but the mode's.
@@ -9521,7 +9536,7 @@ def _replace_mark_module(world: Path, source: str) -> None:
     module.write_text(source)
 
 
-@pytest.mark.parametrize("source", ["syntax_error", "install_raises"])
+@pytest.mark.parametrize("source", sorted(_BROKEN_MARK_MODULES))
 def test_livekit_hook_keeps_tracing_and_says_so_when_the_mark_module_is_broken(
     tmp_path: Path, source: str
 ) -> None:
@@ -9921,3 +9936,30 @@ def test_spawn_context_carries_no_customer_code_environment_by_default(
     assert (
         context().customer_code_environment is not context().customer_code_environment
     )
+
+
+def test_call_file_variable_set_for_exporting_processes_only(tmp_path: Path) -> None:
+    process = _source_process(name="agent")
+    captured = _spawn(tmp_path / "export", process, _EXPORT)
+    assert captured["env"]["FI_SIMULATION_CALL_FILE"] == str(
+        pr.simulation_call_file(tmp_path / "export", 0)
+    )
+
+    for index, environment in enumerate(
+        (None, {}, {"OTEL_RESOURCE_ATTRIBUTES": _MARK})
+    ):
+        env = _spawn(tmp_path / f"no-mode-{index}", process, environment)["env"]
+        assert "FI_SIMULATION_CALL_FILE" not in env
+
+    provisioned = tmp_path / "provisioned"
+    provisioned.mkdir()
+    spawned, built = _provision_from_job_json(provisioned, {**_EXPORT})
+    customer = (["node", "server.js"], ["python3", "agent.py"])
+    named = {
+        env["FI_SIMULATION_CALL_FILE"] for argv, env in spawned if argv in customer
+    }
+    assert named == {
+        str(pr.simulation_call_file(provisioned, index)) for index in (0, 1)
+    }
+    steps = [env for argv, env in built if argv[0] in ("npm", "pip")]
+    assert steps and all("FI_SIMULATION_CALL_FILE" not in env for env in steps)
