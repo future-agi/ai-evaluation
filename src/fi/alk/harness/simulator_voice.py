@@ -455,11 +455,15 @@ _LANGUAGE_CODES: dict[str, str] = {
 def voice_providers(get: Callable[[str], str]) -> tuple[str, str]:
     """The (stt, tts) providers for the caller.
 
-    An explicit override wins; otherwise Cartesia when its key is present (richer, multi-language
-    voices), else Deepgram aura. `get` resolves a setting name for the calling lane, which reads
-    the environment locally and the run-scoped secrets when hosted.
+    An explicit override wins; otherwise Cartesia when it is reachable (richer, multi-language
+    voices): its key is present, or Agent Command Center relays it. Else Deepgram aura. `get`
+    resolves a setting name for the calling lane, which reads the environment locally and the
+    run-scoped secrets when hosted.
     """
-    keyed = bool((get("CARTESIA_API_KEY") or "").strip())
+    keyed = bool(
+        (get("CARTESIA_API_KEY") or "").strip()
+        or (get("AGENTCC_API_KEY") or "").strip()
+    )
     default = "cartesia" if keyed else "deepgram"
     stt = (get("SIMULATOR_STT_PROVIDER") or "").strip() or default
     tts = (get("SIMULATOR_TTS_PROVIDER") or "").strip() or default

@@ -343,7 +343,10 @@ def _check_config(
         connector in {"vapi", "retell"} and config.get("phone_number")
     ):
         required.extend((SIP_OUTBOUND_TRUNK_ID_ALIAS, SIP_OUTBOUND_FROM_NUMBER_ALIAS))
-    if "deepgram" in {stt_provider, tts_provider}:
+    # Through the gateway the model and speech vendors are reached on the gateway's credentials,
+    # not the caller's.
+    direct = agentcc.gateway() is None
+    if direct and "deepgram" in {stt_provider, tts_provider}:
         if not simulator_value(DEEPGRAM_API_KEY_ALIAS):
             required.append(DEEPGRAM_API_KEY_ALIAS)
 
@@ -358,8 +361,6 @@ def _check_config(
 
     missing_aliases = [alias for alias in required if not credential(alias)]
 
-    # Through the gateway the model is reached on the gateway's credentials, not the caller's.
-    direct = agentcc.gateway() is None
     if direct and llm_provider == "google":
         has_api_key = bool(
             simulator_value(GEMINI_API_KEY_ALIAS)
