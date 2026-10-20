@@ -355,6 +355,8 @@ class SimulatorLlm(_Strict):
     model: str
     location: str | None = None
     thinking: str | None = None
+    # Tried in turn when `model` fails; frozen so a later deployment cannot change a run.
+    fallback_models: list[str] = Field(default_factory=list)
 
 
 class SimulatorVoice(_Strict):
