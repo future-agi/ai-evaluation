@@ -263,14 +263,17 @@ def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
         replacement="gemini-2.5-flash-lite",
     )
     # The gateway names a model by the provider serving it: vertex_ai/gemini-3.7-flash is Vertex,
-    # a bare name is the Gemini API. That prefix only routes; everything else uses the bare name.
+    # a bare name is the Gemini API. A caller configured for Vertex gets the prefix, so one model
+    # setting means the same thing with or without the gateway. Everything else uses the bare name.
     name = agentcc.vendor_model(model)
     thinking = _simulator_thinking(name)
     gateway = agentcc.gateway()
     if gateway is not None:
         # Gemini API mode with the gateway key; the gateway reaches Vertex on its own credentials.
         return _gateway_google_llm(google)(
-            model=model,
+            model=agentcc.vertex_model(model)
+            if config.provider.lower() == "vertex"
+            else model,
             temperature=config.temperature,
             vertexai=False,
             api_key=gateway.api_key,
