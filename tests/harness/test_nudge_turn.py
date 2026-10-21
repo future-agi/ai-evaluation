@@ -627,6 +627,113 @@ def test_a_world_check_edit_cites_the_agents_source_and_is_reported(tmp_path):
     assert "world checks changed: menu (cites db/seed.sql)" in result["warnings"]
 
 
+_BOOKINGS_EMPTY = (
+    "def check(world):\n"
+    "    return 'bookings must start empty' if world.state().get('bookings') else None\n"
+)
+
+
+def _with_bookings(root: Path, *rows: str, notes: tuple[str, ...] = ()) -> Path:
+    """The cart world plus a keyed bookings table holding ``rows``, pinned empty by a check."""
+    from fi.alk.harness.world.snapshot import read_manifest, restore, save
+
+    world = restore(root)
+    world.connection.executescript(
+        "CREATE TABLE IF NOT EXISTS bookings(ref TEXT PRIMARY KEY, status TEXT);"
+        "CREATE TABLE IF NOT EXISTS notes(body TEXT);"
+        + "".join(f"INSERT INTO bookings VALUES ('{one}', 'matched');" for one in rows)
+        + "".join(f"INSERT INTO notes VALUES ('{one}');" for one in notes)
+    )
+    world.connection.commit()
+    save(
+        world,
+        root,
+        notes="bookings",
+        sequences=list(read_manifest(root).get("sequences") or []),
+        world_checks={"seed_matches_source": _BOOKINGS_EMPTY},
+    )
+    return root
+
+
+def test_a_seed_row_the_world_kept_out_fails_the_gate_until_it_is_seeded(tmp_path):
+    root = _with_bookings(_cart(tmp_path / "work"))
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "db" / "seed.sql").write_text(
+        "-- Marcus's ride: INSERT INTO bookings (ref) VALUES ('UB_COMMENT');\n"
+        "INSERT INTO menu (id) VALUES ('big_mac');\n"
+        "INSERT INTO public.bookings (ref, status, fare, tags, at) VALUES\n"
+        "  ('UB7F3A2C91', 'matched', 38.00, ARRAY['a,b', 'O''Hare'], now() - interval '1 day')\n"
+        "  ON CONFLICT DO NOTHING;\n"
+        "INSERT INTO trips (id) VALUES ('t1');\n",
+        encoding="utf-8",
+    )
+    nudged = {"nudge_id": "n1", "stage": "environment"}
+
+    result = nudge.report_update(
+        root, nudge=nudged, changed=True, notes="", source=source
+    )
+
+    assert result["passed"] is False
+    [problem] = result["problems"]
+    assert (problem["item"], problem["kind"]) == ("bookings", "seed")
+    assert "ref UB7F3A2C91" in problem["message"]
+    assert "UB_COMMENT" not in problem["message"]
+    assert "db/seed.sql" in problem["message"]
+    assert "these read bookings: seed_matches_source." in problem["message"]
+
+    _with_bookings(root, "UB7F3A2C91")
+    assert nudge.report_update(
+        root, nudge=nudged, changed=True, notes="", source=source
+    )["passed"]
+
+
+def test_a_seeded_table_with_no_key_is_held_only_to_having_rows(tmp_path):
+    root = _with_bookings(_cart(tmp_path / "work"))
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "db" / "seed.sql").write_text(
+        "INSERT INTO notes (body) VALUES ('call back');\n", encoding="utf-8"
+    )
+
+    [problem] = nudge.seed_row_problems(root, source)
+    assert problem["item"] == "notes" and "1 row(s)" in problem["message"]
+
+    _with_bookings(root, notes=("a different note",))
+    assert nudge.seed_row_problems(root, source) == []
+
+
+def test_a_contract_naming_a_removed_tool_is_cleaned_and_warned(tmp_path):
+    from fi.alk.harness.contract import Dependency, ToolEntry
+
+    root = _cart(tmp_path)
+    path = root / "contract.json"
+    contract = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    contract.tools[0].requires = ["geocode_address", "lst"]
+    contract.dependencies = [
+        Dependency(name="api", used_by=["geocode_address", "add"])
+    ]
+    contract.tool_entrypoints = [
+        ToolEntry(tool="geocode_address", mode="service", endpoint="geocode_address"),
+        ToolEntry(tool="add", mode="service", endpoint="add"),
+    ]
+    path.write_text(contract.model_dump_json(), encoding="utf-8")
+
+    result = nudge.report_update(
+        root, nudge={"nudge_id": "n1", "stage": "environment"}, changed=True, notes=""
+    )
+
+    assert result["passed"]
+    assert result["warnings"] == [
+        "contract named tools it no longer has; dropped: tool_entrypoints "
+        "geocode_address, add.requires geocode_address, api.used_by geocode_address"
+    ]
+    saved = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    assert [one.tool for one in saved.tool_entrypoints] == ["add"]
+    assert saved.tools[0].requires == ["lst"]
+    assert saved.dependencies[0].used_by == ["add"]
+
+
 def test_the_world_reproduces_in_flight_seed_rows_the_facts_do_not_list():
     from fi.alk.harness.config import SKILLS_ROOT
 
@@ -931,7 +1038,11 @@ def test_a_new_seed_row_breaking_an_invariant_fails_until_it_is_revised(tmp_path
     server = nudge.nudge_server(
         root, {"nudge_id": "n1", "stage": "environment"}, source=source
     )
-    assert not _environment_report(server)["is_error"]
+    missing = _environment_report(server)
+    assert missing["is_error"]
+    assert [(one["item"], one["kind"]) for one in missing["problems"]] == [
+        ("cart", "seed")
+    ]
 
     _seed_new_row(root)
     failed = _environment_report(server)

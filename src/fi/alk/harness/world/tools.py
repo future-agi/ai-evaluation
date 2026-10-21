@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ from ..catalogue import (
 )
 from ..checks import run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
+from ..seed_rows import only_seed_rows
 from ..simulator import (
     load_simulator_prompt,
     save_simulator_prompt,
@@ -1614,6 +1616,14 @@ def world_tools(
                     + "\n  - ".join(problems)
                 )
         dirty = dirty_state(world, sequences, kind)
+        connection = getattr(world.store, "connection", None)
+        if dirty and source_root and isinstance(connection, sqlite3.Connection):
+            # The agent's own seed rows, such as an active booking, are its starting state.
+            dirty = [
+                name
+                for name in dirty
+                if not only_seed_rows(connection, Path(source_root), name)
+            ]
         if dirty:
             counts = world.state()
             listed = ", ".join(f"{name} ({len(counts[name])} rows)" for name in dirty)

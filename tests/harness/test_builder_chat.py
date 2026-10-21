@@ -1163,6 +1163,45 @@ def test_a_world_check_edit_that_cites_no_seed_change_is_refused(tmp_path, monke
     assert not result["checks"]["warnings"]
 
 
+def test_a_rebuild_that_leaves_out_a_seeded_row_fails_until_it_is_seeded(
+    tmp_path, monkeypatch
+):
+    seen: dict = {}
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(
+            "INSERT INTO menu (id) VALUES ('big_mac');\n"
+            "INSERT INTO bookings (ref, status) VALUES ('UB7F3A2C91', 'matched');\n"
+        )
+        schema = await _tool(stage, "world", "create_schema").handler(
+            {"sql": "CREATE TABLE bookings(ref TEXT PRIMARY KEY, status TEXT);"}
+        )
+        assert not schema.get("is_error"), schema
+        for key in ("left_out", "seeded"):
+            if key == "seeded":
+                await _tool(stage, "world", "seed").handler(
+                    {
+                        "table": "bookings",
+                        "rows": [{"ref": "UB7F3A2C91", "status": "matched"}],
+                    }
+                )
+            saved = await _tool(stage, "world", "save_world").handler({})
+            assert not saved.get("is_error"), saved
+            seen[key] = await _tool(stage, "nudge", "report_update").handler(
+                {"changed": True, "notes": key}
+            )
+
+    _runtime, client, conversation, _asked = _seed_rebuild(tmp_path, monkeypatch, act)
+
+    assert "every row the agent's current seed inserts" in conversation.messages[0]
+    assert seen["left_out"].get("is_error")
+    left_out = seen["left_out"]["content"][0]["text"]
+    assert "UB7F3A2C91" in left_out and "db/seed.sql" in left_out
+    assert not seen["seeded"].get("is_error"), seen["seeded"]
+    assert client.results[-1]["checks"]["passed"] is True
+
+
 def test_a_seed_row_in_a_table_the_old_world_kept_empty_is_reproduced(
     tmp_path, monkeypatch
 ):

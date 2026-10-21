@@ -75,6 +75,12 @@ _NUDGE_NOTE = (
     "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
     "report_update."
 )
+_ENVIRONMENT_NUDGE_NOTE = (
+    "\n\nThe world holds every row the agent's current seed inserts, in-flight ones such as "
+    "an active booking included, even when the facts do not list them as changed and an "
+    "earlier turn left them out. A world check that keeps such rows out pins an old seed: "
+    "rewrite it with add_world_check. report_update fails while a seeded row is missing."
+)
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -1138,7 +1144,7 @@ class HostedChatRuntime:
 
         keys = [str(one) for one in self._nudge.get("user_draft_keys") or []]
         if self._nudge.get("stage") != SUITE:
-            return _NUDGE_NOTE
+            return _NUDGE_NOTE + _ENVIRONMENT_NUDGE_NOTE
         if not keys:
             return (
                 _NUDGE_NOTE

@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .amend import _persist, drop_tool_references
 from .backends import FILE_TOOLS, SessionSpec, ToolServer, ToolSpec, tool, tool_server
 from .builder import _err, _ok, scenario_problems
 from .catalogue import (
@@ -34,6 +35,7 @@ from .proofs import load_proofs, record_proof, record_unprovable
 from .prove import prepared, prove
 from .scenario import Scenario, _slug
 from .scenario_tools import load_scenarios, write_scenarios
+from .seed_rows import missing_seed_rows
 from .source_data_invariants import (
     ARTIFACT,
     source_files,
@@ -538,6 +540,84 @@ def invariant_problems(
     return problems, [said[:_TEXT_MAX]]
 
 
+def seed_row_problems(workspace: Path, source: Path | None) -> list[dict]:
+    """Rows the agent's current seed inserts that the saved SQLite world lacks.
+
+    Each names the world checks and source invariants that read the table, since one that keeps
+    it empty pins an older seed and has to be rewritten with the rows.
+    """
+    workspace = Path(workspace)
+    database = workspace / DATABASE
+    if source is None or not Path(source).is_dir() or not database.is_file():
+        return []
+    manifest = read_manifest(workspace) if (workspace / MANIFEST).is_file() else {}
+    if str(manifest.get("store") or "sqlite") != "sqlite":
+        return []
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            missing = missing_seed_rows(connection, Path(source))
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return []
+    checks = dict(manifest.get("world_checks") or {})
+    try:
+        review = json.loads((workspace / ARTIFACT).read_text(encoding="utf-8"))
+        invariants = {
+            str(one.get("name")): str(one.get("violations_sql") or "")
+            for one in review.get("checks") or []
+        }
+    except (OSError, ValueError, AttributeError):
+        invariants = {}
+
+    def reading(codes: dict, table: str) -> str:
+        return ", ".join(
+            name
+            for name, code in sorted(codes.items())
+            if re.search(rf"\b{re.escape(table)}\b", str(code), re.IGNORECASE)
+        )
+
+    problems = []
+    for table, (column, keys, files) in sorted(missing.items()):
+        pins, held = reading(checks, table), reading(invariants, table)
+        problems.append(
+            _problem(
+                table,
+                "seed",
+                f"the agent's seed ({', '.join(files)}) inserts {table} rows the saved world "
+                f"lacks: {f'{column} ' if column else ''}{', '.join(keys[:5])}. Seed them as "
+                "the seed has them, even if the facts do not list them as changed."
+                + (
+                    " Rewrite a world check that keeps them out with add_world_check, citing "
+                    f"the seed; these read {table}: {pins}."
+                    if pins
+                    else ""
+                )
+                + (
+                    " Revise a source invariant that forbids them with revise_invariant; "
+                    f"these read {table}: {held}."
+                    if held
+                    else ""
+                ),
+            )
+        )
+    return problems
+
+
+def drop_stale_tool_references(workspace: Path) -> list[str]:
+    """Drop the contract's references to tools it no longer has, and say which went."""
+    try:
+        contract = load_contract(workspace)
+    except (OSError, ValueError):
+        return []
+    dropped = drop_tool_references(contract) if contract is not None else []
+    if not dropped:
+        return []
+    _persist(contract, Path(workspace))
+    return ["contract named tools it no longer has; dropped: " + ", ".join(dropped)]
+
+
 def write_result(
     workspace: Path,
     *,
@@ -612,6 +692,8 @@ def report_update(
             )
         if source is not None:
             warnings = source_review_stale(source, workspace)
+            problems.extend(seed_row_problems(workspace, source))
+        warnings.extend(drop_stale_tool_references(workspace))
         if world and world.get("checks"):
             warnings.append(
                 "world checks changed: "

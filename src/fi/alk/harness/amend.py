@@ -243,15 +243,14 @@ def fix_tool(
         )
 
     if remove:
-        entrypoints = list(contract.tool_entrypoints)
+        before = contract.model_copy(deep=True)
         contract.tools.remove(spec)
-        contract.tool_entrypoints = [e for e in entrypoints if e.tool != tool_name]
+        drop_tool_references(contract)
         contract.amendments.append(f"tool removed — {tool_name}: {why.strip()}")
         problems = validate_contract(contract)
         if problems:
-            contract.tools.append(spec)
-            contract.tool_entrypoints = entrypoints
-            contract.amendments.pop()
+            for field in ("tools", "tool_entrypoints", "dependencies", "amendments"):
+                setattr(contract, field, getattr(before, field))
             return False, "cannot remove it: " + "; ".join(problems)
         _persist(contract, destination)
         return True, f"{tool_name} removed. {len(contract.tools)} tools left"
@@ -285,6 +284,30 @@ def fix_tool(
         return False, "the amended contract would not be valid: " + "; ".join(problems)
     _persist(contract, destination)
     return True, f"{tool_name}: {', '.join(changed)}"
+
+
+def drop_tool_references(contract: AgentContract) -> list[str]:
+    """Drop entrypoints, ``requires`` and ``used_by`` naming tools the contract no longer has.
+
+    Returns where each dropped name was. Free text is left alone.
+    """
+    kept = contract.tool_names()
+    dropped = [
+        f"tool_entrypoints {one.tool}"
+        for one in contract.tool_entrypoints
+        if one.tool not in kept
+    ]
+    contract.tool_entrypoints = [
+        one for one in contract.tool_entrypoints if one.tool in kept
+    ]
+    for owner, attribute, label in (
+        *((one, "requires", f"{one.name}.requires") for one in contract.tools),
+        *((one, "used_by", f"{one.name}.used_by") for one in contract.dependencies),
+    ):
+        names = getattr(owner, attribute)
+        dropped.extend(f"{label} {name}" for name in names if name not in kept)
+        setattr(owner, attribute, [name for name in names if name in kept])
+    return dropped
 
 
 def _persist(contract: AgentContract, destination: Path) -> None:
