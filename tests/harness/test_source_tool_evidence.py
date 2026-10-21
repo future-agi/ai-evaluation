@@ -697,3 +697,71 @@ def test_a_tool_declared_after_a_restore_is_owned_by_the_runtime(tmp_path):
         "get_weather",
         "get_forecast",
     }
+
+
+def test_a_tool_the_contract_dropped_leaves_the_runtime_tools(tmp_path):
+    """A rebuild that removes a tool from the contract removes it from the saved world too."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.prove import play_reference_step
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.snapshot import read_manifest, restore
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="weather-agent",
+        modality="chat",
+        conversational=True,
+        tools=[
+            {"name": "get_weather", "args": ["location"]},
+            {"name": "geocode_address", "args": ["query"]},
+        ],
+        real_use_cases=["Look up weather"],
+    )
+    save_catalogue(
+        Catalogue(
+            sub_goals=[
+                SubGoal(
+                    name="calls_weather_tool",
+                    check=(
+                        "def check(world, calls):\n"
+                        "    return None if any(c.name == 'get_weather' for c in calls) "
+                        "else 'weather tool not called'\n"
+                    ),
+                )
+            ]
+        ),
+        tmp_path,
+    )
+    save_simulator_prompt(
+        "You are a customer described by {{ persona }}. Follow {{ instruction }} in a natural "
+        "multi-turn conversation. Never invent the assistant's responses or claim a tool result "
+        "you have not heard. Ask a concise follow-up when needed and end once the task resolves.",
+        tmp_path,
+    )
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    saved = asyncio.run(
+        next(one for one in server.tools if one.name == "save_world").handler({})
+    )
+    assert not saved.get("is_error"), saved
+    assert set(read_manifest(tmp_path)["runtime_tools"]) == {
+        "get_weather",
+        "geocode_address",
+    }
+
+    contract.tools = [one for one in contract.tools if one.name != "geocode_address"]
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    saved = asyncio.run(
+        next(one for one in server.tools if one.name == "save_world").handler({})
+    )
+    assert not saved.get("is_error"), saved
+    assert read_manifest(tmp_path)["runtime_tools"] == ["get_weather"]
+
+    removed = play_reference_step(
+        restore(tmp_path),
+        SimpleNamespace(tool="geocode_address", arguments={"query": "SFO"}),
+    )
+    assert not removed.ok

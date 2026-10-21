@@ -29,6 +29,9 @@ decided in the notes.
 - When the agent's seed changes, reproduce its new rows and values; never drop one to keep a world
   check passing. Rewrite a world check that pins the old seed with `add_world_check` under its
   own name, citing the seed file and quoting the new row.
+- The world holds every row of the agent's current seed, including in-flight ones such as an
+  active booking or an open order, even when the facts do not list that row as changed. A world
+  check that keeps such a table empty pins the old seed: rewrite it the same way.
 
 ## Suite stage
 

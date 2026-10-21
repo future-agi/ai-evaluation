@@ -1012,7 +1012,7 @@ _NEW_SEED = (
 )
 
 
-def _seed_rebuild(tmp_path, monkeypatch, act):
+def _seed_rebuild(tmp_path, monkeypatch, act, checks=_OLD_SEED_CHECKS):
     """An environment rebuild whose world checks pin the old seed: big_mac only, dana 60."""
     import test_nudge_turn
 
@@ -1034,7 +1034,7 @@ def _seed_rebuild(tmp_path, monkeypatch, act):
             root,
             notes="old seed",
             sequences=list(read_manifest(root).get("sequences") or []),
-            world_checks=_OLD_SEED_CHECKS,
+            world_checks=checks,
         )
         save_simulator_prompt(
             "You are a customer described by {{ persona }}. Follow {{ instruction }} in a "
@@ -1157,6 +1157,66 @@ def test_a_world_check_edit_that_cites_no_seed_change_is_refused(tmp_path, monke
     result = client.results[-1]
     assert result["checks"]["passed"] is False
     assert not result["checks"]["warnings"]
+
+
+def test_a_seed_row_in_a_table_the_old_world_kept_empty_is_reproduced(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world.snapshot import read_manifest
+
+    seen: dict = {}
+    empty_cart = {
+        "seed_matches_source": "def check(world):\n"
+        "    st = world.state()\n"
+        "    if sorted(row['id'] for row in st.get('menu') or []) != ['big_mac']:\n"
+        "        return 'menu is not the seed menu'\n"
+        "    return 'cart is not empty at the start' if st.get('cart') else None\n"
+    }
+    seeded_cart = (
+        "def check(world):\n"
+        "    st = world.state()\n"
+        "    if sorted(row['id'] for row in st.get('menu') or []) != ['big_mac']:\n"
+        "        return 'menu is not the seed menu'\n"
+        "    cart = [row['item_id'] for row in st.get('cart') or []]\n"
+        "    return None if cart == ['big_mac'] else f'cart is {cart}'\n"
+    )
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(
+            "INSERT INTO menu (id) VALUES ('big_mac');\n"
+            "INSERT INTO cart (item_id) VALUES ('big_mac');\n"
+        )
+        seeded = await _tool(stage, "world", "seed").handler(
+            {"table": "cart", "rows": [{"item_id": "big_mac"}]}
+        )
+        assert not seeded.get("is_error"), seeded
+        seen["refused"] = await _tool(stage, "world", "save_world").handler({})
+        edited = await _tool(stage, "world", "add_world_check").handler(
+            {
+                "name": "seed_matches_source",
+                "code": seeded_cart,
+                "source_path": "db/seed.sql",
+                "source_quote": "INSERT INTO cart (item_id) VALUES ('big_mac');",
+            }
+        )
+        assert not edited.get("is_error"), edited
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "seeded the open cart"}
+        )
+
+    _runtime, client, _conversation, _asked = _seed_rebuild(
+        tmp_path, monkeypatch, act, checks=empty_cart
+    )
+
+    assert seen["refused"].get("is_error")
+    assert "seed_matches_source" in seen["refused"]["content"][0]["text"]
+    assert not seen["saved"].get("is_error"), seen["saved"]
+    manifest = read_manifest(tmp_path / "work")
+    assert manifest["tables"]["cart"] == 1
+    assert manifest["world_checks"] == {"seed_matches_source": seeded_cart}
+    assert client.results[-1]["checks"]["passed"] is True
 
 
 def test_a_report_after_the_last_write_stands(tmp_path, monkeypatch):

@@ -542,6 +542,25 @@ def test_a_world_check_edit_cites_the_agents_source_and_is_reported(tmp_path):
     assert "world checks changed: menu (cites db/seed.sql)" in result["warnings"]
 
 
+def test_the_world_reproduces_in_flight_seed_rows_the_facts_do_not_list():
+    from fi.alk.harness.config import SKILLS_ROOT
+
+    def said(*parts: str) -> str:
+        return " ".join(
+            SKILLS_ROOT.joinpath(*parts).read_text(encoding="utf-8").split()
+        )
+
+    update = said("builder", "topics", "agent-update.md")
+    assert "including in-flight ones such as an active booking" in update
+    assert "even when the facts do not list that row as changed" in update
+    assert "A world check that keeps such a table empty pins the old seed" in update
+    for skill in ("build-environment", "provision-environment"):
+        assert (
+            "no in-flight work, unless the agent's own seed has them; then reproduce "
+            "those rows as they are" in said(skill, "SKILL.md")
+        ), skill
+
+
 # 4. suite_gate
 
 

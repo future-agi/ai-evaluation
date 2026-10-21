@@ -649,12 +649,10 @@ def world_tools(
         )
 
     def _runtime_owned() -> set[str]:
-        # A restored world keeps the runtime tools it was saved with; tools declared since
-        # belong to the submitted runtime too.
+        # The submitted runtime owns exactly the contract's tools: tools declared since a
+        # restore join them, and tools the contract no longer has leave.
         if deferred_runtime or external_runtime:
-            world.runtime_tools = set(getattr(world, "runtime_tools", set())) | set(
-                contract.tool_names()
-            )
+            world.runtime_tools = set(contract.tool_names())
         return set(getattr(world, "runtime_tools", set()))
 
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:

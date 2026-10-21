@@ -75,8 +75,8 @@ contract carries none, whether an engine you cannot identify is worth guessing a
    agent has, not a corrected version, and a test written against a corrected one will not
    catch the real bug.
 
-   Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what
-   they need.
+   Leave it in its natural starting state: empty carts, no in-flight work, unless the agent's
+   own seed has them; then reproduce those rows as they are. Scenarios add what else they need.
 
 4. **`add_sub_goal`** for each thing worth checking, with its check as code.
 
