@@ -235,6 +235,14 @@ _install()
 _install_worker_isolation()
 
 
+# The methods a framework's tool wrapper (LangChain or CrewAI ``@tool``) runs the wrapped
+# function through. bundle_author_v2 keeps the same set to refuse bindings this hook cannot see;
+# this file is copied into the agent's interpreter on its own, so it cannot import that one.
+_TOOL_WRAPPER_METHODS = frozenset(
+    {"invoke", "ainvoke", "run", "arun", "_run", "_arun", "func", "coroutine", "__call__"}
+)
+
+
 def _install_declared_python_tools() -> None:
     """Observe source-declared Python tool functions across agent frameworks.
 
@@ -262,9 +270,14 @@ def _install_declared_python_tools() -> None:
             isinstance(value, str) and value for value in (name, module, callable_name)
         ):
             continue
-        declared[
-            (module.replace(".", "/") + ".py", callable_name.rsplit(".", 1)[-1])
-        ] = name
+        module_path = module.replace(".", "/") + ".py"
+        segments = callable_name.split(".")
+        declared[(module_path, segments[-1])] = name
+        # ``check_availability.invoke`` names a framework tool's run method, which lives in the
+        # framework, not here. The function the decorator wrapped is defined here under the
+        # tool's own name, so watch that too.
+        if len(segments) > 1 and segments[-1] in _TOOL_WRAPPER_METHODS:
+            declared[(module_path, segments[-2])] = name
     if not declared:
         return
     function_names = {function for _, function in declared}
@@ -283,7 +296,8 @@ def _install_declared_python_tools() -> None:
         if getattr(active, "busy", False):
             return
         code = frame.f_code
-        if code.co_name not in function_names:
+        # A module or class body carries the name of what it defines but is not a call.
+        if code.co_name not in function_names or not code.co_flags & inspect.CO_OPTIMIZED:
             return
         if event == "call":
             # A coroutine re-enters its frame on every resume after an await; the

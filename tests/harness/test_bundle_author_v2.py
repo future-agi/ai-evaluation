@@ -10,6 +10,7 @@ import pytest
 
 from fi.alk.harness.bundle_author_v2 import (
     BundleAuthorError,
+    _TOOL_WRAPPER_METHODS,
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
@@ -17,6 +18,7 @@ from fi.alk.harness.bundle_author_v2 import (
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
+    _trace_bindings,
 )
 from fi.alk.harness.authoring_runtime_validation import _artifact_digest
 from fi.alk.harness.bundle_v2 import load_bundle_v2
@@ -420,6 +422,160 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
         "email": "customer@example.com",
         "status": "active",
     }
+
+
+_LANGCHAIN_AGENT = (
+    "from langchain_core.tools import tool\n"
+    "class Tools:\n"
+    "    def lookup(self, email):\n"
+    "        return email\n"
+    "@tool\n"
+    "def check_availability(date):\n"
+    "    return f'free on {date}'\n"
+    "check = check_availability\n"
+)
+
+
+def _write_chat_trace_contract(authoring: Path, *, module: str, called: str) -> None:
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "modality": "chat",
+                "runtime": {
+                    "language": "python",
+                    "interface": {
+                        "kind": "openai_chat",
+                        "protocol": "openai",
+                        "include_tools": False,
+                    },
+                },
+                "tools": [{"name": "check_availability", "args": ["date"]}],
+                "tool_entrypoints": [
+                    {
+                        "tool": "check_availability",
+                        "mode": "import",
+                        "module": module,
+                        "callable": called,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_chat_bundle_traces_a_framework_tool_bound_through_invoke(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(_LANGCHAIN_AGENT, encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_trace_contract(
+        authoring, module="agent", called="check_availability.invoke"
+    )
+
+    bundle = author_bundle_v2(
+        source=source,
+        job=_job(connector="http"),
+        authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+
+    agent = next(p for p in bundle.processes if p.name == "agent")
+    assert json.loads(agent.environment["ALK_TOOL_TRACE_BINDINGS"]) == [
+        {
+            "name": "check_availability",
+            "module": "agent",
+            "callable": "check_availability.invoke",
+        }
+    ]
+
+
+def test_chat_bundle_refuses_a_trace_binding_that_can_never_record(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text(_LANGCHAIN_AGENT, encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_trace_contract(
+        authoring, module="agent", called="check_availability.batch"
+    )
+
+    with pytest.raises(
+        BundleAuthorError,
+        match=r"contract_tool_trace_unobservable: check_availability: callable "
+        r"'check_availability.batch' does not end in a function defined in agent.py",
+    ):
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http"),
+            authoring=authoring,
+            output=tmp_path / "bundle",
+        )
+
+
+_NO_FUNCTION = "does not end in a function defined in"
+_NO_MODULE = "is not a file in the submitted source"
+
+
+@pytest.mark.parametrize(
+    ("module", "called", "refusal"),
+    [
+        ("agent", "check_availability", None),
+        ("agent", "check_availability.invoke", None),
+        ("agent", "check_availability.ainvoke", None),
+        ("agent", "Tools.lookup", None),
+        ("pkg.agent", "check_availability.invoke", None),
+        # ``invoke`` is defined in the framework, never in agent.py.
+        ("agent", "invoke", _NO_FUNCTION),
+        # A wrapper method on something that is not a function defined there.
+        ("agent", "check.invoke", _NO_FUNCTION),
+        ("agent", "Tools.invoke", _NO_FUNCTION),
+        # A class is not a function; its body runs once, at import.
+        ("agent", "Tools", _NO_FUNCTION),
+        ("agent", "check_availability.batch", _NO_FUNCTION),
+        ("agent", "", None),  # not a trace binding at all
+        # The only missing.py is inside a virtual environment, which is not the agent's source.
+        ("missing", "check_availability", _NO_MODULE),
+        ("other_agent", "check_availability", _NO_MODULE),
+    ],
+)
+def test_trace_binding_is_accepted_only_when_the_hook_can_see_it(
+    tmp_path: Path, module: str, called: str, refusal: str | None
+) -> None:
+    (tmp_path / "agent.py").write_text(_LANGCHAIN_AGENT, encoding="utf-8")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "agent.py").write_text(_LANGCHAIN_AGENT, encoding="utf-8")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "missing.py").write_text(
+        "def check_availability(date):\n    return date\n", encoding="utf-8"
+    )
+    contract = {
+        "tool_entrypoints": [
+            {"tool": "check_availability", "mode": "import", "module": module, "callable": called}
+        ]
+    }
+
+    if refusal is None:
+        _trace_bindings(contract, tmp_path)
+    else:
+        with pytest.raises(
+            BundleAuthorError, match=f"contract_tool_trace_unobservable: .*{refusal}"
+        ):
+            _trace_bindings(contract, tmp_path)
+
+
+def test_trace_wrapper_methods_match_the_hook() -> None:
+    import ast
+
+    hook = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    assignment = next(
+        node
+        for node in ast.parse(hook.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.Assign)
+        and getattr(node.targets[0], "id", None) == "_TOOL_WRAPPER_METHODS"
+    )
+    assert ast.literal_eval(assignment.value.args[0]) == set(_TOOL_WRAPPER_METHODS)
 
 
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:

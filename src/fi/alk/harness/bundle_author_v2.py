@@ -2146,6 +2146,70 @@ def _compile_source_tool_handlers(contract: dict[str, Any], staging: Path) -> li
     return written
 
 
+# The methods a framework's tool wrapper (LangChain or CrewAI ``@tool``) runs the wrapped
+# function through. Kept equal to the set in livekit_tool_trace_bootstrap.py, which is copied into
+# the agent's interpreter on its own and so cannot import this one.
+_TOOL_WRAPPER_METHODS = frozenset(
+    {"invoke", "ainvoke", "run", "arun", "_run", "_arun", "func", "coroutine", "__call__"}
+)
+
+
+def _trace_bindings(contract: dict[str, Any], source: Path) -> list[dict[str, str]]:
+    """The in-process tool trace bindings, each one checked against the submitted source.
+
+    The trace hook records a call only when a function with the binding's last name (or, for
+    ``tool.invoke`` on a framework ``@tool``, the tool's own name) returns from a file ending in
+    the module's path. A binding that names anything else is accepted by the hook and never fires,
+    so every call of the build is graded as missing evidence. Refusing it here sends the builder
+    back to name the function itself.
+    """
+    bindings: list[dict[str, str]] = []
+    for raw in contract.get("tool_entrypoints", []):
+        if not isinstance(raw, dict):
+            continue
+        entry = ToolEntry.model_validate(raw)
+        if entry.mode not in {"import", "construct"} or not entry.module or not entry.callable:
+            continue
+        module_path = entry.module.replace(".", "/") + ".py"
+        defined: set[str] = set()
+        found = False
+        for path in sorted(source.rglob(module_path.rsplit("/", 1)[-1])):
+            relative = path.relative_to(source)
+            if any(part in _IGNORED_ARTIFACT_PARTS for part in relative.parts) or not (
+                f"/{relative.as_posix()}".endswith(f"/{module_path}")
+            ):
+                continue
+            found = True
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+            except SyntaxError:
+                continue
+            defined.update(
+                node.name
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+        segments = entry.callable.split(".")
+        watched = {segments[-1]}
+        if len(segments) > 1 and segments[-1] in _TOOL_WRAPPER_METHODS:
+            watched.add(segments[-2])
+        if not found:
+            raise BundleAuthorError(
+                f"contract_tool_trace_unobservable: {entry.tool}: module {entry.module!r} "
+                f"is not a file in the submitted source (looked for {module_path})"
+            )
+        if not watched & defined:
+            raise BundleAuthorError(
+                f"contract_tool_trace_unobservable: {entry.tool}: callable {entry.callable!r} "
+                f"does not end in a function defined in {module_path}, so its calls can never "
+                "be recorded; name the function the tool runs, as defined in that file"
+            )
+        bindings.append(
+            {"name": entry.tool, "module": entry.module, "callable": entry.callable}
+        )
+    return bindings
+
+
 def _files(root: Path) -> list[BundleFileV2]:
     records: list[BundleFileV2] = []
     for path in sorted(root.rglob("*")):
@@ -2296,14 +2360,10 @@ def author_bundle_v2(
     # callable boundaries inside the target Python process; the trace is observational and
     # never replays the tool. The same mechanism works for any Python framework with an
     # importable callable recorded during source understanding.
-    trace_bindings = [
-        {"name": entry.tool, "module": entry.module, "callable": entry.callable}
-        for raw in contract_body.get("tool_entrypoints", [])
-        if isinstance(raw, dict)
-        for entry in [ToolEntry.model_validate(raw)]
-        if entry.mode in {"import", "construct"} and entry.module and entry.callable
-    ]
-    if contract_modality == "chat" and trace_bindings:
+    trace_bindings = (
+        _trace_bindings(contract_body, source_root) if contract_modality == "chat" else []
+    )
+    if trace_bindings:
         plan = replace(
             plan,
             processes=tuple(
