@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -134,6 +135,33 @@ def violations_in_ir(world, checks: list[dict]) -> list[str]:
                 f"{_first_rows(rows)}). Query: {check['violations_sql']}"
             )
     return failures
+
+
+_ANY = re.compile(r"=\s*ANY\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)", re.IGNORECASE)
+_LITERAL = re.compile(r"('(?:[^']|'')*')")
+
+
+def sqlite_dialect(sql: str) -> str:
+    """Postgres invariant SQL as SQLite can run it on a saved world, where arrays are JSON.
+
+    Rewrites ILIKE, ``= ANY(array)``, ``::`` casts, ``~`` and ``!~`` (REGEXP, see
+    ``sqlite_regexp``), ``btrim`` and the empty array literal; SQLite refuses anything else.
+    """
+    sql = sql.replace("'{}'", "'[]'")
+    sql = _ANY.sub(r"IN (SELECT value FROM json_each(\1))", sql)
+    parts = _LITERAL.split(sql)
+    for index in range(0, len(parts), 2):
+        part = re.sub(r"\bILIKE\b", "LIKE", parts[index], flags=re.IGNORECASE)
+        part = re.sub(r"::\s*\w+(?:\[\])?", "", part)
+        part = part.replace("!~", " NOT REGEXP ")
+        part = re.sub(r"(?<![<>])~", " REGEXP ", part)
+        parts[index] = re.sub(r"\bbtrim\s*\(", "trim(", part, flags=re.IGNORECASE)
+    return "".join(parts)
+
+
+def sqlite_regexp(pattern: str, value: object) -> bool:
+    """SQLite's REGEXP function, for ``sqlite_dialect``'s ``~``."""
+    return value is not None and re.search(pattern, str(value)) is not None
 
 
 def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:

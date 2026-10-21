@@ -35,6 +35,10 @@ decided in the notes.
 - The world holds every row of the agent's current seed, including in-flight ones such as an
   active booking or an open order, even when the facts do not list that row as changed. A world
   check that keeps such a table empty pins the old seed: rewrite it the same way.
+- Source-data invariants (`source-data-invariants.json`) are SQL checks that every run makes on
+  the seeded world. When the agent's seed changes, revise or drop each one that pins the old seed
+  with `revise_invariant`, citing the seed file and quoting the new row. When the agent's seed
+  does not explain the break, fix the data instead.
 
 ## Suite stage
 

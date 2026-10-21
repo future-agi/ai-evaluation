@@ -2,6 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from fi.alk.harness import nudge
 from fi.alk.harness.backends import SessionSpec, tool, tool_server
 from fi.alk.harness.catalogue import Catalogue, SubGoal, load_catalogue, save_catalogue
@@ -875,6 +877,254 @@ def test_a_missing_source_is_not_reported_as_a_stale_review(tmp_path):
     warnings = nudge.source_review_stale(tmp_path / "not-mounted", root)
 
     assert warnings == ["source not available; source review not re-checked"]
+
+
+_NEW_ROW = "INSERT INTO cart (item_id) VALUES ('big_mac');"
+
+
+def _pinned_review(tmp_path: Path, *scenarios: str) -> tuple[Path, Path]:
+    """A cart environment whose invariant pins the old seed: the cart starts empty."""
+    root = _suite(tmp_path / "ws", *scenarios) if scenarios else _cart(tmp_path / "ws")
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "agent.py").write_text(
+        "def lst(db):\n    return db.query('SELECT * FROM cart')\n", encoding="utf-8"
+    )
+    (source / "db" / "seed.sql").write_text(_NEW_ROW + "\n", encoding="utf-8")
+    quote = "return db.query('SELECT * FROM cart')"
+    checks = [
+        ("cart_starts_empty", "SELECT item_id FROM cart LIMIT 100", list(scenarios)),
+        ("menu_has_items", "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM menu)", []),
+    ]
+    review = {
+        "checks": [
+            {
+                "name": name,
+                "violations_sql": sql,
+                "evidence": [{"path": "agent.py", "quote": quote, "sha256": "0" * 64}],
+                "scenarios": scope,
+            }
+            for name, sql, scope in checks
+        ]
+    }
+    (root / ARTIFACT).write_text(json.dumps(review), encoding="utf-8")
+    return root, source
+
+
+def _seed_new_row(root: Path) -> None:
+    import sqlite3
+
+    with sqlite3.connect(root / "world.sqlite") as connection:
+        connection.execute(_NEW_ROW)
+
+
+def _environment_report(server) -> dict:
+    said = _call(server, "report_update", {"changed": True, "notes": "seed"})
+    return {
+        "is_error": bool(said.get("is_error")),
+        **json.loads(said["content"][0]["text"]),
+    }
+
+
+def test_a_new_seed_row_breaking_an_invariant_fails_until_it_is_revised(tmp_path):
+    root, source = _pinned_review(tmp_path)
+    server = nudge.nudge_server(
+        root, {"nudge_id": "n1", "stage": "environment"}, source=source
+    )
+    assert not _environment_report(server)["is_error"]
+
+    _seed_new_row(root)
+    failed = _environment_report(server)
+    assert failed["is_error"]
+    assert [(one["item"], one["kind"]) for one in failed["problems"]] == [
+        ("cart_starts_empty", "invariant")
+    ]
+
+    revised = _call(
+        server,
+        "revise_invariant",
+        {
+            "name": "cart_starts_empty",
+            "violations_sql": "SELECT item_id FROM cart WHERE item_id <> 'big_mac'",
+            "source_path": "db/seed.sql",
+            "source_quote": _NEW_ROW,
+        },
+    )
+    assert not revised.get("is_error"), revised
+    passed = _environment_report(server)
+    assert not passed["is_error"], passed
+    assert (
+        "source-data invariants changed: cart_starts_empty (revised, cites db/seed.sql)"
+        in passed["warnings"]
+    )
+    written = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert written["checks"]["passed"] is True
+
+
+def test_a_scoped_invariant_runs_after_its_scenarios_setup(tmp_path):
+    root, source = _pinned_review(tmp_path, "adds-a-big-mac")
+    assert nudge.invariant_problems(root, source) == ([], [])
+
+    (root / "scenarios" / "adds-a-big-mac" / "setup.py").write_text(
+        "def setup(world):\n    world.put('cart', {'item_id': 'big_mac'})\n",
+        encoding="utf-8",
+    )
+    problems, _ = nudge.invariant_problems(root, source)
+    assert [(one["item"], one["kind"]) for one in problems] == [
+        ("cart_starts_empty", "invariant")
+    ]
+    assert "after adds-a-big-mac's setup" in problems[0]["message"]
+
+    review = json.loads((root / ARTIFACT).read_text(encoding="utf-8"))
+    review["checks"][1]["violations_sql"] = "SELECT 1 FROM unnest(ARRAY[1])"
+    (root / ARTIFACT).write_text(json.dumps(review), encoding="utf-8")
+    _, not_checked = nudge.invariant_problems(root, source)
+    assert not_checked == ["source-data invariants SQLite cannot run: menu_has_items"]
+
+
+def test_a_scoped_postgres_invariant_the_new_seed_breaks_is_caught(tmp_path):
+    import sqlite3
+
+    root, source = _pinned_review(tmp_path, "adds-a-big-mac")
+    tower = "INSERT INTO places VALUES ('tower', 'Salesforce Tower', '[]');"
+    (source / "db" / "seed.sql").write_text(tower + "\n", encoding="utf-8")
+    with sqlite3.connect(root / "world.sqlite") as connection:
+        connection.executescript(
+            "CREATE TABLE places (place_id TEXT, address TEXT, aliases TEXT);"
+            """INSERT INTO places VALUES ('sfo', 'SFO Airport', '["sfo"]');"""
+        )
+    review = json.loads((root / ARTIFACT).read_text(encoding="utf-8"))
+    review["checks"][0]["violations_sql"] = (
+        "SELECT 'sfo_ambiguous' AS problem FROM (SELECT 1) x WHERE (SELECT count(*) "
+        "FROM places WHERE 'sfo' = ANY(aliases) OR address ILIKE '%sfo%') <> 1"
+    )
+    (root / ARTIFACT).write_text(json.dumps(review), encoding="utf-8")
+    assert nudge.invariant_problems(root, source) == ([], [])
+
+    with sqlite3.connect(root / "world.sqlite") as connection:
+        connection.execute(tower)
+    problems, _ = nudge.invariant_problems(root, source)
+    assert [(one["item"], one["kind"]) for one in problems] == [
+        ("cart_starts_empty", "invariant")
+    ]
+
+    said = nudge.revise_invariant(
+        root,
+        {
+            "name": "cart_starts_empty",
+            "violations_sql": "SELECT 'sfo_ambiguous' AS problem FROM (SELECT 1) x "
+            "WHERE (SELECT count(*) FROM places WHERE 'sfo' = ANY(aliases)) <> 1",
+            "source_path": "db/seed.sql",
+            "source_quote": tower,
+        },
+        source,
+    )
+    assert said == "revised, cites db/seed.sql"
+    assert nudge.invariant_problems(root, source) == ([], [])
+
+
+def test_an_uncited_or_misquoted_invariant_edit_is_refused(tmp_path):
+    root, source = _pinned_review(tmp_path)
+    server = nudge.nudge_server(
+        root, {"nudge_id": "n1", "stage": "environment"}, source=source
+    )
+    before = (root / ARTIFACT).read_bytes()
+    edit = {"name": "cart_starts_empty", "violations_sql": "SELECT 1 WHERE 0"}
+
+    for args in (
+        edit,
+        {
+            **edit,
+            "source_path": "db/seed.sql",
+            "source_quote": "VALUES ('onion rings')",
+        },
+        {**edit, "source_path": "db/other.sql", "source_quote": _NEW_ROW},
+        {**edit, "drop": True},
+        {
+            **edit,
+            "name": "no_such_check",
+            "source_path": "db/seed.sql",
+            "source_quote": _NEW_ROW,
+        },
+    ):
+        said = _call(server, "revise_invariant", args)
+        assert said["is_error"] and "Not changed" in said["content"][0]["text"]
+    assert (root / ARTIFACT).read_bytes() == before
+    assert {"source_path", "source_quote"} <= set(
+        next(
+            one for one in server.tools if one.name == "revise_invariant"
+        ).input_schema["required"]
+    )
+    assert "revise_invariant" in nudge.ENVIRONMENT_TOOLS
+    suite = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "suite"})
+    assert "revise_invariant" not in [one.name for one in suite.tools]
+
+    cited = {"source_path": "db/seed.sql", "source_quote": _NEW_ROW, "drop": True}
+    assert not _call(
+        server, "revise_invariant", {**cited, "name": "cart_starts_empty"}
+    ).get("is_error")
+    last = _call(server, "revise_invariant", {**cited, "name": "menu_has_items"})
+    assert last["is_error"] and "one invariant at least" in last["content"][0]["text"]
+    review = json.loads((root / ARTIFACT).read_text(encoding="utf-8"))
+    assert [one["name"] for one in review["checks"]] == ["menu_has_items"]
+
+
+def test_certify_only_reuses_the_revised_invariant_on_a_world_with_the_new_row(
+    tmp_path,
+):
+    from fi.alk.harness.authoring_entrypoint import _drop_stale_invariants
+    from fi.alk.harness.source_data_invariants import (
+        author_invariants,
+        check_invariants,
+    )
+    from fi.alk.harness.world.snapshot import restore
+
+    root, source = _pinned_review(tmp_path)
+    _seed_new_row(root)
+
+    def certify() -> list[dict]:
+        assert _drop_stale_invariants(source, root) == []
+        checks = asyncio.run(author_invariants(source, root, None, reuse_only=True))
+        world = restore(root)
+        try:
+            asyncio.run(check_invariants(world.store, checks))
+        finally:
+            world.close()
+        return checks
+
+    with pytest.raises(ValueError, match="cart_starts_empty"):
+        certify()
+
+    server = nudge.nudge_server(
+        root, {"nudge_id": "n1", "stage": "environment"}, source=source
+    )
+    _call(
+        server,
+        "revise_invariant",
+        {
+            "name": "cart_starts_empty",
+            "violations_sql": "SELECT item_id FROM cart WHERE item_id <> 'big_mac'",
+            "source_path": "db/seed.sql",
+            "source_quote": _NEW_ROW,
+        },
+    )
+    checks = certify()
+    revised = next(one for one in checks if one["name"] == "cart_starts_empty")
+    assert revised["evidence"][0]["path"] == "db/seed.sql"
+
+
+def test_the_update_skill_says_to_revise_invariants_that_pin_the_old_seed():
+    from fi.alk.harness.config import SKILLS_ROOT
+
+    update = " ".join(
+        SKILLS_ROOT.joinpath("builder", "topics", "agent-update.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert (
+        "revise or drop each one that pins the old seed with `revise_invariant`, citing "
+        "the seed file and quoting the new row" in update
+    )
 
 
 # 6. filtered_spec + gate_hooks

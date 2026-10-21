@@ -31,10 +31,16 @@ from .catalogue import (
 from .contract import validate_contract
 from .outbound import _redact_validation_error
 from .proofs import load_proofs, record_proof, record_unprovable
-from .prove import prove
+from .prove import prepared, prove
 from .scenario import Scenario, _slug
 from .scenario_tools import load_scenarios, write_scenarios
-from .source_data_invariants import ARTIFACT, source_files, validate_evidence
+from .source_data_invariants import (
+    ARTIFACT,
+    source_files,
+    sqlite_dialect,
+    sqlite_regexp,
+    validate_evidence,
+)
 from .tools import schema
 from .understand import load as load_contract
 from .world.snapshot import (
@@ -44,6 +50,7 @@ from .world.snapshot import (
     STATE,
     WORLD_MODULE,
     read_manifest,
+    restore,
 )
 from .world.stores import SAVED
 from .world.stores.inprocess import InProcessStore
@@ -64,6 +71,7 @@ ENVIRONMENT_TOOLS = frozenset(
         "impact_of",
         "check_health",
         "add_world_check",
+        "revise_invariant",
         "create_schema",
         "seed",
         "change_data",
@@ -448,6 +456,88 @@ def source_review_stale(source: Path, workspace: Path) -> list[str]:
     return warnings
 
 
+def _invariant_world(workspace: Path, scenario: Scenario | None) -> Any:
+    """The saved world, after ``scenario``'s setup when there is one; None if it cannot open."""
+    try:
+        if scenario is None:
+            world = restore(workspace)
+        else:
+            world, applied, _ = prepared(scenario, workspace)
+            if not applied.ok:
+                world.close()
+                return None
+        world.connection.create_function("regexp", 2, sqlite_regexp)
+    except Exception:  # noqa: BLE001 - a world that cannot open leaves the check unrun
+        return None
+    return world
+
+
+def invariant_problems(
+    workspace: Path, source: Path | None
+) -> tuple[list[dict], list[str]]:
+    """Saved source-data invariants the saved world breaks: (problems, not_checked).
+
+    As certify runs them: checks quoting a line the source no longer has are skipped (certify
+    drops them), unscoped ones run on the saved world, scoped ones after each scenario's setup.
+    Their Postgres is rewritten for SQLite; what SQLite still cannot run is not checked.
+    """
+    workspace = Path(workspace)
+    try:
+        review = json.loads((workspace / ARTIFACT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], []
+    checks = review.get("checks") if isinstance(review, dict) else None
+    if not isinstance(checks, list) or not (workspace / MANIFEST).is_file():
+        return [], []
+    files = source_files(Path(source)) if source and Path(source).is_dir() else None
+    scenarios = {one.scenario_key: one for one in load_scenarios(workspace)}
+    worlds: dict[str | None, Any] = {}
+    problems: list[dict] = []
+    unrun: list[str] = []
+    try:
+        for check in checks:
+            if files is not None:
+                try:
+                    validate_evidence(check, files)
+                except (ValueError, AttributeError, TypeError):
+                    continue
+            name = str(check.get("name") or "a check")
+            for key in check.get("scenarios") or [None]:
+                if key is not None and key not in scenarios:
+                    continue
+                if key not in worlds:
+                    worlds[key] = _invariant_world(workspace, scenarios.get(key))
+                try:
+                    sql = sqlite_dialect(str(check["violations_sql"]))
+                    rows = worlds[key].store.query(sql, ())
+                except Exception:  # noqa: BLE001 - SQL SQLite cannot run is not checked
+                    unrun.append(name)
+                    break
+                if rows:
+                    problems.append(
+                        _problem(
+                            name,
+                            "invariant",
+                            f"the saved world breaks this source-data invariant "
+                            f"({len(rows)} violating rows"
+                            + (f" after {key}'s setup" if key else "")
+                            + "). Fix the data, or if it pins the agent's old seed, "
+                            "revise or drop it with revise_invariant.",
+                        )
+                    )
+                    break
+    finally:
+        for world in worlds.values():
+            if world is not None:
+                world.close()
+    if not unrun:
+        return problems, []
+    said = "source-data invariants SQLite cannot run: " + ", ".join(
+        dict.fromkeys(unrun)
+    )
+    return problems, [said[:_TEXT_MAX]]
+
+
 def write_result(
     workspace: Path,
     *,
@@ -491,12 +581,14 @@ def report_update(
     source: Path | None = None,
     started_with: set[str] | None = None,
     world: Mapping[str, Any] | None = None,
+    invariants: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the stage gate and write the result file. ``nudge`` is the command payload.
 
     ``world`` is the turn's world tracking: world changes not yet saved fail the gate.
     ``started_with`` is what the piece held when the turn began: its scenario keys (suite) or
     its contract's tools (environment).
+    ``invariants`` are the source-data invariants this turn changed, each with how.
     """
     # A gate that raises leaves no result rather than an earlier one.
     (Path(workspace) / NUDGE_RESULT).unlink(missing_ok=True)
@@ -505,6 +597,10 @@ def report_update(
     left_out: list[dict] = []
     if stage == ENVIRONMENT:
         problems, not_checked = environment_gate(workspace, started_with)
+        if "world" not in not_checked:
+            broken, unrun = invariant_problems(workspace, source)
+            problems += broken
+            not_checked += unrun
         if world and world.get("unsaved"):
             problems.append(
                 _problem(
@@ -522,6 +618,13 @@ def report_update(
                 + ", ".join(
                     f"{name} (cites {path})"
                     for name, path in sorted(world["checks"].items())
+                )
+            )
+        if invariants:
+            warnings.append(
+                "source-data invariants changed: "
+                + ", ".join(
+                    f"{name} ({how})" for name, how in sorted(invariants.items())
                 )
             )
     else:
@@ -666,6 +769,60 @@ def cite_world_checks(
     )
 
 
+def revise_invariant(workspace: Path, args: dict[str, Any], source: Path | None) -> str:
+    """Revise or drop one saved source-data invariant, citing the agent's source: what was
+    done, or why not."""
+    path = Path(workspace) / ARTIFACT
+    try:
+        review = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "Not changed: this environment has no source-data invariants."
+    checks = review.get("checks") if isinstance(review, dict) else None
+    name = str(args.get("name") or "").strip()
+    held = next(
+        (
+            one
+            for one in checks or []
+            if isinstance(one, dict) and one.get("name") == name
+        ),
+        None,
+    )
+    if held is None:
+        return f"Not changed: no source-data invariant is named {name!r}."
+    sql = str(args.get("violations_sql") or "").strip() or str(
+        held.get("violations_sql") or ""
+    )
+    said = citation_refusal({**args, "code": sql}, source)
+    if said:
+        return said
+    cites = str(args.get("source_path") or "")
+    if args.get("drop"):
+        if len(checks) == 1:
+            return (
+                "Not changed: certify needs one invariant at least; revise it instead."
+            )
+        kept = [one for one in checks if one is not held]
+        done = f"dropped, cites {cites}"
+    else:
+        revised = validate_evidence(
+            {
+                "name": name,
+                "violations_sql": sql,
+                "evidence": [
+                    {"path": cites, "quote": str(args.get("source_quote") or "")}
+                ],
+                "scenarios": held.get("scenarios") or [],
+            },
+            source_files(Path(source)),
+        )
+        kept = [revised if one is held else one for one in checks]
+        done = f"revised, cites {cites}"
+    path.write_text(
+        json.dumps({**review, "checks": kept}, indent=2) + "\n", encoding="utf-8"
+    )
+    return done
+
+
 def track_world(
     server: ToolServer, held: dict[str, Any], source: Path | None = None
 ) -> ToolServer:
@@ -711,6 +868,7 @@ def nudge_server(
     """
     workspace = Path(workspace)
     stage = str(nudge.get("stage") or "")
+    invariants: dict[str, str] = {}
     started_with = (
         {
             one.scenario_key
@@ -753,6 +911,7 @@ def nudge_server(
             "source": source,
             "started_with": started_with,
             "world": world,
+            "invariants": invariants,
         }
         result = report_update(workspace, nudge=nudge, **done)
         if reported is not None:
@@ -760,7 +919,35 @@ def nudge_server(
         said = json.dumps(result, indent=1)
         return _ok(said) if result["passed"] else _err(said)
 
-    return tool_server(name=NUDGE_SERVER, tools=[retire, report])
+    @tool(
+        "revise_invariant",
+        "Revise or drop a source-data invariant (source-data-invariants.json: SQL that certify "
+        "runs on the seeded world) that pins the agent's old seed. `violations_sql` replaces "
+        "its SELECT (empty keeps it); `drop` removes it. Only to follow the agent's changed "
+        "source: `source_path` is the file, `source_quote` a line of it (20+ characters), such "
+        "as the new seed row.",
+        schema(
+            {
+                "name": str,
+                "violations_sql": str,
+                "drop": bool,
+                "source_path": str,
+                "source_quote": str,
+            },
+            ["name", "source_path", "source_quote"],
+        ),
+    )
+    async def revise(args: dict[str, Any]) -> dict[str, Any]:
+        said = revise_invariant(workspace, args, source)
+        if said.startswith("Not changed"):
+            return _err(said)
+        invariants[str(args.get("name") or "").strip()] = said
+        return _ok(f"{args.get('name')} {said}")
+
+    tools = [retire, report]
+    if stage == ENVIRONMENT:
+        tools.append(revise)
+    return tool_server(name=NUDGE_SERVER, tools=tools)
 
 
 _USAGE_TOTALS = ("tokens_in", "tokens_out", "tokens_cached")

@@ -533,3 +533,25 @@ def test_a_large_suite_is_shared_while_writing_and_full_conversations_are_replac
         declaration()["name"]
     ]
     assert len([check for check in checks if check["scenarios"]]) == 12
+
+
+def test_postgres_invariant_sql_runs_on_a_sqlite_world_with_json_arrays():
+    connection = sqlite3.connect(":memory:")
+    connection.create_function("regexp", 2, subject.sqlite_regexp)
+    connection.executescript(
+        "CREATE TABLE places (id TEXT, address TEXT, aliases TEXT, needs TEXT);"
+        """INSERT INTO places VALUES ('sfo', 'SFO Airport', '["sfo"]', '[]');"""
+        """INSERT INTO places VALUES ('tower', 'Salesforce Tower', '[]', '[]');"""
+    )
+    sql = subject.sqlite_dialect(
+        "SELECT id FROM places WHERE ('sfo' = ANY(aliases) OR address ILIKE '%sfo%') "
+        "AND COALESCE(needs, '{}') = '{}' AND round(1.5::numeric, 0) = 2 "
+        "AND btrim(address) !~ '^x~y' ORDER BY id"
+    )
+
+    assert "'^x~y'" in sql and "ILIKE" not in sql
+    assert [row[0] for row in connection.execute(sql)] == ["sfo", "tower"]
+    with pytest.raises(sqlite3.Error):
+        connection.execute(
+            subject.sqlite_dialect("SELECT a FROM unnest(ARRAY[1]) AS a")
+        )
