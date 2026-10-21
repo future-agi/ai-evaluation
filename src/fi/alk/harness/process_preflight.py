@@ -486,6 +486,19 @@ def _verify_secret_purposes(
             + ", ".join(sorted(simulator_claimants)),
         )
 
+    export_claimants = [
+        process.name
+        for process in manifest.processes
+        if isinstance(process, SourceProcess)
+        and SecretPurpose.OBSERVABILITY_EXPORT in process.secret_purposes
+    ]
+    if export_claimants:
+        raise PreflightError(
+            "secret_purpose_forbidden",
+            "customer processes cannot claim observability_export credentials: "
+            + ", ".join(sorted(export_claimants)),
+        )
+
     ref_has_target_provider = any(
         purpose == SecretPurpose.TARGET_PROVIDER.value
         for purpose in secret_refs.values()

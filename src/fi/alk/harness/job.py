@@ -12,7 +12,7 @@ from enum import Enum
 import re
 from typing import Protocol
 
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
@@ -246,6 +246,21 @@ class HarnessExecutionManifestEntry(BaseModel):
     call_execution_id: str = Field(min_length=1)
 
 
+class HarnessJobMetadata(BaseModel):
+    """The entries of `HarnessJob.metadata` the SDK reads by name, typed.
+
+    The platform writes `customer_code_environment` (future-agi
+    `simulate/services/hosted_harness_gateway.py`, `_with_simulation_mark`) as a map of text to
+    text. `HarnessJob.metadata` itself stays a loose JSON map on purpose, so a bad value here can
+    never fail the whole job at `load_job`; readers validate this entry through this model and
+    fall back to `{}`.
+    """
+
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    customer_code_environment: dict[str, str] = Field(default_factory=dict)
+
+
 class HarnessJob(BaseModel):
     schema_version: str = HARNESS_JOB_SCHEMA_VERSION
     job_id: str
@@ -318,7 +333,8 @@ class HarnessJob(BaseModel):
             for alias, reference in self.agent.secret_refs.items():
                 expected_manager = (
                     "platform-config"
-                    if reference.purpose == "simulator_provider"
+                    if reference.purpose
+                    in {"simulator_provider", "observability_export"}
                     else "platform-vault"
                 )
                 if reference.manager != expected_manager:
@@ -326,6 +342,7 @@ class HarnessJob(BaseModel):
                 if reference.purpose not in {
                     "target_provider",
                     "simulator_provider",
+                    "observability_export",
                 }:
                     raise ValueError(f"hosted_secret_purpose_invalid: {alias}")
             if self.security.allow_privileged:
@@ -488,6 +505,7 @@ __all__ = [
     "HarnessFailure",
     "HarnessExecutionManifestEntry",
     "HarnessJob",
+    "HarnessJobMetadata",
     "HarnessJobStatus",
     "HarnessRetryPolicy",
     "HarnessStage",

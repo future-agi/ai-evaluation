@@ -1,0 +1,152 @@
+{
+  "agent": {
+    "behaviour": [
+      {
+        "id": "main",
+        "instructions": "Book a table.",
+        "shape": "external",
+        "tools": [
+          "reserve"
+        ],
+        "transitions": []
+      }
+    ],
+    "direction_answer": null,
+    "extension": {
+      "contract": {
+        "agent": "booking-livekit-agent",
+        "agent_languages": [],
+        "amendments": [],
+        "call_direction": "inbound",
+        "chosen_evals": [],
+        "conversational": true,
+        "data_schema": {},
+        "data_store": null,
+        "dependencies": [],
+        "hard_constraints": [],
+        "implementation": "",
+        "instrumentation": "opentelemetry",
+        "modality": "voice",
+        "notes": "",
+        "one_liner": "",
+        "open_questions": [],
+        "real_use_cases": [],
+        "refusal_signature": "",
+        "runtime": null,
+        "runtime_dependencies": [],
+        "system_prompt_excerpt": "Book a table.",
+        "tool_entrypoints": [
+          {
+            "callable": "",
+            "endpoint": "/reserve",
+            "factory": "",
+            "first_arg": "",
+            "method": "POST",
+            "mode": "service",
+            "module": "",
+            "notes": "",
+            "service": "booking-api",
+            "tool": "reserve"
+          }
+        ],
+        "tools": [
+          {
+            "arg_types": {},
+            "arg_values": {},
+            "args": [
+              "time",
+              "party_size"
+            ],
+            "description": "Reserve a table.",
+            "name": "reserve",
+            "requires": []
+          }
+        ]
+      }
+    },
+    "gaps": [
+      "flow_not_described"
+    ],
+    "instrumentation": "opentelemetry",
+    "kind": "source",
+    "model": null,
+    "name": "booking-livekit-agent",
+    "provider_ref": null,
+    "schema_version": "1.0",
+    "setup_hash": "sh1:a3a3d29ac8bd079114a9150eb9cc55a7f2c235f7f9ae28938bf0f92ceeb98fac",
+    "supports": [],
+    "telephony": [],
+    "tools": [
+      {
+        "description": "Reserve a table.",
+        "endpoint": null,
+        "kind": "http",
+        "name": "reserve",
+        "parameters": {
+          "properties": {
+            "party_size": {},
+            "time": {}
+          },
+          "required": [
+            "time",
+            "party_size"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "type": "voice",
+    "voice": null
+  },
+  "contract": {
+    "agent": "booking-livekit-agent",
+    "agent_languages": [],
+    "amendments": [],
+    "base_environment": {},
+    "call_direction": "inbound",
+    "chosen_evals": [],
+    "conversational": true,
+    "data_schema": {},
+    "data_store": null,
+    "dependencies": [],
+    "hard_constraints": [],
+    "implementation": "",
+    "instrumentation": "opentelemetry",
+    "modality": "voice",
+    "notes": "",
+    "one_liner": "",
+    "open_questions": [],
+    "real_use_cases": [],
+    "refusal_signature": "",
+    "runtime": null,
+    "runtime_dependencies": [],
+    "system_prompt_excerpt": "Book a table.",
+    "tool_entrypoints": [
+      {
+        "callable": "",
+        "endpoint": "/reserve",
+        "factory": "",
+        "first_arg": "",
+        "method": "POST",
+        "mode": "service",
+        "module": "",
+        "notes": "",
+        "service": "booking-api",
+        "tool": "reserve"
+      }
+    ],
+    "tools": [
+      {
+        "arg_types": {},
+        "arg_values": {},
+        "args": [
+          "time",
+          "party_size"
+        ],
+        "description": "Reserve a table.",
+        "name": "reserve",
+        "requires": []
+      }
+    ]
+  }
+}

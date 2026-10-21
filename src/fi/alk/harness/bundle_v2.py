@@ -115,6 +115,7 @@ class SecretPurpose(str, Enum):
     TARGET_PROVIDER = "target_provider"
     SIMULATOR_PROVIDER = "simulator_provider"
     SOURCE_CHECKOUT = "source_checkout"
+    OBSERVABILITY_EXPORT = "observability_export"
 
 
 # §0 (v1.8): a process `name` is path-joined into `/work/build/<name>/` and
