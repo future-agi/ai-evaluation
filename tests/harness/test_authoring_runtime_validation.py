@@ -9,6 +9,7 @@ import pytest
 from fi.alk.harness.authoring_runtime_validation import (
     _fallback_diagnostic,
     _make_local_seed_files_readable,
+    _provider_owns_tool_execution,
     RuntimeValidationError,
     _setup_check_keys,
     _generic_candidate_hash,
@@ -24,7 +25,7 @@ from fi.alk.harness.certification import (
     GenericHarnessArtifactStore,
     RuntimeValidationEvidence,
 )
-from fi.alk.harness.job import HarnessJob
+from fi.alk.harness.job import HarnessJob, ProviderExecutionMode
 from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
 from fi.alk.harness.diagnostics import HarnessDiagnostic
 from fi.alk.harness.job import HarnessStage
@@ -55,6 +56,24 @@ from fi.alk.harness.world_ir import (
     WorldValue,
     validate_world_ir,
 )
+
+
+@pytest.mark.parametrize(
+    ("connector", "mode"),
+    [
+        ("retell", ProviderExecutionMode.CONNECT_ONLY),
+        ("retell", ProviderExecutionMode.ENVIRONMENT_BACKED),
+        ("retell", ProviderExecutionMode.PROVIDER_IMPORT),
+        ("retell_chat", ProviderExecutionMode.PROVIDER_IMPORT),
+        ("vapi", ProviderExecutionMode.CONNECT_ONLY),
+        ("vapi", ProviderExecutionMode.ENVIRONMENT_BACKED),
+        ("vapi", ProviderExecutionMode.PROVIDER_IMPORT),
+    ],
+)
+def test_provider_connector_owns_tool_execution(connector, mode) -> None:
+    job = SimpleNamespace(agent=SimpleNamespace(connector=connector, mode=mode))
+
+    assert _provider_owns_tool_execution(job)
 
 
 def test_local_seed_handoff_opens_only_generated_seed_files(tmp_path):

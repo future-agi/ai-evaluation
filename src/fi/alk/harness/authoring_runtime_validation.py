@@ -468,6 +468,21 @@ def _looks_like_runtime_plan_failure(detail: str) -> bool:
     )
 
 
+def _provider_owns_tool_execution(job) -> bool:
+    from .job import ProviderExecutionMode
+
+    agent = getattr(job, "agent", None)
+    return str(getattr(agent, "connector", "")).lower() in {
+        "retell",
+        "retell_chat",
+        "vapi",
+    } and getattr(agent, "mode", None) in {
+        ProviderExecutionMode.CONNECT_ONLY,
+        ProviderExecutionMode.ENVIRONMENT_BACKED,
+        ProviderExecutionMode.PROVIDER_IMPORT,
+    }
+
+
 def _repair_guidance(diagnostics) -> str:
     """Render the complete secret-safe evidence needed for one constrained repair."""
 
@@ -670,6 +685,7 @@ async def validate_once(
         and getattr(getattr(job, "agent", None), "mode", None)
         is ProviderExecutionMode.CONNECT_ONLY
     )
+    provider_owned_tools = _provider_owns_tool_execution(job)
     generic = bool(
         isinstance(getattr(job, "metadata", None), dict)
         and job.metadata.get("generic_harness_v1") is True
@@ -845,7 +861,7 @@ async def validate_once(
                     (authoring / "contract.json").read_text(encoding="utf-8")
                 )
                 tool_report = certify_tool_inventory(
-                    contract, bundle, external_provider=external_provider
+                    contract, bundle, external_provider=provider_owned_tools
                 )
                 rejected_tools = [
                     item.tool
