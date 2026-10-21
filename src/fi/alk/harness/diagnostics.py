@@ -73,6 +73,16 @@ _POLICIES = MappingProxyType(
             owner=RepairOwner.COMPILER,
             repair_strategy="recompile_with_discovered_type",
         ),
+        "source_model_digest_conflict": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="regenerate_source_model_for_current_source",
+        ),
+        "source_model_conflict": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.COMPILER,
+            repair_strategy="regenerate_source_model_for_current_source",
+        ),
         "source_model_fingerprint_mismatch": DiagnosticPolicy(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.COMPILER,

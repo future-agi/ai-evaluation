@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 import json
+import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -929,3 +930,267 @@ def test_certify_only_refuses_to_author_invariants_for_a_live_world_with_data(
     assert [item["action"] for item in history["decisions"]] == ["reject"]
     assert not bundle.exists()
     assert not (authoring / ARTIFACT).exists()
+
+
+def _saved_world(authoring: Path, *, users: bool) -> None:
+    """The environment's world.sqlite; with users, a world its recorded World IR lacks."""
+    import sqlite3
+    from contextlib import closing
+
+    with closing(sqlite3.connect(authoring / "world.sqlite")) as connection:
+        connection.execute("PRAGMA user_version = 1")
+        if users:
+            connection.execute("CREATE TABLE users (id TEXT PRIMARY KEY)")
+            connection.execute("INSERT INTO users VALUES ('u1')")
+        connection.commit()
+
+
+def _recorded(authoring: Path) -> dict[str, bytes]:
+    root = authoring / "generic-harness"
+    return {
+        name: (root / name).read_bytes()
+        for name in ("source-model.json", "world-ir.json")
+        if (root / name).is_file()
+    }
+
+
+def test_refresh_keeps_the_facts_of_the_agent_the_environment_was_built_from(
+    tmp_path,
+) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_world(authoring, users=False)
+    before = _recorded(authoring)
+
+    notes = authoring_entrypoint._refresh_source_facts(
+        _job(1), source.resolve(), authoring
+    )
+
+    assert notes == []
+    assert _recorded(authoring) == before
+
+
+def test_refresh_describes_another_agent_version_and_reseeds_the_saved_world(
+    tmp_path,
+) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_world(authoring, users=False)
+    (source / "agent.py").write_text("print('v2')\n", encoding="utf-8")
+
+    notes = authoring_entrypoint._refresh_source_facts(
+        _job(1), source.resolve(), authoring
+    )
+
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    assert store.read_source_model().source_digest == "sha256:" + source_fingerprint(
+        source
+    )
+    assert not (store.root / "world-ir.json").exists()
+    assert len(notes) == 2
+
+
+def test_refresh_keeps_the_world_ir_when_no_saved_world_can_replace_it(
+    tmp_path,
+) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    (source / "agent.py").write_text("print('v2')\n", encoding="utf-8")
+    world_ir = (authoring / "generic-harness" / "world-ir.json").read_bytes()
+
+    authoring_entrypoint._refresh_source_facts(_job(1), source.resolve(), authoring)
+
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    assert store.read_source_model().source_digest == "sha256:" + source_fingerprint(
+        source
+    )
+    assert (store.root / "world-ir.json").read_bytes() == world_ir
+
+
+def test_refresh_drops_a_world_ir_the_saved_world_has_outgrown(tmp_path) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_world(authoring, users=True)
+    root = authoring / "generic-harness"
+    model = (root / "source-model.json").read_bytes()
+
+    authoring_entrypoint._refresh_source_facts(_job(1), source.resolve(), authoring)
+
+    assert (root / "source-model.json").read_bytes() == model
+    assert not (root / "world-ir.json").exists()
+
+
+def test_refresh_keeps_a_world_ir_that_differs_from_a_clean_import(tmp_path) -> None:
+    """A validation repair lives only in the World IR; the saved world still imports."""
+    from fi.alk.harness.source_model import LogicalType
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_world(authoring, users=False)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    repaired = WorldIR.create(
+        source_model_fingerprint=store.read_source_model().fingerprint,
+        tables=(
+            WorldTable(
+                source_name="users",
+                rows=(
+                    WorldRow(
+                        identity="u1",
+                        values={"id": WorldValue.present(LogicalType.STRING, "u1")},
+                    ),
+                ),
+            ),
+        ),
+    )
+    store.write_world_ir(repaired)
+    before = _recorded(authoring)
+
+    assert (
+        authoring_entrypoint._refresh_source_facts(
+            _job(1), source.resolve(), authoring
+        )
+        == []
+    )
+    assert _recorded(authoring) == before
+
+
+def test_certify_only_validates_with_the_facts_of_the_agent_version_it_runs(
+    tmp_path, monkeypatch
+) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_world(authoring, users=False)
+    (source / "agent.py").write_text("print('v2')\n", encoding="utf-8")
+    _forbid_models(monkeypatch)
+    calls: list[str] = []
+    certify = _certifying_validate(calls)
+    seen: list[tuple[str, bool]] = []
+
+    async def validate(job, source, authoring):
+        store = GenericHarnessArtifactStore(authoring / "generic-harness")
+        model = store.read_source_model()
+        seen.append((model.source_digest, (store.root / "world-ir.json").exists()))
+        # What the seed records once it has imported the saved world.
+        store.write_world_ir(
+            WorldIR.create(source_model_fingerprint=model.fingerprint, tables=())
+        )
+        return await certify(job, source, authoring)
+
+    _use_validator(monkeypatch, validate)
+    bundle = tmp_path / "bundle"
+
+    assert (
+        _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, bundle)) == 0
+    )
+
+    assert seen == [("sha256:" + source_fingerprint(source), False)]
+    bundled = SourceModel.model_validate_json(
+        (bundle / "seed" / "source-model.json").read_text(encoding="utf-8")
+    )
+    assert bundled.source_digest == "sha256:" + source_fingerprint(source)
+
+
+def _seed_real_postgres(dsn: str, name: str, bundle: Path) -> dict[str, int]:
+    """Migrate and seed a fresh database from the bundle, as the world-db process does."""
+    import uuid
+
+    from fi.alk.harness import process_runtime as runtime
+
+    psycopg = pytest.importorskip("psycopg")
+    parameters = psycopg.conninfo.conninfo_to_dict(dsn)
+    database = f"certify_{name}_{uuid.uuid4().hex[:8]}"
+    manifest = load_bundle_v2(bundle)
+    (store,) = manifest.seed.stores
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{database}"')
+    try:
+        target = psycopg.conninfo.make_conninfo(dsn, dbname=database)
+        with psycopg.connect(target, autocommit=True) as connection:
+            for migration in store.migrations:
+                connection.execute((bundle / migration).read_text(encoding="utf-8"))
+        for seed_file in store.seed_files:
+            runtime.apply_seed_file(
+                runtime.ManagedEngine.POSTGRES,
+                bundle / seed_file,
+                port=int(parameters.get("port", 5432)),
+                dbname=database,
+                credentials=runtime.EngineCredentials(
+                    username=str(parameters["user"]),
+                    password=str(parameters["password"]),
+                ),
+                process_name="world-db",
+                sync_run=lambda *args, **kwargs: pytest.fail("must not run psql"),
+                source_digest=manifest.provenance.source_digest,
+            )
+        with psycopg.connect(target) as connection:
+            return {
+                table: connection.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+                for table in ("users", "otp_codes")
+                if connection.execute("SELECT to_regclass(%s)", (table,)).fetchone()[0]
+            }
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+
+
+def _rebuilt_for_v2(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """An environment built from source v1, whose world a later rebuild extended for v2."""
+    import sqlite3
+    from contextlib import closing
+
+    v1, authoring, _ = _assembled(tmp_path, {"one": ["works"]})
+    (v1 / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL);\n",
+        encoding="utf-8",
+    )
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    model = SourceModel.create(
+        source_digest="sha256:" + source_fingerprint(v1), engine="none"
+    )
+    store.write_source_model(model)
+    store.write_world_ir(
+        WorldIR.create(source_model_fingerprint=model.fingerprint, tables=())
+    )
+    v2 = tmp_path / "source-v2"
+    shutil.copytree(v1, v2)
+    (v2 / "db" / "schema.sql").write_text(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL);\n"
+        "CREATE TABLE otp_codes (id TEXT PRIMARY KEY, "
+        "user_id TEXT NOT NULL REFERENCES users(id), code TEXT NOT NULL);\n",
+        encoding="utf-8",
+    )
+    with closing(sqlite3.connect(authoring / "world.sqlite")) as connection:
+        connection.execute("CREATE TABLE users (id TEXT, name TEXT)")
+        connection.execute("CREATE TABLE otp_codes (id TEXT, user_id TEXT, code TEXT)")
+        connection.execute("INSERT INTO users VALUES ('u1', 'Ada')")
+        connection.execute("INSERT INTO otp_codes VALUES ('o1', 'u1', '0000')")
+        connection.commit()
+    return v1, v2, authoring
+
+
+@pytest.mark.parametrize("run", ["v2", "v2_unrefreshed", "v1_rollback"])
+def test_real_postgres_seeds_the_saved_world_for_the_agent_version_run(
+    tmp_path, run: str
+) -> None:
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run the real seed test")
+    from fi.alk.harness.process_runtime import ProcessRuntimeError
+
+    v1, v2, authoring = _rebuilt_for_v2(tmp_path)
+    source = v1 if run == "v1_rollback" else v2
+    if run != "v2_unrefreshed":
+        authoring_entrypoint._refresh_source_facts(_job(1), source, authoring)
+    bundle = tmp_path / "bundle"
+    bundle_author.author_bundle_v2(
+        source=source, job=_job(1), authoring=authoring, output=bundle
+    )
+
+    if run == "v2":
+        assert _seed_real_postgres(dsn, run, bundle) == {"users": 1, "otp_codes": 1}
+        return
+    with pytest.raises(ProcessRuntimeError) as raised:
+        _seed_real_postgres(dsn, run, bundle)
+    expected = {
+        "v2_unrefreshed": ("source_model_digest_conflict", None),
+        "v1_rollback": ("unknown_table", "otp_codes"),
+    }[run]
+    assert [
+        (item.code, item.location.table if item.location else None)
+        for item in raised.value.diagnostics
+    ] == [expected]

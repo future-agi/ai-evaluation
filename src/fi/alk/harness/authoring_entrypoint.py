@@ -223,6 +223,52 @@ def _prepare_source_data_invariants(job: HarnessJob, output: Path) -> list[str]:
     return []
 
 
+def _saved_world_outgrew_world_ir(output: Path) -> bool:
+    """Whether world.sqlite holds data the source model its World IR was imported for lacks.
+
+    An IR that differs from a clean import is kept: it may carry a validation repair.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from .certification import GenericHarnessArtifactStore
+    from .world_import.sqlite import SQLiteWorldImportError, import_sqlite_world
+
+    store = GenericHarnessArtifactStore(output / "generic-harness")
+    world = output / "world.sqlite"
+    try:
+        with closing(sqlite3.connect(f"file:{world}?mode=ro", uri=True)) as connection:
+            import_sqlite_world(connection, store.read_source_model(), validate=False)
+    except SQLiteWorldImportError:
+        return True
+    return False
+
+
+def _refresh_source_facts(job: HarnessJob, source: Path, output: Path) -> list[str]:
+    """Describe the agent version being certified and the world the environment saved.
+
+    Both are recorded for whichever agent version last built or edited the environment.
+    """
+    from .cli import after_contract, source_model_is_stale
+
+    notes: list[str] = []
+    stale_model = source_model_is_stale(output, source)
+    world_ir = output / "generic-harness" / "world-ir.json"
+    drop_world_ir = (
+        world_ir.is_file()
+        and (output / "world.sqlite").is_file()
+        and (stale_model or _saved_world_outgrew_world_ir(output))
+    )
+    if stale_model:
+        after_contract(output, source, job)
+        notes.append("source model rebuilt for this agent version's source")
+    if drop_world_ir:
+        # The saved world is imported again at seed, against this source's schema.
+        world_ir.unlink()
+        notes.append("World IR dropped, world.sqlite is seeded instead")
+    return notes
+
+
 def _discard_certify_report(path: Path) -> None:
     """A failed run leaves no report behind."""
     from .authoring_runtime_validation import RuntimeValidationError
@@ -281,6 +327,7 @@ def _certify_only(args: argparse.Namespace) -> int:
             args.job.read_text(encoding="utf-8")
         )
         notes += _prepare_source_data_invariants(runtime_job, output)
+        notes += _refresh_source_facts(runtime_job, source, output)
     except RuntimeValidationError:
         raise
     except Exception as exc:

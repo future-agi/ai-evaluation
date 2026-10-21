@@ -239,6 +239,24 @@ def after_contract(destination: Path, source_path: Path, job: Any) -> None:
         )
 
 
+def source_model_is_stale(destination: Path, source_path: Path) -> bool:
+    """Whether the recorded source model describes other code than the source here now."""
+    from .certification import GenericHarnessArtifactStore
+    from .provision import source_fingerprint
+
+    store = GenericHarnessArtifactStore(destination / "generic-harness")
+    source = Path(source_path).resolve()
+    if not (store.root / store.SOURCE_MODEL).is_file() or not source.is_dir():
+        return False
+    try:
+        recorded = store.read_source_model().source_digest
+    except (OSError, ValueError):
+        return True
+    return recorded.removeprefix("sha256:") != source_fingerprint(source).removeprefix(
+        "sha256:"
+    )
+
+
 def after_world(source_root: Any, destination: Path, contract: Any) -> Any:
     """Seal the exact environment once its world exists. Local and hosted execution consume
     this same internal bundle; the source repository is never a special runtime path after it."""
