@@ -226,8 +226,22 @@ def _world_problems(workspace: Path) -> tuple[list[dict], list[str]]:
     return problems, []
 
 
-def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
-    """Static checks of the environment piece: (problems, not_checked)."""
+def _contract_tools(workspace: Path) -> set[str]:
+    try:
+        contract = load_contract(workspace)
+    except (OSError, ValueError):
+        contract = None
+    return contract.tool_names() if contract is not None else set()
+
+
+def environment_gate(
+    workspace: Path, started_with: set[str] | None = None
+) -> tuple[list[dict], list[str]]:
+    """Static checks of the environment piece: (problems, not_checked).
+
+    ``started_with`` is the contract's tools when the turn began; a tool added since that the
+    saved world has no handler for is a problem.
+    """
     workspace = Path(workspace)
     problems: list[dict] = []
     try:
@@ -286,6 +300,23 @@ def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
             or bool(manifest.get("tools")),
         )
     )
+    if (
+        started_with is not None
+        and contract is not None
+        and (manifest.get("tables") or manifest.get("tools"))
+    ):
+        covered = {
+            *(manifest.get("tools") or []),
+            *(manifest.get("runtime_tools") or []),
+        }
+        problems.extend(
+            _problem(
+                name,
+                "world",
+                "contract tool has no handler; save_world has not saved a world with it",
+            )
+            for name in sorted(contract.tool_names() - started_with - covered)
+        )
     return problems, not_checked
 
 
@@ -303,11 +334,7 @@ def suite_gate(
     workspace = Path(workspace)
     earlier = load_proofs(workspace)
     catalogue = load_catalogue(workspace)
-    try:
-        contract = load_contract(workspace)
-    except (OSError, ValueError):
-        contract = None
-    tools = contract.tool_names() if contract is not None else set()
+    tools = _contract_tools(workspace)
     scenarios = load_scenarios(workspace)
     present = {one.scenario_key for one in scenarios}
     before = set(earlier) if started_with is None else set(started_with)
@@ -434,7 +461,7 @@ def report_update(
     warnings: list[str] = []
     left_out: list[dict] = []
     if stage == ENVIRONMENT:
-        problems, not_checked = environment_gate(workspace)
+        problems, not_checked = environment_gate(workspace, started_with)
         if source is not None:
             warnings = source_review_stale(source, workspace)
     else:
@@ -541,6 +568,8 @@ def nudge_server(
             for one in (kept if kept is not None else load_scenarios(workspace))
         }
         if stage == SUITE
+        else _contract_tools(workspace)
+        if stage == ENVIRONMENT
         else None
     )
 

@@ -379,6 +379,54 @@ def test_a_corrupt_sqlite_world_is_reported(tmp_path):
     ]
 
 
+def _add_tool(root: Path, name: str) -> None:
+    path = root / "contract.json"
+    contract = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    contract.tools.append(ToolSpec(name=name))
+    path.write_text(contract.model_dump_json(), encoding="utf-8")
+
+
+def _set_manifest(root: Path, **fields) -> None:
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    (root / "manifest.json").write_text(
+        json.dumps({**manifest, **fields}), encoding="utf-8"
+    )
+
+
+def test_a_tool_added_without_a_saved_handler_is_reported(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    problems, _ = nudge.environment_gate(root, {"add", "lst"})
+    assert [(one["item"], one["kind"]) for one in problems] == [("send_otp", "world")]
+
+
+def test_a_tool_added_with_a_saved_handler_or_runtime_tool_passes(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    _add_tool(root, "verify_otp")
+    _set_manifest(root, tools=["add", "lst", "send_otp"], runtime_tools=["verify_otp"])
+    assert nudge.environment_gate(root, {"add", "lst"}) == ([], [])
+
+
+def test_a_tool_added_to_an_empty_world_passes(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    _set_manifest(root, tools=[], tables={})
+    assert nudge.environment_gate(root, {"add", "lst"}) == ([], [])
+
+
+def test_a_handler_gap_the_turn_started_with_is_not_reported(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    assert nudge.environment_gate(root, {"add", "lst", "send_otp"}) == ([], [])
+
+
+def test_without_started_with_added_tools_are_not_checked(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    assert nudge.environment_gate(root) == ([], [])
+
+
 # 4. suite_gate
 
 

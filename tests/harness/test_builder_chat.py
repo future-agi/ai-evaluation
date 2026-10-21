@@ -925,6 +925,26 @@ def test_a_write_after_the_last_report_runs_the_checks_again(tmp_path, monkeypat
     )
 
 
+def test_a_tool_added_without_saving_the_world_fails_the_report(
+    tmp_path, monkeypatch
+):
+    from test_nudge_turn import _add_tool
+
+    async def act(stage):
+        _add_tool(tmp_path / "work", "send_otp")
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "added send_otp"}
+        )
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    result = client.results[-1]
+    assert result["checks"]["passed"] is False
+    assert [one["item"] for one in result["checks"]["problems"]] == ["send_otp"]
+
+
 def test_a_report_after_the_last_write_stands(tmp_path, monkeypatch):
     async def act(stage):
         _called(stage, "submit_scenario")
