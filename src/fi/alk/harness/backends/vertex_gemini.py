@@ -225,7 +225,7 @@ def _llm(model: str) -> Any:
     from google.adk.models import Gemini
 
     return Gemini(
-        model=model,
+        model=agentcc.vertex_model(model),
         base_url=gateway.base_url,
         client_kwargs={"vertexai": False, "api_key": gateway.api_key},
     )

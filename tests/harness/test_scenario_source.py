@@ -1549,12 +1549,14 @@ def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> 
                 "scenario_key": "a",
                 "scenario_id": "platform-a",
                 "trial_index": 1,
+                "call_execution_id": "call-1",
             },
             {
                 "execution_key": "a-trial-2",
                 "scenario_key": "a",
                 "scenario_id": "platform-a",
                 "trial_index": 2,
+                "call_execution_id": "call-2",
             },
         ],
     )
@@ -1567,6 +1569,7 @@ def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> 
         "platform-a",
         "platform-a",
     ]
+    assert [scenario.call_execution_id for scenario in selected] == ["call-1", "call-2"]
     assert selected[0].setup is authored[0].setup
     assert selected[1].ready is authored[0].ready
 
