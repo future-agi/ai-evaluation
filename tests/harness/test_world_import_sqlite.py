@@ -13,6 +13,7 @@ from fi.alk.harness.source_model import (
 from fi.alk.harness.world_import.sqlite import (
     SQLiteNullPolicy,
     SQLiteWorldImportError,
+    array_value,
     import_sqlite_world,
 )
 from fi.alk.harness.world_ir import ValueState
@@ -182,3 +183,55 @@ def test_import_normalizes_legacy_naive_timestamp_to_utc() -> None:
     assert [decision.code for decision in result.decisions] == [
         "legacy_naive_timestamp_normalized_to_utc"
     ]
+
+
+def test_import_reads_a_postgres_array_default_sqlite_stored_as_text() -> None:
+    source = _source(
+        _column("id", LogicalType.STRING),
+        _column(
+            "accessibility_needs",
+            LogicalType.ARRAY,
+            nullable=True,
+            default="'{}'::text[]",
+            element_type=LogicalType.STRING,
+        ),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, accessibility_needs TEXT[] DEFAULT '{}')"
+    )
+    connection.execute("INSERT INTO users (id) VALUES ('rider-1')")
+
+    result = import_sqlite_world(connection, source)
+
+    row = result.world.tables[0].rows[0]
+    assert row.values["accessibility_needs"].value == []
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected"),
+    [
+        ("{}", []),
+        ("{ }", []),
+        ('{wheelchair,"service animal",NULL}', ["wheelchair", "service animal", None]),
+        ('{"a \\"quoted\\" one"}', ['a "quoted" one']),
+    ],
+)
+def test_array_value_reads_postgres_array_literals(literal, expected) -> None:
+    assert array_value(literal, LogicalType.STRING) == expected
+
+
+@pytest.mark.parametrize(
+    "literal",
+    ['{"k":1}', '{"k": [1]}', "{a", "{a,}", "{{a},{b}}", '{"open}', "nope", "{a\\,b}"],
+)
+def test_array_value_refuses_what_is_not_an_array(literal) -> None:
+    with pytest.raises(ValueError, match="array_value_invalid"):
+        array_value(literal, LogicalType.STRING)
+
+
+def test_array_value_does_not_guess_element_types_from_a_literal() -> None:
+    assert array_value("{}", LogicalType.INTEGER) == []
+    assert array_value("[1, 2]", LogicalType.INTEGER) == [1, 2]
+    with pytest.raises(ValueError, match="array_value_invalid"):
+        array_value("{1,2}", LogicalType.INTEGER)

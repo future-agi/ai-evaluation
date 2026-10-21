@@ -143,6 +143,70 @@ def _parse_structured(
     return parsed
 
 
+def _postgres_array(text: str) -> list[str | None]:
+    """A one-dimensional Postgres array literal such as ``{}`` or ``{a,"b c",NULL}``."""
+    if not (text.startswith("{") and text.endswith("}")):
+        raise ValueError("array_value_invalid")
+    body, at = text[1:-1], 0
+    items: list[str | None] = []
+    if not body.strip():
+        return []
+    while True:
+        while at < len(body) and body[at].isspace():
+            at += 1
+        if at < len(body) and body[at] == '"':
+            at += 1
+            chars: list[str] = []
+            while at < len(body) and body[at] != '"':
+                at += body[at] == "\\"
+                if at >= len(body):
+                    break
+                chars.append(body[at])
+                at += 1
+            if at >= len(body):
+                raise ValueError("array_value_invalid")
+            at += 1
+            items.append("".join(chars))
+        else:
+            end = at
+            while end < len(body) and body[end] not in ',"{}\\':
+                end += 1
+            word = body[at:end].strip()
+            if not word:
+                raise ValueError("array_value_invalid")
+            items.append(None if word.upper() == "NULL" else word)
+            at = end
+        while at < len(body) and body[at].isspace():
+            at += 1
+        if at == len(body):
+            return items
+        if body[at] != ",":
+            raise ValueError("array_value_invalid")
+        at += 1
+
+
+_TEXT_ELEMENTS = {None, LogicalType.STRING, LogicalType.UUID, LogicalType.ENUM}
+
+
+def array_value(value: Any, element_type: LogicalType | None = None) -> list[Any]:
+    """An array cell as a list: JSON, a legacy Python repr, or a Postgres array literal.
+
+    The literal is what SQLite stores when a column declared ``TEXT[] DEFAULT '{}'`` is left
+    out of an insert. A JSON array never starts with ``{``, so reading it here is unambiguous.
+    """
+    try:
+        return _json_value(
+            _parse_structured(value, expected=list, code="array_value_invalid")
+        )
+    except ValueError:
+        if not (isinstance(value, str) and value.startswith("{")):
+            raise
+    items = _postgres_array(value)
+    if items and element_type not in _TEXT_ELEMENTS:
+        raise ValueError("array_value_invalid")
+    return items
+
+
 def _convert(column: SourceColumn, value: Any) -> Any:
     logical = column.logical_type
     if logical is LogicalType.BOOLEAN:
@@ -200,9 +264,7 @@ def _convert(column: SourceColumn, value: Any) -> Any:
             raise ValueError(f"{logical.value}_value_invalid")
         return value
     if logical is LogicalType.ARRAY:
-        return _json_value(
-            _parse_structured(value, expected=list, code="array_value_invalid")
-        )
+        return array_value(value, column.element_type)
     if logical is LogicalType.JSON:
         parsed = _parse_structured(
             value,
@@ -344,5 +406,6 @@ __all__ = [
     "SQLiteNullPolicy",
     "SQLiteWorldImportError",
     "SQLiteWorldImportResult",
+    "array_value",
     "import_sqlite_world",
 ]

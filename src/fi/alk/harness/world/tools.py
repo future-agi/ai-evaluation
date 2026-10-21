@@ -388,6 +388,56 @@ def _world_columns(world: Any, table: str) -> dict[str, bool] | None:
         return None
 
 
+def _unreadable_arrays(world: Any, destination: Path) -> list[str]:
+    """Rewrite Postgres array literals in array columns as JSON; the columns left unreadable.
+
+    Uses the source model and the converter the seed import uses, so what saves also seeds.
+    """
+    from ..certification import GenericHarnessArtifactStore
+    from ..source_model import LogicalType
+    from ..world_import.sqlite import array_value
+
+    store = getattr(world, "store", None)
+    artifacts = GenericHarnessArtifactStore(destination / "generic-harness")
+    if getattr(store, "engine", "") != "sqlite" or not (
+        artifacts.root / artifacts.SOURCE_MODEL
+    ).is_file():
+        return []
+    try:
+        source = artifacts.read_source_model()
+    except (OSError, ValueError):
+        return []
+    held = set(store.collections())
+    problems: list[str] = []
+    for table in source.tables:
+        if table.name not in held:
+            continue
+        info = store.query(f'PRAGMA table_info("{table.name}")')
+        columns = {row["name"] for row in info}
+        for column in table.columns:
+            if column.logical_type is not LogicalType.ARRAY:
+                continue
+            if column.name not in columns:
+                continue
+            found = store.query(
+                f'SELECT DISTINCT "{column.name}" AS value FROM "{table.name}" '
+                f'WHERE "{column.name}" IS NOT NULL'
+            )
+            for value in (row["value"] for row in found):
+                try:
+                    items = array_value(value, column.element_type)
+                except ValueError:
+                    problems.append(f"{table.name}.{column.name}")
+                    break
+                if isinstance(value, str) and value.startswith("{"):
+                    store.execute(
+                        f'UPDATE "{table.name}" SET "{column.name}" = ? '
+                        f'WHERE "{column.name}" = ?',
+                        [items, value],
+                    )
+    return problems
+
+
 def _still_refusing(counts: dict[str, int], gate: str, problems: list[str]) -> bool:
     key = f"{gate}:{sorted(problems)}"
     counts[key] = counts.get(key, 0) + 1
@@ -1519,6 +1569,13 @@ def world_tools(
                 "rows from this world, so an insert naming any of these fails and the environment "
                 "never stands up. Use the agent's own names, or drop what it does not have. A "
                 "column it never declares is one its code never reads."
+            )
+        if unreadable := _unreadable_arrays(world, destination):
+            return _err(
+                "Not saved. These array columns hold values that are not lists: "
+                + ", ".join(unreadable)
+                + '. The runtime seed reads an array as a JSON list, such as [] or ["a"]. '
+                "Set them with change_data."
             )
         data_free = (
             (is_data_free_conversation(contract) or external_runtime or runtime_only)
