@@ -19,7 +19,7 @@ from typing import Any
 from .backends import SessionSpec
 from .catalogue import Catalogue
 from .config import artifact_dir, chosen_model, load_skill, provisioning
-from .contract import AgentContract
+from .contract import AgentContract, runtime_owns_tools
 from .session import Stage
 from .world.snapshot import saved as world_saved
 from .world.tools import WORLD_SERVER, world_tools
@@ -52,19 +52,8 @@ def blockers(
             "the agent source path was not preserved; reopen the session with the repository "
             "path (or pass --path) so its shipped implementation can be run"
         )
-    # A voice worker is itself the runnable seam. Frameworks commonly create function tools as
-    # closures that capture session state; forcing those closures to also be importable outside
-    # the worker rejects valid agents or encourages the harness to rewrite their behavior. The
-    # provisioning stage still has to prove that the submitted worker can actually be packaged.
-    runtime_owned = bool(
-        contract.modality == "voice"
-        and contract.runtime
-        and (
-            contract.runtime.command
-            or contract.runtime.dockerfile
-            or contract.runtime.install
-        )
-    )
+    # The provisioning stage still has to prove that the submitted worker can be packaged.
+    runtime_owned = runtime_owns_tools(contract)
     entries = {entry.tool: entry for entry in contract.tool_entrypoints}
     for tool in contract.tools:
         entry = entries.get(tool.name)

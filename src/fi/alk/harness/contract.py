@@ -797,6 +797,24 @@ class AgentContract(BaseModel):
         return bool(found and found.mode in ("import", "construct", "service"))
 
 
+def runtime_owns_tools(contract: AgentContract) -> bool:
+    """Whether a submitted voice worker is itself the runnable seam for every tool.
+
+    Frameworks commonly create function tools as closures that capture session state; forcing
+    those closures to also be importable outside the worker rejects valid agents or encourages
+    the harness to rewrite their behavior.
+    """
+    return bool(
+        contract.modality == "voice"
+        and contract.runtime
+        and (
+            contract.runtime.command
+            or contract.runtime.dockerfile
+            or contract.runtime.install
+        )
+    )
+
+
 def is_data_free_conversation(contract: AgentContract) -> bool:
     """Whether the contract claims conversation without custom tools or business state.
 

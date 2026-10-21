@@ -248,10 +248,28 @@ def _refresh_source_facts(job: HarnessJob, source: Path, output: Path) -> list[s
     """Describe the agent version being certified and the world the environment saved.
 
     Both are recorded for whichever agent version last built or edited the environment.
+    Entrypoints left behind by tools the contract no longer has are dropped.
     """
+    from .amend import _persist
     from .cli import after_contract, source_model_is_stale
+    from .understand import load
 
     notes: list[str] = []
+    contract = load(output)
+    if contract is not None:
+        kept = contract.tool_names()
+        stale = sorted(
+            {e.tool for e in contract.tool_entrypoints if e.tool not in kept}
+        )
+        if stale:
+            contract.tool_entrypoints = [
+                e for e in contract.tool_entrypoints if e.tool in kept
+            ]
+            _persist(contract, output)
+            notes.append(
+                "entrypoints dropped for tools the contract no longer has: "
+                + ", ".join(stale)
+            )
     stale_model = source_model_is_stale(output, source)
     world_ir = output / "generic-harness" / "world-ir.json"
     drop_world_ir = (

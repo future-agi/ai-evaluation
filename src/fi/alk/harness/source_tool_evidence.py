@@ -14,6 +14,8 @@ from pathlib import Path
 
 from .contract import AgentContract
 
+_NOT_AGENT_CODE = {"tests", "test", "node_modules", "site-packages", "venv", "__pycache__"}
+
 
 def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
     root = source.resolve()
@@ -77,3 +79,28 @@ def tool_evidence_problems(contract: AgentContract, source: Path) -> list[str]:
                 "custom tools must use tools=[]; do not invent a tool or backing data."
             )
     return problems
+
+
+def defined_tool_names(source: Path) -> set[str]:
+    """Names the source's own Python code defines a callable or an explicit tool name for."""
+    root = source.resolve()
+    names: set[str] = set()
+    for path in root.rglob("*.py"):
+        parts = path.relative_to(root).parts[:-1]
+        if any(part.startswith(".") or part in _NOT_AGENT_CODE for part in parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.add(node.name)
+            elif (
+                isinstance(node, ast.keyword)
+                and node.arg == "name"
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                names.add(node.value.value)
+    return names

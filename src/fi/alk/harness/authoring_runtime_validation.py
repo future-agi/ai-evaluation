@@ -650,14 +650,17 @@ async def validate_once(
                     (authoring / "contract.json").read_text(encoding="utf-8")
                 )
                 tool_report = certify_tool_inventory(
-                    contract, bundle, external_provider=external_provider
+                    contract,
+                    bundle,
+                    external_provider=external_provider,
+                    source=source,
                 )
-                rejected_tools = [
-                    item.tool
+                rejected = {
+                    item.tool: item.reason
                     for item in tool_report.tools
                     if item.availability is ToolAvailability.REJECTED
-                ]
-                if rejected_tools:
+                }
+                if rejected:
                     from .diagnostics import DiagnosticLocation, HarnessDiagnostic
                     from .job import HarnessStage
 
@@ -666,15 +669,15 @@ async def validate_once(
                             stage=HarnessStage.VALIDATING_ENVIRONMENT,
                             component="tool_contract",
                             code="tool_schema_mismatch",
-                            message=f"{name}: tool has no single runnable implementation seam",
+                            message=f"{name}: {rejected[name]}",
                             location=DiagnosticLocation(tool=name),
                         )
-                        for name in sorted(rejected_tools)
+                        for name in sorted(rejected)
                     )
                     raise RuntimeValidationError(
                         "environment",
                         "Tool contract certification rejected: "
-                        + ", ".join(sorted(rejected_tools)),
+                        + ", ".join(sorted(rejected)),
                         diagnostics=diagnostics,
                     )
                 source_model = GenericHarnessArtifactStore(

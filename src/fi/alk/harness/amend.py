@@ -243,11 +243,14 @@ def fix_tool(
         )
 
     if remove:
+        entrypoints = list(contract.tool_entrypoints)
         contract.tools.remove(spec)
+        contract.tool_entrypoints = [e for e in entrypoints if e.tool != tool_name]
         contract.amendments.append(f"tool removed — {tool_name}: {why.strip()}")
         problems = validate_contract(contract)
         if problems:
             contract.tools.append(spec)
+            contract.tool_entrypoints = entrypoints
             contract.amendments.pop()
             return False, "cannot remove it: " + "; ".join(problems)
         _persist(contract, destination)

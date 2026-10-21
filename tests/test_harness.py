@@ -2271,9 +2271,14 @@ def test_a_misread_tool_can_be_corrected(tmp_path):
 
 def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
     from fi.alk.harness.amend import fix_tool
+    from fi.alk.harness.contract import ToolEntry
 
     contract = _written_contract(tmp_path)
     contract.tools.append(ToolSpec(name="checkout", args=["id"]))
+    contract.tool_entrypoints = [
+        ToolEntry(tool="add", mode="service", endpoint="/add"),
+        ToolEntry(tool="checkout", mode="service", endpoint="/checkout"),
+    ]
     done, said = fix_tool(
         contract,
         tmp_path,
@@ -2283,6 +2288,7 @@ def test_a_tool_the_agent_does_not_have_can_be_removed(tmp_path):
     )
     assert done and "1 tools left" in said
     assert load(tmp_path).tool_names() == {"add"}
+    assert [entry.tool for entry in load(tmp_path).tool_entrypoints] == ["add"]
 
 
 def test_correcting_a_contract_without_saying_why_is_refused(tmp_path):

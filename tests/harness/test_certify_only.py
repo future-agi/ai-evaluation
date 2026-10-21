@@ -1194,3 +1194,96 @@ def test_real_postgres_seeds_the_saved_world_for_the_agent_version_run(
         (item.code, item.location.table if item.location else None)
         for item in raised.value.diagnostics
     ] == [expected]
+
+
+def _rebuilt_voice_environment(tmp_path: Path, agent_code: str):
+    """An environment a nudge rebuild renamed geocode_address to search_places in.
+
+    Only the first build recorded entrypoints, so the rename leaves geocode_address's behind
+    and search_places without one.
+    """
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    (source / "agent.py").write_text(agent_code, encoding="utf-8")
+    (authoring / "contract.json").write_text(
+        json.dumps(
+            {
+                "agent": "rides",
+                "modality": "voice",
+                "real_use_cases": ["book a ride"],
+                "runtime": {"language": "python", "command": ["python", "agent.py"]},
+                "data_store": {"kind": "in_process"},
+                "tools": [{"name": "book_ride"}, {"name": "search_places"}],
+                "tool_entrypoints": [
+                    {"tool": "geocode_address", "mode": "service", "endpoint": "geo"},
+                    {"tool": "book_ride", "mode": "service", "endpoint": "book"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return source, authoring, job_path
+
+
+_RIDE_AGENT = (
+    "class RideAgent:\n"
+    "    async def search_places(self, text): ...\n"
+    "    async def book_ride(self): ...\n"
+)
+
+
+def test_certify_only_certifies_tools_a_rebuild_added_to_a_voice_worker(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    source, authoring, job_path = _rebuilt_voice_environment(tmp_path, _RIDE_AGENT)
+    opened = _forbid_models(monkeypatch)
+    _real_runtime(tmp_path, monkeypatch, state={})
+    bundle = tmp_path / "bundle"
+
+    code = _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, bundle))
+
+    err = capsys.readouterr().err
+    assert code == 0, err
+    assert opened == []
+    assert "entrypoints dropped for tools the contract no longer has: geocode_address" in err
+    contract = json.loads((authoring / "contract.json").read_text())
+    assert [entry["tool"] for entry in contract["tool_entrypoints"]] == ["book_ride"]
+    assert load_bundle_v2(bundle).digest == load_bundle_v2(
+        authoring / "generic-harness" / "certified-bundle"
+    ).digest
+
+
+def test_certify_only_rejects_a_tool_the_runs_source_does_not_define(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    source, authoring, job_path = _rebuilt_voice_environment(
+        tmp_path, "class RideAgent:\n    async def book_ride(self): ...\n"
+    )
+    _forbid_models(monkeypatch)
+    _real_runtime(tmp_path, monkeypatch, state={})
+    bundle = tmp_path / "bundle"
+
+    assert (
+        _hosted(tmp_path, monkeypatch, _argv(source, authoring, job_path, bundle)) == 78
+    )
+
+    assert "Tool contract certification rejected: search_places" in (
+        capsys.readouterr().err
+    )
+    assert not bundle.exists()
+
+
+def test_refresh_leaves_a_contract_whose_entrypoints_all_have_tools_untouched(
+    tmp_path,
+) -> None:
+    source, authoring, job_path = _rebuilt_voice_environment(tmp_path, _RIDE_AGENT)
+    contract = json.loads((authoring / "contract.json").read_text())
+    contract["tool_entrypoints"] = contract["tool_entrypoints"][1:]
+    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    before = (authoring / "contract.json").read_bytes()
+
+    notes = authoring_entrypoint._refresh_source_facts(
+        _job(1), source.resolve(), authoring
+    )
+
+    assert (authoring / "contract.json").read_bytes() == before
+    assert not any("entrypoints" in note for note in notes)
