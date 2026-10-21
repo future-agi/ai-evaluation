@@ -996,6 +996,169 @@ def test_world_changes_fail_the_report_until_the_world_is_saved(tmp_path, monkey
     assert client.results[-1]["checks"]["passed"] is True
 
 
+_OLD_SEED_CHECKS = {
+    "seed_matches_source": "def check(world):\n"
+    "    ids = sorted(row['id'] for row in world.state().get('menu') or [])\n"
+    "    return None if ids == ['big_mac'] else f'menu is {ids}'\n",
+    "key_balances": "def check(world):\n"
+    "    rows = world.state().get('wallet') or []\n"
+    "    dana = [row['balance'] for row in rows if row['rider'] == 'dana']\n"
+    "    return None if dana == [60.0] else f'dana holds {dana}'\n",
+}
+_NEW_SEED = (
+    "INSERT INTO menu (id) VALUES ('big_mac');\n"
+    "INSERT INTO menu (id) VALUES ('fries');\n"
+    "INSERT INTO wallet (rider, balance) VALUES ('dana', 5.00);\n"
+)
+
+
+def _seed_rebuild(tmp_path, monkeypatch, act):
+    """An environment rebuild whose world checks pin the old seed: big_mac only, dana 60."""
+    import test_nudge_turn
+
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.snapshot import read_manifest, restore, save
+
+    suite = test_nudge_turn._suite
+
+    def _old_seed_suite(root: Path, *names: str) -> Path:
+        suite(root, *names)
+        world = restore(root)
+        world.connection.executescript(
+            "CREATE TABLE wallet(rider TEXT PRIMARY KEY, balance REAL);"
+            "INSERT INTO wallet VALUES ('dana', 60.0);"
+        )
+        world.connection.commit()
+        save(
+            world,
+            root,
+            notes="old seed",
+            sequences=list(read_manifest(root).get("sequences") or []),
+            world_checks=_OLD_SEED_CHECKS,
+        )
+        save_simulator_prompt(
+            "You are a customer described by {{ persona }}. Follow {{ instruction }} in a "
+            "natural multi-turn conversation. Never invent the assistant's responses or claim "
+            "a tool result you have not heard. Ask a concise follow-up when needed and end "
+            "once the task resolves.",
+            root,
+        )
+        return root
+
+    monkeypatch.setattr(test_nudge_turn, "_suite", _old_seed_suite)
+    return _rebuild(tmp_path, monkeypatch, "environment", act)
+
+
+def _reseed(stage):
+    async def run():
+        seeded = await _tool(stage, "world", "seed").handler(
+            {"table": "menu", "rows": [{"id": "fries"}]}
+        )
+        changed = await _tool(stage, "world", "change_data").handler(
+            {"sql": "UPDATE wallet SET balance = 5.0 WHERE rider = 'dana'"}
+        )
+        assert not seeded.get("is_error") and not changed.get("is_error"), changed
+
+    return run()
+
+
+def test_a_seed_change_rewrites_the_world_checks_that_pin_the_old_seed(
+    tmp_path, monkeypatch
+):
+    from fi.alk.harness.world.snapshot import read_manifest
+
+    seen: dict = {}
+    menu = (
+        "def check(world):\n"
+        "    ids = sorted(row['id'] for row in world.state().get('menu') or [])\n"
+        "    return None if ids == ['big_mac', 'fries'] else f'menu is {ids}'\n"
+    )
+    balances = _OLD_SEED_CHECKS["key_balances"].replace("[60.0]", "[5.0]")
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(_NEW_SEED)
+        seen["granted"] = set(stage.spec.granted())
+        await _reseed(stage)
+        seen["refused"] = await _tool(stage, "world", "save_world").handler({})
+        for name, code, quote in (
+            ("seed_matches_source", menu, "INSERT INTO menu (id) VALUES ('fries');"),
+            ("key_balances", balances, "VALUES ('dana', 5.00);"),
+        ):
+            edited = await _tool(stage, "world", "add_world_check").handler(
+                {
+                    "name": name,
+                    "code": code,
+                    "source_path": "db/seed.sql",
+                    "source_quote": quote,
+                }
+            )
+            assert not edited.get("is_error"), edited
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        seen["report"] = await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "new seed rows"}
+        )
+
+    _runtime, client, _conversation, _asked = _seed_rebuild(tmp_path, monkeypatch, act)
+
+    assert "mcp__world__add_world_check" in seen["granted"]
+    refused = seen["refused"]["content"][0]["text"]
+    assert seen["refused"].get("is_error")
+    assert "key_balances" in refused and "seed_matches_source" in refused
+    assert not seen["saved"].get("is_error"), seen["saved"]
+    assert not seen["report"].get("is_error"), seen["report"]
+    checks = read_manifest(tmp_path / "work")["world_checks"]
+    assert checks == {"seed_matches_source": menu, "key_balances": balances}
+    result = client.results[-1]
+    assert result["checks"]["passed"] is True
+    assert result["checks"]["warnings"] == [
+        "world checks changed: key_balances (cites db/seed.sql), "
+        "seed_matches_source (cites db/seed.sql)"
+    ]
+
+
+def test_a_world_check_edit_that_cites_no_seed_change_is_refused(tmp_path, monkeypatch):
+    from fi.alk.harness.world.snapshot import read_manifest
+
+    seen: dict = {}
+    weakened = (
+        "def check(world):\n    return None if world.state().get('menu') else 'no'\n"
+    )
+
+    async def act(stage):
+        (tmp_path / "source" / "db").mkdir(parents=True)
+        (tmp_path / "source" / "db" / "seed.sql").write_text(
+            "INSERT INTO menu (id) VALUES ('big_mac');\n"
+        )
+        await _reseed(stage)
+        tool = _tool(stage, "world", "add_world_check")
+        seen["uncited"] = await tool.handler(
+            {"name": "seed_matches_source", "code": weakened}
+        )
+        seen["unchanged"] = await tool.handler(
+            {
+                "name": "seed_matches_source",
+                "code": weakened,
+                "source_path": "db/seed.sql",
+                "source_quote": "INSERT INTO menu (id) VALUES ('fries');",
+            }
+        )
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "fries"}
+        )
+
+    _runtime, client, _conversation, _asked = _seed_rebuild(tmp_path, monkeypatch, act)
+
+    assert seen["uncited"].get("is_error") and seen["unchanged"].get("is_error")
+    assert "does not occur in db/seed.sql" in seen["unchanged"]["content"][0]["text"]
+    assert seen["saved"].get("is_error")
+    assert read_manifest(tmp_path / "work")["world_checks"] == _OLD_SEED_CHECKS
+    result = client.results[-1]
+    assert result["checks"]["passed"] is False
+    assert not result["checks"]["warnings"]
+
+
 def test_a_report_after_the_last_write_stands(tmp_path, monkeypatch):
     async def act(stage):
         _called(stage, "submit_scenario")

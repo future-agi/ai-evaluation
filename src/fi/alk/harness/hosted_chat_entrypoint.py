@@ -402,7 +402,9 @@ class HostedChatRuntime:
             allowed = nudge.ENVIRONMENT_TOOLS
             if WORLD_SERVER in servers:
                 world = {}
-                servers[WORLD_SERVER] = nudge.track_world(servers[WORLD_SERVER], world)
+                servers[WORLD_SERVER] = nudge.track_world(
+                    servers[WORLD_SERVER], world, self.source
+                )
         else:
             allowed = nudge.SUITE_TOOLS
             servers[SCENARIO_SERVER] = nudge.guard_renames(

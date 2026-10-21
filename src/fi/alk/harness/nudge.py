@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .backends import FILE_TOOLS, SessionSpec, ToolServer, tool, tool_server
+from .backends import FILE_TOOLS, SessionSpec, ToolServer, ToolSpec, tool, tool_server
 from .builder import _err, _ok, scenario_problems
 from .catalogue import (
     Catalogue,
@@ -62,6 +62,7 @@ ENVIRONMENT_TOOLS = frozenset(
         "retire_sub_goal",
         "impact_of",
         "check_health",
+        "add_world_check",
         "create_schema",
         "seed",
         "change_data",
@@ -105,6 +106,7 @@ WORLD_WRITES = frozenset(
         "adopt_tool",
         "adopt_state",
         "write_store_ops",
+        "add_world_check",
     }
 )
 # How far past the suite a rebuild's aim_for may set the target at one time.
@@ -493,6 +495,14 @@ def report_update(
             )
         if source is not None:
             warnings = source_review_stale(source, workspace)
+        if world and world.get("checks"):
+            warnings.append(
+                "world checks changed: "
+                + ", ".join(
+                    f"{name} (cites {path})"
+                    for name, path in sorted(world["checks"].items())
+                )
+            )
     else:
         problems, not_checked, left_out = suite_gate(
             workspace,
@@ -575,11 +585,76 @@ def guard_renames(server: ToolServer, workspace: Path) -> ToolServer:
     return tool_server(name=server.name, version=server.version, tools=tools)
 
 
-def track_world(server: ToolServer, held: dict[str, Any]) -> ToolServer:
+def citation_refusal(args: dict[str, Any], source: Path | None) -> str:
+    """Why this world check edit does not cite the agent's source, or ""."""
+    if source is None or not Path(source).is_dir():
+        return "Not changed: the agent's source is not here to cite."
+    try:
+        validate_evidence(
+            {
+                "name": str(args.get("name") or ""),
+                "violations_sql": str(args.get("code") or ""),
+                "evidence": [
+                    {
+                        "path": str(args.get("source_path") or ""),
+                        "quote": str(args.get("source_quote") or ""),
+                    }
+                ],
+            },
+            source_files(Path(source)),
+        )
+    except ValueError as exc:
+        return f"Not changed: {exc}. Cite the agent's changed source, such as its seed."
+    return ""
+
+
+def cite_world_checks(
+    one: ToolSpec, held: dict[str, Any], source: Path | None
+) -> ToolSpec:
+    """``add_world_check`` that refuses an edit not citing the agent's source, and records the
+    cited file in ``held["checks"]`` (environment nudge turns)."""
+    add = one.handler
+
+    async def cited(args: dict[str, Any]) -> dict[str, Any]:
+        said = citation_refusal(args, source)
+        if said:
+            return _err(said)
+        result = await add(args)
+        if not result.get("is_error"):
+            held.setdefault("checks", {})[str(args.get("name") or "")] = str(
+                args.get("source_path") or ""
+            )
+        return result
+
+    return replace(
+        one,
+        handler=cited,
+        description=one.description
+        + " In a rebuild, only to follow the agent's changed source: `source_path` is the "
+        "file, `source_quote` a line of it (20+ characters), such as the new seed row.",
+        input_schema=schema(
+            {
+                "name": str,
+                "code": str,
+                "what": str,
+                "source_path": str,
+                "source_quote": str,
+            },
+            ["name", "code", "source_path", "source_quote"],
+        ),
+    )
+
+
+def track_world(
+    server: ToolServer, held: dict[str, Any], source: Path | None = None
+) -> ToolServer:
     """The same world server, recording in ``held["unsaved"]`` whether a world change has been
-    made since the last successful save_world (environment nudge turns)."""
+    made since the last successful save_world (environment nudge turns). A world check edit
+    has to cite ``source``, the agent's source."""
     tools = []
     for one in server.tools:
+        if one.name == "add_world_check":
+            one = cite_world_checks(one, held, source)
         if one.name in WORLD_WRITES or one.name == "save_world":
             call = one.handler
 

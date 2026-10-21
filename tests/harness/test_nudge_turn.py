@@ -487,6 +487,61 @@ def test_track_world_holds_unsaved_until_a_save_succeeds():
     assert held == {"unsaved": False}
 
 
+def test_a_world_check_edit_cites_the_agents_source_and_is_reported(tmp_path):
+    root = _cart(tmp_path / "work")
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "db" / "seed.sql").write_text("INSERT INTO menu VALUES ('fries');\n")
+    added: list[dict] = []
+
+    @tool("add_world_check", "Add one check.", {})
+    async def add_world_check(args: dict) -> dict:
+        added.append(args)
+        return {"content": []}
+
+    held: dict = {}
+    server = nudge.track_world(
+        tool_server(name="world", tools=[add_world_check]), held, source
+    )
+    check = {"name": "menu", "code": "def check(world): return None"}
+
+    uncited = _call(server, "add_world_check", check)
+    misquoted = _call(
+        server,
+        "add_world_check",
+        {
+            **check,
+            "source_path": "db/seed.sql",
+            "source_quote": "VALUES ('onion rings')",
+        },
+    )
+    assert uncited["is_error"] and misquoted["is_error"]
+    assert added == [] and held == {}
+
+    cited = {
+        **check,
+        "source_path": "db/seed.sql",
+        "source_quote": "INSERT INTO menu VALUES ('fries');",
+    }
+    assert not _call(server, "add_world_check", cited).get("is_error")
+    assert added == [cited]
+    assert held == {"unsaved": True, "checks": {"menu": "db/seed.sql"}}
+    assert {"source_path", "source_quote"} <= set(
+        server.tools[0].input_schema["required"]
+    )
+
+    held["unsaved"] = False
+    result = nudge.report_update(
+        root,
+        nudge={"nudge_id": "n1", "stage": "environment"},
+        changed=True,
+        notes="",
+        world=held,
+    )
+    assert result["passed"]
+    assert "world checks changed: menu (cites db/seed.sql)" in result["warnings"]
+
+
 # 4. suite_gate
 
 
