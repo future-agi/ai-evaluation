@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import subprocess
 import sys
@@ -89,13 +88,9 @@ def test_package_source_has_no_trace_or_top_span_id():
 
 
 def test_default_unit_id_equals_main_unit_id():
-    try:
-        agent = importlib.import_module("fi.alk.agent")
-    except ModuleNotFoundError as exc:
-        if exc.name != "fi.alk.agent":
-            raise
-        pytest.skip("fi.alk.agent, which defines MAIN_UNIT_ID, has not landed yet")
-    assert DEFAULT_UNIT_ID == agent.MAIN_UNIT_ID == "main"
+    from fi.alk.providers.agent import MAIN_UNIT_ID
+
+    assert DEFAULT_UNIT_ID == MAIN_UNIT_ID == "main"
 
 
 def _invalid_episode(record, context):
