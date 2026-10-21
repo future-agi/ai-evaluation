@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from .catalogue import (
     catalogue_problems,
     load_catalogue,
     save_catalogue,
+    unused_sub_goals,
     validate_sub_goal,
 )
 from .contract import validate_contract
@@ -92,6 +94,17 @@ SUITE_TOOLS = frozenset(
         "offered_values",
         "report_update",
         *FILE_TOOLS,
+    }
+)
+# World tools whose changes stand only once save_world has written them out.
+WORLD_WRITES = frozenset(
+    {
+        "create_schema",
+        "seed",
+        "change_data",
+        "adopt_tool",
+        "adopt_state",
+        "write_store_ops",
     }
 )
 # How far past the suite a rebuild's aim_for may set the target at one time.
@@ -234,13 +247,10 @@ def _contract_tools(workspace: Path) -> set[str]:
     return contract.tool_names() if contract is not None else set()
 
 
-def environment_gate(
-    workspace: Path, started_with: set[str] | None = None
-) -> tuple[list[dict], list[str]]:
+def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
     """Static checks of the environment piece: (problems, not_checked).
 
-    ``started_with`` is the contract's tools when the turn began; a tool added since that the
-    saved world has no handler for is a problem.
+    A contract tool the saved world has no handler for is a problem.
     """
     workspace = Path(workspace)
     problems: list[dict] = []
@@ -300,11 +310,7 @@ def environment_gate(
             or bool(manifest.get("tools")),
         )
     )
-    if (
-        started_with is not None
-        and contract is not None
-        and (manifest.get("tables") or manifest.get("tools"))
-    ):
+    if contract is not None and (manifest.get("tables") or manifest.get("tools")):
         covered = {
             *(manifest.get("tools") or []),
             *(manifest.get("runtime_tools") or []),
@@ -315,7 +321,7 @@ def environment_gate(
                 "world",
                 "contract tool has no handler; save_world has not saved a world with it",
             )
-            for name in sorted(contract.tool_names() - started_with - covered)
+            for name in sorted(contract.tool_names() - covered)
         )
     return problems, not_checked
 
@@ -325,11 +331,13 @@ def suite_gate(
     user_draft_keys: set[str],
     *,
     started_with: set[str] | None = None,
+    new_sub_goals: list[str] | None = None,
 ) -> tuple[list[dict], list[str], list[dict]]:
     """Prove every scenario into proofs.json: (problems, not_checked, left_out).
 
     ``started_with`` is the suite's keys when the turn began; without it the keys proofs.json
-    held before this proving stand in for them.
+    held before this proving stand in for them. ``new_sub_goals`` are the sub-goals the
+    environment rebuild added; each one the catalogue defines must be named by a scenario.
     """
     workspace = Path(workspace)
     earlier = load_proofs(workspace)
@@ -380,6 +388,14 @@ def suite_gate(
             not_checked.append(key)
         else:
             problems.append(_problem(key, "scenario", why))
+    unnamed = set(unused_sub_goals(catalogue, scenarios))
+    problems.extend(
+        _problem(
+            name, "sub_goal", "added by the environment rebuild; no scenario names it"
+        )
+        for name in new_sub_goals or []
+        if name in catalogue.names() and name in unnamed
+    )
     return problems, not_checked, left_out
 
 
@@ -453,15 +469,28 @@ def report_update(
     notes: str,
     source: Path | None = None,
     started_with: set[str] | None = None,
+    world: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the stage gate and write the result file. ``nudge`` is the command payload."""
+    """Run the stage gate and write the result file. ``nudge`` is the command payload.
+
+    ``world`` is the turn's world tracking: world changes not yet saved fail the gate.
+    """
     # A gate that raises leaves no result rather than an earlier one.
     (Path(workspace) / NUDGE_RESULT).unlink(missing_ok=True)
     stage = str(nudge.get("stage") or "")
     warnings: list[str] = []
     left_out: list[dict] = []
     if stage == ENVIRONMENT:
-        problems, not_checked = environment_gate(workspace, started_with)
+        problems, not_checked = environment_gate(workspace)
+        if world and world.get("unsaved"):
+            problems.append(
+                _problem(
+                    "world",
+                    "world",
+                    "world changes are not saved: save_world has not succeeded since "
+                    "they were made",
+                )
+            )
         if source is not None:
             warnings = source_review_stale(source, workspace)
     else:
@@ -469,6 +498,7 @@ def report_update(
             workspace,
             set(nudge.get("user_draft_keys") or []),
             started_with=started_with,
+            new_sub_goals=list(nudge.get("new_sub_goals") or []),
         )
     write_result(
         workspace,
@@ -545,6 +575,27 @@ def guard_renames(server: ToolServer, workspace: Path) -> ToolServer:
     return tool_server(name=server.name, version=server.version, tools=tools)
 
 
+def track_world(server: ToolServer, held: dict[str, Any]) -> ToolServer:
+    """The same world server, recording in ``held["unsaved"]`` whether a world change has been
+    made since the last successful save_world (environment nudge turns)."""
+    tools = []
+    for one in server.tools:
+        if one.name in WORLD_WRITES or one.name == "save_world":
+            call = one.handler
+
+            async def tracked(
+                args: dict[str, Any], _call=call, _name=one.name
+            ) -> dict[str, Any]:
+                result = await _call(args)
+                if not result.get("is_error"):
+                    held["unsaved"] = _name != "save_world"
+                return result
+
+            one = replace(one, handler=tracked)
+        tools.append(one)
+    return tool_server(name=server.name, version=server.version, tools=tools)
+
+
 def nudge_server(
     workspace: Path,
     nudge: dict[str, Any],
@@ -553,12 +604,14 @@ def nudge_server(
     catalogue: Catalogue | None = None,
     kept: list[Scenario] | None = None,
     reported: dict[str, Any] | None = None,
+    world: dict[str, Any] | None = None,
 ) -> ToolServer:
     """``retire_sub_goal`` and ``report_update`` for one nudge turn.
 
     ``catalogue`` and ``kept`` are the ones the session's scenario server holds. ``kept`` must be
     its whole list: saving it removes every scenario folder it does not name. ``reported``
     receives each report_update's arguments, so the turn can run the gate again at its end.
+    ``world`` is the dict ``track_world`` keeps for this turn.
     """
     workspace = Path(workspace)
     stage = str(nudge.get("stage") or "")
@@ -568,8 +621,6 @@ def nudge_server(
             for one in (kept if kept is not None else load_scenarios(workspace))
         }
         if stage == SUITE
-        else _contract_tools(workspace)
-        if stage == ENVIRONMENT
         else None
     )
 
@@ -603,6 +654,7 @@ def nudge_server(
             "notes": str(args.get("notes") or ""),
             "source": source,
             "started_with": started_with,
+            "world": world,
         }
         result = report_update(workspace, nudge=nudge, **done)
         if reported is not None:

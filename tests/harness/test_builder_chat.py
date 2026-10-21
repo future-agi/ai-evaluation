@@ -945,6 +945,57 @@ def test_a_tool_added_without_saving_the_world_fails_the_report(
     assert [one["item"] for one in result["checks"]["problems"]] == ["send_otp"]
 
 
+def test_world_changes_fail_the_report_until_the_world_is_saved(tmp_path, monkeypatch):
+    import test_nudge_turn
+
+    from fi.alk.harness.simulator import save_simulator_prompt
+
+    suite = test_nudge_turn._suite
+
+    def _checked_suite(root: Path, *names: str) -> Path:
+        suite(root, *names)
+        test_nudge_turn._set_manifest(
+            root,
+            world_checks={
+                "menu-has-items": "def check(world):\n"
+                "    return None if world.state().get('menu') else 'no menu'\n"
+            },
+        )
+        save_simulator_prompt(
+            "You are a customer described by {{ persona }}. Follow {{ instruction }} in a "
+            "natural multi-turn conversation. Never invent the assistant's responses or claim "
+            "a tool result you have not heard. Ask a concise follow-up when needed and end "
+            "once the task resolves.",
+            root,
+        )
+        return root
+
+    monkeypatch.setattr(test_nudge_turn, "_suite", _checked_suite)
+    seen: dict = {}
+
+    async def act(stage):
+        seeded = await _tool(stage, "world", "seed").handler(
+            {"table": "menu", "rows": [{"id": "fries"}]}
+        )
+        assert not seeded.get("is_error"), seeded
+        seen["unsaved"] = await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "seeded fries"}
+        )
+        seen["saved"] = await _tool(stage, "world", "save_world").handler({})
+        await _tool(stage, "nudge", "report_update").handler(
+            {"changed": True, "notes": "seeded fries"}
+        )
+
+    _runtime, client, _conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    assert seen["unsaved"].get("is_error")
+    assert '"kind": "world"' in seen["unsaved"]["content"][0]["text"]
+    assert not seen["saved"].get("is_error"), seen["saved"]
+    assert client.results[-1]["checks"]["passed"] is True
+
+
 def test_a_report_after_the_last_write_stands(tmp_path, monkeypatch):
     async def act(stage):
         _called(stage, "submit_scenario")

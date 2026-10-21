@@ -638,3 +638,62 @@ def test_empty_runtime_owned_tool_world_does_not_invent_world_checks(tmp_path):
     saved = asyncio.run(tools["save_world"]({}))
     assert not saved.get("is_error"), saved
     assert world.runtime_tools == {"get_weather"}
+
+
+def test_a_tool_declared_after_a_restore_is_owned_by_the_runtime(tmp_path):
+    """A restored deferred world keeps up with tools the contract gains in a rebuild."""
+    import asyncio
+
+    from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
+    from fi.alk.harness.contract import AgentContract, ToolSpec
+    from fi.alk.harness.simulator import save_simulator_prompt
+    from fi.alk.harness.world.snapshot import read_manifest
+    from fi.alk.harness.world.tools import world_tools
+
+    contract = AgentContract(
+        agent="weather-agent",
+        modality="chat",
+        conversational=True,
+        tools=[{"name": "get_weather", "args": ["location"]}],
+        real_use_cases=["Look up weather"],
+    )
+    save_catalogue(
+        Catalogue(
+            sub_goals=[
+                SubGoal(
+                    name="calls_weather_tool",
+                    check=(
+                        "def check(world, calls):\n"
+                        "    return None if any(c.name == 'get_weather' for c in calls) "
+                        "else 'weather tool not called'\n"
+                    ),
+                )
+            ]
+        ),
+        tmp_path,
+    )
+    save_simulator_prompt(
+        "You are a customer described by {{ persona }}. Follow {{ instruction }} in a natural "
+        "multi-turn conversation. Never invent the assistant's responses or claim a tool result "
+        "you have not heard. Ask a concise follow-up when needed and end once the task resolves.",
+        tmp_path,
+    )
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    saved = asyncio.run(
+        next(one for one in server.tools if one.name == "save_world").handler({})
+    )
+    assert not saved.get("is_error"), saved
+
+    server, _ = world_tools(contract, tmp_path, deferred_runtime=True)
+    tools = {one.name: one.handler for one in server.tools}
+    contract.tools.append(ToolSpec(name="get_forecast", args=["location"]))
+
+    adopted = asyncio.run(tools["adopt_tool"]({"tool_name": "get_forecast"}))
+    assert not adopted.get("is_error"), adopted
+    assert "owned by the submitted runtime" in adopted["content"][0]["text"]
+    saved = asyncio.run(tools["save_world"]({}))
+    assert not saved.get("is_error"), saved
+    assert set(read_manifest(tmp_path)["runtime_tools"]) == {
+        "get_weather",
+        "get_forecast",
+    }

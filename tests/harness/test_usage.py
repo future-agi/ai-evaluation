@@ -113,12 +113,15 @@ class _TransientTransport:
         return TransportResponse(200, {"result": {"allowed": True}}, {})
 
 
-def test_paid_usage_check_fails_closed_on_transport_error(tmp_path) -> None:
+def test_paid_usage_check_fails_closed_on_transport_error(
+    tmp_path, monkeypatch
+) -> None:
     reporter = UsageReporter(
         _capabilities(),
         _UnavailableTransport(),
         UsageJournal(tmp_path / "usage.json", attempt_id="attempt-1"),
     )
+    monkeypatch.setattr("fi.alk.harness.usage.time.sleep", lambda _seconds: None)
 
     with pytest.raises(UsageUnavailable, match="usage check unavailable"):
         reporter.check("voice_call")
@@ -171,3 +174,48 @@ def test_usage_check_retries_transient_transport_and_server_failures(
     reporter.check("voice_call")
 
     assert transport.calls == 3
+
+
+class _OutageTransport:
+    def __init__(self, failures: int) -> None:
+        self.calls = 0
+        self.failures = failures
+
+    def request(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            return TransportResponse(502, {"detail": "bad gateway"}, {})
+        return TransportResponse(200, {"result": {"allowed": True}}, {})
+
+
+def test_usage_check_rides_out_a_short_backend_outage(tmp_path, monkeypatch) -> None:
+    transport = _OutageTransport(failures=4)
+    reporter = UsageReporter(
+        _capabilities(),
+        transport,
+        UsageJournal(tmp_path / "usage.json", attempt_id="attempt-1"),
+    )
+    slept: list[float] = []
+    monkeypatch.setattr("fi.alk.harness.usage.time.sleep", slept.append)
+
+    reporter.check("voice_call")
+
+    assert transport.calls == 5
+    assert slept == [1.0, 2.0, 4.0, 8.0]
+
+
+def test_usage_check_gives_up_after_six_attempts(tmp_path, monkeypatch) -> None:
+    transport = _OutageTransport(failures=99)
+    reporter = UsageReporter(
+        _capabilities(),
+        transport,
+        UsageJournal(tmp_path / "usage.json", attempt_id="attempt-1"),
+    )
+    slept: list[float] = []
+    monkeypatch.setattr("fi.alk.harness.usage.time.sleep", slept.append)
+
+    with pytest.raises(UsageUnavailable, match="HTTP 502"):
+        reporter.check("voice_call")
+
+    assert transport.calls == 6
+    assert slept == [1.0, 2.0, 4.0, 8.0, 15.0]

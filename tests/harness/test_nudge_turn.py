@@ -396,7 +396,7 @@ def _set_manifest(root: Path, **fields) -> None:
 def test_a_tool_added_without_a_saved_handler_is_reported(tmp_path):
     root = _cart(tmp_path)
     _add_tool(root, "send_otp")
-    problems, _ = nudge.environment_gate(root, {"add", "lst"})
+    problems, _ = nudge.environment_gate(root)
     assert [(one["item"], one["kind"]) for one in problems] == [("send_otp", "world")]
 
 
@@ -405,26 +405,86 @@ def test_a_tool_added_with_a_saved_handler_or_runtime_tool_passes(tmp_path):
     _add_tool(root, "send_otp")
     _add_tool(root, "verify_otp")
     _set_manifest(root, tools=["add", "lst", "send_otp"], runtime_tools=["verify_otp"])
-    assert nudge.environment_gate(root, {"add", "lst"}) == ([], [])
+    assert nudge.environment_gate(root) == ([], [])
 
 
 def test_a_tool_added_to_an_empty_world_passes(tmp_path):
     root = _cart(tmp_path)
     _add_tool(root, "send_otp")
     _set_manifest(root, tools=[], tables={})
-    assert nudge.environment_gate(root, {"add", "lst"}) == ([], [])
-
-
-def test_a_handler_gap_the_turn_started_with_is_not_reported(tmp_path):
-    root = _cart(tmp_path)
-    _add_tool(root, "send_otp")
-    assert nudge.environment_gate(root, {"add", "lst", "send_otp"}) == ([], [])
-
-
-def test_without_started_with_added_tools_are_not_checked(tmp_path):
-    root = _cart(tmp_path)
-    _add_tool(root, "send_otp")
     assert nudge.environment_gate(root) == ([], [])
+
+
+def test_a_handler_gap_already_in_the_contract_is_reported(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
+
+    said = _call(server, "report_update", {"changed": False, "notes": "fits"})
+
+    assert said.get("is_error")
+    written = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert [(one["item"], one["kind"]) for one in written["checks"]["problems"]] == [
+        ("send_otp", "world")
+    ]
+
+
+def test_an_uncovered_tool_is_reported_without_a_turn(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "send_otp")
+    problems, _ = nudge.environment_gate(root)
+    assert [(one["item"], one["kind"]) for one in problems] == [("send_otp", "world")]
+
+
+def test_unsaved_world_changes_fail_the_report(tmp_path):
+    root = _cart(tmp_path)
+    result = nudge.report_update(
+        root,
+        nudge={"nudge_id": "n1", "stage": "environment"},
+        changed=True,
+        notes="",
+        world={"unsaved": True},
+    )
+    assert [(one["item"], one["kind"]) for one in result["problems"]] == [
+        ("world", "world")
+    ]
+    assert nudge.report_update(
+        root,
+        nudge={"nudge_id": "n1", "stage": "environment"},
+        changed=True,
+        notes="",
+        world={"unsaved": False},
+    )["passed"]
+
+
+def test_track_world_holds_unsaved_until_a_save_succeeds():
+    outcomes = {"save_world": {"is_error": True}}
+
+    def _named(name: str):
+        @tool(name, name, {})
+        async def handler(_args: dict) -> dict:
+            return outcomes.get(name, {"content": []})
+
+        return handler
+
+    held: dict = {}
+    server = nudge.track_world(
+        tool_server(
+            name="world",
+            tools=[_named("seed"), _named("save_world"), _named("check_health")],
+        ),
+        held,
+    )
+
+    _call(server, "check_health", {})
+    assert held == {}
+    _call(server, "seed", {})
+    assert held == {"unsaved": True}
+    _call(server, "save_world", {})
+    assert held == {"unsaved": True}
+    outcomes.pop("save_world")
+    _call(server, "save_world", {})
+    assert held == {"unsaved": False}
 
 
 # 4. suite_gate
@@ -552,6 +612,52 @@ def test_a_dropped_scenario_is_left_out(tmp_path):
         "adds-one-big-mac",
         "dropped-last-week",
     ]
+
+
+def _add_sub_goal(root: Path, name: str) -> None:
+    catalogue = load_catalogue(root)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name=name,
+            what="the cart was listed",
+            check=(
+                "def check(world, calls):\n"
+                "    listed = any(c.name == 'lst' and c.ok for c in calls)\n"
+                "    return None if listed else 'lst was never called'\n"
+            ),
+        )
+    )
+    save_catalogue(catalogue, root)
+
+
+def test_a_sub_goal_the_environment_added_must_be_named_by_a_scenario(tmp_path):
+    root = _suite(tmp_path, "adds-a-big-mac")
+    _add_sub_goal(root, "cart-listed")
+    server = nudge.nudge_server(
+        root,
+        {
+            "nudge_id": "n1",
+            "stage": "suite",
+            "new_sub_goals": ["cart-listed", "not-in-catalogue"],
+        },
+    )
+
+    said = _call(server, "report_update", {"changed": True, "notes": "none added"})
+
+    assert said.get("is_error")
+    written = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert [(one["item"], one["kind"]) for one in written["checks"]["problems"]] == [
+        ("cart-listed", "sub_goal")
+    ]
+    assert nudge.suite_gate(root, set())[0] == []
+
+    body = root / "scenarios" / "adds-a-big-mac" / "scenario.json"
+    payload = json.loads(body.read_text(encoding="utf-8"))
+    payload["sub_goals"].append("cart-listed")
+    body.write_text(json.dumps(payload), encoding="utf-8")
+
+    said = _call(server, "report_update", {"changed": True, "notes": "named it"})
+    assert not said.get("is_error"), said
 
 
 # 5. source_review_stale

@@ -393,11 +393,16 @@ class HostedChatRuntime:
         """Only the rebuild stage's tools, with report_update; a suite turn never renames."""
         from . import nudge
         from .scenario_tools import SCENARIO_SERVER
+        from .world.tools import WORLD_SERVER
 
         command = self._nudge or {}
         servers = dict(stage.spec.servers)
+        world: dict[str, Any] | None = None
         if command.get("stage") == nudge.ENVIRONMENT:
             allowed = nudge.ENVIRONMENT_TOOLS
+            if WORLD_SERVER in servers:
+                world = {}
+                servers[WORLD_SERVER] = nudge.track_world(servers[WORLD_SERVER], world)
         else:
             allowed = nudge.SUITE_TOOLS
             servers[SCENARIO_SERVER] = nudge.guard_renames(
@@ -410,6 +415,7 @@ class HostedChatRuntime:
             catalogue=catalogue,
             kept=stage.kept,
             reported=self._nudge_reported,
+            world=world,
         )
         stage.configure(
             nudge.filtered_spec(replace(stage.spec, servers=servers), allowed)

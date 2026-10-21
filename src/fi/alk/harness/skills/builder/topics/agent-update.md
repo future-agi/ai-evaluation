@@ -32,6 +32,8 @@ decided in the notes.
 - The environment is fixed. Repair scenarios that broke, drop the ones the new agent makes
   meaningless, add scenarios for what it newly does, and never rename one.
 - Before adding, raise the target with `aim_for` to the size the suite will have.
+- Every sub-goal the environment added must be named by at least one scenario; one scenario may
+  cover several.
 - Drop a sub-goal from scenarios with `retire_sub_goal` only after the environment retired it.
 - Prove everything with `prove_scenarios`. Scenarios the person is still editing are listed at the
   end of the message; leave them as they are, even when they fail.

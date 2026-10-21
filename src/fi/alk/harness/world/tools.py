@@ -648,6 +648,15 @@ def world_tools(
             encoding="utf-8",
         )
 
+    def _runtime_owned() -> set[str]:
+        # A restored world keeps the runtime tools it was saved with; tools declared since
+        # belong to the submitted runtime too.
+        if deferred_runtime or external_runtime:
+            world.runtime_tools = set(getattr(world, "runtime_tools", set())) | set(
+                contract.tool_names()
+            )
+        return set(getattr(world, "runtime_tools", set()))
+
     def _verified() -> tuple[list[str], list[str], dict[str, list[str]]]:
         """How the world's own checks fare, and which of them cannot fail.
 
@@ -899,7 +908,7 @@ def world_tools(
                 f"{name!r} is not a tool this agent has. It has: "
                 f"{', '.join(sorted(contract.tool_names()))}"
             )
-        if name in set(getattr(world, "runtime_tools", set())):
+        if name in _runtime_owned():
             return _ok(
                 f"{name} is owned by the submitted runtime. Its dependencies and callable are "
                 "built and exercised inside the isolated execution process; no control-plane "
@@ -1410,7 +1419,7 @@ def world_tools(
         schema({"name": str, "code": str, "what": str}, ["name", "code"]),
     )
     async def add_world_check(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
@@ -1451,6 +1460,7 @@ def world_tools(
         {},
     )
     async def check_world(_args: dict[str, Any]) -> dict[str, Any]:
+        _runtime_owned()
         report = probe(world, contract, sequences=sequences, kind=kind)
         scores.append(report.score)
         # Saying the score is going nowhere, rather than leaving it to be noticed. A stage that
@@ -1497,7 +1507,7 @@ def world_tools(
         schema({"notes": str}, []),
     )
     async def save_world(args: dict[str, Any]) -> dict[str, Any]:
-        runtime_tools = set(getattr(world, "runtime_tools", set()))
+        runtime_tools = _runtime_owned()
         runtime_only = bool(contract.tools) and set(contract.tool_names()).issubset(
             runtime_tools
         )
