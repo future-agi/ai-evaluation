@@ -180,6 +180,38 @@ def _prune_suite_to_catalogue(output: Path) -> tuple[list[str], dict[str, object
     return notes, {"dropped": sorted(dropped), "narrowed": narrowed}
 
 
+def _drop_stale_invariants(source: Path, output: Path) -> list[str]:
+    """Hold the saved invariant review to the run's source; return the checks dropped.
+
+    A check whose quoted lines the source still holds is stamped with this source. One quoting
+    a line the source no longer has is dropped: certify-only cannot review it again.
+    """
+    from .source_data_invariants import ARTIFACT, source_files, validate_evidence
+
+    artifact = output / ARTIFACT
+    if not artifact.is_file():
+        return []
+    body = json.loads(artifact.read_text(encoding="utf-8"))
+    checks = body.get("checks") if isinstance(body, dict) else None
+    if not isinstance(checks, list) or not checks:
+        return []
+    files = source_files(source)
+    kept: list[dict] = []
+    stale: list[str] = []
+    for check in checks:
+        try:
+            evidence = validate_evidence(check, files)["evidence"]
+        except (ValueError, AttributeError, TypeError):
+            stale.append(str(check.get("name") or "a check"))
+            continue
+        kept.append({**check, "evidence": evidence})
+    if kept != checks:
+        artifact.write_text(
+            json.dumps({**body, "checks": kept}, indent=2) + "\n", encoding="utf-8"
+        )
+    return stale
+
+
 def _prepare_source_data_invariants(job: HarnessJob, output: Path) -> list[str]:
     """Reuse the environment's invariant review without asking a model for a new one."""
     from .authoring_runtime_validation import RuntimeValidationError
@@ -201,7 +233,8 @@ def _prepare_source_data_invariants(job: HarnessJob, output: Path) -> list[str]:
             raise RuntimeValidationError(
                 "environment",
                 "Certify-only: no saved source-data invariant applies to the scenarios "
-                "left in the suite, so invariants must be authored again",
+                "left in the suite and the agent's source, so invariants must be authored "
+                "again",
             )
         return notes
     if (
@@ -344,6 +377,14 @@ def _certify_only(args: argparse.Namespace) -> int:
         runtime_job = HarnessJob.model_validate_json(
             args.job.read_text(encoding="utf-8")
         )
+        stale = _drop_stale_invariants(source, output)
+        notes += [
+            f"source-data invariant {name} dropped, it quotes a line this agent "
+            "version's source no longer has"
+            for name in stale
+        ]
+        if stale:
+            report["stale_invariants"] = stale
         notes += _prepare_source_data_invariants(runtime_job, output)
         notes += _refresh_source_facts(runtime_job, source, output)
     except RuntimeValidationError:

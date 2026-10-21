@@ -220,6 +220,10 @@ _POLICIES = MappingProxyType(
             domain=FailureDomain.ENVIRONMENT,
             owner=RepairOwner.UNSUPPORTED,
         ),
+        "source_data_invariant_violated": DiagnosticPolicy(
+            domain=FailureDomain.ENVIRONMENT,
+            owner=RepairOwner.AUTHORING,
+        ),
     }
 )
 

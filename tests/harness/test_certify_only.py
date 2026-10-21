@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from functools import partial
+import hashlib
 import json
 import os
 import shutil
@@ -484,6 +485,109 @@ def test_data_ful_review_scopes_are_pruned_to_scenarios_present(tmp_path) -> Non
         ("kept", ["one"]),
         ("global", []),
     ]
+
+
+_SCHEMA_QUOTE = "CREATE TABLE users (id TEXT PRIMARY KEY)"
+
+
+def _saved_review(authoring: Path, quotes: dict[str, str]) -> None:
+    """A review saved by an earlier agent version: every file it cites has changed since."""
+    (authoring / ARTIFACT).write_text(
+        json.dumps(
+            {
+                "checks": [
+                    {
+                        "name": name,
+                        "violations_sql": "SELECT 1 WHERE false",
+                        "evidence": [
+                            {"path": "db/schema.sql", "quote": quote, "sha256": "0" * 64}
+                        ],
+                        "scenarios": [],
+                    }
+                    for name, quote in quotes.items()
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _reusing_validate(calls: list[str], reused: list[dict]):
+    """The certifying stand-in, reusing the saved review as validate_once does."""
+
+    class World:
+        def state(self):
+            return {"users": []}
+
+    certify = _certifying_validate(calls)
+
+    async def validate(job, source, authoring):
+        reused.extend(
+            await author_invariants(source, authoring, World(), reuse_only=True)
+        )
+        return await certify(job, source, authoring)
+
+    return validate
+
+
+def test_certify_only_drops_invariants_quoting_moved_lines_and_reuses_the_rest(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_review(
+        authoring,
+        {"kept": _SCHEMA_QUOTE, "moved": "CREATE TABLE wallets (rider_id TEXT)"},
+    )
+    opened = _forbid_models(monkeypatch)
+    reused: list[dict] = []
+    _use_validator(monkeypatch, _reusing_validate([], reused))
+
+    assert (
+        _hosted(
+            tmp_path,
+            monkeypatch,
+            _argv(source, authoring, job_path, tmp_path / "bundle"),
+        )
+        == 0
+    )
+
+    assert [check["name"] for check in reused] == ["kept"]
+    schema = (source / "db" / "schema.sql").read_bytes()
+    assert reused[0]["evidence"][0]["sha256"] == hashlib.sha256(schema).hexdigest()
+    assert json.loads((authoring / "certify-report.json").read_text()) == {
+        "dropped": [],
+        "narrowed": {},
+        "stale_invariants": ["moved"],
+    }
+    assert (
+        "source-data invariant moved dropped, it quotes a line this agent "
+        "version's source no longer has"
+    ) in capsys.readouterr().err
+    assert opened == []
+
+
+def test_certify_only_rejects_when_every_invariant_quotes_a_moved_line(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    source, authoring, job_path = _assembled(tmp_path, {"one": ["works"]})
+    _saved_review(authoring, {"moved": "CREATE TABLE wallets (rider_id TEXT)"})
+    opened = _forbid_models(monkeypatch)
+    calls: list[str] = []
+    _use_validator(monkeypatch, _reusing_validate(calls, []))
+
+    assert (
+        _hosted(
+            tmp_path,
+            monkeypatch,
+            _argv(source, authoring, job_path, tmp_path / "bundle"),
+        )
+        == 78
+    )
+
+    assert calls == []
+    assert "invariants must be authored again" in capsys.readouterr().err
+    assert not (authoring / "certify-report.json").exists()
+    assert opened == []
 
 
 def test_certify_only_bundle_failure_exits_78(tmp_path, monkeypatch, capsys) -> None:

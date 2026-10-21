@@ -297,6 +297,21 @@ def _generic_candidate_hash(source: Path, authoring: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def _invariants_violated(detail: str) -> tuple:
+    """Certify-only's typed rejection for seeded data that breaks a saved invariant."""
+    from .diagnostics import HarnessDiagnostic
+    from .job import HarnessStage
+
+    return (
+        HarnessDiagnostic.create(
+            stage=HarnessStage.VALIDATING_ENVIRONMENT,
+            component="source_data_invariants",
+            code="source_data_invariant_violated",
+            message=detail,
+        ),
+    )
+
+
 def _fallback_diagnostic(error):
     from .diagnostics import HarnessDiagnostic
     from .job import HarnessStage
@@ -732,6 +747,7 @@ async def validate_once(
             async def check_setups(invariants, suite=None):
                 suite = scenarios if suite is None else suite
                 failures: list[str] = []
+                diagnostics: list = []
 
                 async def lane(own, against):
                     for scenario in own:
@@ -739,6 +755,7 @@ async def validate_once(
                             await check_setup(scenario, invariants, against)
                         except RuntimeValidationError as exc:
                             failures.append(str(exc))
+                            diagnostics.extend(exc.diagnostics)
                         else:
                             cleared.append(scenario)
 
@@ -750,7 +767,9 @@ async def validate_once(
                     )
                 )
                 if failures:
-                    raise RuntimeValidationError(phase, "\n".join(sorted(failures)))
+                    raise RuntimeValidationError(
+                        phase, "\n".join(sorted(failures)), diagnostics=diagnostics
+                    )
 
             async def check_setup(scenario, invariants, against=None):
                 try:
@@ -798,8 +817,13 @@ async def validate_once(
                                 scenario_key=scenario.scenario_key,
                             )
                         except Exception as exc:
+                            detail = f"{scenario.scenario_key}: source data: {exc}"
                             raise RuntimeValidationError(
-                                phase, f"{scenario.scenario_key}: source data: {exc}"
+                                phase,
+                                detail,
+                                diagnostics=_invariants_violated(detail)
+                                if reuse_invariants_only and isinstance(exc, ValueError)
+                                else (),
                             ) from exc
                     if name == "ready":
                         verdict = _classify_ready(result.value)
@@ -864,7 +888,14 @@ async def validate_once(
             # Review probes may have effects; none belongs in the test baseline.
             await provider.reset(runtime, work_directory=work)
             baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
-            await check_invariants(baseline.read_only(), invariants)
+            try:
+                await check_invariants(baseline.read_only(), invariants)
+            except ValueError as exc:
+                if not reuse_invariants_only:
+                    raise
+                raise RuntimeValidationError(
+                    phase, str(exc), diagnostics=_invariants_violated(str(exc))
+                ) from exc
             if generic:
                 from .action_certification import certify_actions
 
