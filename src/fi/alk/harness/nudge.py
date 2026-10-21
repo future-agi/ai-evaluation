@@ -9,6 +9,7 @@ or runs against the frozen world on disk.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import replace
@@ -249,10 +250,23 @@ def _contract_tools(workspace: Path) -> set[str]:
     return contract.tool_names() if contract is not None else set()
 
 
-def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
+def _untested_tools(added: set[str], catalogue: Catalogue) -> list[str]:
+    """The added tools no sub-goal's check or criteria name."""
+    texts = [f"{one.check}\n{one.judged}" for one in catalogue.sub_goals]
+    return sorted(
+        name
+        for name in added
+        if not any(re.search(rf"\b{re.escape(name)}\b", text) for text in texts)
+    )
+
+
+def environment_gate(
+    workspace: Path, started_with: set[str] | None = None
+) -> tuple[list[dict], list[str]]:
     """Static checks of the environment piece: (problems, not_checked).
 
-    A contract tool the saved world has no handler for is a problem.
+    A contract tool the saved world has no handler for is a problem. ``started_with`` is the
+    contract's tools when the turn began; a tool added since that nothing tests is a problem.
     """
     workspace = Path(workspace)
     problems: list[dict] = []
@@ -324,6 +338,11 @@ def environment_gate(workspace: Path) -> tuple[list[dict], list[str]]:
                 "contract tool has no handler; save_world has not saved a world with it",
             )
             for name in sorted(contract.tool_names() - covered)
+        )
+    if contract is not None and started_with is not None:
+        problems.extend(
+            _problem(name, "tool", "added in this rebuild; no sub-goal checks it")
+            for name in _untested_tools(contract.tool_names() - started_with, catalogue)
         )
     return problems, not_checked
 
@@ -476,6 +495,8 @@ def report_update(
     """Run the stage gate and write the result file. ``nudge`` is the command payload.
 
     ``world`` is the turn's world tracking: world changes not yet saved fail the gate.
+    ``started_with`` is what the piece held when the turn began: its scenario keys (suite) or
+    its contract's tools (environment).
     """
     # A gate that raises leaves no result rather than an earlier one.
     (Path(workspace) / NUDGE_RESULT).unlink(missing_ok=True)
@@ -483,7 +504,7 @@ def report_update(
     warnings: list[str] = []
     left_out: list[dict] = []
     if stage == ENVIRONMENT:
-        problems, not_checked = environment_gate(workspace)
+        problems, not_checked = environment_gate(workspace, started_with)
         if world and world.get("unsaved"):
             problems.append(
                 _problem(
@@ -696,6 +717,8 @@ def nudge_server(
             for one in (kept if kept is not None else load_scenarios(workspace))
         }
         if stage == SUITE
+        else _contract_tools(workspace)
+        if stage == ENVIRONMENT
         else None
     )
 

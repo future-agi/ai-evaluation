@@ -436,6 +436,89 @@ def test_an_uncovered_tool_is_reported_without_a_turn(tmp_path):
     assert [(one["item"], one["kind"]) for one in problems] == [("send_otp", "world")]
 
 
+def _add_tool_sub_goal(root: Path, name: str, tool_name: str) -> None:
+    catalogue = load_catalogue(root)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name=name,
+            what=f"{tool_name} was used",
+            check=(
+                "def check(world, calls):\n"
+                f"    made = [c for c in calls if c.name == '{tool_name}' and c.ok]\n"
+                f"    if not made: return '{tool_name} was never called'\n"
+                "    got = made[0].arguments.get('label')\n"
+                "    return None if got == 'home' else 'wrong place'\n"
+            ),
+        )
+    )
+    save_catalogue(catalogue, root)
+
+
+def test_a_tool_added_in_the_turn_that_no_sub_goal_checks_is_reported(tmp_path):
+    root = _cart(tmp_path)
+    server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
+    _add_tool(root, "saved_places")
+    _set_manifest(root, tools=["add", "lst", "saved_places"])
+
+    said = _call(server, "report_update", {"changed": True, "notes": "fits"})
+
+    assert said.get("is_error")
+    written = json.loads((root / nudge.NUDGE_RESULT).read_text(encoding="utf-8"))
+    assert [(one["item"], one["kind"]) for one in written["checks"]["problems"]] == [
+        ("saved_places", "tool")
+    ]
+
+
+def test_a_tool_added_in_the_turn_with_a_sub_goal_naming_it_passes(tmp_path):
+    root = _cart(tmp_path)
+    server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
+    _add_tool(root, "saved_places")
+    _set_manifest(root, tools=["add", "lst", "saved_places"])
+    # A longer name that contains it is not a mention.
+    _add_tool_sub_goal(root, "other", "saved_places_v2")
+    assert nudge.environment_gate(root, {"add", "lst"})[0] == [
+        nudge._problem(
+            "saved_places", "tool", "added in this rebuild; no sub-goal checks it"
+        )
+    ]
+    _add_tool_sub_goal(root, "used-saved-places", "saved_places")
+
+    said = _call(server, "report_update", {"changed": True, "notes": "fits"})
+
+    assert not said.get("is_error"), said
+
+
+def test_a_renamed_tool_with_its_sub_goals_updated_or_a_removed_tool_passes(tmp_path):
+    root = _cart(tmp_path)
+    server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
+    path = root / "contract.json"
+    contract = AgentContract.model_validate_json(path.read_text(encoding="utf-8"))
+    contract.tools = [
+        ToolSpec(name="add_item", args=["item_id"], arg_values={"item_id": ["big_mac"]})
+    ]
+    path.write_text(contract.model_dump_json(), encoding="utf-8")
+    _set_manifest(root, tools=["add_item"])
+    catalogue = load_catalogue(root)
+    for one in catalogue.sub_goals:
+        one.check = one.check.replace("'add'", "'add_item'")
+    save_catalogue(catalogue, root)
+
+    said = _call(server, "report_update", {"changed": True, "notes": "fits"})
+
+    assert not said.get("is_error"), said
+
+
+def test_an_untested_tool_already_in_the_contract_is_not_reported(tmp_path):
+    root = _cart(tmp_path)
+    _add_tool(root, "saved_places")
+    _set_manifest(root, tools=["add", "lst", "saved_places"])
+    server = nudge.nudge_server(root, {"nudge_id": "n1", "stage": "environment"})
+
+    said = _call(server, "report_update", {"changed": False, "notes": "fits"})
+
+    assert not said.get("is_error"), said
+
+
 def test_unsaved_world_changes_fail_the_report(tmp_path):
     root = _cart(tmp_path)
     result = nudge.report_update(

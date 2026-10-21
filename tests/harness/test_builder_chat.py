@@ -942,7 +942,11 @@ def test_a_tool_added_without_saving_the_world_fails_the_report(
 
     result = client.results[-1]
     assert result["checks"]["passed"] is False
-    assert [one["item"] for one in result["checks"]["problems"]] == ["send_otp"]
+    # The turn added it, so it also needs a sub-goal checking it.
+    assert [(one["item"], one["kind"]) for one in result["checks"]["problems"]] == [
+        ("send_otp", "world"),
+        ("send_otp", "tool"),
+    ]
 
 
 def test_world_changes_fail_the_report_until_the_world_is_saved(tmp_path, monkeypatch):
@@ -1267,9 +1271,38 @@ def test_a_suite_rebuild_is_told_which_scenarios_are_the_persons(tmp_path, monke
     )
 
     assert conversation.messages[0].endswith(
-        "Scenarios the person is still editing (leave them as they are): "
-        "adds-a-big-mac"
+        "Scenarios the person is still editing (keep what they wrote; only carry over a "
+        "renamed tool or argument): adds-a-big-mac"
     )
+    assert "No scenario is being edited" not in conversation.messages[0]
+
+
+def test_a_suite_rebuild_with_no_draft_says_earlier_edits_have_landed(
+    tmp_path, monkeypatch
+):
+    async def act(stage):
+        return None
+
+    _runtime, _client, conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "suite", act
+    )
+
+    assert conversation.messages[0].endswith(
+        "No scenario is being edited by the person now: no list of edits in an earlier "
+        "message applies any more, so repair every scenario this update breaks."
+    )
+
+
+def test_an_environment_rebuild_says_nothing_about_edits(tmp_path, monkeypatch):
+    async def act(stage):
+        return None
+
+    _runtime, _client, conversation, _asked = _rebuild(
+        tmp_path, monkeypatch, "environment", act
+    )
+
+    assert "being edited" not in conversation.messages[0]
+    assert "still editing" not in conversation.messages[0]
 
 
 def test_a_suite_rebuild_can_add_a_scenario(tmp_path, monkeypatch):

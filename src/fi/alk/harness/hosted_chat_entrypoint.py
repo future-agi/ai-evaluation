@@ -1137,12 +1137,19 @@ class HostedChatRuntime:
         from .nudge import SUITE
 
         keys = [str(one) for one in self._nudge.get("user_draft_keys") or []]
-        if self._nudge.get("stage") != SUITE or not keys:
+        if self._nudge.get("stage") != SUITE:
             return _NUDGE_NOTE
+        if not keys:
+            return (
+                _NUDGE_NOTE
+                + "\n\nNo scenario is being edited by the person now: no list of edits in "
+                "an earlier message applies any more, so repair every scenario this update "
+                "breaks."
+            )
         return (
             _NUDGE_NOTE
-            + "\n\nScenarios the person is still editing (leave them as they are): "
-            + ", ".join(keys)
+            + "\n\nScenarios the person is still editing (keep what they wrote; only carry "
+            "over a renamed tool or argument): " + ", ".join(keys)
         )
 
     def _report_again_if_written(self) -> None:

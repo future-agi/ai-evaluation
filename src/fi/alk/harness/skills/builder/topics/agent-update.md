@@ -25,6 +25,9 @@ decided in the notes.
   rebuilt in its own turn after this one lands.
 - There is no running world and no credentials here. Do not try to run the agent's tools; the
   checks are static.
+- For every tool the agent gained, add a sub-goal whose check names the tool, so the suite stage
+  adds a scenario for what it lets the caller do. `report_update` fails a new tool no sub-goal
+  checks.
 - Change the world's data with `seed` or `change_data`, and keep it with `save_world`.
 - When the agent's seed changes, reproduce its new rows and values; never drop one to keep a world
   check passing. Rewrite a world check that pins the old seed with `add_world_check` under its
@@ -42,7 +45,10 @@ decided in the notes.
   cover several.
 - Drop a sub-goal from scenarios with `retire_sub_goal` only after the environment retired it.
 - Prove everything with `prove_scenarios`. Scenarios the person is still editing are listed at the
-  end of the message; leave them as they are, even when they fail.
+  end of the message. Only this message's list counts: a scenario an earlier message listed is
+  no longer being edited and is repaired like any other. In a listed scenario keep what the
+  person wrote and only carry over a mechanical change, such as a renamed tool or argument in its
+  solution; leave it as it is otherwise, even when it fails.
 
 ## Ending the turn
 
