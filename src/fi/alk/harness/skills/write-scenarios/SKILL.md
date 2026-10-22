@@ -31,7 +31,8 @@ fail is a scenario nobody needed to run.
 
 Everything you need about the agent is in front of you. The contract above lists its tools with their
 arguments, its hard rules, its data, its real use cases and how its tools report a refusal. A summary
-of the world follows it. Do not restate those; read them.
+of the world follows it. Do not restate those; read them. The agent's own prompt is there whole:
+read all of it before the first scenario.
 
 ## Hard requirements
 
@@ -175,7 +176,7 @@ afterwards. It is a whole conversation from first contact to a settled outcome, 
 | `instruction` | What the person is trying to achieve, written to them, plus everything they hold. | yes |
 | `sub_goals` | Names from the shared catalogue that must hold. Nothing else grades this scenario. | yes |
 | `solution` | What a correct agent would do, as steps. Never run against the agent under test. | yes |
-| `fixture` | A readable manifest of the data this scenario relies on. Its `origin` must be `seed`, `generated` or `mixed`. A fixture changes nothing by itself. | yes, when the world has data |
+| `fixture` | A readable manifest of the data this scenario relies on. Its `origin` must be `seed`, `generated` or `mixed`. A fixture changes nothing by itself, with one exception: the number the caller calls from goes under `caller_phone`; a call is placed from it, and without it from a default number that may belong to someone else. | yes, when the world has data |
 | `persona` | Who the person is, as structured fields. | yes, when the prompt asks for one |
 | `setup_code` | Python defining `setup(world)`. This is what actually changes the world. | when the instruction presumes anything |
 | `ready_code` | Python defining `ready(world)`. Returns `None` when the world is ready, or a sentence naming what is missing. | recommended |
@@ -184,6 +185,36 @@ afterwards. It is a whole conversation from first contact to a settled outcome, 
 | `tests` | One line: the condition this scenario passes on. Shown to people as "passes when", so write it to complete that phrase. | no |
 | `variables` | Extra values the prompt asks for, by slot name. Each is substituted into the prompt where its name appears. | when the prompt asks |
 | `max_turns` | How many turns the conversation may take. Defaults to 10. | no |
+
+### One situation, and every field written from it
+
+A scenario is one call, so every field describes the same one. Decide the situation first, in one
+sentence: who calls, what they want, what is true in the world, and what makes it hard. Then write the
+fields from it, in this order, each from the one before:
+
+1. `setup_code` makes that world true, by changing what the world already holds; `ready_code` checks
+   each thing the situation needs, and nothing else.
+2. `solution` is what the agent does in that world under its rules, step by step, ending on the
+   outcome this situation reaches.
+3. `instruction` gives the person what they want and how they behave in that situation, and ends with
+   a `Your details:` block holding every value they can be asked for. It holds only what the person
+   knows: a fact about the world they are unaware of stays in setup.
+4. `sub_goals` assert that outcome and the hard moment, against the solution's fixed values.
+5. `name`, `branch`, `tests`, `use_case` and the coordinate label that situation.
+
+The fields are linked, and each link holds:
+
+- every `caller:` value the solution fixes is a line in `Your details`, word for word;
+- every `record:` value is held by setup or the seed, and listed in `fixture`;
+- every record `Your details` names (an account, a booking, a card, an address) exists in the world as
+  stated, and `ready_code` checks it;
+- every sub-goal named compares values the solution fixes, or judges what that situation makes the
+  agent say;
+- `name`, `branch` and `tests` describe exactly what setup makes true and the solution reaches.
+
+Read it back once as the agent, the person and the world would meet it: each field must tell the same
+call. When you change one field, rewrite every field that follows from it; a scenario patched in one
+place and not the others is wrong in the others.
 
 `branch` and `tests` are different and easy to confuse. `branch` is the **condition**: what is
 different about this scenario's world or request. `tests` is the **question**: what the run will find
@@ -239,6 +270,103 @@ disqualifying announcement is one test billed four times.
 {"tool": "get_account", "arguments": {"account_id": "..."}}
 ```
 
+**The solution is what the agent's prompt tells it to do in this situation.** Find every part of the
+prompt that applies to what the person wants and the state they are in, including a rule that
+overrides the usual flow or ends the conversation early. The steps follow those parts and stop where
+they say to stop; a step this situation's rules skip is not in the solution, and a sub-goal for that
+step is not named here. Never add a step the rules skip just so a sub-goal's check passes: that check
+is wrong for this situation, so leave it off the scenario. `try_calls` shows what the world accepts, not what
+the agent was told to do.
+
+### The solution is the answer key: write it in four steps
+
+A verdict that is wrong because of your solution or its `fixed` marks, and not because of the agent,
+is a failure of this stage. Write nothing here you could not defend from the agent's instructions and
+this caller's situation.
+
+Every code sub-goal you name is handed your solution and checks the agent's calls and records
+against it, so it is written for the checks as much as for the proof.
+
+**1. Write the call as this caller's call should go under the agent's rules.** First find the rule
+that governs this situation in the agent's instructions, then write only the steps that rule asks for,
+complete to the outcome, with this caller's values as they last corrected them, exactly as the agent's
+tools take them.
+
+- When the caller states something a rule says to hand over, stop or refuse on, the solution is that
+  action with nothing before it the rule does not ask for: no identity check and no lookup. An
+  identity check belongs before disclosing or changing something, never before handing over. A rule
+  that says to act at once comes before the agent's usual opening steps, verifying the caller
+  included. When the reason to hand over
+  can only be found by looking (an account's state the caller does not mention), the lookups that find
+  it come first, as in the example under "What is not a scenario".
+- A step another tool already does inside its own work is not one the agent repeats.
+- A step succeeds only where nothing it refuses on holds: read each tool's `refuses` in the contract
+  and rule every one out through setup or the caller's situation, or write the refusal as the outcome.
+  An effect the contract states under a condition ("ready if a setting is on", "found when one is
+  active") holds only when your setup makes that condition true, and setup can only set what the
+  world holds before the call.
+- Setup changes the record the world already holds for a thing; it never adds a second one for the
+  same thing. Two records for one address, person or item give the agent a choice your solution
+  cannot know it made, and a check comparing the identifier fails the correct one.
+
+A wrong value or an extra step in the solution fails a correct agent, because a check that finds it
+there expects the agent to match it.
+
+**2. Mark on every step which arguments are `fixed`, and where each comes from.** An argument is fixed
+when its right value comes from one of three places, written against it as its source:
+`caller: <what they say>`, `record: <where the world holds it>`, or
+`rule: "<the rule's own words>"`, quoted exactly as the agent's instructions write them and
+containing the value. A value from a record is written in the form the tool takes it: a prefix or
+format the tool's description names is part of the value. The build refuses a source that does not hold. Only fixed arguments are shown to
+the checks and the judge, so everything else stays out of their reach:
+
+- the agent's own choices: a destination or category it picks, a label, note or reason it writes in its
+  own words, even when the caller asked for that very thing (the caller fixes what they want, not the
+  words the agent records it under), and the same for a place or description the caller gave and
+  the agent writes down (the identifier the world resolves it to is fixed, from the record);
+- a value the agent's code fills in elsewhere, which does not fix what the agent's model passes;
+- an optional argument nothing fixes: leave it out, and the tool's default applies.
+
+Find each source yourself in this caller's situation, their record or the agent's instructions; a
+sub-goal's contract saying where a value comes from does not make it so. Never mark a value fixed
+because a check compares it.
+
+**Everything the person came for is fixed somewhere, on the step where it enters.** List what they
+want and whose record it touches; each item is a fixed value on some step of the solution, or only
+what is said can settle it. When the outcome is assembled over several steps and a last one commits
+it (choices made one by one, then a confirm), the values sit on the earlier steps, and a committing
+step that carries none of them is normal. The record being acted on is fixed too, from the record,
+on every step that names it, even when the agent could find it on its own. A solution with almost
+nothing fixed leaves the checks nothing to compare, and every agent that does the steps passes.
+
+**3. Write the other ways the agent's instructions allow, in `alternatives`.** Where a rule names one
+tool and another tool reaches the same outcome, or one tool does a step inside its own work, write each
+other way as a full list of steps like the solution. The proof plays each one, and every check must
+pass on all of them.
+
+**4. Name the sub-goals this scenario settles, and try each the first time you name it.** Read each in
+the catalogue (`inspect_world` lists them, and the catalogue file holds their checks): what it
+compares, and when it applies. Name one only when its situation arises here and a correct agent
+passes it whichever way its rules allow, and whichever turn this caller may take within their
+situation: if the caller could reasonably ask for a person or change their mind, name sub-goals for
+what the agent must do either way, not for an outcome only one of those turns reaches. The first
+time you name a sub-goal in your session, and whenever you add or replace one, run it with
+`try_check`: your solution, another way the instructions allow, and your solution with a fixed
+value wrong. The first two must hold and the third must fail; when they do not, replace the sub-goal
+with `add_sub_goal` or name another. Sub-goals are shared, so after that first try you reuse it without trying again.
+
+**What the proof plays, and how to answer it.** Beyond your solution and your alternatives, it plays an
+agent that gets every fixed value right but makes its own choice for everything else, and an agent that
+gets one fixed value wrong at a time.
+
+- *Too strict* names an argument a check held a correct agent to. Mark it fixed only if the caller,
+  their record or a quoted rule really fixes it; otherwise the check must be rewritten to check the
+  outcome.
+- *Unchecked* names a fixed value no check notices when wrong. Name a sub-goal whose check compares
+  it, or take it out of `fixed` if only what is said settles it.
+- *Could not find an argument in the reference* means a check expected a value you did not mark. Mark
+  it if this caller really fixes it; otherwise the check is wrong.
+
 Some agents insert trusted values between what the model chooses and what the underlying service
 receives: resolved identifiers, prices, routes. Those must never appear as arguments the model
 supposedly chose. Put them in `environment_arguments` on the same step, which the proof passes to the
@@ -270,14 +398,21 @@ nothing can fill.
 **Name every sub-goal the scenario actually settles, not just the one it is about.** A refusal also
 settles what the world must still hold; a completed task settles the call and the state it left.
 **Whatever your reference solution does last is the outcome the scenario exists for, and a sub-goal
-has to assert it.** Six ended on a status lookup and named only booking
-sub-goals, so an agent that booked and never looked passed them all. Two a scenario
-is the working number; one is right only when the agent had nothing to find out before acting.
+has to assert it.** Scenarios whose solution ended on a final lookup named sub-goals only for the
+step before it, so an agent that skipped the lookup passed them all. Two is the working
+number; one is right only when the agent had nothing to find out before acting, as when a rule tells
+it to act at once. Before naming one, say in
+a line what a wrong agent would do in this scenario to fail it; if you cannot, it does not belong,
+and a sub-goal whose situation never comes up here is filler that passes for nothing. When the
+catalogue has no sub-goal for what this caller came for, add one rather than naming a filler.
 
-**And, when the agent has tools, that one must be the checked kind, not the judged kind.** The last step is a call, so the call
-log and the world both hold the evidence: a judge asked to read the transcript for it is being asked
-to settle something the arguments already settle. One suite of sixty left its closing status lookup to
+**And, when the agent has tools, settle it from the evidence the call left.** The last step is a call,
+so the call log and the world both hold the evidence, and the judge reads both as well as the
+conversation: a check compares the call and the records with your reference solution, and the
+judge settles what was said. One suite of sixty left its closing status lookup to
 a judge and nothing else asserted it, which is the same hole as naming no sub-goal for it at all.
+A check handed your reference solution settles whether the step was right for this caller (their
+record, their values, as last corrected).
 
 The two failures look opposite and are both real. One suite defined thirty-nine sub-goals and used
 twenty-six of them exactly once: a bespoke check wherever a shared one would have done, so nothing
@@ -303,6 +438,21 @@ Fail when, If it does not arise (see `add_sub_goal`). Name one on a scenario who
 cannot come up tests nothing with it, and one where the agent can keep it from coming up is exactly
 where that line decides the verdict. When you add a judged sub-goal, write all four lines so two
 judges would reach the same verdict: what the agent says or does, never "handles it well".
+
+- **Name the value, not the act.** When the step carries a detail the caller gave or the world holds,
+  Pass when says the agent used that one, as last corrected, and Fail when covers the same step with
+  a different one. "Read back the details" is an act; "read back the details the caller gave" is a
+  sub-goal. The judge also sees your reference solution, so it can tell the right value from a wrong
+  one without demanding the same steps.
+- **Cover every way it can go.** Pass when and Fail when together cover each way the agent can handle
+  the situation. An agent asked to skip a required step that simply takes it anyway did the safe
+  thing; criteria demanding it *explain* why fail it for its wording. Ask for the behaviour.
+- **Applies when is about the conversation, not your intent.** A request that turned out specific
+  enough does not make "too vague to act on" apply, whatever the scenario meant to test.
+- **Survive the next version of the agent.** Name the behaviour and where its rule comes from ("what
+  its instructions require it to say"), never today's wording, amounts or names copied from the
+  prompt, unless the instructions demand that exact text; then judge the words spoken, not how the
+  transcript spelled them.
 
 **The mechanical test: does the check turn on a tool your task does not use?** If it names
 `create_booking` and your scenario cancels, or names `cancel_booking` and yours creates, the check is not
@@ -348,14 +498,17 @@ Every sub-goal is graded one of two ways, and **you choose which by whether you 
 
 - **Deterministic.** The sub-goal carries a `check`: Python receiving the world as the run left it and
   every call the agent made with its arguments, returning nothing if it held or a sentence saying
-  what was wrong. This is what you want almost always.
-- **Judged.** The sub-goal carries no check, so a model reads the transcript and decides. Reserve
-  this for things nothing observable can settle: whether a refusal was explained kindly, whether a
-  number was invented.
+  what was wrong. It is shared by every scenario naming it; written `check(world, calls, reference)`,
+  it is also handed this scenario's solution and settles whether this caller's values were used.
+- **Judged.** The sub-goal carries no check, so a model hears the call and decides. Use it for what
+  nothing observable can settle, whether a refusal was explained kindly, whether a number was
+  invented.
 
-Prefer a check. You have the world afterwards and every call with its arguments, so most things worth
-checking are visible in one of them. A judged sub-goal is reported as judged, and a suite of them
-tells you less than it appears to.
+Use a check only for a change the call must leave in the records, made as it should be. Whether a
+forbidden thing happened is judged from the records: a check that holds on an untouched world grades
+nothing and is refused. The judge reads every call with its arguments and the records as well as
+the conversation, so judged does not mean read from the transcript alone, and anything the agent says
+is judged.
 
 **A check that only asks whether a tool was called is not a check.** It proves the plumbing worked, not
 that the agent behaved: any agent that reaches the tool at all passes it, and no agent that behaves
@@ -502,7 +655,8 @@ The order for one scenario:
 
 1. `inspect_world` with no collection, then look at the ones that matter. Read the sub-goals that
    already exist.
-2. Read the agent's hard rules. Each one is a branch waiting to be written.
+2. Read the agent's prompt and hard rules. Each rule is a branch waiting to be written, and decides
+   what the solution of every scenario it applies to does.
 3. Work out the solution with `try_calls`, passing your `setup_code` so you see the world the agent
    will actually face. Confirm the sub-goals you intend to name respond to it.
 4. `submit_scenario`. Read what comes back: a refusal names exactly what is wrong.
@@ -523,7 +677,8 @@ conversation is the only evidence there will be. Everything else in this skill s
   criteria lines, and a pass and a fail a reader could agree on: "states the fee before asking to confirm", "reads the address
   back before acting", "refuses to disclose another person's details", "offers a person when asked
   twice". Nuance is fine when it is observable: order of steps, what was disclosed, what was refused,
-  the language it answered in.
+  the language it answered in. Correctness shows here too: what the agent read back, confirmed or
+  answered must match what the caller asked, as last corrected, not just be said.
 - **Nothing the agent has to look up.** Do not seed records or hand the caller IDs, balances or
   account states the agent would need to find: there is no world to find them in. The caller brings
   their own details, invented for the persona, and the scenario tests what the agent does with them.
@@ -568,6 +723,9 @@ yourself first. If an honest answer is the wrong one, fix the scenario before `s
 21. Does the instruction say when the person gives in, cooperates, acknowledges or hangs up?
 22. On a spoken call, is a noise place that fits where the person is named, unless the brief dealt a
     quiet line?
+23. Would an agent that follows its rules to the letter pass every named sub-goal? If a rule says to
+    act at once on what this caller says, does the solution start with that act, with no
+    verification or lookup before it?
 
 ## The three gates
 
@@ -640,7 +798,8 @@ Three of these are enforced by validation. Eight are your judgement, and no chec
   agent says what the channel can and cannot carry. A scenario that depends on something it cannot
   carry tests something that never happens; put the difficulty in what the person says and does.
 - **The scenario's own claim is asserted.** *(judgement)* Sub-goals that fit every call (tone, how
-  numbers are spoken, brevity) are fine to share, but they are not what this scenario is for. At least
+  numbers are spoken, brevity) are graded on every call by the suite evals, so they are not sub-goals
+  and not what this scenario is for. At least
   one sub-goal must fail when the agent gets *this* scenario's difficulty wrong: the thing its `tests`
   line names. A scenario checked only by suite-wide style can pass whatever the agent does, and a
   sub-goal that fits any scenario (answered the request, resolved the call) is not this scenario's
@@ -682,6 +841,13 @@ GOOD   solution   [find_account(identifier=...), get_account(account_id=...),
        (the handoff now has to be reached by discovering the reason for it, and
         account_state_checked holds on any lookup whose result carried the status)
 ```
+
+That is the case where the reason is found by looking. When the caller states the reason and a rule
+says to hand over at once, the solution is the hand-over alone, and the scenario can still fail: an
+agent that carries on (keeps taking details, verifies first, starts the task it should hand over)
+instead of handing over.
+Name sub-goals for exactly that, the hand-over and the forbidden carrying on, never for the lookups
+the rule skips.
 
 ## The coordinate is a promise. The instruction has to keep it.
 
@@ -833,6 +999,12 @@ say you will" scripts a calm, compliant caller into a crisis, and the call tests
 reference for it, but you will only give it if asked."* Whether the agent asks is the whole point of
 many scenarios. Put it in the instruction and the agent gets it for free; leave it out entirely and
 the scenario cannot be completed.
+
+**The caller only talks.** Never tell them to do something off the line: tap a link, pay on a page,
+open an app, read a screen. They will say they did it and nothing in the world changes, so an agent
+that checks finds it undone. When the agent's flow waits on such an action, the call ends at what the
+agent does around it, and the sub-goals stop there too. Setup cannot stand in for the action either:
+it holds what was true before the call.
 
 **Every value the caller is told to give is in their details.** "Give the last four digits of your
 phone number" needs the phone number in the instruction; a caller told to give a value they were never
@@ -1252,6 +1424,10 @@ the replacement, the account's and the order's, give both and name each role. Ha
 offers it for the other purpose because it is the only such value they have. It is real, it is in the
 instruction, and it still fails, which is harder to diagnose than a missing value.
 
+**The person is who the agent identifies.** The brief's WHO THE AGENT IS TALKING TO says how the agent
+recognises the person and what it loads before any tool runs. Whatever the scenario turns on (an
+order, a booking, an account) must belong to that person, or the agent finds nothing.
+
 **Take them all from one record.** Fields from two records describe somebody who does not exist, and
 no lookup will find them.
 
@@ -1288,7 +1464,11 @@ true of the world. A name that says one person in the persona and another in the
 misreports every result anybody reads.
 
 **The persona is binding, not decoration.** It is what the caller is rendered as: the voice, the age,
-the accent. An instruction that contradicts it describes somebody who never reaches the agent. A
+the accent, and the mood they are heard in. `personality` sets that mood: `Impatient and direct` and
+`Emotional` are voiced frustrated, every other value calm. A caller the situation makes frustrated,
+angry or desperate carries one of those two, and an older caller carries the `age_group` their age
+falls in, or the call sounds like somebody the scenario never described. An instruction that
+contradicts the persona describes somebody who never reaches the agent. A
 14-year-old written over an `age_group` of `18-25` is spoken by an adult, so the only evidence of a
 minor is the caller announcing one, and the agent is being graded on a fact the call never carried.
 If the offered vocabulary cannot express the person the level needs, the level is unwritable: say so
