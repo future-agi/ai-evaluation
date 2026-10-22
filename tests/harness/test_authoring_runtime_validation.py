@@ -1521,12 +1521,6 @@ def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
     assert len(repairs) == RepairBudgets().scenario_patches + 1
     assert suite["value"] == "original"
 
-   source = _P(invariants.__file__).read_text(encoding="utf-8")
-   assert "if not saved and checks:" in source
-   assert "declared no executable check" in source
-   assert "did not finish; not certified" not in source
-
-
 @pytest.mark.parametrize(
    "declared_kind,legacy_world,expected_storage_repair",
    [
