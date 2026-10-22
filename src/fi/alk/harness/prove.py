@@ -340,30 +340,39 @@ def _declared_options(world_root: Path) -> set[str]:
     }
 
 
-def _other_choices(
-    scenario: Scenario, calls: Sequence[Call], declared: set[str] = frozenset()
-) -> tuple[list[Call], set[str]]:
-    """The same calls with every free text argument the scenario does not mark fixed set otherwise."""
+def _with_value(step: Any, name: str, value: Any) -> Any:
+    """The step with one argument changed where it is executed too, or None when what is executed
+    does not carry that argument, so changing it could not change what the step does."""
+    update: dict[str, Any] = {"arguments": {**step.arguments, name: value}}
+    if step.environment_arguments:
+        if step.environment_arguments.get(name) != step.arguments.get(name):
+            return None
+        update["environment_arguments"] = {**step.environment_arguments, name: value}
+    return step.model_copy(update=update)
+
+
+def _end_state(world: GeneratedWorld) -> dict[str, Any] | None:
+    try:
+        return world.state()
+    except Exception:  # noqa: BLE001 - an unreadable state compares as different, never as equal
+        return None
+
+
+def _other_choices(scenario: Scenario, declared: set[str] = frozenset()) -> tuple[list[Any], set[str]]:
+    """The solution with every free text argument the scenario does not mark fixed set otherwise."""
     steps = list(getattr(scenario, "solution", None) or ())
     if any(step.fixed is None for step in steps):
-        return list(calls), set()
-    varied, changed, at = [], set(), 0
-    for call in calls:
-        step = steps[at] if at < len(steps) else None
-        if step is None or step.tool != call.name:
-            varied.append(call)
-            continue
-        at += 1
-        fixed = step.fixed or ()
-        arguments = dict(call.arguments)
-        for name, value in call.arguments.items():
-            written = step.arguments.get(name)
-            chained = isinstance(written, str) and written.startswith("$")
-            free = name not in fixed and not chained and f"{call.name}.{name}" not in declared
-            if free and isinstance(value, str) and value:
-                arguments[name] = f"another {name}"
-                changed.add(f"{call.name}.{name}")
-        varied.append(replace(call, arguments=arguments))
+        return steps, set()
+    varied, changed = [], set()
+    for step in steps:
+        for name, value in step.arguments.items():
+            free = name not in step.fixed and f"{step.tool}.{name}" not in declared
+            if free and isinstance(value, str) and value and not value.startswith("$"):
+                other = _with_value(step, name, f"another {name}")
+                if other is not None:
+                    step = other
+                    changed.add(f"{step.tool}.{name}")
+        varied.append(step)
     return varied, changed
 
 
@@ -382,8 +391,9 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any]]]:
                 other = f"{value}-other"
             else:
                 continue
-            changed = step.model_copy(update={"arguments": {**step.arguments, name: other}})
-            wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+            changed = _with_value(step, name, other)
+            if changed is not None:
+                wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
     return wrong
 
 
@@ -437,15 +447,23 @@ def prove(
         ]
         passing = {one.name for one in proof.with_solution if one.held}
         held = [(name, source) for name, source in checks if name in passing]
-        varied, changed = _other_choices(scenario, calls, _declared_options(world_root))
-        if changed:
+        right_state = _end_state(world)
+    finally:
+        world.close()
+    varied, changed = _other_choices(scenario, _declared_options(world_root))
+    if changed:
+        other_world, other_calls, other_refused, _ = _run(
+            scenario, world_root, with_solution=True, steps=varied
+        )
+        try:
             proof.too_strict = [
                 f"{name} (the agent chose: {', '.join(sorted(changed))})"
                 for name, source in held
-                if not run_check(source, world, varied, name=name, reference=reference).held
+                if not other_refused
+                and not run_check(source, other_world, other_calls, name=name, reference=reference).held
             ]
-    finally:
-        world.close()
+        finally:
+            other_world.close()
     for number, other in enumerate(getattr(scenario, "alternatives", None) or (), start=1):
         alt_world, alt_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=other)
         try:
@@ -460,7 +478,10 @@ def prove(
     for label, steps in _with_one_wrong(scenario) if held else ():
         wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:
-            if all(
+            # A wrong value that leaves the end state as the right one left is a draft a later step
+            # corrected, or one nothing executes: no outcome is wrong for a check to notice.
+            ended = _end_state(wrong_world)
+            if (ended is None or ended != right_state) and all(
                 run_check(source, wrong_world, wrong_calls, name=name, reference=reference).held
                 for name, source in held
             ):

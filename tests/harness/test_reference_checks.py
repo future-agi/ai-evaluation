@@ -230,15 +230,91 @@ def test_the_proof_varies_every_argument_nothing_fixes_and_keeps_chained_values(
             Step(tool="confirm", arguments={"token": "$call.open.token"}, fixed={}),
         ],
     )
-    calls = [
-        Call(name="open", arguments={"account": "A-1", "note": "picked"}, result={"token": "t1"}, ok=True),
-        Call(name="confirm", arguments={"token": "t1"}, result={}, ok=True),
-    ]
-    varied, changed = _other_choices(scenario, calls)
+    varied, changed = _other_choices(scenario)
     assert varied[0].arguments == {"account": "A-1", "note": "another note"}
-    assert varied[1].arguments == {"token": "t1"} and changed == {"open.note"}
-    strict = "def check(world, calls, reference):\n    return None if any(c.arguments.get('note') == 'picked' for c in calls) else 'done wrong: note'\n"
-    assert run_check(strict, _World([]), calls, reference=[]).held
-    assert not run_check(strict, _World([]), varied, reference=[]).held
+    assert varied[1].arguments == {"token": "$call.open.token"} and changed == {"open.note"}
     unfixed = scenario.model_copy(update={"solution": [Step(tool="open", arguments={"note": "x"})]})
-    assert _other_choices(unfixed, calls[:1]) == (calls[:1], set())
+    assert _other_choices(unfixed) == (unfixed.solution, set())
+
+
+def test_a_changed_value_reaches_what_the_step_executes_or_is_not_probed():
+    from fi.alk.harness.prove import _with_value
+    from fi.alk.harness.scenario import Step
+
+    plain = Step(tool="pay", arguments={"account": "A-1"})
+    assert _with_value(plain, "account", "A-2").arguments == {"account": "A-2"}
+    carried = Step(tool="pay", arguments={"account": "A-1"}, environment_arguments={"account": "A-1", "via": "api"})
+    assert _with_value(carried, "account", "A-2").environment_arguments == {"account": "A-2", "via": "api"}
+    reshaped = Step(tool="pay", arguments={"account": "A-1"}, environment_arguments={"acct_no": "A-1"})
+    assert _with_value(reshaped, "account", "A-2") is None
+
+
+def _notes_world(tmp_path):
+    from fi.alk.harness.world import GeneratedWorld
+    from fi.alk.harness.world.snapshot import save
+
+    class W(GeneratedWorld):
+        name = "notes"
+        tools = [{"name": "save_note"}, {"name": "book"}]
+        handlers = {
+            "save_note": (
+                "def handle(args, db):\n"
+                "    db.execute('INSERT INTO notes (customer, note) VALUES (?, ?)', [args['customer'], args['note']])\n"
+                "    return {'ok': 1}\n"
+            ),
+            "book": (
+                "def handle(args, db):\n"
+                "    db.execute('DELETE FROM bookings')\n"
+                "    db.execute('INSERT INTO bookings (time) VALUES (?)', [args['time']])\n"
+                "    return {'ok': 1}\n"
+            ),
+        }
+
+    world = W(":memory:")
+    world.connection.executescript("CREATE TABLE notes(customer TEXT, note TEXT); CREATE TABLE bookings(time TEXT);")
+    world.connection.commit()
+    save(world, tmp_path, notes="test", sequences=[])
+    return tmp_path
+
+
+def _proof(root, solution, check):
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    catalogue = Catalogue(sub_goals=[SubGoal(name="right", what="right", check=check)])
+    scenario = Scenario(
+        name="s", use_case="u", instruction="i", tests="t", fixture={"origin": "seed"}, solution=solution, sub_goals=["right"]
+    )
+    return prove(scenario, catalogue, root)
+
+
+def test_a_check_that_the_saved_note_is_the_one_sent_is_not_called_too_strict(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    check = (
+        "def check(world, calls, reference):\n"
+        "    sent = [c.arguments['note'] for c in calls if c.name == 'save_note' and c.ok]\n"
+        "    saved = [r['note'] for r in world.state()['notes']]\n"
+        "    return None if sent and sent == saved else 'done wrong: the saved note is not the one sent'\n"
+    )
+    solution = [Step(tool="save_note", arguments={"customer": "C-1", "note": "left earbud broken"}, fixed={"customer": "caller: C-1"})]
+    proof = _proof(_notes_world(tmp_path), solution, check)
+    assert proof.too_strict == []
+
+
+def test_a_draft_a_later_step_corrects_is_not_a_value_the_checks_must_catch(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    check = (
+        "def check(world, calls, reference):\n"
+        "    want = [s['arguments']['time'] for s in reference if s['tool'] == 'book'][-1]\n"
+        "    rows = world.state()['bookings']\n"
+        "    return None if [r['time'] for r in rows] == [want] else 'done wrong: time'\n"
+    )
+    solution = [
+        Step(tool="book", arguments={"time": "4 pm"}, fixed={"time": "caller: 4 pm"}),
+        Step(tool="book", arguments={"time": "6 pm"}, fixed={"time": "caller: 6 pm"}),
+    ]
+    proof = _proof(_notes_world(tmp_path), solution, check)
+    assert proof.unchecked == []
