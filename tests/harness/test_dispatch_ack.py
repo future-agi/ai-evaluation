@@ -19,6 +19,7 @@ from fi.alk.harness import call_runner as cr
 from fi.alk.harness import hosted_scheduler as hs
 from fi.alk.harness.hosted_scheduler import CallAborted
 from fi.alk.harness.job import FailureDomain
+from fi.simulate.runtime.failures import FailureStage, SimulationFailure
 from fi.simulate.runtime.run import TestCaseStatus
 
 _UNACK = "voice_dispatch_unacknowledged"
@@ -125,19 +126,26 @@ def _runner() -> cr.CallRunnerImpl:
     runner = cr.CallRunnerImpl.__new__(cr.CallRunnerImpl)
     runner._adapter = None  # never touched: no calls, no result
     runner._collect_calls = lambda runtime: ()  # instance override
+    runner._context = SimpleNamespace(usage_reporter=None)
+    runner._environ = {}
     return runner
 
 
 def _report(*, status: TestCaseStatus, code: str | None) -> SimpleNamespace:
-    failure = SimpleNamespace(code=code, message="dispatch not acked") if code else None
+    failure = (
+        SimulationFailure(stage=FailureStage.RUNNING, code=code, message="dispatch not acked")
+        if code
+        else None
+    )
     case = SimpleNamespace(
+        test_case_id="c1",
         status=status,
         started_at=None,
         ended_at=None,
         result=None,
         failure=failure,
     )
-    return SimpleNamespace(test_cases=[case])
+    return SimpleNamespace(run_id="r1", test_cases=[case])
 
 
 def _translate(report: SimpleNamespace) -> CallAborted:
