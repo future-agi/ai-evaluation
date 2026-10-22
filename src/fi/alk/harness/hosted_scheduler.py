@@ -502,7 +502,7 @@ _DISCARD_ON_ERROR_CODES = frozenset(
 )
 
 SETUP_TIMEOUT_SECONDS = 60.0
-READY_TIMEOUT_SECONDS = 15.0
+READY_TIMEOUT_SECONDS = 60.0
 CHECK_TIMEOUT_SECONDS = 60.0
 
 _MESSAGE_LIMIT = 2000  # matches the Call.result/error truncation convention (world-handle-interface.md).
