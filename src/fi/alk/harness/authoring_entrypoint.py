@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from functools import partial
 import json
 import os
 import sys
@@ -17,6 +18,8 @@ import shutil
 import threading
 import time
 from pathlib import Path
+import shutil
+import sys
 import tempfile
 
 from .cli import _auto
@@ -47,6 +50,406 @@ def _persist_authored_scenario_count(
         encoding="utf-8",
     )
     temporary.replace(job_path)
+
+
+CERTIFY_REPORT = "certify-report.json"
+
+
+def _one_line(exc: BaseException) -> str:
+    return " ".join(f"{type(exc).__name__}: {exc}".split())
+
+
+def _prune_suite_to_catalogue(output: Path) -> tuple[list[str], dict[str, object]]:
+    """Grade each scenario only on sub_goals the environment defines; drop ones left with none.
+
+    Folders keep their names and scenarios their keys. Returns notes and the pruning report.
+    """
+    from .authoring_runtime_validation import RuntimeValidationError
+    from .catalogue import CATALOGUE, load_catalogue
+    from .folder import SCENARIOS, read_folder, refresh_check, write_index
+
+    if not (output / CATALOGUE).is_file():
+        raise RuntimeValidationError(
+            "environment", f"Certify-only: {CATALOGUE} is missing from the environment"
+        )
+    if not (output / CATALOGUE).read_text(encoding="utf-8").strip():
+        raise RuntimeValidationError(
+            "environment", f"Certify-only: {CATALOGUE} is empty"
+        )
+    catalogue = load_catalogue(output)
+    if not catalogue.sub_goals:
+        raise RuntimeValidationError(
+            "environment", f"Certify-only: {CATALOGUE} defines no sub_goals"
+        )
+    known = catalogue.names()
+    root = output / SCENARIOS
+    folders = (
+        sorted(path for path in root.iterdir() if path.is_dir())
+        if root.is_dir()
+        else []
+    )
+    documents: list[tuple[Path, dict, str]] = []
+    owners: dict[str, str] = {}
+    for folder in folders:
+        try:
+            if read_folder(output, folder.name) is None:
+                raise RuntimeValidationError(
+                    "scenarios",
+                    f"Certify-only: {folder.name}: scenario.json is missing",
+                )
+            body = json.loads((folder / "scenario.json").read_text(encoding="utf-8"))
+        except RuntimeValidationError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a silently skipped folder would shrink the suite
+            raise RuntimeValidationError(
+                "scenarios",
+                f"Certify-only: {folder.name}: unreadable scenario: {_one_line(exc)}",
+            ) from exc
+        name = str(body.get("name") or "")
+        if "/" in name or "\\" in name or name in {".", ".."}:
+            raise RuntimeValidationError(
+                "scenarios",
+                f"Certify-only: {folder.name}: invalid scenario name {name!r}",
+            )
+        # The key the bundle derives; written back so Scenario's slug(name) cannot replace it.
+        key = str(body.get("scenario_key") or name or folder.name)
+        if key in owners:
+            raise RuntimeValidationError(
+                "scenarios",
+                f"Certify-only: {owners[key]} and {folder.name} share scenario_key {key!r}",
+            )
+        owners[key] = folder.name
+        documents.append((folder, body, key))
+
+    kept: list[tuple[Path, dict]] = []
+    untouched: list[Path] = []
+    notes: list[str] = []
+    dropped: list[str] = []
+    narrowed: dict[str, list[str]] = {}
+    for folder, body, key in documents:
+        if "sub_goals" not in body:
+            # Older suites name no sub_goals; they are left as authored.
+            untouched.append(folder)
+            continue
+        goals = list(body.get("sub_goals") or [])
+        graded = [goal for goal in goals if goal in known]
+        removed = [goal for goal in goals if goal not in known]
+        if not graded:
+            dropped.append(key)
+            notes.append(f"{key}: dropped, no sub_goal left to grade")
+            continue
+        if removed:
+            narrowed[key] = sorted(removed)
+            notes.append(
+                f"{key}: sub_goals not in the environment catalogue: "
+                + ", ".join(removed)
+            )
+        kept.append((folder, {**body, "scenario_key": key, "sub_goals": graded}))
+    if not kept and not untouched:
+        raise RuntimeValidationError(
+            "scenarios",
+            "Certify-only: no scenario grades a sub_goal in the environment catalogue",
+        )
+
+    keeping = {folder for folder, _ in kept} | set(untouched)
+    for folder, _, _ in documents:
+        if folder not in keeping:
+            shutil.rmtree(folder)
+    for folder, body in kept:
+        (folder / "scenario.json").write_text(
+            json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        (folder / "checks").mkdir(exist_ok=True)
+        for stale in (folder / "checks").glob("*.py"):
+            if stale.stem not in body["sub_goals"]:
+                stale.unlink()
+    # Checks come from this environment's catalogue; a judged sub_goal keeps no check file.
+    for sub_goal in catalogue.sub_goals:
+        refresh_check(output, sub_goal)
+    # TODO: write_index names each folder after its scenario, which a kept folder may not match.
+    write_index(
+        [
+            scenario
+            for scenario in (
+                read_folder(output, folder.name) for folder in sorted(keeping)
+            )
+            if scenario is not None
+        ],
+        output,
+    )
+    return notes, {"dropped": sorted(dropped), "narrowed": narrowed}
+
+
+def _drop_stale_invariants(source: Path, output: Path) -> list[str]:
+    """Hold the saved invariant review to the run's source; return the checks dropped.
+
+    A check whose quoted lines the source still holds is stamped with this source. One quoting
+    a line the source no longer has is dropped: certify-only cannot review it again.
+    """
+    from .source_data_invariants import ARTIFACT, source_files, validate_evidence
+
+    artifact = output / ARTIFACT
+    if not artifact.is_file():
+        return []
+    body = json.loads(artifact.read_text(encoding="utf-8"))
+    checks = body.get("checks") if isinstance(body, dict) else None
+    if not isinstance(checks, list) or not checks:
+        return []
+    files = source_files(source)
+    kept: list[dict] = []
+    stale: list[str] = []
+    for check in checks:
+        try:
+            evidence = validate_evidence(check, files)["evidence"]
+        except (ValueError, AttributeError, TypeError):
+            stale.append(str(check.get("name") or "a check"))
+            continue
+        kept.append({**check, "evidence": evidence})
+    if kept != checks:
+        artifact.write_text(
+            json.dumps({**body, "checks": kept}, indent=2) + "\n", encoding="utf-8"
+        )
+    return stale
+
+
+def _prepare_source_data_invariants(job: HarnessJob, output: Path) -> list[str]:
+    """Reuse the environment's invariant review without asking a model for a new one."""
+    from .authoring_runtime_validation import RuntimeValidationError
+    from .contract import AgentContract, is_data_free_conversation
+    from .source_data_invariants import ARTIFACT, prune_invariant_scopes
+
+    artifact = output / ARTIFACT
+    if artifact.is_file():
+        body = json.loads(artifact.read_text(encoding="utf-8"))
+        if isinstance(body, dict) and body.get("status") == "not_applicable":
+            # Regenerated deterministically; contract.json may have been rewritten since.
+            artifact.unlink()
+            return []
+        notes = [
+            f"source-data invariant {name} dropped, its scenarios left the suite"
+            for name in prune_invariant_scopes(output)
+        ]
+        if not json.loads(artifact.read_text(encoding="utf-8")).get("checks"):
+            raise RuntimeValidationError(
+                "environment",
+                "Certify-only: no saved source-data invariant applies to the scenarios "
+                "left in the suite and the agent's source, so invariants must be authored "
+                "again",
+            )
+        return notes
+    if (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+    ):
+        return []
+    contract = AgentContract.model_validate_json(
+        (output / "contract.json").read_text(encoding="utf-8")
+    )
+    in_process = bool(
+        contract.data_store and contract.data_store.kind.strip().lower() == "in_process"
+    )
+    if not (is_data_free_conversation(contract) or in_process):
+        raise RuntimeValidationError(
+            "environment",
+            "Certify-only: environment has no saved source-data invariant review",
+        )
+    return []
+
+
+def _saved_world_outgrew_world_ir(output: Path) -> bool:
+    """Whether world.sqlite holds data the source model its World IR was imported for lacks.
+
+    An IR that differs from a clean import is kept: it may carry a validation repair.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from .certification import GenericHarnessArtifactStore
+    from .world_import.sqlite import SQLiteWorldImportError, import_sqlite_world
+
+    store = GenericHarnessArtifactStore(output / "generic-harness")
+    world = output / "world.sqlite"
+    try:
+        with closing(sqlite3.connect(f"file:{world}?mode=ro", uri=True)) as connection:
+            import_sqlite_world(connection, store.read_source_model(), validate=False)
+    except SQLiteWorldImportError:
+        return True
+    return False
+
+
+def _refresh_source_facts(job: HarnessJob, source: Path, output: Path) -> list[str]:
+    """Describe the agent version being certified and the world the environment saved.
+
+    Both are recorded for whichever agent version last built or edited the environment.
+    Entrypoints left behind by tools the contract no longer has are dropped.
+    """
+    from .amend import _persist
+    from .cli import after_contract, source_model_is_stale
+    from .understand import load
+
+    notes: list[str] = []
+    contract = load(output)
+    if contract is not None:
+        kept = contract.tool_names()
+        stale = sorted(
+            {e.tool for e in contract.tool_entrypoints if e.tool not in kept}
+        )
+        if stale:
+            contract.tool_entrypoints = [
+                e for e in contract.tool_entrypoints if e.tool in kept
+            ]
+            _persist(contract, output)
+            notes.append(
+                "entrypoints dropped for tools the contract no longer has: "
+                + ", ".join(stale)
+            )
+    stale_model = source_model_is_stale(output, source)
+    world_ir = output / "generic-harness" / "world-ir.json"
+    drop_world_ir = (
+        world_ir.is_file()
+        and (output / "world.sqlite").is_file()
+        and (stale_model or _saved_world_outgrew_world_ir(output))
+    )
+    if stale_model:
+        after_contract(output, source, job)
+        notes.append("source model rebuilt for this agent version's source")
+    if drop_world_ir:
+        # The saved world is imported again at seed, against this source's schema.
+        world_ir.unlink()
+        notes.append("World IR dropped, world.sqlite is seeded instead")
+    return notes
+
+
+def _discard_certify_report(path: Path) -> None:
+    """A failed run leaves no report behind."""
+    from .authoring_runtime_validation import RuntimeValidationError
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeValidationError(
+            "environment",
+            f"Certify-only could not remove {CERTIFY_REPORT}: {_one_line(exc)}",
+        ) from exc
+
+
+def _certify_only(args: argparse.Namespace) -> int:
+    """Certify an assembled environment and suite, then seal its bundle. No model calls.
+
+    The provider profile is not read: only authoring stages consume it, and validation and
+    bundling work from contract.json and the scenarios. No provider API is called.
+    """
+    from .authoring_runtime_validation import (
+        RuntimeValidationError,
+        validate_and_repair,
+        validate_once,
+    )
+    from .bundle_author_v2 import _reuse_certified_bundle
+    from .repair_controller import RepairBudgets, RepairController
+
+    source = args.source.resolve()
+    output = args.output.resolve()
+    bundle_output = args.bundle_output.resolve()
+    report_path = output / CERTIFY_REPORT
+    try:
+        if args.target_secrets is not None:
+            # One-shot provider credential; certify-only never uses it, so drop it before any
+            # environment process starts.
+            args.target_secrets.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeValidationError(
+            "environment", f"Certify-only could not clear stale files: {_one_line(exc)}"
+        ) from exc
+    try:
+        job = HarnessJob.model_validate_json(args.job.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeValidationError(
+            "environment", f"Certify-only: invalid job document: {_one_line(exc)}"
+        ) from exc
+    if job.metadata.get("generic_harness_v1") is not True:
+        raise RuntimeValidationError(
+            "environment", "Certify-only requires a generic_harness_v1 job"
+        )
+    try:
+        notes, report = _prune_suite_to_catalogue(output)
+        _persist_authored_scenario_count(args.job, job, output)
+        runtime_job = HarnessJob.model_validate_json(
+            args.job.read_text(encoding="utf-8")
+        )
+        stale = _drop_stale_invariants(source, output)
+        notes += [
+            f"source-data invariant {name} dropped, it quotes a line this agent "
+            "version's source no longer has"
+            for name in stale
+        ]
+        if stale:
+            report["stale_invariants"] = stale
+        notes += _prepare_source_data_invariants(runtime_job, output)
+        notes += _refresh_source_facts(runtime_job, source, output)
+    except RuntimeValidationError:
+        raise
+    except Exception as exc:
+        raise RuntimeValidationError(
+            "environment", f"Certify-only preparation failed: {_one_line(exc)}"
+        ) from exc
+    for note in notes:
+        print(f"certify-only: {note}", file=sys.stderr, flush=True)
+
+    async def refuse_repair(phase: str, guidance: str) -> int:
+        raise RuntimeValidationError(phase, "Certify-only does not repair")
+
+    try:
+        asyncio.run(
+            validate_and_repair(
+                runtime_job,
+                source,
+                output,
+                validate=partial(validate_once, reuse_invariants_only=True),
+                repair=refuse_repair,
+                controller=RepairController(
+                    RepairBudgets(
+                        compiler_candidates=0,
+                        environment_patches=0,
+                        scenario_patches=0,
+                    )
+                ),
+            )
+        )
+    except RuntimeValidationError:
+        raise
+    except Exception as exc:
+        raise RuntimeValidationError(
+            "environment", f"Certify-only validation failed: {_one_line(exc)}"
+        ) from exc
+    try:
+        # Written before sealing: the platform's fill gate keys on the sealed certificate.
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        _discard_certify_report(report_path)
+        raise RuntimeValidationError(
+            "environment",
+            f"Certify-only could not write {CERTIFY_REPORT}: {_one_line(exc)}",
+        ) from exc
+    try:
+        bundle_output.parent.mkdir(parents=True, exist_ok=True)
+        # Only the exact bytes validation froze; never a fresh compile.
+        sealed = _reuse_certified_bundle(
+            source=source, job=runtime_job, authoring=output, output=bundle_output
+        )
+    except Exception as exc:
+        _discard_certify_report(report_path)
+        raise RuntimeValidationError(
+            "bundle", f"Certified bundle could not be sealed: {_one_line(exc)}"
+        ) from exc
+    if sealed is None:
+        _discard_certify_report(report_path)
+        raise RuntimeValidationError(
+            "bundle", "Certify-only: validation left no certified bundle to seal"
+        )
+    return 0
 
 
 def _load_provider_import_profile(
@@ -251,7 +654,21 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         type=Path,
         help="Conversation capability document for messages delivered to the current stage",
     )
+    parser.add_argument(
+        "--certify-only",
+        action="store_true",
+        help="Certify the assembled authoring directory and seal its bundle; author nothing",
+    )
+    parser.add_argument(
+        "--bundle-output",
+        type=Path,
+        help="Directory the sealed bundle is written to in --certify-only mode",
+    )
     args = parser.parse_args(argv)
+    if args.certify_only:
+        if args.bundle_output is None:
+            parser.error("--certify-only requires --bundle-output")
+        return _certify_only(args)
 
     job = HarnessJob.model_validate(json.loads(args.job.read_text(encoding="utf-8")))
     profile = _load_provider_import_profile(

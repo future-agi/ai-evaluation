@@ -219,8 +219,8 @@ then say so plainly, because every scenario after this will be limited to those 
 
 Ask the person for values wherever the contract carries none.
 
-Leave it in its natural starting state: empty carts, no in-flight work. Scenarios add what they
-need.
+Leave it in its natural starting state: empty carts, no in-flight work, unless the agent's own
+seed has them; then reproduce those rows as they are. Scenarios add what else they need.
 
 **Write values, not the names of values.** A generated seed that quotes a function reaches the
 database as a string and the insert fails on the column's type: `'CURRENT_TIMESTAMP'` is eleven

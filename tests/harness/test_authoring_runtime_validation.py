@@ -1003,9 +1003,8 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
     assert calls == ["provision", "reset", "close"]
 
 
-def test_local_runtime_validation_does_not_require_hosted_capabilities(
-    tmp_path, monkeypatch
-):
+def _stub_local_validation(tmp_path, monkeypatch, check_invariants):
+    """validate_once's collaborators for a local run of one scenario; returns its arguments."""
     from fi.alk.harness import (
         bundle_author_v2,
         hosted_entrypoint,
@@ -1076,9 +1075,6 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
     async def author_invariants(*_args, **_kwargs):
         return []
 
-    async def check_invariants(*_args, **_kwargs):
-        return None
-
     monkeypatch.setattr(source_data_invariants, "author_invariants", author_invariants)
     monkeypatch.setattr(source_data_invariants, "check_invariants", check_invariants)
     job = SimpleNamespace(
@@ -1087,6 +1083,18 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
         metadata={},
         scenario_count=1,
         seed=0,
+    )
+    return job, authoring, secrets
+
+
+def test_local_runtime_validation_does_not_require_hosted_capabilities(
+    tmp_path, monkeypatch
+):
+    async def check_invariants(*_args, **_kwargs):
+        return None
+
+    job, authoring, secrets = _stub_local_validation(
+        tmp_path, monkeypatch, check_invariants
     )
 
     assert (
@@ -1100,6 +1108,40 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
             )
         )
         == 1
+    )
+
+
+@pytest.mark.parametrize("certify_only", [True, False])
+@pytest.mark.parametrize(
+    ("violated_at", "phase"), [(None, "environment"), ("one", "scenarios")]
+)
+def test_certify_only_rejects_a_violated_invariant_with_a_typed_diagnostic(
+    tmp_path, monkeypatch, certify_only, violated_at, phase
+):
+    async def check_invariants(*_args, scenario_key=None, **_kwargs):
+        if scenario_key == violated_at:
+            raise ValueError("Source data invariants failed:\n- 'wallets' failed")
+
+    job, authoring, secrets = _stub_local_validation(
+        tmp_path, monkeypatch, check_invariants
+    )
+
+    with pytest.raises(RuntimeValidationError) as raised:
+        asyncio.run(
+            validate_once(
+                job,
+                tmp_path,
+                authoring,
+                secrets_path=secrets,
+                local_runtime=True,
+                reuse_invariants_only=certify_only,
+            )
+        )
+
+    assert raised.value.phase == phase
+    assert "Source data invariants failed" in str(raised.value)
+    assert [item.code for item in raised.value.diagnostics] == (
+        ["source_data_invariant_violated"] if certify_only else []
     )
 
 

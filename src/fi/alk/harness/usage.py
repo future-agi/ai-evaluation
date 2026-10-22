@@ -250,7 +250,7 @@ class UsageReporter:
 
     def check(self, action: UsageAction) -> None:
         last_transport_error: TransportError | None = None
-        for attempt in range(3):
+        for attempt in range(6):
             try:
                 with self._network_lock:
                     response = self._transport.request(
@@ -261,8 +261,8 @@ class UsageReporter:
                     )
             except TransportError as exc:
                 last_transport_error = exc
-                if attempt < 2:
-                    time.sleep(0.5 * (2**attempt))
+                if attempt < 5:
+                    time.sleep(min(15.0, 2.0**attempt))
                     continue
                 raise UsageUnavailable(f"usage check unavailable: {exc}") from exc
             body = response.body
@@ -273,8 +273,8 @@ class UsageReporter:
             )
             if response.status_code == 402:
                 raise UsageDenied(body)
-            if 500 <= response.status_code < 600 and attempt < 2:
-                time.sleep(0.5 * (2**attempt))
+            if 500 <= response.status_code < 600 and attempt < 5:
+                time.sleep(min(15.0, 2.0**attempt))
                 continue
             if response.status_code < 200 or response.status_code >= 300:
                 raise UsageUnavailable(

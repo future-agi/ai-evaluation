@@ -533,3 +533,216 @@ def test_a_large_suite_is_shared_while_writing_and_full_conversations_are_replac
         declaration()["name"]
     ]
     assert len([check for check in checks if check["scenarios"]]) == 12
+
+
+def test_postgres_invariant_sql_runs_on_a_sqlite_world_with_json_arrays():
+    connection = sqlite3.connect(":memory:")
+    connection.create_function("regexp", 2, subject.sqlite_regexp)
+    connection.executescript(
+        "CREATE TABLE places (id TEXT, address TEXT, aliases TEXT, needs TEXT);"
+        """INSERT INTO places VALUES ('sfo', 'SFO Airport', '["sfo"]', '[]');"""
+        """INSERT INTO places VALUES ('tower', 'Salesforce Tower', '[]', '[]');"""
+    )
+    sql = subject.sqlite_dialect(
+        "SELECT id FROM places WHERE ('sfo' = ANY(aliases) OR address ILIKE '%sfo%') "
+        "AND COALESCE(needs, '{}') = '{}' AND round(1.5::numeric, 0) = 2 "
+        "AND btrim(address) !~ '^x~y' ORDER BY id"
+    )
+
+    assert "'^x~y'" in sql and "ILIKE" not in sql
+    assert [row[0] for row in connection.execute(sql)] == ["sfo", "tower"]
+    with pytest.raises(sqlite3.Error):
+        connection.execute(
+            subject.sqlite_dialect("SELECT a FROM unnest(ARRAY[1]) AS a")
+        )
+
+
+SEED = """INSERT INTO market_config (market, cash_supported, currency, surge_multiplier, available_products) VALUES
+  ('US-SF',  FALSE, 'USD', 1.00, ARRAY['uberx','comfort','uberxl','black','wav']),
+  ('US-NYC', FALSE, 'USD', 1.35, ARRAY['uberx','comfort','uberxl','black']),
+  ('IN-BLR', TRUE,  'INR', 1.00, ARRAY['uberx','uberxl']);
+
+INSERT INTO places (place_id, formatted_address, city, market, lat, lng, aliases) VALUES
+  ('plc_main_st_sf', 'Main Street, San Francisco, CA', 'San Francisco', 'US-SF', 37.791400, -122.392600,
+     ARRAY['main street']),
+  ('plc_main_st_la', 'Main Street, Los Angeles, CA', 'Los Angeles', 'US-LA', 34.050400, -118.242000,
+     ARRAY['main street']);
+"""
+
+TOOLS = """    mk = one("SELECT * FROM market_config WHERE market = %s", (p["market"],))
+    if not mk:
+        raise HTTPException(404, "unknown_market")
+    surge = _f(mk["surge_multiplier"]) or 1.0
+"""
+
+
+def market_check(**extra):
+    return {
+        "name": "places_market_must_exist_in_market_config",
+        "violations_sql": "SELECT p.place_id, p.market FROM places p WHERE NOT EXISTS "
+        "(SELECT 1 FROM market_config mc WHERE mc.market = p.market) LIMIT 100",
+        "evidence": [
+            {
+                "path": "tools-api/main.py",
+                "quote": 'raise HTTPException(404, "unknown_market")',
+            }
+        ],
+        **extra,
+    }
+
+
+SEED_PLACES = [("plc_main_st_sf", "US-SF"), ("plc_main_st_la", "US-LA")]
+GENERATED_LA = ("plc_gen_lax_1", "US-LA")
+
+
+class MarketWorld(ReadWorld):
+    def __init__(self, places=SEED_PLACES):
+        self.db = sqlite3.connect(":memory:", check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript(
+            "CREATE TABLE market_config (market TEXT);"
+            "CREATE TABLE places (place_id TEXT, market TEXT);"
+            "INSERT INTO market_config VALUES ('US-SF'), ('US-NYC'), ('IN-BLR');"
+        )
+        self.db.executemany("INSERT INTO places VALUES (?, ?)", places)
+        self.db.execute("PRAGMA query_only=ON")
+
+
+def _ride_source(tmp_path):
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "tools-api").mkdir()
+    (source / "db" / "seed.sql").write_text(SEED)
+    (source / "tools-api" / "main.py").write_text(TOOLS)
+    return source
+
+
+def _declare(monkeypatch, source, world, check, scenarios=None):
+    replies = []
+
+    class Stage(ReviewStage):
+        async def say(self, message, *args):
+            if not replies:
+                if scenarios:
+                    await self.tools["read_scenarios"]({"names": list(scenarios)})
+                result = await self.tools["declare_invariant"](check)
+                replies.append(json.loads(result["content"][0]["text"]))
+                await self.tools["finish_review"]({})
+
+    monkeypatch.setattr(subject, "Stage", Stage)
+    checks, _ = asyncio.run(
+        subject._review_session(
+            subject.source_files(source), scenarios or {}, world, {}
+        )
+    )
+    return replies[0], checks
+
+
+def test_a_universal_check_only_the_submitted_seed_violates_is_an_intended_case(
+    tmp_path, monkeypatch
+):
+    reply, checks = _declare(
+        monkeypatch, _ride_source(tmp_path), MarketWorld(), market_check()
+    )
+    assert "intended cases" in reply["error"]
+    assert "scenarios" not in reply["error"]
+    assert checks == []
+
+
+@pytest.mark.parametrize(
+    "places,select",
+    [
+        ([SEED_PLACES[0], GENERATED_LA], "p.place_id, p.market"),
+        ([*SEED_PLACES, GENERATED_LA], "DISTINCT p.market"),
+        (
+            [("plc_main_st_sf", "US-NYC"), ("plc_main_st_sf", "US-LA")],
+            "p.place_id, p.market",
+        ),
+    ],
+    ids=["generated", "market-only", "seed-id-with-changed-market"],
+)
+def test_generated_rows_still_violate_for_repair(tmp_path, monkeypatch, places, select):
+    check = market_check()
+    check["violations_sql"] = check["violations_sql"].replace(
+        "p.place_id, p.market", select
+    )
+    reply, checks = _declare(
+        monkeypatch, _ride_source(tmp_path), MarketWorld(places), check
+    )
+    assert reply["violating_rows"] == 1
+    assert [check["name"] for check in checks] == [market_check()["name"]]
+
+
+def test_a_seed_row_among_generated_violations_must_be_excluded(tmp_path, monkeypatch):
+    source = _ride_source(tmp_path)
+    world = MarketWorld([*SEED_PLACES, GENERATED_LA])
+    reply, checks = _declare(monkeypatch, source, world, market_check())
+    assert "plc_main_st_la" in reply["error"]
+    assert "plc_gen_lax_1" not in reply["error"]
+    assert checks == []
+
+    check = market_check()
+    check["violations_sql"] = check["violations_sql"].replace(
+        "WHERE", "WHERE p.place_id <> 'plc_main_st_la' AND", 1
+    )
+    reply, checks = _declare(monkeypatch, source, world, check)
+    assert reply["violating_rows"] == 1
+    assert [check["name"] for check in checks] == [check["name"]]
+
+
+def test_a_scoped_check_the_seed_violates_is_kept(tmp_path, monkeypatch):
+    source = _ride_source(tmp_path)
+    (tmp_path / "suite").mkdir()
+    _, out = _suite(tmp_path / "suite", ["book-la"])
+    scenarios = {"book-la": out / "scenarios" / "book-la" / "scenario.json"}
+    reply, checks = _declare(
+        monkeypatch,
+        source,
+        MarketWorld(),
+        market_check(scenarios=["book-la"]),
+        scenarios,
+    )
+    assert reply["violating_rows"] == 1
+    assert [check["scenarios"] for check in checks] == [["book-la"]]
+
+
+def test_authoring_drops_a_recorded_universal_check_only_the_seed_violates(
+    tmp_path, monkeypatch
+):
+    source = _ride_source(tmp_path)
+    (tmp_path / "suite").mkdir()
+    _, out = _suite(tmp_path / "suite", ["book-sf"])
+    files = subject.source_files(source)
+    seed_only = subject.validate_evidence(market_check(), files)
+    scoped = subject.validate_evidence(
+        market_check(name="sf place exists", scenarios=["book-sf"])
+        | {"violations_sql": "SELECT 1 FROM places WHERE place_id = 'none' LIMIT 100"},
+        files,
+    )
+    (out / subject.BATCHES).parent.mkdir(parents=True, exist_ok=True)
+    (out / subject.BATCHES).write_text(
+        json.dumps(
+            [
+                {
+                    "world": subject.world_digest(out),
+                    "session": "writing",
+                    "scenarios": {
+                        "book-sf": subject.scenario_digest(
+                            out / "scenarios" / "book-sf"
+                        )
+                    },
+                    "checks": [seed_only, scoped],
+                    "probes": [],
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(subject, "Stage", None)
+    world = MarketWorld()
+
+    checks = asyncio.run(subject.author_invariants(source, out, world))
+
+    assert [check["name"] for check in checks] == ["sf place exists"]
+    assert json.loads((out / subject.ARTIFACT).read_text())["checks"] == checks
+    asyncio.run(subject.check_invariants(world, checks))
+    asyncio.run(subject.check_invariants(world, checks, scenario_key="book-sf"))

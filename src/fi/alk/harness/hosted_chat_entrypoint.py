@@ -71,6 +71,16 @@ _NEEDS_CONFIRMATION = frozenset(
     }
 )
 _CONFIRM = "Yes, make this change"
+_NUDGE_NOTE = (
+    "\n\nLoad `builder/agent-update` with read_skill first, and end the turn with "
+    "report_update."
+)
+_ENVIRONMENT_NUDGE_NOTE = (
+    "\n\nThe world holds every row the agent's current seed inserts, in-flight ones such as "
+    "an active booking included, even when the facts do not list them as changed and an "
+    "earlier turn left them out. A world check that keeps such rows out pins an old seed: "
+    "rewrite it with add_world_check. report_update fails while a seeded row is missing."
+)
 # What the environment is made of, for telling whether anything is left unsaved.
 _PUBLISHED_PARTS = (
     "scenarios",
@@ -146,6 +156,24 @@ observable artifact proves that the requested change has taken effect.
 """
 
 
+async def _enter(stage: Stage) -> None:
+    """Open the stage; a stored session the provider refuses to resume opens fresh instead."""
+    servers = stage.spec.servers
+    try:
+        await stage.__aenter__()
+    except Exception:
+        conversation = stage.spec.conversation
+        if conversation is None or conversation.resume_session_id is None:
+            raise
+        # Its transcript never reached this sandbox: the kept references still arrive with
+        # every message, so the conversation carries on in a fresh session.
+        traceback.print_exc()
+        await stage.__aexit__()
+        stage.spec.servers = servers
+        conversation.resume_session_id = None
+        await stage.__aenter__()
+
+
 class CoordinatorConversation:
     """One foreground model that owns the user conversation and delegates stage work."""
 
@@ -156,13 +184,13 @@ class CoordinatorConversation:
 
     async def say(self, message: str, on_event: Any | None = None) -> Any:
         if not self.opened:
-            await self.stage.__aenter__()
+            await _enter(self.stage)
             self.opened = True
         return await self.stage.say(message, on_event=on_event)
 
     async def resume(self, invocation_id: str, on_event: Any | None = None) -> Any:
         if not self.opened:
-            await self.stage.__aenter__()
+            await _enter(self.stage)
             self.opened = True
         return await self.stage.resume_turn(invocation_id, on_event=on_event)
 
@@ -189,7 +217,7 @@ class BuilderConversation:
     async def _opened(self, *, resume: bool = True) -> Stage:
         if self.stage is None:
             self.stage = await self._open_stage(resume=resume)
-            await self.stage.__aenter__()
+            await _enter(self.stage)
         return self.stage
 
     async def say(self, message: str, on_event: Any | None = None) -> Any:
@@ -262,6 +290,12 @@ class HostedChatRuntime:
         self._tool_names: dict[str, str] = {}
         self._checkpoint_lock = asyncio.Lock()
         self._restart_after_turn = False
+        # The rebuild command this sandbox runs, and the spend when its turn began.
+        self._nudge: dict[str, Any] | None = None
+        self._nudge_spent: dict[str, Any] = {}
+        # The last report_update's arguments, and whether a write came after it.
+        self._nudge_reported: dict[str, Any] = {}
+        self._nudge_dirty = False
         self._last_health = ""
         # Set when the person answered a question in this turn, or when the opening health check
         # asked for a small repair: then consequential writes are allowed.
@@ -298,7 +332,7 @@ class HostedChatRuntime:
             except ConversationTransportError:
                 overview = None
             stage = self._open_built(contract, overview, policy_job)
-        if not self._control_only():
+        if not self._control_only() and self._nudge is None:
             self._guard(stage.spec)
         capabilities = self.client.capabilities
         stage.configure(
@@ -338,9 +372,14 @@ class HostedChatRuntime:
 
     def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
         from .builder import environment_brief, open_builder
+        from .catalogue import load_catalogue
+        from .nudge import ENVIRONMENT
         from .poc_guest_booking import guest_booking_pin_scenario_problem
 
-        return open_builder(
+        # A rebuild's servers share one catalogue, so a retired sub-goal stays retired.
+        catalogue = load_catalogue(self.workspace) if self._nudge is not None else None
+        world = self._control_only() or (self._nudge or {}).get("stage") == ENVIRONMENT
+        stage = open_builder(
             contract,
             brief=environment_brief(contract, self.workspace, overview),
             out=self.workspace,
@@ -355,10 +394,14 @@ class HostedChatRuntime:
             hosted_prompt=self._hosted_prompt(),
             sealed=not self._control_only(),
             # While building, the world itself (tools, data, caller prompt) can still change.
-            more_servers=self._world_servers(contract) if self._control_only() else None,
+            more_servers=self._world_servers(contract, catalogue) if world else None,
+            catalogue=catalogue,
         )
+        if self._nudge is not None:
+            self._nudge_tools(stage, catalogue)
+        return stage
 
-    def _world_servers(self, contract: Any) -> dict[str, Any]:
+    def _world_servers(self, contract: Any, catalogue: Any = None) -> dict[str, Any]:
         from .build import open_stage as build_stage
 
         stage, _ = build_stage(
@@ -366,8 +409,43 @@ class HostedChatRuntime:
             out=self.workspace,
             source_root=str(self.source if self.source.is_dir() else ""),
             deferred_runtime=True,
+            catalogue=catalogue,
         )
         return dict(stage.spec.servers)
+
+    def _nudge_tools(self, stage: Stage, catalogue: Any) -> None:
+        """Only the rebuild stage's tools, with report_update; a suite turn never renames."""
+        from . import nudge
+        from .scenario_tools import SCENARIO_SERVER
+        from .world.tools import WORLD_SERVER
+
+        command = self._nudge or {}
+        servers = dict(stage.spec.servers)
+        world: dict[str, Any] | None = None
+        if command.get("stage") == nudge.ENVIRONMENT:
+            allowed = nudge.ENVIRONMENT_TOOLS
+            if WORLD_SERVER in servers:
+                world = {}
+                servers[WORLD_SERVER] = nudge.track_world(
+                    servers[WORLD_SERVER], world, self.source
+                )
+        else:
+            allowed = nudge.SUITE_TOOLS
+            servers[SCENARIO_SERVER] = nudge.guard_renames(
+                servers[SCENARIO_SERVER], self.workspace
+            )
+        servers[nudge.NUDGE_SERVER] = nudge.nudge_server(
+            self.workspace,
+            command,
+            source=self.source,
+            catalogue=catalogue,
+            kept=stage.kept,
+            reported=self._nudge_reported,
+            world=world,
+        )
+        stage.configure(
+            nudge.filtered_spec(replace(stage.spec, servers=servers), allowed)
+        )
 
     def _open_for_building(self, contract: Any) -> Stage:
         from .builder import open_for_building
@@ -1055,6 +1133,78 @@ class HostedChatRuntime:
             after_world(self.source if self.source.is_dir() else None, self.workspace, load_contract(self.workspace))
 
     async def _handle(self, command: dict[str, Any]) -> None:
+        if str(command["kind"]) != "nudge":
+            await self._handle_command(command)
+            return
+        # A rebuild turn ends this sandbox: the platform starts chat again once it lands.
+        from . import spend
+
+        self._nudge_spent = spend.snapshot()
+        await self.conversation.close()
+        self._nudge = dict(command.get("payload") or {})
+        try:
+            await self._handle_command(command)
+        finally:
+            self.stopping.set()
+
+    def _turn_usage(self) -> dict[str, Any]:
+        if self._nudge is None:
+            return {}
+        from . import spend
+        from .nudge import usage_delta
+
+        return {"usage": usage_delta(self._nudge_spent, spend.snapshot())}
+
+    def _nudge_note(self) -> str:
+        if self._nudge is None:
+            return ""
+        from .nudge import SUITE
+
+        keys = [str(one) for one in self._nudge.get("user_draft_keys") or []]
+        if self._nudge.get("stage") != SUITE:
+            return _NUDGE_NOTE + _ENVIRONMENT_NUDGE_NOTE
+        if not keys:
+            return (
+                _NUDGE_NOTE
+                + "\n\nNo scenario is being edited by the person now: no list of edits in "
+                "an earlier message applies any more, so repair every scenario this update "
+                "breaks."
+            )
+        return (
+            _NUDGE_NOTE
+            + "\n\nScenarios the person is still editing (keep what they wrote; only carry "
+            "over a renamed tool or argument): " + ", ".join(keys)
+        )
+
+    def _report_again_if_written(self) -> None:
+        """A write after the last report_update runs the gate again over what lands."""
+        if self._nudge is None or not self._nudge_dirty or not self._nudge_reported:
+            return
+        from .nudge import NUDGE_RESULT, report_update
+
+        notes = self._nudge_reported["notes"] + (
+            " (changed after this report; checks re-run at the end of the turn)"
+        )
+        try:
+            report_update(
+                self.workspace,
+                nudge=self._nudge,
+                **{**self._nudge_reported, "changed": True, "notes": notes},
+            )
+        except Exception:  # noqa: BLE001 - no result fails the rebuild as unreported
+            traceback.print_exc()
+            (self.workspace / NUDGE_RESULT).unlink(missing_ok=True)
+
+    def _journal_unsuccessful(self, journal: dict[str, str], message_id: str) -> None:
+        """A failed or cut-off rebuild turn keeps no result; its replay lands none."""
+        if self._nudge is not None:
+            from .nudge import NUDGE_RESULT
+
+            (self.workspace / NUDGE_RESULT).unlink(missing_ok=True)
+        journal[message_id] = "completed" if self._nudge is None else "ended"
+        self._write_journal(journal)
+
+    async def _handle_command(self, command: dict[str, Any]) -> None:
         sequence = int(command["sequence"])
         message_id = str(command["message_id"])
         kind = str(command["kind"])
@@ -1082,10 +1232,26 @@ class HostedChatRuntime:
         journal = self._read_journal()
         state = str(journal.get(message_id) or "")
         if state == "completed":
+            if self._nudge is not None:
+                # The turn's final workspace, holding its result, is what lands.
+                await self.client.emit(
+                    "checkpoint_committed",
+                    stage=self.conversation.stage_name,
+                    payload=await self._checkpoint(),
+                )
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
                 payload={"command_message_id": message_id, "replayed": True},
+                acknowledge_through=sequence,
+            )
+            return
+        if state == "ended":
+            # A rebuild turn that did not succeed fails again; nothing of it lands.
+            await self.client.emit(
+                "turn_completed",
+                stage=self.conversation.stage_name,
+                payload={"command_message_id": message_id, "outcome": "failed"},
                 acknowledge_through=sequence,
             )
             return
@@ -1110,8 +1276,7 @@ class HostedChatRuntime:
                     "reason": "previous sandbox stopped before the turn committed",
                 },
             )
-            journal[message_id] = "completed"
-            self._write_journal(journal)
+            self._journal_unsuccessful(journal, message_id)
             await self._checkpoint()
             await self.client.emit(
                 "turn_completed",
@@ -1124,6 +1289,11 @@ class HostedChatRuntime:
             journal[message_id] = "started"
             self._write_journal(journal)
             await self._checkpoint()
+        if self._nudge is not None:
+            from .nudge import NUDGE_RESULT
+
+            # A resumed turn lost its last report too, so it must report again.
+            (self.workspace / NUDGE_RESULT).unlink(missing_ok=True)
         retry_note = (
             "[Your earlier attempt at this message was cut off when the sandbox restarted. "
             "Tools it called may already have taken effect: check before repeating a change.]\n\n"
@@ -1177,7 +1347,8 @@ class HostedChatRuntime:
                     else retry_note
                     + self._ledger_note()
                     + await self._selection_note(payload)
-                    + str(payload.get("content") or ""),
+                    + str(payload.get("content") or "")
+                    + self._nudge_note(),
                     receive,
                 )
             )
@@ -1197,14 +1368,17 @@ class HostedChatRuntime:
                 invocation_id=invocation_id,
                 payload={"text": message, "error": type(exc).__name__},
             )
-            journal[message_id] = "completed"
-            self._write_journal(journal)
+            self._journal_unsuccessful(journal, message_id)
             await self._checkpoint()
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
                 invocation_id=invocation_id,
-                payload={"command_message_id": message_id, "outcome": "failed"},
+                payload={
+                    "command_message_id": message_id,
+                    "outcome": "failed",
+                    **self._turn_usage(),
+                },
                 acknowledge_through=self._turn_acknowledged_through,
             )
             return
@@ -1236,8 +1410,7 @@ class HostedChatRuntime:
                     ),
                 },
             )
-            journal[message_id] = "completed"
-            self._write_journal(journal)
+            self._journal_unsuccessful(journal, message_id)
             checkpoint = await self._checkpoint()
             await self.client.emit(
                 "checkpoint_committed",
@@ -1249,7 +1422,11 @@ class HostedChatRuntime:
                 "turn_completed",
                 stage=self.conversation.stage_name,
                 invocation_id=invocation_id,
-                payload={"command_message_id": message_id, "outcome": "interrupted"},
+                payload={
+                    "command_message_id": message_id,
+                    "outcome": "interrupted",
+                    **self._turn_usage(),
+                },
                 acknowledge_through=self._turn_acknowledged_through,
             )
             return
@@ -1263,14 +1440,17 @@ class HostedChatRuntime:
                 invocation_id=invocation_id,
                 payload={"text": message, "error": "stage_failed"},
             )
-            journal[message_id] = "completed"
-            self._write_journal(journal)
+            self._journal_unsuccessful(journal, message_id)
             await self._checkpoint()
             await self.client.emit(
                 "turn_completed",
                 stage=self.conversation.stage_name,
                 invocation_id=invocation_id,
-                payload={"command_message_id": message_id, "outcome": "failed"},
+                payload={
+                    "command_message_id": message_id,
+                    "outcome": "failed",
+                    **self._turn_usage(),
+                },
                 acknowledge_through=self._turn_acknowledged_through,
             )
             return
@@ -1286,6 +1466,7 @@ class HostedChatRuntime:
                 + ("; and more" if len(problems) > 3 else "")
             ).strip()
         self._last_health = ""
+        self._report_again_if_written()
         if final_text:
             await self.client.emit(
                 "assistant_message",
@@ -1307,7 +1488,11 @@ class HostedChatRuntime:
             "turn_completed",
             stage=self.conversation.stage_name,
             invocation_id=invocation_id,
-            payload={"command_message_id": message_id, "outcome": "success"},
+            payload={
+                "command_message_id": message_id,
+                "outcome": "success",
+                **self._turn_usage(),
+            },
             acknowledge_through=self._turn_acknowledged_through,
         )
         if self._restart_after_turn:
@@ -1408,6 +1593,13 @@ class HostedChatRuntime:
                     call_id = str(event.detail.get("call_id") or "")
                     tool = event.tool.rsplit("__", 1)[-1]
                     self._tool_names[call_id] = tool
+                    if self._nudge is not None:
+                        from .nudge import READ_ONLY_TOOLS
+
+                        if tool == "report_update":
+                            self._nudge_dirty = False
+                        elif tool not in READ_ONLY_TOOLS:
+                            self._nudge_dirty = True
                     await self.client.emit(
                         "tool_started",
                         stage=stage,

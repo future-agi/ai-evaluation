@@ -3342,6 +3342,55 @@ def test_canonical_seed_replays_bundled_discovery_without_authoring_directory(
         assert applied[0].source_schema_hash == discovered.fingerprint
 
 
+def test_canonical_seed_names_a_source_model_recorded_for_other_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from contextlib import nullcontext
+
+    from fi.alk.harness.source_model import SourceModel
+    from fi.alk.harness.source_schema import postgres as schema
+    from fi.alk.harness.world_ir import WorldIR
+
+    recorded = SourceModel.create(source_digest="sha256:" + "a" * 64, engine="none")
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "source-model.json").write_text(recorded.model_dump_json())
+    world = WorldIR.create(source_model_fingerprint=recorded.fingerprint, tables=())
+    (seed / "world-ir.json").write_text(world.model_dump_json())
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        types.SimpleNamespace(connect=lambda **_: nullcontext(object())),
+    )
+    monkeypatch.setattr(
+        schema,
+        "inspect_postgres",
+        lambda *_args, source_digest, **_kwargs: SourceModel.create(
+            source_digest=source_digest, engine="postgres"
+        ),
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError) as raised:
+        pr.apply_seed_file(
+            pr.ManagedEngine.POSTGRES,
+            seed / "world-ir.json",
+            port=14000,
+            dbname="baseline",
+            credentials=pr.EngineCredentials(username="harness", password="pw"),
+            process_name="world-db",
+            sync_run=lambda *args, **kwargs: pytest.fail("must not execute"),
+            source_digest="b" * 64,
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "source_model_digest_conflict"
+    ]
+    assert str(raised.value).endswith(
+        "canonical World IR could not be compiled or applied: "
+        "source_model_digest_conflict"
+    )
+
+
 def test_typed_postgres_seed_persists_the_accepted_source_and_world(
     tmp_path: Path, monkeypatch
 ) -> None:

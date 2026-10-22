@@ -18,6 +18,7 @@ renders. Nothing above this line knows a vendor's name.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -55,6 +56,8 @@ STAGE_IDLE_TIMEOUT_SECONDS = float(
     os.getenv("ALK_STAGE_IDLE_TIMEOUT_SECONDS", str(DEFAULT_STAGE_IDLE_TIMEOUT_SECONDS))
 )
 STAGE_IDLE_RETRIES = int(os.getenv("ALK_STAGE_IDLE_RETRIES", "1"))
+
+logger = logging.getLogger(__name__)
 
 
 class StageIdleTimeout(TimeoutError):

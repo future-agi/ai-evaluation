@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fi.alk.harness import spend
 from fi.alk.harness.backends import SessionSpec, StageDone
 from fi.alk.harness.session import Stage, Turn
@@ -64,6 +66,13 @@ def test_a_session_reports_its_own_cost_without_being_asked(tmp_path):
     assert body["stages"][0]["stage"] == "write-scenarios:slice-c"
     assert body["stages"][0]["turns"] == 7
     assert body["stages"][0]["models"] == ["gemini"]
+
+
+def test_a_turn_billed_to_a_forbidden_model_stops_the_stage(tmp_path):
+    _fresh(tmp_path)
+    stage = Stage(SessionSpec(system_prompt="x"), name="write-scenarios")
+    with pytest.raises(RuntimeError, match="may not spend on: claude-opus-4-7"):
+        stage._events(StageDone(models={"claude-opus-4-7"}), Turn())
 
 
 def test_the_tokens_behind_a_price_are_kept(tmp_path):
