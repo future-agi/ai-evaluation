@@ -27,11 +27,13 @@ from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
+    CONTRACT_FIELDS,
+    CONTRACT_SCHEMA,
+    CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
     already_claimed,
     SubGoal,
-    catalogue_problems,
     load_catalogue,
     save_catalogue,
     compares_to_a_value,
@@ -40,7 +42,7 @@ from ..catalogue import (
     weak_check_advisory,
     without_delivery_overlay,
 )
-from ..checks import run_check, run_world_check
+from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
 from ..simulator import (
     load_simulator_prompt,
@@ -52,7 +54,8 @@ from ..tools import schema
 from .kinds import for_contract
 from .mutate import UNDAMAGED, blind, unnoticed, unnoticed_in_place
 from .probe import dirty_state, probe
-from .runtime import GeneratedWorld
+from ..scenario import Step
+from .runtime import Call, GeneratedWorld
 from .snapshot import MANIFEST, read_manifest, restore, save
 from .stores.written import API as OPS_API
 
@@ -688,7 +691,9 @@ def world_tools(
 
     @tool(
         "create_schema",
-        "Run CREATE TABLE statements. Call once with the whole schema; call again to alter it.",
+        "Run CREATE TABLE statements. Call once with the whole schema; call again to alter it. "
+        "Keep the agent's own constraints: every column its schema declares NOT NULL, primary keys "
+        "included, is declared NOT NULL here too.",
         {"sql": str},
     )
     async def create_schema(args: dict[str, Any]) -> dict[str, Any]:
@@ -709,7 +714,10 @@ def world_tools(
                 world.connection.executescript(args["sql"])
                 world.connection.commit()
         except Exception as failed:
-            return _err(f"schema rejected: {failed}")
+            standing = sorted(world.state())
+            return _err(
+                f"schema rejected: {failed}. Tables that already exist: {', '.join(standing) or 'none'}"
+            )
         tables = sorted(world.state())
         return _ok(f"{len(tables)} tables: {', '.join(tables) or 'none'}")
 
@@ -975,6 +983,37 @@ def world_tools(
         return _ok(f"ok: {_brief(call.result)}")
 
     @tool(
+        "try_check",
+        "Run a check against calls you write, before you trust it. Give the check's Python, the "
+        "calls an agent makes (each {tool, arguments, result, ok}) and the reference a scenario "
+        "would hand it (steps with `tool`, `arguments` and `fixed`). It runs against those calls "
+        "and the world as it stands, and changes nothing. Try every sub-goal before you add it: "
+        "an agent that does it right another way its instructions allow must pass, and an agent "
+        "that gets a fixed value wrong must fail.",
+        schema({"check": str, "calls": list, "reference": list}, ["check", "calls"]),
+    )
+    async def try_check(args: dict[str, Any]) -> dict[str, Any]:
+        source = str(args.get("check") or "")
+        if "def check(" not in source:
+            return _err("give the check's Python, defining check(world, calls, reference)")
+        try:
+            calls = [
+                Call(
+                    name=str(one.get("name") or one.get("tool") or ""),
+                    arguments=dict(one.get("arguments") or {}),
+                    result=one.get("result"),
+                    ok=bool(one.get("ok", True)),
+                )
+                for one in args.get("calls") or []
+            ]
+            reference = reference_of([Step.model_validate(one) for one in args.get("reference") or []])
+        except Exception as invalid:
+            return _err(f"invalid call or step: {invalid}"[:600])
+        outcome = run_check(source, world, calls, name="trial", reference=reference)
+        verdict = "broken" if outcome.broken else ("held" if outcome.held else "failed")
+        return _ok(f"{verdict}: {outcome.said or 'nothing wrong'}")
+
+    @tool(
         "declare_sequence",
         "Declare a series of calls whose end state should hold, so consistency across calls is "
         "checked. Each call is {tool, arguments}. expect_state keys are 'table.column' or "
@@ -982,7 +1021,7 @@ def world_tools(
         "Every sequence runs on its own from the frozen world: the state is put back before each "
         "one, so they never see each other's rows and expect_state is an absolute count, not a "
         "running total. If a sequence fails, the fault is in that sequence, not in the ones "
-        "declared before it.",
+        "declared before it. Declare it once every tool it calls has a handler.",
         schema({"name": str, "calls": list, "expect_state": dict}, ["name", "calls"]),
     )
     async def declare_sequence(args: dict[str, Any]) -> dict[str, Any]:
@@ -1188,6 +1227,9 @@ def world_tools(
                 "args": list,
                 "arg_types": dict,
                 "description": str,
+                "refuses": str,
+                "effects": str,
+                "inputs_from": dict,
                 "remove": bool,
                 "why": str,
             },
@@ -1205,6 +1247,9 @@ def world_tools(
                 str(k): str(v) for k, v in (args.get("arg_types") or {}).items()
             },
             description=str(args.get("description") or ""),
+            refuses=str(args.get("refuses") or ""),
+            effects=str(args.get("effects") or ""),
+            inputs_from={str(k): str(v) for k, v in (args.get("inputs_from") or {}).items()},
             remove=bool(args.get("remove")),
         )
         return _ok(said) if done else _err(said)
@@ -1246,8 +1291,7 @@ def world_tools(
         "tool call made, each with .name, .arguments, .ok and .refused — so a check can insist "
         "a call happened with the right arguments, not merely that it happened.\n\n"
         + SUB_GOAL_RULES
-        + "Use `judged` only where nothing observable settles it; it holds the criteria. `output` is "
-        "pass_fail.\n"
+        + CHECK_RULES
         + CRITERIA_RULES
         + "`overlay` names the overlay level this sub-goal is the claim for, when it is one: "
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
@@ -1255,7 +1299,7 @@ def world_tools(
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
         "task sub-goal.",
         schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str},
+            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
             ["name", "what"],
         ),
     )
@@ -1267,6 +1311,7 @@ def world_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(sub_goal)
         if problems:
@@ -1547,13 +1592,6 @@ def world_tools(
                 "add_world_check: what has to be true for this world to be worth testing "
                 "against, as code.\n\n" + WORLD_CHECK_HELP
             )
-        # Per-sub-goal validation cannot see the shape of the set, and the shape is what decides
-        # whether the suite grades anything: a catalogue that is mostly judged reports opinions.
-        if shape_problems := catalogue_problems(
-            catalogue.sub_goals,
-            world_is_observable=bool(world.state()) or bool(world.handlers),
-        ):
-            return _err("Not saved.\n  - " + "\n  - ".join(shape_problems))
         failing, cannot_fail, _survived = _verified()
         if failing:
             return _err(
@@ -1578,13 +1616,6 @@ def world_tools(
                 "Not saved. No sub-goals yet. They are defined here, once, and every scenario "
                 "names the ones it needs — that is what makes results add up across the suite. "
                 "Add them with add_sub_goal."
-            )
-        settled = [one for one in catalogue.sub_goals if one.deterministic()]
-        if not settled and not data_free:
-            return _err(
-                "Not saved. Every sub-goal is judged by a model. Most of what this agent does "
-                "leaves a trace in the world or in its calls, and those should be settled by "
-                "code; a judge is the fallback for what leaves none."
             )
         if contract.conversational and not load_simulator_prompt(destination):
             return _err(
@@ -1666,6 +1697,7 @@ def world_tools(
             seed,
             change_data,
             run_tool,
+            try_check,
             declare_sequence,
             drop_sequence,
             amend_contract,
@@ -1698,6 +1730,7 @@ TOOL_NAMES = (
     "adopt_store",
     "adopt_tool",
     "run_tool",
+    "try_check",
     "declare_sequence",
     "drop_sequence",
     "amend_contract",

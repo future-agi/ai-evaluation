@@ -166,6 +166,19 @@ def test_file_tool_trace_is_collected_from_runtime_metadata(tmp_path: Path) -> N
     assert calls[1].error == "declined"
 
 
+def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_path: Path) -> None:
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    trace.write_text(
+        "".join(
+            json.dumps({"name": "verify_otp", "arguments": {}, "output": output, "is_error": False}) + "\n"
+            for output in ("{'verified': True}", '{"verified": true}', "sent")
+        ),
+        encoding="utf-8",
+    )
+    calls = cr._collect_file_tool_calls(_runtime(metadata={"tool_trace_path": str(trace)}))
+    assert [call.result for call in calls] == [{"verified": True}, {"verified": True}, "sent"]
+
+
 def _trace_lines(path: Path, *records: dict) -> Path:
     path.write_text(
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
@@ -1977,3 +1990,14 @@ def test_the_returned_outcome_keeps_the_transcript_the_judge_needs():
         messages=said,
     )
     assert replace(base, calls=()).messages == said
+
+
+def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
+    from fi.alk.harness.call_runner import _structured
+
+    assert _structured('{"id": 7}') == {"id": 7}
+    assert _structured("{'id': 7}") == {"id": 7}
+    assert _structured("[1, 2]") == [1, 2]
+    assert _structured("[INFO] booked") == "[INFO] booked"
+    assert _structured({"id": 7}) == {"id": 7}
+    assert len(_structured("x" * 5000)) == 2000
