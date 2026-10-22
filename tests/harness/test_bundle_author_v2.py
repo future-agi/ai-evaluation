@@ -2741,6 +2741,169 @@ def test_a_reseal_keeps_a_validation_repair_of_the_world(tmp_path: Path) -> None
         assert "repaired" in ir.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("ir_seed", [True, False])
+def test_the_world_a_bundle_seeds_is_always_the_hashed_world_sqlite(
+    tmp_path: Path, ir_seed: bool
+) -> None:
+    """The environment hash covers world.sqlite, not generic-harness/world-ir.json.
+
+    Through a repair stored in the world or an IR recorded after the build, a reseal
+    without and with a world edit, and certify-only's compile, the seeded world stays
+    what world.sqlite imports to.
+    """
+    from fi.alk.harness.authoring_runtime_validation import _stored_in_world
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, source_model, bundle, _ = _places(tmp_path, ir_seed=ir_seed)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    job = _job(connector="http", metadata={"generic_harness_v1": True})
+
+    def imported() -> WorldIR:
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            return import_sqlite_world(database, source_model, validate=False).world
+
+    def seeded(output: Path) -> WorldIR:
+        ir = output / "seed" / "world-ir.json"
+        if ir.is_file():
+            return WorldIR.model_validate_json(ir.read_text(encoding="utf-8"))
+        with sqlite3.connect(output / "seed" / "world.sqlite") as database:
+            return import_sqlite_world(database, source_model, validate=False).world
+
+    def holds(output: Path) -> None:
+        assert seeded(output) == imported()
+        preflight_bundle(output, load_bundle_v2(output), parallelism=1, secret_refs={})
+
+    world = imported()
+    if ir_seed:
+        # A repair stored as runtime validation stores it, then the build seals it.
+        [row] = world.tables[0].rows
+        label = WorldValue.present(row.values["label"].logical_type, "repaired")
+        world = _stored_in_world(
+            authoring,
+            world.model_copy(
+                update={
+                    "tables": (
+                        WorldTable(
+                            source_name="places",
+                            rows=(
+                                WorldRow(
+                                    identity=row.identity,
+                                    values={**row.values, "label": label},
+                                ),
+                            ),
+                        ),
+                    )
+                }
+            ),
+            source_model,
+        )
+        store.write_world_ir(world)
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=bundle)
+    else:
+        # Runtime validation records the IR it imported, after the build sealed.
+        store.write_world_ir(world)
+    holds(bundle)
+    # A scenario-only chat save, then a world edit, each resealed.
+    (authoring / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps({"name": "one", "instruction": "Edited", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+    reseal_scenarios(authoring)
+    holds(bundle)
+    assert ("repaired" in seeded(bundle).model_dump_json()) is ir_seed
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    reseal_scenarios(authoring)
+    holds(bundle)
+    # The compile certify-only makes after its preparation.
+    from fi.alk.harness.authoring_entrypoint import _refresh_source_facts
+
+    _refresh_source_facts(job, source, authoring)
+    fresh = tmp_path / "fresh"
+    author_bundle_v2(source=source, job=job, authoring=authoring, output=fresh)
+    holds(fresh)
+    assert "renamed" in seeded(fresh).model_dump_json()
+
+
+@pytest.mark.parametrize("ir_seed", [True, False])
+@pytest.mark.parametrize("resealed", [True, False])
+def test_a_certified_bundle_is_reused_only_while_it_seeds_world_sqlite(
+    tmp_path: Path, resealed: bool, ir_seed: bool
+) -> None:
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source, authoring, source_model, bundle, sealed = _places(tmp_path, ir_seed=ir_seed)
+    root = authoring / "generic-harness"
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        world = import_sqlite_world(database, source_model, validate=False).world
+    GenericHarnessArtifactStore(root).write_world_ir(world)
+    shutil.copytree(bundle, root / "certified-bundle")
+    certificate = HarnessCertification.create(
+        status=CertificationStatus.CERTIFIED,
+        source=CertificationSource(
+            digest=source_fingerprint(source), schema_hash=source_model.fingerprint
+        ),
+        authoring=CertificationAuthoring(
+            contract_hash=_artifact_digest(authoring / "contract.json"),
+            world_ir_hash=world.fingerprint,
+            scenario_set_hash=_artifact_digest(authoring / "scenarios"),
+        ),
+        compiler=CertificationCompiler(version="test", bundle_digest=sealed.digest),
+        runtime=CertificationRuntime(snapshot="test", validation_attempts=1),
+        checks=CertificationChecks(
+            static=CheckStatus.PASSED,
+            schema_and_seed=CheckStatus.PASSED,
+            processes=CheckStatus.PASSED,
+            source_invariants=CheckStatus.PASSED,
+            scenario_setup_ready="1/1",
+            tool_contract="0/0",
+            action_behavior="0/0",
+            reset_equivalence=CheckStatus.PASSED,
+            world_isolation=CheckStatus.PASSED,
+        ),
+        repairs=RepairHistory(
+            decisions=(),
+            results=(),
+            compiler_candidates_used=0,
+            environment_patches_used=0,
+            scenario_patches_used=0,
+        ),
+    )
+    (authoring / "runtime-validation.json").write_text(
+        certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    # A world edit after validation froze the bundle; a chat save reseals it.
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+    if resealed:
+        reseal_scenarios(authoring)
+
+    def compile_() -> None:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="http", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=tmp_path / "out",
+        )
+
+    if not resealed:
+        with pytest.raises(BundleAuthorError, match="world.sqlite"):
+            compile_()
+        return
+    compile_()
+    seed = tmp_path / "out" / "seed"
+    if ir_seed:
+        assert "renamed" in (seed / "world-ir.json").read_text(encoding="utf-8")
+    else:
+        with sqlite3.connect(seed / "world.sqlite") as database:
+            assert database.execute("SELECT label FROM places").fetchall() == [
+                ("renamed",)
+            ]
+
+
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
 

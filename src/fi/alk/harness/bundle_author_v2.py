@@ -177,6 +177,17 @@ def _reuse_certified_bundle(
         expected["source_schema"] = store.read_source_model().fingerprint
         actual["source_schema"] = certificate.source.schema_hash
     mismatched = sorted(name for name in expected if expected[name] != actual[name])
+    world, seed = authoring / "world.sqlite", frozen / "seed"
+    if world.is_file() and (
+        (seed / "world.sqlite").is_file()
+        and (seed / "world.sqlite").read_bytes() != world.read_bytes()
+        or (seed / "world-ir.json").is_file()
+        and not _imports_to(
+            world, seed / "source-model.json", seed / "world-ir.json"
+        )
+    ):
+        # The frozen bundle must seed the world.sqlite the environment is known by.
+        mismatched.append("world.sqlite")
     if mismatched:
         raise BundleAuthorError(
             "certified_bundle_inputs_changed: " + ", ".join(mismatched)
@@ -2789,6 +2800,11 @@ def _recertify_scenarios(
     if not path.is_file():
         return
     held = HarnessCertification.model_validate_json(path.read_text(encoding="utf-8"))
+    update = {"scenario_set_hash": _artifact_digest(authoring / "scenarios")}
+    artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
+    if world_changed and (artifacts.root / "world-ir.json").is_file():
+        # A world edit rewrote the canonical IR along with the seed.
+        update["world_ir_hash"] = artifacts.read_world_ir().fingerprint
     note = (
         "scenarios changed after runtime validation were proved against the authoring world, "
         "not the runtime"
@@ -2796,9 +2812,7 @@ def _recertify_scenarios(
     certificate = HarnessCertification.create(
         status=held.status,
         source=held.source,
-        authoring=held.authoring.model_copy(
-            update={"scenario_set_hash": _artifact_digest(authoring / "scenarios")}
-        ),
+        authoring=held.authoring.model_copy(update=update),
         compiler=held.compiler.model_copy(update={"bundle_digest": bundle_digest}),
         runtime=held.runtime,
         checks=held.checks.model_copy(update={"scenario_setup_ready": f"{count}/{count}"}),

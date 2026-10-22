@@ -259,7 +259,8 @@ def _prepare_source_data_invariants(job: HarnessJob, output: Path) -> list[str]:
 def _saved_world_outgrew_world_ir(output: Path) -> bool:
     """Whether world.sqlite holds data the source model its World IR was imported for lacks.
 
-    An IR that differs from a clean import is kept: it may carry a validation repair.
+    An IR that otherwise differs from a clean import is kept on disk but never seeds:
+    the compile seeds world.sqlite unless the IR is exactly its import.
     """
     import sqlite3
     from contextlib import closing
