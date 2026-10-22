@@ -1464,7 +1464,11 @@ true of the world. A name that says one person in the persona and another in the
 misreports every result anybody reads.
 
 **The persona is binding, not decoration.** It is what the caller is rendered as: the voice, the age,
-the accent. An instruction that contradicts it describes somebody who never reaches the agent. A
+the accent, and the mood they are heard in. `personality` sets that mood: `Impatient and direct` and
+`Emotional` are voiced frustrated, every other value calm. A caller the situation makes frustrated,
+angry or desperate carries one of those two, and an older caller carries the `age_group` their age
+falls in, or the call sounds like somebody the scenario never described. An instruction that
+contradicts the persona describes somebody who never reaches the agent. A
 14-year-old written over an `age_group` of `18-25` is spoken by an adult, so the only evidence of a
 minor is the caller announcing one, and the agent is being graded on a fact the call never carried.
 If the offered vocabulary cannot express the person the level needs, the level is unwritable: say so
