@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -49,14 +50,18 @@ class TargetConversationEnded(Exception):
 class Exchange:
     speaker: str
     text: str
+    # Epoch seconds when the turn was delivered, on the same clock as `Call.at`, so a tool call
+    # the agent made before replying sorts between the customer's turn and the reply.
+    at: float = 0.0
     # A sub-actor's turn: who it was, so the turn is never read as the person's or the agent's.
     name: str = ""
     sub_actor: str = ""
 
-    def message(self, role: str) -> dict[str, str]:
+    def message(self, role: str, *, timed: bool = False) -> dict[str, Any]:
+        when = {"at": self.at} if timed and self.at else {}
         if self.speaker != "sub_actor":
-            return {"role": role, "content": self.text}
-        return {"role": "sub_actor", "name": self.name, "sub_actor": self.sub_actor, "content": self.text}
+            return {"role": role, "content": self.text, **when}
+        return {"role": "sub_actor", "name": self.name, "sub_actor": self.sub_actor, "content": self.text, **when}
 
 
 @dataclass
@@ -92,7 +97,7 @@ class Transcript:
                 {
                     "transcript": self.spoken(),
                     "messages": [
-                        turn.message("user" if turn.speaker == "customer" else "assistant")
+                        turn.message("user" if turn.speaker == "customer" else "assistant", timed=True)
                         for turn in self.exchanges
                     ],
                     "ended": self.ended,
@@ -261,7 +266,7 @@ class _ChatSubActors:
         interject = getattr(target, "interject", None)
         if callable(interject):
             interject(one["name"], said)
-        return Exchange("sub_actor", said, name=one["name"], sub_actor=one["id"])
+        return Exchange("sub_actor", said, time.time(), name=one["name"], sub_actor=one["id"])
 
 
 async def converse(
@@ -302,7 +307,7 @@ async def converse(
             on_exchange(exchange)
 
     def record(speaker: str, text: str) -> None:
-        keep(Exchange(speaker, text))
+        keep(Exchange(speaker, text, time.time()))
 
     await target.open()
     await customer.__aenter__()

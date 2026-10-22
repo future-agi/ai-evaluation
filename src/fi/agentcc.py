@@ -43,6 +43,14 @@ class Gateway:
         """The gateway's OpenAI-compatible root, for clients that append ``/chat/completions``."""
         return f"{self.base_url}/v1"
 
+    def speech_url(self, vendor: str, path: str = "") -> str:
+        """The gateway's copy of a speech vendor's API (``/deepgram``, ``/cartesia``).
+
+        It speaks the vendor's own WebSocket protocol, so the vendor's SDK only needs this as
+        its base URL and the gateway key as its key; the gateway connects on the platform's.
+        """
+        return f"{self.base_url}/{vendor}{path}"
+
 
 def gateway() -> Gateway | None:
     """The configured gateway, or None when model calls go straight to each vendor."""
@@ -60,3 +68,12 @@ def vendor_model(model: str) -> str:
     model can do, and a call made straight to the vendor, go by the name without it.
     """
     return model.rsplit("/", 1)[-1]
+
+
+def vertex_model(model: str) -> str:
+    """The gateway's name for a model served by Vertex: ``gemini-3.7-flash`` is ``vertex_ai/gemini-3.7-flash``.
+
+    A bare name is the Gemini API's, so a client configured for Vertex adds the prefix; a name that
+    already names its provider is left alone.
+    """
+    return model if "/" in model else f"vertex_ai/{model}"

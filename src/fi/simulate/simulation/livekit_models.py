@@ -117,7 +117,7 @@ def _deepgram_stt(
 ) -> livekit_stt.STT:
     deepgram = _import_plugin("deepgram")
     return deepgram.STT(
-        api_key=_required_env("DEEPGRAM_API_KEY"),
+        **_speech_credentials("deepgram", "DEEPGRAM_API_KEY", "/v1/listen"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -134,7 +134,7 @@ def _cartesia_stt(
 ) -> livekit_stt.STT:
     cartesia = _import_plugin("cartesia")
     return cartesia.STT(
-        api_key=_required_env("CARTESIA_API_KEY"),
+        **_speech_credentials("cartesia", "CARTESIA_API_KEY"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -176,7 +176,7 @@ def _deepgram_tts(
 ) -> livekit_tts.TTS:
     deepgram = _import_plugin("deepgram")
     return deepgram.TTS(
-        api_key=_required_env("DEEPGRAM_API_KEY"),
+        **_speech_credentials("deepgram", "DEEPGRAM_API_KEY", "/v1/speak"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -207,7 +207,7 @@ def _cartesia_tts(
         "cartesia_tts voice=%s speed=%s emotion=%s", voice, speed, emotion or None
     )
     return cartesia.TTS(
-        api_key=_required_env("CARTESIA_API_KEY"),
+        **_speech_credentials("cartesia", "CARTESIA_API_KEY"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -263,14 +263,17 @@ def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
         replacement="gemini-2.5-flash-lite",
     )
     # The gateway names a model by the provider serving it: vertex_ai/gemini-3.7-flash is Vertex,
-    # a bare name is the Gemini API. That prefix only routes; everything else uses the bare name.
+    # a bare name is the Gemini API. A caller configured for Vertex gets the prefix, so one model
+    # setting means the same thing with or without the gateway. Everything else uses the bare name.
     name = agentcc.vendor_model(model)
     thinking = _simulator_thinking(name)
     gateway = agentcc.gateway()
     if gateway is not None:
         # Gemini API mode with the gateway key; the gateway reaches Vertex on its own credentials.
         return _gateway_google_llm(google)(
-            model=model,
+            model=agentcc.vertex_model(model)
+            if config.provider.lower() == "vertex"
+            else model,
             temperature=config.temperature,
             vertexai=False,
             api_key=gateway.api_key,
@@ -524,6 +527,18 @@ def _required_env(*names: str) -> str:
         if value:
             return value
     raise ValueError(f"Missing provider credential: {' or '.join(names)}")
+
+
+def _speech_credentials(vendor: str, key_env: str, path: str = "") -> dict[str, str]:
+    """``api_key`` for a speech vendor's plugin, and its ``base_url`` when the gateway relays it.
+
+    Through the gateway the sandbox holds no vendor key: the plugin connects to the gateway's
+    copy of the vendor's API with the gateway key.
+    """
+    gateway = agentcc.gateway()
+    if gateway is None:
+        return {"api_key": _required_env(key_env)}
+    return {"api_key": gateway.api_key, "base_url": gateway.speech_url(vendor, path)}
 
 
 def _provider_model(configured: str, *, default: str, replacement: str) -> str:

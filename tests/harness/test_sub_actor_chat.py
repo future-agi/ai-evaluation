@@ -69,7 +69,9 @@ def test_a_second_participant_writes_after_the_agent_turn_its_trigger_names(tmp_
 
     first, second, third = asyncio.run(scenario())
     assert first == [] and third == []
-    assert second == [Exchange("sub_actor", "Can you add one more for me?", name="Friend", sub_actor="subactor_friend")]
+    assert [(e.speaker, e.text, e.name, e.sub_actor) for e in second] == [
+        ("sub_actor", "Can you add one more for me?", "Friend", "subactor_friend")
+    ]
     assert target.heard == [("Friend", "Can you add one more for me?")]
 
 
