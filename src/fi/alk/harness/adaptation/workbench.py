@@ -159,10 +159,24 @@ class Workbench:
                 profile, self.mode, None, environment_root=self.target_root
             )
             if self.mode is BindingMode.CANONICAL:
+                admitted = {one.name for one in profile.admitted}
                 self.alignment["mapped"] = [
                     {"agent_tool": one.name, "steps": [one.name]}
                     for one in profile.admitted
                 ]
+                # The agent calls the environment's tools by name, so a scenario whose solution
+                # needs a tool it lacks (an attached MCP server's, say) cannot be passed.
+                for entry in self.base_suite.scenarios:
+                    scenario = read_folder(self.suite_root, Path(entry.path).name)
+                    if missing := sorted(
+                        {step.tool for step in scenario.solution} - admitted
+                    ):
+                        self.alignment["unscorable"].append(
+                            {
+                                "scenario_key": entry.key,
+                                "reason": f"the agent has no {', '.join(missing)}",
+                            }
+                        )
             else:
                 self.alignment["unscorable"] = [
                     {

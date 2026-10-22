@@ -67,6 +67,13 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   against the usage limit or recorded as `text_call`. The parent now checks
   before starting the worker and records the simulator tokens the worker
   measured, for repository and Retell chat agents alike.
+- Environment releases can attach MCP servers (`servers.json`): each world
+  starts them fresh, their tools reach agents as `<id>__<tool>`, and their
+  calls are traced like the release's own tools. The first is ALK's read-only
+  `sql` server, which reads only the tables a release lists through a reader
+  role. Scenarios that use attached tools are proved on PostgreSQL. The clinic
+  release attaches it and adds a schedule question only it can answer; for
+  agents without that tool, adaptation reports the scenario unscorable.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

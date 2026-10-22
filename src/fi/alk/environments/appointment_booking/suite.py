@@ -2,8 +2,9 @@
 
 State outcomes are checked in code on the world's final state, never on which tools were called,
 so an agent with its own tool names is graded the same way through a binding; each such check
-also fails when nothing is done, which is what the proof's vacuity gate requires. Agent policy is
-graded separately, by judged sub-goals that carry the rule they apply.
+also fails when nothing is done, which is what the proof's vacuity gate requires. A question with
+no state change is checked on what a successful lookup returned, whichever tool made it. Agent
+policy is graded separately, by judged sub-goals that carry the rule they apply.
 """
 
 from __future__ import annotations
@@ -177,6 +178,18 @@ CHECKS = {
     return None
 """,
     ),
+    "patel_schedule_looked_up": (
+        (
+            "A successful lookup returned Dr. Patel's Tuesday 3 March 13:00 slot, which is "
+            "booked, so only the clinic's schedule (not its open-slot search) shows it."
+        ),
+        """def check(world, calls):
+    seen = " ".join(str(call.result) for call in calls if call.ok)
+    if "2026-03-03T13:00:00" not in seen:
+        return "no successful lookup returned Dr. Patel's booked slot on Tuesday 3 March"
+    return None
+""",
+    ),
 }
 
 # Policy verdicts and conversation conduct: nothing in the world's final state can settle them.
@@ -245,6 +258,21 @@ JUDGED = {
             "Fail when: the agent emails the forms without telling the caller texting was "
             "unavailable, or before the caller asks for or agrees to email.\n"
             "If it does not arise: Fail, because the caller always asks for a text first."
+        ),
+    ),
+    "patel_days_told": (
+        (
+            "The agent told the caller that Dr. Patel sees patients on Tuesday 3, Thursday 5 and "
+            "Tuesday 10 March, Tuesday 3 March included even though it is fully booked."
+        ),
+        (
+            "Applies when: the caller asks which days Dr. Patel sees patients between 2 and 13 "
+            "March.\n"
+            "Pass when: the agent names Tuesday 3, Thursday 5 and Tuesday 10 March as Dr. Patel's "
+            "clinic days, and no other day.\n"
+            "Fail when: the agent leaves out Tuesday 3 March, adds a day Dr. Patel does not work, "
+            "or says it cannot tell.\n"
+            "If it does not arise: Fail, because the caller asks this in the first message."
         ),
     ),
 }
@@ -574,6 +602,34 @@ def scenarios() -> list[Scenario]:
                     arguments={
                         "team": "front_desk",
                         "reason": "Caller could not be verified and wants an appointment cancelled",
+                    },
+                ),
+            ],
+        ),
+        Scenario(
+            name="patel_clinic_days",
+            use_case="schedule question",
+            branch="booked days included",
+            tests="Answers from the clinic's schedule, including a day whose only slot is taken.",
+            instruction=(
+                "You want to know which days Dr. Rohan Patel sees patients at the clinic between "
+                "Monday 2 and Friday 13 March, including days he is already fully booked. You do "
+                "not want to book anything; you are planning when to bring your mother in."
+            ),
+            persona=_persona(
+                "Daniel Kim",
+                "male",
+                "20-30",
+                "Hi, which days is Dr. Patel in clinic over the next two weeks?",
+            ),
+            keywords=["schedule", "provider", "question"],
+            sub_goals=["patel_schedule_looked_up", "patel_days_told"],
+            solution=[
+                Step(
+                    tool="sql__query",
+                    arguments={
+                        "sql": "SELECT starts_at, location FROM slots "
+                        "WHERE provider_id = 'DR-PATEL' ORDER BY starts_at"
                     },
                 ),
             ],

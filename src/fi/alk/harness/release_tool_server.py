@@ -33,7 +33,7 @@ from typing import Any
 import psycopg
 
 from fi.alk.harness import request_binding
-from fi.alk.harness.world_tools import WorldTools, load_handlers
+from fi.alk.harness.world_tools import WorldTools, attach_servers, load_handlers
 
 RESULT_LIMIT = 15_000
 BINDING_FILE = "binding.json"
@@ -316,15 +316,17 @@ def make_handler(
 
 
 def main() -> None:
-    from fi.alk.harness.releases import load_agent_binding, load_tools
+    from fi.alk.harness.releases import load_agent_binding, load_servers, load_tools
 
     here = Path(__file__).resolve().parent
     binding_file = here / BINDING_FILE
+    database_url = os.environ["DATABASE_URL"]
     world = WorldTools(
         load_handlers(here / "tools.json", here / "handlers"),
         load_tools(here),
-        os.environ["DATABASE_URL"],
+        database_url,
         binding=load_agent_binding(binding_file) if binding_file.is_file() else None,
+        attached=attach_servers(load_servers(here), database_url, cwd=here),
     )
     handler = make_handler(
         world,

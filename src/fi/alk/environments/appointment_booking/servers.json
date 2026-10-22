@@ -1,0 +1,8 @@
+[
+  {
+    "id": "sql",
+    "server": "sql",
+    "tools": ["query"],
+    "attach": {"database_reader": {"tables": ["providers", "slots"]}}
+  }
+]

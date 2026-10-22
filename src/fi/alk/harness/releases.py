@@ -52,6 +52,7 @@ ENVIRONMENT_MANIFEST = "release.json"
 SUITE_MANIFEST = "suite.json"
 TOOLS = "tools.json"
 POLICY = "policy.json"
+SERVERS = "servers.json"
 WORLD = "world"
 PROOFS = "proofs.json"
 # The platform creates a suite's scenario records from this, exactly as the guest's provision
@@ -111,6 +112,104 @@ class ToolDefinition(_Strict):
         if value.get("type") != "object":
             raise ValueError("parameters must be a JSON Schema object")
         return value
+
+
+class DatabaseReader(_Strict):
+    """Read access to these world tables through the reader role, nothing else."""
+
+    tables: list[str] = Field(min_length=1)
+
+
+class ServerAttach(_Strict):
+    database_reader: DatabaseReader | None = None
+
+
+class AttachedServer(_Strict):
+    """One MCP server from `mcp_servers.REGISTRY`, started fresh in every world. Its allowed
+    `tools` reach the agent as `<id>__<tool>`."""
+
+    id: str = Field(pattern=_SLUG_PATTERN)
+    server: str
+    tools: list[str] = Field(min_length=1)
+    attach: ServerAttach = Field(default_factory=ServerAttach)
+
+    def tool_names(self) -> list[str]:
+        return [f"{self.id}__{tool}" for tool in self.tools]
+
+
+def load_servers(root: Path) -> list[AttachedServer]:
+    """The release's `servers.json`; an environment without one attaches nothing."""
+    path = Path(root) / SERVERS
+    if not path.is_file():
+        return []
+    raw = _read_json(path, "environment_servers_invalid")
+    if not isinstance(raw, list):
+        raise ReleaseError("environment_servers_invalid", f"{SERVERS} must be a list")
+    return [
+        _validated(AttachedServer, item, "environment_servers_invalid") for item in raw
+    ]
+
+
+def attached_tool_names(root: Path) -> set[str]:
+    return {name for server in load_servers(root) for name in server.tool_names()}
+
+
+def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
+    from .mcp_servers import DATABASE_READER, REGISTRY
+
+    servers = load_servers(root)
+    problems: list[str] = []
+    if repeated := sorted(
+        name
+        for name, count in Counter(server.id for server in servers).items()
+        if count > 1
+    ):
+        problems.append(f"duplicate server ids: {repeated}")
+    native = {tool.name for tool in tools}
+    world_tables = set(_parent_tables(Path(root) / WORLD / "world.sqlite"))
+    for server in servers:
+        registered = REGISTRY.get(server.server)
+        if registered is None:
+            problems.append(
+                f"{server.id}: unknown server {server.server!r}; "
+                f"known: {', '.join(sorted(REGISTRY))}"
+            )
+            continue
+        if clashes := sorted(set(server.tool_names()) & native):
+            problems.append(f"{server.id}: tool names clash with {clashes}")
+        reader = server.attach.database_reader
+        if reader is not None:
+            if DATABASE_READER not in registered.attach:
+                problems.append(f"{server.id}: {server.server} takes no database reader")
+            for table in reader.tables:
+                if table not in world_tables:
+                    problems.append(f"{server.id}: no world table {table!r}")
+                elif table.startswith("_alk_") or table == POLICY_TABLE:
+                    problems.append(f"{server.id}: {table} is internal")
+    if problems:
+        raise ReleaseError("environment_servers_invalid", "; ".join(problems))
+
+
+def reader_grants_sql(environment_root: Path) -> str:
+    """The seed lines that let the reader role SELECT the tables attached servers read. They run
+    in the template database, so every world cloned from it keeps them."""
+    from .mcp_servers import READER_ROLE
+
+    tables = sorted(
+        {
+            table
+            for server in load_servers(environment_root)
+            if server.attach.database_reader is not None
+            for table in server.attach.database_reader.tables
+        }
+    )
+    if not tables:
+        return ""
+    return (
+        f"DO $$ BEGIN CREATE ROLE {READER_ROLE} NOLOGIN; "
+        "EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;\n"
+        + "".join(f'GRANT SELECT ON "{table}" TO {READER_ROLE};\n' for table in tables)
+    )
 
 
 class RuleClass(str, Enum):
@@ -670,6 +769,7 @@ def _check_environment_contents(
             "environment_policy_unseeded",
             f"{POLICY_TABLE} holds {seeded} but the policy defaults are {defaults}",
         )
+    _check_servers(root, tools)
     return tools, policy
 
 
@@ -718,6 +818,8 @@ def _check_extension(
     for rule in load_policy(parent_root).rules:
         if child_rules.get(rule.id) != rule:
             problems.append(f"rule {rule.id} removed or changed")
+    if load_servers(root) != load_servers(parent_root):
+        problems.append(f"{SERVERS} changed; attached servers belong to the base release")
     parent_db = parent_root / WORLD / "world.sqlite"
     child_db = root / WORLD / "world.sqlite"
     if parent_db.is_file():
@@ -985,6 +1087,7 @@ def _prove_all(
     from .prove import prove
 
     catalogue = load_catalogue(root)
+    attached = frozenset(attached_tool_names(environment_root))
     results: dict[str, Any] = {}
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="suite-proof-") as scratch:
@@ -992,7 +1095,7 @@ def _prove_all(
         shutil.copytree(environment_root / WORLD, world_root)
         apply_policy_profile(world_root, policy, profile)
         for entry, scenario in loaded:
-            proof = prove(scenario, catalogue, world_root)
+            proof = prove(scenario, catalogue, world_root, postgres_only=attached)
             results[entry.key] = {
                 "holds": proof.holds,
                 "gates": proof.gates(),
@@ -1001,6 +1104,8 @@ def _prove_all(
                 "refused": proof.refused,
                 "broken": proof.broken,
                 "judged_only": proof.judged_only,
+                # Only when true, so releases without attached servers keep their digests.
+                **({"postgres_only": True} if proof.postgres_only else {}),
             }
             if not proof.holds or proof.assumed:
                 reason = (
@@ -1071,6 +1176,7 @@ class PostgresProof:
             environment_root / TOOLS, environment_root / WORLD / "handlers"
         )
         self.environment_tools = load_tools(environment_root)
+        self._servers = load_servers(environment_root)
         self._base = f"alk_proof_{secrets.token_hex(6)}"
         self._target = f"{self._base}_w"
         self.server_version = ""
@@ -1109,6 +1215,7 @@ class PostgresProof:
         self._admin(
             f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
             f'DROP DATABASE IF EXISTS "{self._base}" WITH (FORCE)',
+            f'DROP ROLE IF EXISTS "{self._target}_reader"',
         )
 
     def checks(self, scenario: Any) -> list[tuple[str, str]]:
@@ -1130,10 +1237,10 @@ class PostgresProof:
 
         from .checks import run_check
         from .folder import apply_setup, check_ready
-        from .world_tools import WorldTools
         from .world.handle import HostedWorld
         from .world.runtime import Call
         from .world.stores.postgres import AttachedPostgresStore
+        from .world_tools import WorldTools, attach_servers
 
         self._admin(
             f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
@@ -1142,7 +1249,11 @@ class PostgresProof:
         dsn = self._dsn(self._target)
         store = AttachedPostgresStore(dsn)
         tools = WorldTools(
-            self._handlers, self.environment_tools, dsn, binding=binding
+            self._handlers,
+            self.environment_tools,
+            dsn,
+            binding=binding,
+            attached=attach_servers(self._servers, dsn),
         )
         counts = {table: len(rows) for table, rows in store.state().items()}
         world = HostedWorld(store, 0, random.Random(0), counts)
@@ -1152,35 +1263,38 @@ class PostgresProof:
         played: list[Any] = []
         faults: list[str] = []
         outcomes: list[Any] = []
-        for tool, arguments in calls if ready.ok else ():
-            outcome = tools.call(tool, arguments)
-            outcomes.append(outcome)
-            if outcome.status == "fault":
-                faults.append(f"{tool}: {outcome.error}")
-            ok, refused = outcome.status == "ok", outcome.status == "refused"
-            # The calls a run's checks read are the trace rows: environment operations, all
-            # failed when the agent call was not ok, or one row named by the agent tool.
-            played.extend(
-                Call(
-                    name=operation.tool,
-                    arguments=dict(operation.arguments),
-                    result=operation.result if ok else None,
-                    ok=ok,
-                    refused=refused,
-                    error=outcome.error,
-                )
-                for operation in outcome.operations
-            )
-            if not outcome.operations:
-                played.append(
+        try:
+            for tool, arguments in calls if ready.ok else ():
+                outcome = tools.call(tool, arguments)
+                outcomes.append(outcome)
+                if outcome.status == "fault":
+                    faults.append(f"{tool}: {outcome.error}")
+                ok, refused = outcome.status == "ok", outcome.status == "refused"
+                # The calls a run's checks read are the trace rows: environment operations, all
+                # failed when the agent call was not ok, or one row named by the agent tool.
+                played.extend(
                     Call(
-                        name=tool,
-                        arguments=arguments if isinstance(arguments, dict) else {},
-                        ok=False,
+                        name=operation.tool,
+                        arguments=dict(operation.arguments),
+                        result=operation.result if ok else None,
+                        ok=ok,
                         refused=refused,
                         error=outcome.error,
                     )
+                    for operation in outcome.operations
                 )
+                if not outcome.operations:
+                    played.append(
+                        Call(
+                            name=tool,
+                            arguments=arguments if isinstance(arguments, dict) else {},
+                            ok=False,
+                            refused=refused,
+                            error=outcome.error,
+                        )
+                    )
+        finally:
+            tools.close()
         return Attempt(
             ready,
             faults,
@@ -1312,6 +1426,12 @@ def seal_suite_release(
     _check_rule_coverage(root, profile, loaded)
     (root / PROOFS).unlink(missing_ok=True)
     proofs = _prove_all(root, environment_root, policy, profile, loaded)
+    if not postgres_dsn and any(entry.get("postgres_only") for entry in proofs.values()):
+        raise ReleaseError(
+            "suite_runtime_unproved",
+            "scenarios that call attached MCP servers are proved only on PostgreSQL; "
+            "seal with a postgres DSN",
+        )
     runtime = (
         _prove_on_postgres(root, environment_root, profile, loaded, postgres_dsn)
         if postgres_dsn
@@ -1559,7 +1679,8 @@ def world_seed_sql(environment_root: str | Path, profile: PolicyProfile) -> str:
     """The PostgreSQL seed of a release's world with a suite's policy profile applied.
 
     Built by the same converter agent-first bundles use, after the shared prefix that creates the
-    readiness sentinel and `_alk_tool_trace`, and the request-binding tables (§6.2).
+    readiness sentinel and `_alk_tool_trace`, and the request-binding tables (§6.2), then the
+    reader role's grants for attached servers.
     """
     from .bundle_author_v2 import WORLD_SEED_PREFIX, _sql_literal, _sqlite_sql
     from .request_binding import REQUEST_BINDING_SQL
@@ -1579,6 +1700,7 @@ def world_seed_sql(environment_root: str | Path, profile: PolicyProfile) -> str:
                 .items()
             )
         )
+        + reader_grants_sql(environment_root)
     )
 
 
@@ -1728,6 +1850,8 @@ def compose_bundle(
         server = staging / TOOL_SERVER_DIRECTORY
         shutil.copytree(world_root / WORLD / "handlers", server / "handlers")
         shutil.copyfile(world_root / TOOLS, server / TOOLS)
+        if (world_root / SERVERS).is_file():
+            shutil.copyfile(world_root / SERVERS, server / SERVERS)
         shutil.copyfile(binding_path, server / BINDING_FILE)
         shutil.copyfile(
             Path(__file__).with_name("release_tool_server.py"), server / "server.py"

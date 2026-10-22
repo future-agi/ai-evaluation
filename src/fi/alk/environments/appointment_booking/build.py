@@ -20,6 +20,7 @@ from fi.alk.harness.catalogue import save_catalogue
 from fi.alk.harness.folder import write_folder
 from fi.alk.harness.releases import (
     POLICY,
+    SERVERS,
     TOOLS,
     WORLD,
     WORLD_IMPLEMENTATION,
@@ -69,6 +70,8 @@ def build_environment(destination: Path) -> str:
     destination.mkdir(parents=True)
     shutil.copyfile(HERE / TOOLS, destination / TOOLS)
     shutil.copyfile(HERE / POLICY, destination / POLICY)
+    # The read-only `sql` MCP server over the reference tables (providers, slots).
+    shutil.copyfile(HERE / SERVERS, destination / SERVERS)
     world = GeneratedWorld(":memory:", kind="sqlite")
     world.name = NAME
     world.store.apply((HERE / "world.sql").read_text(encoding="utf-8"))
