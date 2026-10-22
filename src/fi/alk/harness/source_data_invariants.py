@@ -175,6 +175,43 @@ def _first_rows(rows: list, *, most: int = 3, width: int = 60) -> str:
     return ": " + "; ".join(shown) if shown else ""
 
 
+def source_lines(files: dict[str, Path]) -> list[str]:
+    return [
+        line
+        for path in files.values()
+        for line in path.read_bytes().decode("utf-8", "replace").splitlines()
+    ]
+
+
+def submitted_rows(rows: list, lines: list[str]) -> list:
+    """Violating rows that are the submitted source's own data: intended cases.
+
+    A row is submitted when it has two or more strings (4+ characters) and all of them occur
+    on one source line, so a generated row or a reused id with a changed value is not."""
+    found = []
+    for row in rows:
+        values = [
+            value
+            for value in (row.values() if isinstance(row, dict) else row)
+            if isinstance(value, str) and len(value) >= 4
+        ]
+        if len(values) >= 2 and any(
+            all(value in line for value in values) for line in lines
+        ):
+            found.append(row)
+    return found
+
+
+async def _submitted(world, check: dict, lines: list[str]) -> list:
+    try:
+        rows = await asyncio.wait_for(
+            asyncio.to_thread(world.query, check["violations_sql"]), timeout=15
+        )
+    except Exception:
+        return []
+    return submitted_rows(rows, lines)
+
+
 async def check_invariants(
     world, checks: list[dict], *, scenario_key: str | None = None
 ) -> None:
@@ -372,6 +409,18 @@ async def author_invariants(
         earlier=earlier,
     )
     result = _merge(batches, hashes)
+    lines = source_lines(files)
+    intended = [
+        check["name"]
+        for check in result
+        if not check["scenarios"] and await _submitted(world, check, lines)
+    ]
+    if intended:
+        logger.warning(
+            "dropping universal checks the submitted source data violates: %s",
+            ", ".join(intended),
+        )
+        result = [check for check in result if check["name"] not in intended]
     if not result:
         raise ValueError(
             "Source data invariant review declared no executable check, so nothing was certified"
@@ -702,6 +751,7 @@ async def _review_session(
     probes = []
     saved = False
     declared: list[str] = []
+    lines = source_lines(files)
 
     def reply(value):
         return {"content": [{"type": "text", "text": json.dumps(value, default=str)}]}
@@ -850,6 +900,16 @@ async def _review_session(
             rows = await asyncio.wait_for(
                 asyncio.to_thread(world.query, check["violations_sql"]), 15
             )
+            seeded = [] if check["scenarios"] else submitted_rows(rows, lines)
+            if seeded:
+                return reply(
+                    {
+                        "error": "The submitted source's own data violates this check, so "
+                        "those rows are intended cases, not an invariant. Exclude them in "
+                        "the WHERE clause or declare only relationships the submitted data "
+                        "satisfies" + _first_rows(seeded)
+                    }
+                )
             checks[check["name"]] = check
             declared.append(check["name"])
             return reply(
@@ -906,7 +966,9 @@ async def _review_session(
         "values returned by one tool and consumed by another, supported discriminators and "
         "required companion records. Do not infer a relationship from column names alone. "
         "Preserve legitimate optional/null/external references and intentionally negative cases; "
-        "do not require all business requests to succeed. Quote exact supporting source. "
+        "do not require all business requests to succeed. Rows present verbatim in the "
+        "submitted seed or source data are intended cases, never violations to repair. "
+        "Quote exact supporting source. "
         "Use probe_dependency against actual local source services to check lookups and raw "
         "API arguments. Read /openapi.json if available and source otherwise. This is a "
         "throwaway world reset after review; effects do not become seed data. Follow values "
