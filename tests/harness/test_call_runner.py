@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -726,6 +727,59 @@ def test_dispatch_agent_name_and_livekit_url_flow_into_the_built_spec(
         spec.environment.config["params"]["agent_first_silence_timeout_seconds"] == 60.0
     )
     assert spec.environment.config["params"]["min_turn_messages"] == 6
+
+
+def test_the_spec_is_built_off_the_event_loop(tmp_path: Path, monkeypatch) -> None:
+    """Choosing the caller's voice may wait on Cartesia; the scheduler's loop keeps running meanwhile."""
+    import threading
+
+    _job_obj, context = _context(tmp_path=tmp_path)
+    _write_scenario_doc(context.bundle_dir, scenario_key="k1", instruction="Do the thing.")
+    built = cr._build_spec
+    seen: dict[str, Any] = {}
+
+    def slow_build(**kwargs):
+        ran = threading.Event()
+        seen["loop"].call_soon_threadsafe(ran.set)
+        # On the loop's own thread the callback could not run until this returned.
+        seen["loop_ran"] = ran.wait(timeout=2)
+        return built(**kwargs)
+
+    async def place_call(spec):
+        return _report()
+
+    async def run():
+        seen["loop"] = asyncio.get_running_loop()
+        await runner.run(_FakeScenario("k1"), _runtime(metadata={"livekit_agent_name": "agent-w0"}))
+
+    monkeypatch.setattr(cr, "_build_spec", slow_build)
+    runner = cr.CallRunnerImpl(FakeAdapter(), context, place_call=place_call)
+    asyncio.run(run())
+    assert seen["loop_ran"] is True
+
+
+@pytest.mark.parametrize("call_key", ["call-key", ""])
+def test_the_voice_check_uses_the_calls_private_key(tmp_path: Path, monkeypatch, call_key) -> None:
+    from fi.alk.harness import simulator_voice
+
+    keys: list[str] = []
+    monkeypatch.delenv("CARTESIA_API_KEY", raising=False)
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: keys.append(key) or True)
+    cr._build_spec(
+        run_id="r1",
+        room_name="room",
+        agent_name="agent-w0",
+        doc={"instruction": "Book a ride.", "persona": {"name": "Noor", "gender": "female"}},
+        livekit_url="wss://example.livekit.cloud",
+        call_timeout_seconds=60.0,
+        run_seconds=60.0,
+        recordings_root=tmp_path,
+        simulator_config={"simulator_tts_provider": "cartesia"},
+        environ={"CARTESIA_API_KEY": call_key, "DEEPGRAM_API_KEY": "dg"},
+    )
+    # The private per-call key reaches the check without being exported to this process.
+    assert keys[:1] == [call_key]
+    assert "CARTESIA_API_KEY" not in os.environ
 
 
 @pytest.mark.parametrize(

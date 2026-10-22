@@ -1088,31 +1088,46 @@ def cartesia_voice_for(persona: dict) -> str:
 _VOICE_TRIES = 5
 
 
-@lru_cache(maxsize=256)
-def _cartesia_voice_served(voice: str) -> bool | None:
+# Cartesia's answer per (key, voice). Only a definite answer is kept: one that could not be had is
+# asked again, since another call may carry a key that can.
+_SERVED: dict[tuple[str, str], bool] = {}
+
+
+def _cartesia_voice_served(voice: str, key: str) -> bool | None:
     """Whether Cartesia still serves this voice: False when it says not, None when it cannot say."""
-    key = (os.environ.get("CARTESIA_API_KEY") or "").strip()
+    key = (key or "").strip()
     if not key:
         return None
+    if (key, voice) in _SERVED:
+        return _SERVED[(key, voice)]
     request = urllib.request.Request(
         f"https://api.cartesia.ai/voices/{voice}",
         headers={"X-API-Key": key, "Cartesia-Version": "2025-04-16"},
     )
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
-            return response.status == 200
+            served = response.status == 200
     except urllib.error.HTTPError as refused:
-        return False if refused.code in (400, 404, 410) else None
+        if refused.code not in (400, 404, 410):
+            return None
+        served = False
     except Exception:  # noqa: BLE001 - an unreachable check never holds up a call
         return None
+    _SERVED[(key, voice)] = served
+    return served
 
 
-def served_cartesia_voice(persona: dict) -> str:
-    """This caller's voice, or the next one Cartesia still serves when it has removed theirs."""
+def served_cartesia_voice(persona: dict, key: str | None = None) -> str:
+    """This caller's voice, or the next one Cartesia still serves when it has removed theirs.
+
+    `key` is the call's own Cartesia key; None reads this process's. Without one (a gateway-relayed
+    call) nothing can be checked and the caller's voice is kept.
+    """
+    key = os.environ.get("CARTESIA_API_KEY", "") if key is None else key
     candidates = _cartesia_voice_candidates(persona)
     last = candidates[-1]
     for voice in [*candidates[:_VOICE_TRIES], *candidates[-_VOICE_TRIES - 1 :]]:
-        if _cartesia_voice_served(voice) is not False:
+        if _cartesia_voice_served(voice, key) is not False:
             if voice != candidates[0]:
                 logger.warning(
                     "cartesia_voice_unavailable", extra={"voice": candidates[0], "using": voice}
@@ -1161,9 +1176,11 @@ _ANGRY_EMOTIONS = frozenset({"outraged"})
 # two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
 # control at all, which is the provider default and the behaviour before this existed.
 _PERSONALITY_EMOTION = (
-    (("furious", "livid", "irate", "hostile", "enraged"), "outraged"),
-    (("irritated", "annoyed", "frustrated", "angry"), "outraged"),
-    (("impatient", "abrupt", "emotional"), "outraged"),
+    (
+        ("furious", "livid", "irate", "hostile", "enraged", "irritated", "annoyed", "frustrated", "angry",
+         "impatient", "abrupt", "emotional"),
+        "outraged",
+    ),
     (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
     (("professional", "formal", "businesslike", "efficient"), "positivity:low"),
     (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
@@ -1436,6 +1453,7 @@ def caller_scenario(
     outcome: str = "",
     initial_message: str = "",
     variation: str = "",
+    cartesia_key: str | None = None,
 ) -> "simulate.Scenario":
     """One simulated caller.
 
@@ -1448,7 +1466,7 @@ def caller_scenario(
     # A voice from the persona's accent/language, so callers in one suite sound different.
     if not persona.get("voice") and not persona.get("voice_id"):
         if provider == "cartesia":
-            persona["voice"] = served_cartesia_voice(persona)
+            persona["voice"] = served_cartesia_voice(persona, cartesia_key)
         elif provider == "deepgram":
             persona["voice"] = aura_voice_for(persona)
     fixture = fixture if isinstance(fixture, Mapping) else {}

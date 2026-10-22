@@ -650,6 +650,7 @@ def _build_spec(
             fixture=doc.get("fixture"),
             tts_provider=simulator.tts.provider,
             variation=run_id,
+            cartesia_key=setting("CARTESIA_API_KEY"),
         ),
         simulator=simulator,
         # An outbound agent dials; the person answers, so the caller opens.
@@ -1374,7 +1375,9 @@ class CallRunnerImpl:
                 else None
             )
 
-        spec = _build_spec(
+        # Off the event loop: choosing the caller's voice may ask Cartesia over HTTP.
+        spec = await asyncio.to_thread(
+            _build_spec,
             run_id=run_id,
             room_name=room_name,
             connector=connector,

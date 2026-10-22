@@ -4527,16 +4527,43 @@ def test_a_voice_cartesia_no_longer_serves_falls_back_to_the_next(monkeypatch):
     persona = {"name": "Alex Morgan", "gender": "male", "age_group": "60+", "accent": "American"}
     first, second = _cartesia_voice_candidates(persona)[:2]
 
-    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice: voice != first)
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: voice != first)
     assert served_cartesia_voice(persona) == second
 
-    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice: False)
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: False)
     assert served_cartesia_voice(persona) == _CARTESIA_DEFAULT_VOICES["male"]
     assert served_cartesia_voice({**persona, "gender": "female"}) == _CARTESIA_DEFAULT_VOICES["female"]
 
     # A check that cannot reach Cartesia keeps the caller's own voice.
-    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice: None)
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: None)
     assert served_cartesia_voice(persona) == first
+
+
+def test_the_voice_check_uses_the_calls_own_key_and_retries_without_one(monkeypatch):
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import _cartesia_voice_candidates, served_cartesia_voice
+
+    persona = {"name": "Priya Nair", "gender": "female", "age_group": "40-50", "accent": "Indian"}
+    first, second = _cartesia_voice_candidates(persona)[:2]
+    asked = []
+
+    def urlopen(request, timeout):
+        asked.append((request.full_url.rsplit("/", 1)[-1], request.get_header("X-api-key")))
+        if request.full_url.endswith(first):
+            raise simulator_voice.urllib.error.HTTPError(request.full_url, 404, "gone", {}, None)
+        return contextlib.nullcontext(SimpleNamespace(status=200))
+
+    monkeypatch.delenv("CARTESIA_API_KEY", raising=False)
+    monkeypatch.setattr(simulator_voice, "_SERVED", {})
+    monkeypatch.setattr(simulator_voice.urllib.request, "urlopen", urlopen)
+
+    # No key for the call (a gateway-relayed call): nothing is asked and nothing is remembered.
+    assert served_cartesia_voice(persona, "") == first
+    assert asked == [] and simulator_voice._SERVED == {}
+
+    # The call's own key is used though this process has none.
+    assert served_cartesia_voice(persona, "call-key") == second
+    assert asked == [(first, "call-key"), (second, "call-key")]
 
 
 def test_every_fallback_voice_is_the_callers_gender():
