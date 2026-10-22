@@ -1990,3 +1990,14 @@ def test_the_returned_outcome_keeps_the_transcript_the_judge_needs():
         messages=said,
     )
     assert replace(base, calls=()).messages == said
+
+
+def test_a_tool_result_sent_as_text_is_read_back_into_its_shape():
+    from fi.alk.harness.call_runner import _structured
+
+    assert _structured('{"id": 7}') == {"id": 7}
+    assert _structured("{'id': 7}") == {"id": 7}
+    assert _structured("[1, 2]") == [1, 2]
+    assert _structured("[INFO] booked") == "[INFO] booked"
+    assert _structured({"id": 7}) == {"id": 7}
+    assert len(_structured("x" * 5000)) == 2000

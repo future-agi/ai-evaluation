@@ -318,3 +318,27 @@ def test_a_draft_a_later_step_corrects_is_not_a_value_the_checks_must_catch(tmp_
     ]
     proof = _proof(_notes_world(tmp_path), solution, check)
     assert proof.unchecked == []
+
+
+def test_a_writer_is_told_which_coverage_levels_already_hold_their_share():
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _full_levels
+
+    grid = {"task": ["book", "cancel", "change"], "overlay": ["none", "a", "b"]}
+    kept = [Scenario(name=f"s{i}", instruction="i", coverage={"task": "book", "overlay": "a"}) for i in range(4)]
+    assert _full_levels(grid, kept, 12) == ["task book"]
+    assert _full_levels(grid, kept[:3], 12) == []
+    assert _full_levels(grid, kept, 9) == []
+
+
+def test_the_agents_prompt_is_copied_from_the_lines_named_and_nothing_outside_the_source(tmp_path):
+    from fi.alk.harness.contract import AgentContract, PromptSource
+    from fi.alk.harness.tools import _copy_prompt
+
+    (tmp_path / "prompt.py").write_text("x = 1\nYou book rides.\nNever share PINs.\n")
+    contract = AgentContract(agent="a", system_prompt_excerpt="quoted", system_prompt_from=[PromptSource(path="prompt.py", start_line=2, end_line=3)])
+    assert _copy_prompt(contract, tmp_path) == []
+    assert contract.system_prompt_excerpt == "You book rides.\nNever share PINs."
+    for where in (PromptSource(path="../outside.py", start_line=1, end_line=1), PromptSource(path="prompt.py", start_line=2, end_line=9)):
+        kept = AgentContract(agent="a", system_prompt_excerpt="quoted", system_prompt_from=[where])
+        assert _copy_prompt(kept, tmp_path) and kept.system_prompt_excerpt == "quoted"
