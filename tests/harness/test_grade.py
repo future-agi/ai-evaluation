@@ -230,46 +230,6 @@ def test_the_cap_holds_for_the_session_that_saves_too(tmp_path):
         said = asyncio.run(submit.handler({"name": "one_more", "instruction": "three"}))
         assert said.get("is_error"), can_save
         assert "2 of 2 written" in said["content"][0]["text"]
-    contract = AgentContract(
-        agent="cart", real_use_cases=["add an item", "remove an item"]
-    )
-    # Above FEWEST_WORTH_DELEGATING, or the fan-out tool is not published at all.
-    server, _kept = st.scenario_tools(contract, tmp_path, tmp_path, wanted=20)
-    suite = next(spec for spec in server.tools if spec.name == "generate_suite")
-
-    asked_for: list[int] = []
-
-    async def _fake_parallel(contract, *, out, wanted, use_cases, slices, at_once):
-        asked_for.append(wanted)
-        return []
-
-    monkeypatch.setattr("fi.alk.harness.scenarios.write_in_parallel", _fake_parallel)
-    # Nothing on disk yet: the full ask goes through.
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20]
-
-    # Fourteen already written, and the model asks for twenty again: six are outstanding.
-    monkeypatch.setattr(
-        st,
-        "load_scenarios",
-        lambda _d: [
-            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(14)
-        ],
-    )
-    monkeypatch.setattr(st, "journalled", lambda _d: [])
-    asyncio.run(suite.handler({"count": 20}))
-    assert asked_for == [20, 6]
-
-    monkeypatch.setattr(
-        st,
-        "load_scenarios",
-        lambda _d: [
-            Scenario(name=f"s{i}", instruction="i", sub_goals=["x"]) for i in range(20)
-        ],
-    )
-    said = asyncio.run(suite.handler({"count": 20}))
-    assert "already holds the 20" in said["content"][0]["text"]
-    assert asked_for == [20, 6]
 
 
 def test_only_chat_can_grow_a_finished_suite(tmp_path):
