@@ -12,6 +12,7 @@ All three are recorded, because how a conversation ended is often the finding.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -44,6 +45,9 @@ class TargetConversationEnded(Exception):
 class Exchange:
     speaker: str
     text: str
+    # Epoch seconds when the turn was delivered, on the same clock as `Call.at`, so a tool call
+    # the agent made before replying sorts between the customer's turn and the reply.
+    at: float = 0.0
 
 
 @dataclass
@@ -82,6 +86,7 @@ class Transcript:
                             if turn.speaker == "customer"
                             else "assistant",
                             "content": turn.text,
+                            **({"at": turn.at} if turn.at else {}),
                         }
                         for turn in self.exchanges
                     ],
@@ -215,7 +220,7 @@ async def converse(
     )
 
     def record(speaker: str, text: str) -> None:
-        exchange = Exchange(speaker, text)
+        exchange = Exchange(speaker, text, time.time())
         transcript.exchanges.append(exchange)
         if on_exchange:
             on_exchange(exchange)

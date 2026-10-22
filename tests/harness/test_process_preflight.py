@@ -1534,3 +1534,51 @@ def test_agent_name_with_both_placeholders_passes_at_high_w(tmp_path: Path) -> N
         )
         is None
     )
+
+
+def test_observability_export_purpose_is_accepted_and_never_claimable(
+    tmp_path: Path,
+) -> None:
+    """The platform ships the export key under a purpose of its own and injects it into every
+    customer process, so the purpose must be a known one (else preflight raises ValueError and
+    the run crashes after accepting job.json) and no bundle may ask for it."""
+    assert bundle_v2_module.SecretPurpose.OBSERVABILITY_EXPORT.value == (
+        "observability_export"
+    )
+    refs = {
+        **TARGET_PROVIDER_REFS,
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "observability_export",
+    }
+
+    manifest = _build_bundle(tmp_path / "accepted")
+    assert (
+        preflight_bundle(
+            tmp_path / "accepted", manifest, parallelism=1, secret_refs=refs
+        )
+        is None
+    )
+
+    def claim(body: dict[str, Any]) -> dict[str, Any]:
+        body["processes"][1]["secret_purposes"].append("observability_export")
+        return body
+
+    claiming = _build_bundle(tmp_path / "claiming", body_overrides=claim)
+    with pytest.raises(PreflightError) as refused:
+        preflight_bundle(
+            tmp_path / "claiming", claiming, parallelism=1, secret_refs=refs
+        )
+    assert refused.value.code == "secret_purpose_forbidden"
+    assert refused.value.message == (
+        "customer processes cannot claim observability_export credentials: agent"
+    )
+
+    # The claim is refused whether or not a ref carries the purpose, exactly as for
+    # `simulator_provider`.
+    with pytest.raises(PreflightError) as refused_without_ref:
+        preflight_bundle(
+            tmp_path / "claiming",
+            claiming,
+            parallelism=1,
+            secret_refs=TARGET_PROVIDER_REFS,
+        )
+    assert refused_without_ref.value.code == "secret_purpose_forbidden"

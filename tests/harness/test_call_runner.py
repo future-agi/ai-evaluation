@@ -179,6 +179,86 @@ def test_a_result_traced_as_the_text_of_a_dict_reaches_checks_as_the_dict(tmp_pa
     assert [call.result for call in calls] == [{"verified": True}, {"verified": True}, "sent"]
 
 
+def _trace_lines(path: Path, *records: dict) -> Path:
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    return path
+
+
+def test_file_tool_trace_merges_agent_line_with_livekit_hook_time(
+    tmp_path: Path,
+) -> None:
+    # The agent writes what it executed while the tool runs; the hook writes the model's
+    # call, with its time, after the step. They are one call.
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {
+            "name": "cancel_ride",
+            "arguments": {"booking_ref": "bk_1", "caller_explicitly_confirmed": True},
+            "output": {"status": "cancelled"},
+            "is_error": False,
+        },
+        {
+            "name": "cancel_ride",
+            "arguments": '{"caller_explicitly_confirmed": true}',
+            "output": "{'status': 'cancelled'}",
+            "is_error": False,
+            "at": 134.9,
+            "source": "livekit",
+        },
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert [(call.arguments, call.result, call.at) for call in calls] == [
+        (
+            {"booking_ref": "bk_1", "caller_explicitly_confirmed": True},
+            {"status": "cancelled"},
+            134.9,
+        )
+    ]
+
+
+def test_file_tool_trace_keeps_a_rejected_call_apart_from_a_same_name_success(
+    tmp_path: Path,
+) -> None:
+    # LiveKit rejects malformed arguments before the agent function runs, so only the
+    # successful call of the batch has an agent line, but the hook writes both.
+    trace = _trace_lines(
+        tmp_path / "agent-tool-calls.jsonl",
+        {
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+            "output": {"forecast": "sun"},
+            "is_error": False,
+        },
+        {
+            "name": "get_weather",
+            "arguments": '{"city": ',
+            "output": "invalid arguments",
+            "is_error": True,
+            "at": 100.0,
+            "source": "livekit",
+        },
+        {
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "output": "{'forecast': 'sun'}",
+            "is_error": False,
+            "at": 101.0,
+            "source": "livekit",
+        },
+    )
+    calls = cr._collect_file_tool_calls(
+        _runtime(metadata={"tool_trace_path": str(trace)})
+    )
+    assert sorted((call.at, call.ok, call.result) for call in calls) == [
+        (100.0, False, None),
+        (101.0, True, {"forecast": "sun"}),
+    ]
+
+
 def test_file_tool_trace_clear_removes_previous_attempt(tmp_path: Path) -> None:
     trace = tmp_path / "agent-tool-calls.jsonl"
     trace.write_text("stale\n", encoding="utf-8")
