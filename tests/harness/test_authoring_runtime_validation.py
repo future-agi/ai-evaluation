@@ -1,15 +1,19 @@
 import asyncio
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
+from fi.alk.harness.bundle_author_v2 import world_ir_is_imported
+from fi.alk.harness.world_import.sqlite import import_sqlite_world
 from fi.alk.harness.authoring_runtime_validation import (
     _fallback_diagnostic,
     _make_local_seed_files_readable,
     RuntimeValidationError,
     _setup_check_keys,
     _generic_candidate_hash,
+    _stored_in_world,
     _world_isolation_status,
     _write_generic_certificate,
     _write_runtime_evidence,
@@ -35,6 +39,7 @@ from fi.alk.harness.repair_controller import (
 from fi.alk.harness.repair_patch import (
     RepairPatchOp,
     RepairPatchOperation,
+    RepairPatchRejected,
     WorldIRRepairPatch,
 )
 from fi.alk.harness.runtime_repair import RuntimePlanPatch, _contract_hash
@@ -264,7 +269,10 @@ def test_generic_repair_without_typed_patch_keeps_validation_failure(
     assert history["results"][0]["outcome"] == "failed"
 
 
-def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) -> None:
+@pytest.mark.parametrize("saved_world", [False, True])
+def test_generic_validation_applies_typed_world_patch_transactionally(
+    tmp_path, saved_world
+) -> None:
     source_root = tmp_path / "source"
     authoring = tmp_path / "authoring"
     source_root.mkdir()
@@ -297,9 +305,16 @@ def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) 
             ),
         ),
     )
+    if saved_world:
+        # The world.sqlite the IR was imported from: the hashed world.
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            database.execute("CREATE TABLE accounts (id INTEGER)")
+            database.execute("INSERT INTO accounts VALUES (NULL)")
+            world = import_sqlite_world(database, source_model, validate=False).world
     store = GenericHarnessArtifactStore(authoring / "generic-harness")
     store.write_source_model(source_model)
     store.write_world_ir(world)
+    identity = world.tables[0].rows[0].identity
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.VALIDATING_ENVIRONMENT,
         component="world_ir",
@@ -324,7 +339,7 @@ def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) 
                 RepairPatchOperation(
                     op=RepairPatchOp.SET_VALUE,
                     table="accounts",
-                    row_identity="account-1",
+                    row_identity=identity,
                     column="id",
                     value=WorldValue.present(LogicalType.INTEGER, 1),
                     reason="required_value_missing",
@@ -342,11 +357,84 @@ def test_generic_validation_applies_typed_world_patch_transactionally(tmp_path) 
 
     validate_world_ir(store.read_world_ir(), source_model)
     assert (authoring / "generic-harness" / "repair-patch-0001.json").is_file()
+    if saved_world:
+        # The repair is in the hashed world too, and the IR is what it imports to.
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            assert database.execute("SELECT id FROM accounts").fetchall() == [(1,)]
+        assert world_ir_is_imported(authoring)
     history = store.read_repair_history()
     assert (
         history.results[0].after_candidate_hash
         != history.results[0].before_candidate_hash
     )
+
+
+@pytest.mark.parametrize("repair", ["a_value_sqlite_changes", "a_null_over_a_default"])
+def test_a_repair_world_sqlite_cannot_hold_is_rejected_and_writes_nothing(
+    tmp_path, repair
+) -> None:
+    source_model = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="accounts",
+                columns=(
+                    SourceColumn(
+                        name="zip",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=True,
+                        has_default=True,
+                        default_expression="'00000'",
+                    ),
+                    SourceColumn(
+                        name="note",
+                        logical_type=LogicalType.STRING,
+                        native_type="text",
+                        nullable=True,
+                        has_default=False,
+                    ),
+                ),
+            ),
+        ),
+    )
+    path = tmp_path / "world.sqlite"
+    with sqlite3.connect(path) as database:
+        database.execute("CREATE TABLE accounts (zip INTEGER)")
+        database.execute("INSERT INTO accounts VALUES (NULL)")
+        world = import_sqlite_world(database, source_model, validate=False).world
+    before = path.read_bytes()
+    [row] = world.tables[0].rows
+    zip_code = (
+        WorldValue.present(LogicalType.STRING, "02134")
+        if repair == "a_value_sqlite_changes"
+        else WorldValue.null(LogicalType.STRING)
+    )
+    repaired = world.model_copy(
+        update={
+            "tables": (
+                WorldTable(
+                    source_name="accounts",
+                    rows=(
+                        WorldRow(
+                            identity=row.identity,
+                            values={
+                                "zip": zip_code,
+                                # A column world.sqlite lacks: added, then undone.
+                                "note": WorldValue.present(LogicalType.STRING, "x"),
+                            },
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(RepairPatchRejected, match="repair_patch_not_storable"):
+        _stored_in_world(tmp_path, repaired, source_model)
+
+    assert path.read_bytes() == before
 
 
 def test_generic_validation_rejects_unchanged_compiler_failure(tmp_path) -> None:

@@ -18,6 +18,11 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .source_model import SourceModel
+    from .world_ir import WorldIR
 
 
 def _artifact_digest(path: Path) -> str:
@@ -295,6 +300,44 @@ def _generic_candidate_hash(source: Path, authoring: Path) -> str:
         digest.update(f"authoring/{relative}\n".encode("utf-8"))
         digest.update(path.read_bytes())
     return "sha256:" + digest.hexdigest()
+
+
+def _stored_in_world(
+    authoring: Path, world: WorldIR, source: SourceModel
+) -> WorldIR:
+    """Keep a repaired World IR in world.sqlite, the world the environment is known by.
+
+    Returns the world as it imports back, so the IR stays exactly what world.sqlite
+    holds. A repair SQLite cannot hold as it seeds is rejected and nothing is written.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from .repair_patch import RepairPatchRejected
+    from .world_import.sqlite import (
+        import_sqlite_world,
+        world_holds,
+        write_sqlite_world,
+    )
+
+    path = authoring / "world.sqlite"
+    if not path.is_file():
+        return world
+    with closing(sqlite3.connect(path)) as connection:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            wrote = write_sqlite_world(connection, world, source)
+            stored = import_sqlite_world(connection, source, validate=False).world
+            if not world_holds(stored, world, source):
+                raise ValueError("world_not_held")
+        except (sqlite3.Error, ValueError, OverflowError) as exc:
+            connection.rollback()
+            raise RepairPatchRejected("repair_patch_not_storable") from exc
+        if wrote:
+            connection.commit()
+        else:
+            connection.rollback()
+    return stored
 
 
 def _invariants_violated(detail: str) -> tuple:
@@ -1232,11 +1275,17 @@ async def validate_and_repair(
                         artifacts.write_repair_patch(
                             repair_result, sequence=decision.sequence
                         )
-                        repaired_world = apply_world_ir_repair_patch(
-                            world_ir,
+                        repaired_world = _stored_in_world(
+                            authoring,
+                            apply_world_ir_repair_patch(
+                                world_ir,
+                                source_model,
+                                repair_result,
+                                allowed_reason_codes={
+                                    item.code for item in diagnostics
+                                },
+                            ),
                             source_model,
-                            repair_result,
-                            allowed_reason_codes={item.code for item in diagnostics},
                         )
                         artifacts.write_world_ir(repaired_world)
                         still_broken = _invariants_the_ir_still_breaks(

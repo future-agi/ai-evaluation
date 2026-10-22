@@ -2695,6 +2695,52 @@ def test_a_compile_seeds_world_sqlite_over_a_world_ir_it_does_not_import_to(
         ]
 
 
+def test_a_reseal_keeps_a_validation_repair_of_the_world(tmp_path: Path) -> None:
+    from fi.alk.harness.authoring_runtime_validation import _stored_in_world
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_ir import WorldRow, WorldTable, WorldValue
+
+    source, authoring, source_model, bundle, _ = _places(tmp_path, ir_seed=True)
+    store = GenericHarnessArtifactStore(authoring / "generic-harness")
+    world = store.read_world_ir()
+    [row] = world.tables[0].rows
+    label = WorldValue.present(row.values["label"].logical_type, "repaired")
+    repaired = world.model_copy(
+        update={
+            "tables": (
+                WorldTable(
+                    source_name="places",
+                    rows=(
+                        WorldRow(
+                            identity=row.identity,
+                            values={**row.values, "label": label},
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+    # Runtime validation repairs the world, then the build seals it.
+    store.write_world_ir(_stored_in_world(authoring, repaired, source_model))
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=bundle,
+    )
+    # A scenario-only chat save reseals.
+    scenario = authoring / "scenarios" / "one" / "scenario.json"
+    scenario.write_text(
+        json.dumps({"name": "one", "instruction": "Edited", "sub_goals": ["works"]}),
+        encoding="utf-8",
+    )
+
+    reseal_scenarios(authoring)
+
+    for ir in (bundle / "seed" / "world-ir.json", store.root / "world-ir.json"):
+        assert "repaired" in ir.read_text(encoding="utf-8")
+
+
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
 

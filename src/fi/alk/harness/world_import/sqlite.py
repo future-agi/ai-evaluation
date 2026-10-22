@@ -20,7 +20,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from ..source_model import LogicalType, SourceColumn, SourceModel, SourceTable
-from ..world_ir import WorldIR, WorldRow, WorldTable, WorldValue, validate_world_ir
+from ..world_ir import (
+    ValueState,
+    WorldIR,
+    WorldRow,
+    WorldTable,
+    WorldValue,
+    validate_world_ir,
+)
 
 
 class SQLiteNullPolicy(str, Enum):
@@ -103,6 +110,18 @@ def _canonical_json(value: Any) -> str:
         ensure_ascii=False,
         allow_nan=False,
     )
+
+
+def _identities(table: SourceTable, rows: list[dict[str, Any]]) -> list[str]:
+    """Each row's identity; equal rows are told apart by a suffix, in order."""
+    seen: dict[str, int] = {}
+    identities = []
+    for row in rows:
+        base = _row_identity(table, row)
+        collision = seen.get(base, 0)
+        seen[base] = collision + 1
+        identities.append(base if collision == 0 else f"{base}-{collision + 1}")
+    return identities
 
 
 def _row_identity(table: SourceTable, row: dict[str, Any]) -> str:
@@ -317,15 +336,10 @@ def import_sqlite_world(
             dict(zip(authored_columns, row, strict=True))
             for row in connection.execute(query).fetchall()
         ]
-        identities: dict[str, int] = {}
         rows: list[WorldRow] = []
-        for raw_row in raw_rows:
-            base_identity = _row_identity(source_table, raw_row)
-            collision = identities.get(base_identity, 0)
-            identities[base_identity] = collision + 1
-            identity = (
-                base_identity if collision == 0 else f"{base_identity}-{collision + 1}"
-            )
+        for identity, raw_row in zip(
+            _identities(source_table, raw_rows), raw_rows, strict=True
+        ):
             values: dict[str, WorldValue] = {}
             for column in source_table.columns:
                 if column.name not in raw_row:
@@ -401,6 +415,157 @@ def import_sqlite_world(
     return SQLiteWorldImportResult(world=world, decisions=tuple(decisions))
 
 
+def _stored(value: WorldValue | None) -> Any:
+    if value is None or value.state is not ValueState.PRESENT:
+        return None
+    if value.logical_type in {LogicalType.ARRAY, LogicalType.JSON}:
+        return _canonical_json(value.value)
+    if value.logical_type is LogicalType.BOOLEAN:
+        return int(bool(value.value))
+    return value.value
+
+
+def _rowids(
+    connection: sqlite3.Connection, table: SourceTable, name: str
+) -> dict[str, int]:
+    """Each row's identity, as the import gives it, mapped to its SQLite rowid."""
+    columns = _sqlite_columns(connection, name)
+    selected = ", ".join(_identifier(column) for column in columns)
+    fetched = connection.execute(
+        f"SELECT rowid, {selected} FROM {_identifier(name)} ORDER BY {selected}"
+    ).fetchall()
+    rows = [dict(zip(columns, row[1:], strict=True)) for row in fetched]
+    return {
+        identity: row[0]
+        for identity, row in zip(_identities(table, rows), fetched, strict=True)
+    }
+
+
+def write_sqlite_world(
+    connection: sqlite3.Connection, world: WorldIR, source: SourceModel
+) -> bool:
+    """Write the rows where a World IR differs from what a SQLite world imports to.
+
+    Changed values are updated in place and new rows inserted with their present values
+    only, so defaults apply and untouched rows stay as stored. Rows the IR lacks are
+    kept. Returns whether anything was written; commits nothing.
+    """
+    tables = {table.name: table for table in source.tables}
+    held = {
+        table.source_name: {row.identity: row for row in table.rows}
+        for table in import_sqlite_world(
+            connection, source, validate=False
+        ).world.tables
+    }
+    wrote = False
+    for table in world.tables:
+        name = table.source_name
+        current = held.get(name, {})
+        changes = [row for row in table.rows if current.get(row.identity) != row]
+        if not changes:
+            continue
+        wrote = True
+        if name not in held:
+            connection.execute(
+                f"CREATE TABLE {_identifier(name)} ("
+                + ", ".join(_identifier(column.name) for column in tables[name].columns)
+                + ")"
+            )
+        # Identities as the import gives them, before any column is added.
+        rowids = _rowids(connection, tables[name], name)
+        columns = set(_sqlite_columns(connection, name))
+        for row in changes:
+            for column, value in row.values.items():
+                if column not in columns and _stored(value) is not None:
+                    connection.execute(
+                        f"ALTER TABLE {_identifier(name)} "
+                        f"ADD COLUMN {_identifier(column)}"
+                    )
+                    columns.add(column)
+        for row in changes:
+            old = current.get(row.identity)
+            if old is None:
+                # Absent values are the database's to fill; a null is written as one.
+                values = {
+                    column: _stored(value)
+                    for column, value in row.values.items()
+                    if value.state is not ValueState.ABSENT and column in columns
+                }
+                connection.execute(
+                    f"INSERT INTO {_identifier(name)} "
+                    f"({', '.join(_identifier(column) for column in values)}) "
+                    f"VALUES ({', '.join('?' for _ in values)})"
+                    if values
+                    else f"INSERT INTO {_identifier(name)} DEFAULT VALUES",
+                    tuple(values.values()),
+                )
+                continue
+            changed = {
+                column: _stored(value)
+                for column, value in row.values.items()
+                if old.values.get(column) != value and column in columns
+            }
+            connection.execute(
+                f"UPDATE {_identifier(name)} SET "
+                + ", ".join(f"{_identifier(column)} = ?" for column in changed)
+                + " WHERE rowid = ?",
+                (*changed.values(), rowids.get(row.identity)),
+            )
+    return wrote
+
+
+def world_holds(stored: WorldIR, world: WorldIR, source: SourceModel) -> bool:
+    """Whether a stored world seeds what a World IR does: its rows, with every value
+    it sets. A value left absent may be filled only where the source has a default; an
+    explicit null there cannot be stored, since SQLite's NULL reads back as absent.
+    """
+    columns = {
+        table.name: {column.name: column for column in table.columns}
+        for table in source.tables
+    }
+    rows = {table.source_name: list(table.rows) for table in stored.tables}
+    if {name for name, held in rows.items() if held} != {
+        table.source_name for table in world.tables if table.rows
+    }:
+        return False
+    for table in world.tables:
+        held = rows.get(table.source_name, [])
+        if len(held) != len(table.rows):
+            return False
+        for row in table.rows:
+            wanted: dict[str, Any] = {}
+            for name, column in columns[table.source_name].items():
+                value = row.values.get(name, WorldValue.absent())
+                if value.state is ValueState.PRESENT:
+                    try:
+                        wanted[name] = _convert(column, _stored(value))
+                    except (TypeError, ValueError):
+                        return False
+                elif value.state is ValueState.NULL and column.has_default:
+                    return False
+                elif not column.has_default:
+                    wanted[name] = None
+
+            def holds(one: WorldRow) -> bool:
+                return all(
+                    one.values[name].state is not ValueState.PRESENT
+                    if value is None
+                    else one.values[name].state is ValueState.PRESENT
+                    and one.values[name].value == value
+                    for name, value in wanted.items()
+                )
+
+            # The same row first, so a looser added row cannot take another's place.
+            match = next(
+                (one for one in held if one.identity == row.identity and holds(one)),
+                next((one for one in held if holds(one)), None),
+            )
+            if match is None:
+                return False
+            held.remove(match)
+    return True
+
+
 __all__ = [
     "SQLiteImportDecision",
     "SQLiteNullPolicy",
@@ -408,4 +573,6 @@ __all__ = [
     "SQLiteWorldImportResult",
     "array_value",
     "import_sqlite_world",
+    "world_holds",
+    "write_sqlite_world",
 ]

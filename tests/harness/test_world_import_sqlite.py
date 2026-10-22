@@ -15,8 +15,16 @@ from fi.alk.harness.world_import.sqlite import (
     SQLiteWorldImportError,
     array_value,
     import_sqlite_world,
+    world_holds,
+    write_sqlite_world,
 )
-from fi.alk.harness.world_ir import ValueState
+from fi.alk.harness.world_ir import (
+    ValueState,
+    WorldIR,
+    WorldRow,
+    WorldTable,
+    WorldValue,
+)
 
 
 def _column(
@@ -235,3 +243,217 @@ def test_array_value_does_not_guess_element_types_from_a_literal() -> None:
     assert array_value("[1, 2]", LogicalType.INTEGER) == [1, 2]
     with pytest.raises(ValueError, match="array_value_invalid"):
         array_value("{1,2}", LogicalType.INTEGER)
+
+
+def test_a_world_written_back_imports_to_the_same_world() -> None:
+    source = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                columns=(
+                    _column("id", LogicalType.STRING),
+                    _column("tags", LogicalType.ARRAY, element_type=LogicalType.STRING),
+                    _column("profile", LogicalType.JSON),
+                    _column("active", LogicalType.BOOLEAN),
+                    _column("balance", LogicalType.NUMBER, nullable=True),
+                    _column("note", LogicalType.STRING, nullable=True, default="'x'"),
+                ),
+                primary_key=("id",),
+            ),
+            SourceTable(name="trips", columns=(_column("id", LogicalType.INTEGER),)),
+        ),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE users (id TEXT, tags TEXT, profile TEXT, active)")
+    connection.execute("INSERT INTO users VALUES ('u1', '{}', '{\"a\": 1}', 'true')")
+    world = import_sqlite_world(connection, source).world
+    [row] = world.tables[0].rows
+    # A repair: a value set, a column the table lacks, a row and a table added.
+    edited = WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name="trips",
+                rows=(
+                    WorldRow(
+                        identity="t",
+                        values={"id": WorldValue.present(LogicalType.INTEGER, 7)},
+                    ),
+                ),
+            ),
+            WorldTable(
+                source_name="users",
+                rows=tuple(
+                    sorted(
+                        (
+                            WorldRow(
+                                identity=row.identity,
+                                values={
+                                    **row.values,
+                                    "balance": WorldValue.present(
+                                        LogicalType.NUMBER, 7.25
+                                    ),
+                                    "profile": WorldValue.present(
+                                        LogicalType.JSON, "plain text"
+                                    ),
+                                },
+                            ),
+                            WorldRow(
+                                identity="u2",
+                                values={
+                                    "id": WorldValue.present(LogicalType.STRING, "u2"),
+                                    "tags": WorldValue.present(
+                                        LogicalType.ARRAY, ["a", "b"]
+                                    ),
+                                    "profile": WorldValue.present(
+                                        LogicalType.JSON, None
+                                    ),
+                                    "active": WorldValue.present(
+                                        LogicalType.BOOLEAN, False
+                                    ),
+                                    "note": WorldValue.absent(),
+                                },
+                            ),
+                        ),
+                        key=lambda one: one.identity,
+                    )
+                ),
+            ),
+        ),
+    )
+
+    write_sqlite_world(connection, edited, source)
+    stored = import_sqlite_world(connection, source).world
+
+    def values(ir: WorldIR) -> dict:
+        return {
+            table.source_name: sorted(
+                (
+                    {
+                        name: value.model_dump(mode="json")
+                        for name, value in one.values.items()
+                        if value.state is not ValueState.ABSENT
+                    }
+                    for one in table.rows
+                ),
+                key=lambda item: str(item.get("id")),
+            )
+            for table in ir.tables
+        }
+
+    assert values(stored) == values(edited)
+
+
+def test_a_repair_writes_only_what_it_changes_and_lets_defaults_apply() -> None:
+    source = SourceModel.create(
+        source_digest="sha256:" + "a" * 64,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="users",
+                columns=(
+                    _column("id", LogicalType.STRING),
+                    _column("active", LogicalType.BOOLEAN),
+                    _column("made", LogicalType.STRING, default="'now'"),
+                ),
+                primary_key=("id",),
+            ),
+        ),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, active, "
+        "made TEXT NOT NULL DEFAULT 'now')"
+    )
+    connection.execute("INSERT INTO users VALUES ('a', 'true', 'then')")
+    connection.execute("INSERT INTO users VALUES ('b', 'true', 'then')")
+    world = import_sqlite_world(connection, source).world
+    a, b = world.tables[0].rows
+    added = WorldRow(
+        identity="c",
+        values={
+            "id": WorldValue.present(LogicalType.STRING, "c"),
+            "active": WorldValue.present(LogicalType.BOOLEAN, True),
+            "made": WorldValue.absent(),
+        },
+    )
+    unchanged = WorldValue.present(LogicalType.BOOLEAN, True)
+    repaired = WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name="users",
+                rows=tuple(
+                    sorted(
+                        (
+                            a.model_copy(
+                                update={
+                                    "values": {
+                                        **a.values,
+                                        "active": WorldValue.present(
+                                            LogicalType.BOOLEAN, False
+                                        ),
+                                    }
+                                }
+                            ),
+                            b,
+                            added,
+                        ),
+                        key=lambda one: one.identity,
+                    )
+                ),
+            ),
+        ),
+    )
+    assert b.values["active"] == unchanged
+
+    assert write_sqlite_world(connection, repaired, source)
+    assert (
+        write_sqlite_world(
+            connection, import_sqlite_world(connection, source).world, source
+        )
+        is False
+    )
+
+    assert connection.execute("SELECT * FROM users ORDER BY id").fetchall() == [
+        ("a", 0, "then"),
+        ("b", "true", "then"),
+        ("c", 1, "now"),
+    ]
+
+
+def test_a_default_only_sqlite_has_does_not_count_as_the_world() -> None:
+    source = _source(
+        _column("id", LogicalType.STRING),
+        _column("note", LogicalType.STRING, nullable=True),
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE users (id TEXT PRIMARY KEY, note TEXT DEFAULT 'x')"
+    )
+    world = import_sqlite_world(connection, source).world
+    added = WorldIR.create(
+        source_model_fingerprint=world.source_model_fingerprint,
+        tables=(
+            WorldTable(
+                source_name="users",
+                rows=(
+                    WorldRow(
+                        identity="u1",
+                        values={
+                            "id": WorldValue.present(LogicalType.STRING, "u1"),
+                            "note": WorldValue.absent(),
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    write_sqlite_world(connection, added, source)
+
+    # The source has no default, so a run seeds NULL; SQLite filled 'x'.
+    stored = import_sqlite_world(connection, source).world
+    assert not world_holds(stored, added, source)
