@@ -652,7 +652,9 @@ def stub_account(monkeypatch):
     url = f"http://127.0.0.1:{server.server_address[1]}"
     monkeypatch.setenv("AGENT_LEARNING_API_KEY", "test-key")
     monkeypatch.setenv("AGENT_LEARNING_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("AGENT_LEARNING_API_URL", url)
+    # Importing the config writes the default URL into FI_BASE_URL, which is read first.
+    for name in ("FI_BASE_URL", "FUTURE_AGI_API_URL", "AGENT_LEARNING_API_URL"):
+        monkeypatch.setenv(name, url)
     try:
         yield url
     finally:
