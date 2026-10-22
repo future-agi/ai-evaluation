@@ -3,7 +3,7 @@ services:
     pull_policy: build
     image: gptresearcher/gpt-researcher
     build: ./
-    environment: 
+    environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
@@ -22,7 +22,7 @@ services:
     restart: always
     ports:
       - 8000:8000
-      
+
   gptr-nextjs:
     pull_policy: build
     image: gptresearcher/gptr-nextjs
@@ -47,7 +47,7 @@ services:
   gpt-researcher-tests:
     image: gptresearcher/gpt-researcher-tests
     build: ./
-    environment: 
+    environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
@@ -60,7 +60,7 @@ services:
       python -m pytest tests/report-types.py &&
       python -m pytest tests/vector-store.py
       "
-  
+
   discord-bot:
     build:
       context: ./docs/discord-bot
