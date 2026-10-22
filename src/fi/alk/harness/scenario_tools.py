@@ -1750,7 +1750,6 @@ def scenario_tools(
                 refused.pop(key, None)
             full = _full_levels(target.get("axes"), kept, cap())
             if full:
-                # Said on the way in, so the next scenario avoids a refusal rather than meeting one.
                 result["content"][0]["text"] += (
                     "\nAt their share of the suite now, so place the next scenarios elsewhere: "
                     + ", ".join(full)

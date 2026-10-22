@@ -359,7 +359,8 @@ def _other_choices(
         for name, value in call.arguments.items():
             written = step.arguments.get(name)
             chained = isinstance(written, str) and written.startswith("$")
-            if name not in fixed and not chained and isinstance(value, str) and value and f"{call.name}.{name}" not in declared:
+            free = name not in fixed and not chained and f"{call.name}.{name}" not in declared
+            if free and isinstance(value, str) and value:
                 arguments[name] = f"another {name}"
                 changed.add(f"{call.name}.{name}")
         varied.append(replace(call, arguments=arguments))
@@ -434,13 +435,14 @@ def prove(
             run_check(source, world, calls, name=name, reference=reference)
             for name, source in checks
         ]
+        passing = {one.name for one in proof.with_solution if one.held}
+        held = [(name, source) for name, source in checks if name in passing]
         varied, changed = _other_choices(scenario, calls, _declared_options(world_root))
         if changed:
             proof.too_strict = [
                 f"{name} (the agent chose: {', '.join(sorted(changed))})"
-                for name, source in checks
-                if any(one.name == name and one.held for one in proof.with_solution)
-                and not run_check(source, world, varied, name=name, reference=reference).held
+                for name, source in held
+                if not run_check(source, world, varied, name=name, reference=reference).held
             ]
     finally:
         world.close()
@@ -450,13 +452,11 @@ def prove(
             proof.too_strict += [
                 f"{name} (another way the instructions allow, alternative {number}: "
                 f"{', '.join(step.tool for step in other)})"
-                for name, source in checks
-                if any(one.name == name and one.held for one in proof.with_solution)
-                and not run_check(source, alt_world, alt_calls, name=name, reference=reference).held
+                for name, source in held
+                if not run_check(source, alt_world, alt_calls, name=name, reference=reference).held
             ]
         finally:
             alt_world.close()
-    held = [(name, source) for name, source in checks if any(one.name == name and one.held for one in proof.with_solution)]
     for label, steps in _with_one_wrong(scenario) if held else ():
         wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:

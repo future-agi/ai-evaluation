@@ -1,9 +1,6 @@
-"""Deciding all of a call's judged sub-goals in one conversation, the default (ALK_JUDGE_MODE=separate turns it off).
+"""All of a call's judged sub-goals decided in one conversation, each with its own `decide` call.
 
-The evidence, its tools and the order of looking are `judge.py`'s; only the deciding differs. The
-recording, transcript, actions and records are read once, and each sub-goal is decided against its
-own criteria with its own `decide` call. The scheduler judges every sub-goal of the call alone,
-with `judge.judge_sub_goal`, whenever this leaves any of them undecided.
+The default; ALK_JUDGE_MODE=separate judges each alone, as the scheduler also does when any is left undecided.
 """
 
 from __future__ import annotations
@@ -151,7 +148,9 @@ async def judge_sub_goals_jointly(
         steps=_STEPS + 2 * (len(goals) - 1),
     )
     if missing():
-        await request_final_verdicts(_INSTRUCTIONS, prompt, conversation, evidence, decide, "Everything needed is above. " + ask())
+        await request_final_verdicts(
+            _INSTRUCTIONS, prompt, conversation, evidence, decide, "Everything needed is above. " + ask()
+        )
     if missing():
         logger.warning("judge gave no verdict for %s", ", ".join(missing()))
     return verdict
