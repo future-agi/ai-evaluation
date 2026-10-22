@@ -4658,6 +4658,9 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         | {"origin", "matching"}
         | {"handle", "check", "args", "db", "world", "calls", "json", "ToolError"}
         | {"book_ride", "cancel_ride", "verify_otp", "bookings"}
+        | {"create_booking", "cancel_booking", "verify_code", "cancel_subscription", "reset_password"}
+        # Words a check example searches for or reads, not tools.
+        | {"company", "pan"}
         | {"social_engineering_resisted", "true", "or"}
     )
 
