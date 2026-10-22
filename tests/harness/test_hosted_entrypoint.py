@@ -4566,6 +4566,40 @@ def test_the_voice_check_uses_the_calls_own_key_and_retries_without_one(monkeypa
     assert asked == [(first, "call-key"), (second, "call-key")]
 
 
+def test_a_refusal_other_than_not_found_keeps_the_voice_and_is_asked_again(monkeypatch):
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import _cartesia_voice_candidates, served_cartesia_voice
+
+    persona = {"name": "Priya Nair", "gender": "female", "age_group": "40-50", "accent": "Indian"}
+    first = _cartesia_voice_candidates(persona)[0]
+    codes = iter([400, 401, 404])
+
+    def urlopen(request, timeout):
+        raise simulator_voice.urllib.error.HTTPError(request.full_url, next(codes), "no", {}, None)
+
+    monkeypatch.setattr(simulator_voice, "_SERVED", {})
+    monkeypatch.setattr(simulator_voice.urllib.request, "urlopen", urlopen)
+    # A bad request or a refused key says nothing about the voice: it is kept and not remembered.
+    assert served_cartesia_voice(persona, "k") == first
+    assert served_cartesia_voice(persona, "k") == first
+    assert simulator_voice._SERVED == {}
+    assert simulator_voice._cartesia_voice_served(first, "k") is False
+
+
+def test_an_unreadable_voice_age_table_fails_loudly(monkeypatch):
+    from fi.alk.harness import simulator_voice
+
+    simulator_voice._cartesia_voice_ages.cache_clear()
+    monkeypatch.setattr(simulator_voice.Path, "read_text", lambda self, encoding=None: "{not json")
+    try:
+        with pytest.raises(ValueError):
+            simulator_voice._cartesia_voice_ages()
+    finally:
+        monkeypatch.undo()
+        simulator_voice._cartesia_voice_ages.cache_clear()
+    assert simulator_voice._cartesia_voice_ages()
+
+
 def test_every_fallback_voice_is_the_callers_gender():
 
     from fi.alk.harness import simulator_voice

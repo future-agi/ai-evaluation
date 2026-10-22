@@ -950,10 +950,8 @@ _CARTESIA_LOCAL_AGE_ORDER = {
 def _cartesia_voice_ages() -> dict[str, str]:
     """Each voice's age from its Cartesia description: "young", "older", or absent when unstated."""
     path = Path(__file__).parent / "run" / "data" / "voice_ages.json"
-    try:
-        ages = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    # Shipped with the package: unreadable means a broken install, never "no ages known".
+    ages = json.loads(path.read_text(encoding="utf-8"))
     return {voice: age for age, voices in ages.items() for voice in voices}
 
 
@@ -1108,7 +1106,8 @@ def _cartesia_voice_served(voice: str, key: str) -> bool | None:
         with urllib.request.urlopen(request, timeout=3) as response:
             served = response.status == 200
     except urllib.error.HTTPError as refused:
-        if refused.code not in (400, 404, 410):
+        # Only 'not found' means removed; any other refusal says nothing about the voice.
+        if refused.code not in (404, 410):
             return None
         served = False
     except Exception:  # noqa: BLE001 - an unreachable check never holds up a call
