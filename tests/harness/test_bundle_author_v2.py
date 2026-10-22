@@ -2659,7 +2659,8 @@ def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
     assert reseal_scenarios(_authoring(tmp_path)) is None
 
 
-def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> None:
+def _places(tmp_path: Path, *, ir_seed: bool):
+    """A generic-harness world of places, built and sealed with an IR or SQLite seed."""
     from fi.alk.harness.source_model import LogicalType, SourceColumn, SourceTable
     from fi.alk.harness.world_import.sqlite import import_sqlite_world
 
@@ -2687,7 +2688,10 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
         database.execute("INSERT INTO places VALUES ('home', 'home')")
     with sqlite3.connect(authoring / "world.sqlite") as database:
         world = import_sqlite_world(database, source_model, validate=False).world
-    (artifact_root / "world-ir.json").write_text(world.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if ir_seed:
+        (artifact_root / "world-ir.json").write_text(
+            world.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
     bundle = authoring / "environment-bundle"
     sealed = author_bundle_v2(
         source=source,
@@ -2695,12 +2699,42 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
         authoring=authoring,
         output=bundle,
     )
+    return source, authoring, source_model, bundle, sealed
 
-    with sqlite3.connect(authoring / "world.sqlite") as database:
-        database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+
+@pytest.mark.parametrize(
+    ("ir_seed", "through_save_world"), [(True, False), (True, True), (False, True)]
+)
+def test_a_changed_world_reaches_the_sealed_seed_on_reseal(
+    tmp_path: Path, ir_seed: bool, through_save_world: bool
+) -> None:
+    source, authoring, source_model, bundle, sealed = _places(tmp_path, ir_seed=ir_seed)
+    artifact_root = authoring / "generic-harness"
+    assert (bundle / "seed" / "world-ir.json").is_file() is ir_seed
+
+    if through_save_world:
+        from fi.alk.harness.world.snapshot import save
+
+        # What save_world writes: the world's own SQLite file in the authoring root.
+        changed = GeneratedWorld(":memory:")
+        changed.connection.executescript(
+            "CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT);"
+            "INSERT INTO places VALUES ('home', 'renamed');"
+        )
+        changed.connection.commit()
+        save(changed, authoring)
+    else:
+        with sqlite3.connect(authoring / "world.sqlite") as database:
+            database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
     digest = reseal_scenarios(authoring)
 
     assert digest is not None and digest != sealed.digest
-    assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
-    assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
+    preflight_bundle(bundle, load_bundle_v2(bundle), parallelism=1, secret_refs={})
+    if ir_seed:
+        for ir in (bundle / "seed" / "world-ir.json", artifact_root / "world-ir.json"):
+            assert "renamed" in ir.read_text(encoding="utf-8")
+    else:
+        with sqlite3.connect(bundle / "seed" / "world.sqlite") as database:
+            labels = database.execute("SELECT label FROM places").fetchall()
+        assert labels == [("renamed",)]
     assert reseal_scenarios(authoring) == digest
