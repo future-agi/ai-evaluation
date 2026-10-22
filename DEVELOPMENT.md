@@ -144,7 +144,9 @@ approval, against `main` of
 `ALK_E2B_TEMPLATE_CPU_UNITS`, `ALK_E2B_TEMPLATE_MEMORY_MB` and
 `ALK_E2B_TEMPLATE_DISK_GB` is set from the certified release, and where
 `HARNESS_PARALLEL_SNAPSHOT_DIGESTS` lists the previous build ID it is swapped for the
-new one. No other line changes.
+new one. Where `ALK_HOSTED_OBSERVABILITY_EXPORT_SNAPSHOTS` lists the previous template
+reference it is swapped for the new one; the setting is never added where it is absent.
+No other line changes.
 
 The workflow never merges the pull request and never moves a production alias; a
 person reviews and merges it. If a setting is missing from a values file, appears a

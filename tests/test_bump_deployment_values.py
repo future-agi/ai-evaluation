@@ -63,6 +63,21 @@ def _load():
 
 bump = _load()
 
+OLD_REFERENCE = f"alk-hosted-old:{OLD_BUILD}"
+
+
+def _with_export(text: str, value: str) -> str:
+    """Add the export list after the parallel list in every block, as deployment PR 406 does."""
+    return "\n".join(
+        line
+        + (
+            f'\n      {bump.EXPORT_KEY}: "{value}" # update it with every template pin'
+            if line.strip().startswith(f"{bump.PARALLEL_KEY}:")
+            else ""
+        )
+        for line in text.split("\n")
+    )
+
 
 def _release(**overrides) -> dict:
     release = {
@@ -184,6 +199,113 @@ def test_parallel_key_may_be_absent(tmp_path):
 
     assert _values_of(updated, "ALK_E2B_TEMPLATE_BUILD_ID") == [f'"{NEW_BUILD}"'] * 2
     assert bump.PARALLEL_KEY not in updated
+
+
+def test_export_list_swaps_old_reference_for_new(tmp_path):
+    text = _with_export(VALUES, OLD_REFERENCE)
+
+    updated, changes = bump.bump_text(text, _pin(tmp_path), label="values.yaml")
+
+    assert _values_of(updated, bump.EXPORT_KEY) == [f'"{NEW_REFERENCE}"'] * 2
+    assert updated.count("# update it with every template pin") == 2
+    assert sum(bump.EXPORT_KEY in change for change in changes) == 1
+    before, after = text.split("\n"), updated.split("\n")
+    assert len(before) == len(after)
+    changed = [
+        index for index, pair in enumerate(zip(before, after)) if pair[0] != pair[1]
+    ]
+    named = [
+        index
+        for index, line in enumerate(before)
+        if line.strip().startswith(
+            (*bump.TEMPLATE_KEYS, bump.PARALLEL_KEY, bump.EXPORT_KEY)
+        )
+    ]
+    assert changed == named
+
+
+def test_export_list_absent_is_not_added(tmp_path):
+    updated, _ = bump.bump_text(VALUES, _pin(tmp_path), label="values.yaml")
+
+    assert bump.EXPORT_KEY not in updated
+
+
+def test_export_list_swaps_only_the_old_reference(tmp_path):
+    pinned = f"alk-hosted-pinned:{OLD_BUILD.replace('1', '3')}"
+    text = _with_export(VALUES, f"daytona-snap,{OLD_REFERENCE},{pinned}")
+
+    updated, _ = bump.bump_text(text, _pin(tmp_path), label="values.yaml")
+
+    assert (
+        _values_of(updated, bump.EXPORT_KEY)
+        == [f'"daytona-snap,{NEW_REFERENCE},{pinned}"'] * 2
+    )
+
+
+def test_export_list_does_not_duplicate_new_reference(tmp_path):
+    text = _with_export(VALUES, f"{NEW_REFERENCE},{OLD_REFERENCE}")
+
+    updated, _ = bump.bump_text(text, _pin(tmp_path), label="values.yaml")
+
+    assert _values_of(updated, bump.EXPORT_KEY) == [f'"{NEW_REFERENCE}"'] * 2
+
+
+def test_export_list_untouched_when_old_reference_absent(tmp_path):
+    text = _with_export(VALUES, "daytona-snap")
+
+    updated, changes = bump.bump_text(text, _pin(tmp_path), label="values.yaml")
+
+    assert _values_of(updated, bump.EXPORT_KEY) == ['"daytona-snap"'] * 2
+    assert not any(bump.EXPORT_KEY in change for change in changes)
+
+
+def test_export_list_refused_when_blocks_disagree_on_old_reference(tmp_path):
+    head, tail = _with_export(VALUES, OLD_REFERENCE).split("core_backend_worker_l:")
+    text = (
+        head
+        + "core_backend_worker_l:"
+        + tail.replace("alk-hosted-old:", "alk-hosted-other:")
+    )
+
+    with pytest.raises(
+        bump.BumpError, match="ALK_E2B_TEMPLATE_REFERENCE differs between blocks"
+    ):
+        bump.bump_text(text, _pin(tmp_path), label="values.yaml")
+
+
+def test_export_list_not_added_to_a_block_without_it(tmp_path):
+    head, tail = VALUES.split("core_backend_worker_l:")
+    text = _with_export(head, OLD_REFERENCE) + "core_backend_worker_l:" + tail
+
+    updated, _ = bump.bump_text(text, _pin(tmp_path), label="values.yaml")
+
+    assert _values_of(updated, bump.EXPORT_KEY) == [f'"{NEW_REFERENCE}"']
+    assert updated.count(bump.EXPORT_KEY) == 1
+    assert len(updated.split("\n")) == len(text.split("\n"))
+
+
+def test_export_list_output_never_shows_file_contents(tmp_path, capsys):
+    release = _write_release(tmp_path, _release())
+    good, bad = tmp_path / "us.yaml", tmp_path / "eu.yaml"
+    good.write_bytes(_with_export(VALUES, f"daytona-snap,{OLD_REFERENCE}").encode())
+    head, tail = _with_export(VALUES, OLD_REFERENCE).split("core_backend_worker_l:")
+    bad.write_bytes(
+        (
+            head
+            + "core_backend_worker_l:"
+            + tail.replace("alk-hosted-old:", "alk-hosted-other:")
+        ).encode()
+    )
+
+    assert bump.main(["--release", str(release), str(good)]) == 0
+    with pytest.raises(SystemExit) as refusal:
+        bump.main(["--release", str(release), str(bad)])
+
+    captured = capsys.readouterr()
+    shown = captured.out + captured.err + str(refusal.value)
+    assert bump.EXPORT_KEY in shown
+    for hidden in ("daytona-snap", "alk-hosted-old", "alk-hosted-other", OLD_BUILD):
+        assert hidden not in shown
 
 
 def test_refuses_when_a_setting_is_missing(tmp_path):
