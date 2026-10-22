@@ -34,7 +34,7 @@ def test_the_caller_may_not_claim_an_action_it_cannot_perform():
 
 
 def test_the_caller_asks_again_for_the_part_of_its_question_left_unanswered():
-    assert "hold the answer against what you asked" in SIMULATOR_INSTRUCTIONS
+    assert "Hold every answer against what you asked" in SIMULATOR_INSTRUCTIONS
     assert "ask for that part once" in SIMULATOR_INSTRUCTIONS
 
 
