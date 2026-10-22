@@ -18,6 +18,7 @@ _INSERT = re.compile(
     re.IGNORECASE,
 )
 _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+_INTEGER = re.compile(r"[+-]?\d+")
 _CAST = re.compile(r"::\s*\w+(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?\s*$")
 
 
@@ -98,6 +99,11 @@ def _literal(cell: str) -> str | None:
     if len(text) >= 2 and text[0] == text[-1] == "'":
         inner = text[1:-1]
         return None if "'" in inner.replace("''", "") else inner.replace("''", "'")
+    if _INTEGER.fullmatch(text) and len(text.lstrip("+-0")) <= 19:
+        value = int(text)
+        # Exact where SQLite keeps an integer: a float would round keys above 2**53.
+        if -(2**63) <= value < 2**63:
+            return normal(value)
     if _NUMBER.fullmatch(text):
         return normal(float(text))
     return {"TRUE": "1", "FALSE": "0"}.get(text.upper())
@@ -107,8 +113,10 @@ def normal(value: object) -> str:
     """One text form for a key value, so 38, 38.0 and '38' compare equal."""
     if isinstance(value, bool):
         return str(int(value))
-    if isinstance(value, (int, float)):
-        return str(int(value)) if float(value).is_integer() else repr(float(value))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
     return str(value)
 
 

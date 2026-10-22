@@ -688,6 +688,41 @@ def test_a_seed_row_the_world_kept_out_fails_the_gate_until_it_is_seeded(tmp_pat
     )["passed"]
 
 
+def test_a_seed_key_above_two_to_the_53_passes_the_gate_when_the_world_holds_it(
+    tmp_path,
+):
+    from fi.alk.harness.world.snapshot import read_manifest, restore, save
+
+    root = _cart(tmp_path / "work")
+    world = restore(root)
+    world.connection.executescript(
+        "CREATE TABLE drivers(id INTEGER PRIMARY KEY);"
+        "INSERT INTO drivers VALUES (9007199254740993);"
+    )
+    world.connection.commit()
+    save(
+        world,
+        root,
+        notes="drivers",
+        sequences=list(read_manifest(root).get("sequences") or []),
+    )
+    source = tmp_path / "source"
+    (source / "db").mkdir(parents=True)
+    (source / "db" / "seed.sql").write_text(
+        "INSERT INTO drivers (id) VALUES (9007199254740993);\n", encoding="utf-8"
+    )
+
+    result = nudge.report_update(
+        root,
+        nudge={"nudge_id": "n1", "stage": "environment"},
+        changed=True,
+        notes="",
+        source=source,
+    )
+
+    assert result["passed"], result["problems"]
+
+
 def test_a_seeded_table_with_no_key_is_held_only_to_having_rows(tmp_path):
     root = _with_bookings(_cart(tmp_path / "work"))
     source = tmp_path / "source"

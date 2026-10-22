@@ -2,6 +2,8 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from fi.alk.harness.seed_rows import (
     missing_seed_rows,
     only_seed_rows,
@@ -126,7 +128,52 @@ def test_only_seed_rows_tells_seeded_starting_rows_from_leftovers(tmp_path):
     assert not only_seed_rows(world, source, "trips")
 
 
-def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(tmp_path):
+# A key above 2**53 that a float would round to its neighbour.
+_BIG = 9007199254740993
+
+
+def test_integer_literals_are_read_exactly_and_other_numbers_as_before(tmp_path):
+    source = _source(
+        tmp_path,
+        "INSERT INTO drivers (id) VALUES "
+        f"({_BIG}), (-42), (+7), (38.00), (1.5e3), (-2.5E-1), (4.9), "
+        "(99999999999999999999);\n",
+    )
+
+    assert [row["id"] for _file, row in seed_rows(source)["drivers"]] == [
+        str(_BIG),
+        "-42",
+        "7",
+        "38",
+        "1500",
+        "-0.25",
+        "4.9",
+        # Past 64 bits SQLite stores a REAL, so the key is read as one.
+        "100000000000000000000",
+    ]
+
+
+def test_a_big_integer_key_the_world_holds_is_not_reported_missing(tmp_path):
+    source = _source(tmp_path, f"INSERT INTO drivers (id) VALUES ({_BIG});\n")
+    world = sqlite3.connect(":memory:")
+    world.execute("CREATE TABLE drivers (id INTEGER PRIMARY KEY)")
+    world.execute(f"INSERT INTO drivers VALUES ({_BIG - 1})")
+
+    assert missing_seed_rows(world, source) == {
+        "drivers": ("id", [str(_BIG)], ["db/seed.sql"])
+    }
+    world.execute(f"INSERT INTO drivers VALUES ({_BIG})")
+    world.execute(f"DELETE FROM drivers WHERE id = {_BIG - 1}")
+    assert missing_seed_rows(world, source) == {}
+    assert only_seed_rows(world, source, "drivers")
+
+
+@pytest.mark.parametrize(
+    ("key_type", "seeded"), [("TEXT", "'UB7F3A2C91'"), ("BIGINT", str(_BIG))]
+)
+def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(
+    tmp_path, key_type, seeded
+):
     from fi.alk.harness.catalogue import Catalogue, SubGoal, save_catalogue
     from fi.alk.harness.contract import AgentContract, ToolSpec
     from fi.alk.harness.simulator import save_simulator_prompt
@@ -149,8 +196,8 @@ def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(tmp_pa
 
     world = Rides(":memory:")
     world.connection.executescript(
-        "CREATE TABLE bookings (booking_ref TEXT PRIMARY KEY, status TEXT);"
-        "INSERT INTO bookings VALUES ('UB7F3A2C91', 'matched');"
+        f"CREATE TABLE bookings (booking_ref {key_type} PRIMARY KEY, status TEXT);"
+        f"INSERT INTO bookings VALUES ({seeded}, 'matched');"
     )
     world.connection.commit()
     workspace = tmp_path / "work"
@@ -168,7 +215,7 @@ def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(tmp_pa
         world_checks={
             "ride_seeded": "def check(world):\n"
             "    refs = [r['booking_ref'] for r in world.state()['bookings']]\n"
-            "    return None if 'UB7F3A2C91' in refs else 'no seeded ride'\n"
+            f"    return None if {seeded} in refs else 'no seeded ride'\n"
         },
     )
     contract = AgentContract(
@@ -207,7 +254,7 @@ def test_a_seeded_in_flight_row_is_not_refused_as_left_over_from_building(tmp_pa
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
     (source / "db" / "seed.sql").write_text(
-        "INSERT INTO bookings (booking_ref, status) VALUES ('UB7F3A2C91', 'matched');\n",
+        f"INSERT INTO bookings (booking_ref, status) VALUES ({seeded}, 'matched');\n",
         encoding="utf-8",
     )
     kept = saved(str(source))
