@@ -89,6 +89,9 @@ async def judge_sub_goals_jointly(
         what = str(args.get("what") or "").strip()
         if not what:
             return _say("say what the customer did", error=True)
+        refusal = evidence.verdict_problem({"verdict": "fail", "explanation": what, "evidence": args.get("evidence")})
+        if refusal:
+            return _say(refusal, error=True)
         logger.info("customer off script: %s (%s)", what, args.get("evidence"))
         verdict[OFF_SCRIPT] = (False, what)
         return _say("recorded")

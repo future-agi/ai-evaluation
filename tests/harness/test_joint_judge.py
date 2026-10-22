@@ -110,3 +110,16 @@ def test_an_undecided_sub_goal_is_left_out_for_the_caller_to_fall_back(monkeypat
     verdicts, prompts, _ = _run(monkeypatch, turns)
     assert verdicts == {"confirmed_first": (True, "confirmed_first explained")}
     assert "No verdict yet for: no_card_by_voice" in prompts[-1]
+
+
+def test_an_off_script_report_waits_for_the_evidence_it_rests_on(monkeypatch):
+    report = _call("customer_off_script", {"what": "gave another policy number", "evidence": "the transcript"}, 2)
+    verdicts, _, said = _run(
+        monkeypatch,
+        [
+            [_call("read_transcript", {}, 1), report],
+            [_decide("confirmed_first", True, 3), _decide("no_card_by_voice", True, 4)],
+        ],
+    )
+    assert joint_judge.OFF_SCRIPT not in verdicts
+    assert said[1] == "read what you just asked for before deciding"

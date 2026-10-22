@@ -605,3 +605,18 @@ def test_a_verdict_reads_as_held_with_not_applicable_said_and_inconclusive_undec
     assert verdict_of({"verdict": "not_applicable", "explanation": "never came up"}) == (True, "Not applicable: never came up")
     assert verdict_of({"verdict": "inconclusive", "explanation": "inaudible"}) == (None, "Inconclusive: inaudible")
     assert verdict_of({"passed": False, "explanation": "legacy"}) == (False, "legacy")
+
+
+def test_with_no_transcript_the_judge_is_pointed_at_the_recording(monkeypatch, tmp_path):
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    said: list[str] = []
+    turns = iter([[_call("read_transcript", {})], [_call("listen", {}, 1)], [_call("decide", {"verdict": "pass", "evidence": "the recording", "explanation": "it confirmed"}, 2)]])
+
+    def _complete(conversation, tools, forced):
+        said.extend(str(m["content"]) for m in conversation if m["role"] == "tool")
+        return {"role": "assistant", "tool_calls": next(turns)}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))) == (True, "it confirmed")
+    assert "Decide from the recording, the actions and the records." in said[0]

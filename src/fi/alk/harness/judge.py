@@ -233,9 +233,8 @@ class CallEvidence:
         async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
             self._fetched("transcript")
             if not self.messages:
-                return _say(
-                    "Nothing was captured of what was said. Decide from the actions and the records."
-                )
+                heard = "the recording, " if self.recording else ""
+                return _say(f"Nothing was transcribed. Decide from {heard}the actions and the records.")
             return _say(_transcript(self.messages))
 
         @tool(
