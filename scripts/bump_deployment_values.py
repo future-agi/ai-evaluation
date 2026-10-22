@@ -29,8 +29,9 @@ TEMPLATE_KEYS = (
     "ALK_E2B_TEMPLATE_DISK_GB",
 )
 PARALLEL_KEY = "HARNESS_PARALLEL_SNAPSHOT_DIGESTS"
+EXPORT_KEY = "ALK_HOSTED_OBSERVABILITY_EXPORT_SNAPSHOTS"
 
-_ALL_KEYS = (*TEMPLATE_KEYS, PARALLEL_KEY)
+_ALL_KEYS = (*TEMPLATE_KEYS, PARALLEL_KEY, EXPORT_KEY)
 _BUILD_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _KEY_START = re.compile(r"^[ \t]*(?P<key>" + "|".join(_ALL_KEYS) + r")[ \t]*:")
@@ -135,17 +136,15 @@ def _scan(lines: list[str], label: str) -> dict[str, list[_KeyLine]]:
     return found
 
 
-def _swap_build(value: str, old_build: str, new_build: str) -> str | None:
+def _swap_entry(value: str, old: str, new: str) -> str | None:
     entries = value.split(",")
-    if not old_build or old_build not in (entry.strip() for entry in entries):
+    if not old or old not in (entry.strip() for entry in entries):
         return None
     swapped: list[str] = []
     for entry in entries:
-        if entry.strip() == old_build:
-            entry = new_build
-        if entry.strip() == new_build and new_build in (
-            kept.strip() for kept in swapped
-        ):
+        if entry.strip() == old:
+            entry = new
+        if entry.strip() == new and new in (kept.strip() for kept in swapped):
             continue
         swapped.append(entry)
     return ",".join(swapped)
@@ -169,6 +168,15 @@ def bump_text(text: str, pin: TemplatePin, *, label: str) -> tuple[str, list[str
             "pin every block to one template by hand first"
         )
     old_build = old_builds.pop()
+    old_references = {
+        _unquote(line.value) for line in found["ALK_E2B_TEMPLATE_REFERENCE"]
+    }
+    if found[EXPORT_KEY] and len(old_references) != 1:
+        raise BumpError(
+            f"{label}: ALK_E2B_TEMPLATE_REFERENCE differs between blocks; "
+            "pin every block to one template by hand first"
+        )
+    old_reference = old_references.pop() if len(old_references) == 1 else ""
 
     wanted = {
         "ALK_E2B_TEMPLATE_REFERENCE": pin.reference,
@@ -190,21 +198,23 @@ def bump_text(text: str, pin: TemplatePin, *, label: str) -> tuple[str, list[str
         changed = sum(rewrite(line, wanted[key]) for line in found[key])
         if changed:
             changes.append(f"{key}: {changed} line(s) set to {wanted[key]}")
-    swapped_lines = 0
-    for line in found[PARALLEL_KEY]:
-        swapped = _swap_build(_unquote(line.value), old_build, pin.build_id)
-        if swapped is None:
-            continue
-        if '"' in swapped or "\\" in swapped:
-            raise BumpError(
-                f"{label}: line {line.index + 1} sets {PARALLEL_KEY} in a form that "
-                "cannot be rewritten safely"
-            )
-        swapped_lines += rewrite(line, swapped)
-    if swapped_lines:
-        changes.append(
-            f"{PARALLEL_KEY}: {swapped_lines} line(s) now list {pin.build_id}"
-        )
+    for key, old, new in (
+        (PARALLEL_KEY, old_build, pin.build_id),
+        (EXPORT_KEY, old_reference, pin.reference),
+    ):
+        swapped_lines = 0
+        for line in found[key]:
+            swapped = _swap_entry(_unquote(line.value), old, new)
+            if swapped is None:
+                continue
+            if '"' in swapped or "\\" in swapped:
+                raise BumpError(
+                    f"{label}: line {line.index + 1} sets {key} in a form that "
+                    "cannot be rewritten safely"
+                )
+            swapped_lines += rewrite(line, swapped)
+        if swapped_lines:
+            changes.append(f"{key}: {swapped_lines} line(s) now list {new}")
 
     after = _scan(lines, label)
     for key in TEMPLATE_KEYS:
