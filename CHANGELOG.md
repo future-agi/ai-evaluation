@@ -74,6 +74,18 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   role. Scenarios that use attached tools are proved on PostgreSQL. The clinic
   release attaches it and adds a schedule question only it can answer; for
   agents without that tool, adaptation reports the scenario unscorable.
+- Our own agent can run on an environment release: connector `hosted_agent`,
+  an `AgentSpec` (instructions and a model) whose digest the binding pins. Its
+  bundle serves the world's tools over MCP (`fi.alk.harness.world_mcp`, `/mcp`,
+  the release's tools plus attached servers'), and the agent runs in the chat
+  worker as a tool loop through Agent Command Center, billed in `text_call`.
+  Its evidence is the world's trace, not anything it reports.
+- A scenario with no tool calls is graded normally when the harness wrote and
+  read the trace itself (our agent, or a request-bound provider run); only an
+  unreadable trace is still `evidence_missing`.
+- Suite sealing refuses a simulator prompt without `{{ persona }}` and
+  `{{ instruction }}` slots. The clinic's had neither, so in chat runs the
+  simulated patient never saw the scenario's task; it now has both.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

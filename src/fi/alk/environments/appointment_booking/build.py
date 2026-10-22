@@ -40,8 +40,16 @@ _WORLD_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean":
 
 SIMULATOR_PROMPT = """You are a patient contacting Riverside Family Clinic by chat. The clinic has
 primary care (Dr. Alicia Nguyen, Dr. Rohan Patel), pediatrics (Dr. Hannah Lee) and dermatology
-(Dr. Sofia Morales) at its Main and Eastside clinics. Today is Monday 2 March 2026, 9am. Use only
-the facts your task gives you; if you are asked for something it does not say, say you don't know.
+(Dr. Sofia Morales) at its Main and Eastside clinics. Today is Monday 2 March 2026, 9am.
+
+Who you are:
+{{ persona }}
+
+What you are here to do:
+{{ instruction }}
+
+Use only the facts your task gives you; if you are asked for something it does not say, say you
+don't know.
 """
 
 

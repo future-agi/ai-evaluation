@@ -44,7 +44,10 @@ async def _record_text_usage(
     funding: str,
     transcript: Transcript | None,
     failure: BaseException | None,
+    agent_tokens: int = 0,
 ) -> None:
+    """`agent_tokens` is the agent under test's own model use when we host it; it is billed in
+    `text_call` with the simulator's."""
     if reporter is None:
         return
     partial = transcript or getattr(failure, "partial_transcript", None)
@@ -59,7 +62,7 @@ async def _record_text_usage(
             reporter.record,
             action="text_call",
             scenario_key=scenario_key,
-            amount=simulator_tokens,
+            amount=simulator_tokens + agent_tokens,
             funding=funding,
             occurred_at=started,
             outcome="completed" if completed else "failed",

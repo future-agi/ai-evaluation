@@ -399,7 +399,7 @@ class SuiteReleaseV1(_Strict):
 # --- bindings and run manifests --------------------------------------------------------------------
 
 
-Connector = Literal["livekit", "vapi", "retell", "retell_chat", "phone"]
+Connector = Literal["livekit", "vapi", "retell", "retell_chat", "phone", "hosted_agent"]
 
 
 class AgentRef(_Strict):
@@ -994,6 +994,21 @@ def _check_rule_coverage(
         raise ReleaseError("suite_policy_profile_invalid", "; ".join(problems))
 
 
+def _check_simulator_prompt(root: Path) -> None:
+    """The simulated person is the suite's prompt with each scenario's persona and instruction
+    filled in; a prompt without those slots runs every scenario as the same aimless caller."""
+    from .simulator import load_simulator_prompt, validate_simulator_prompt, variables_in
+
+    prompt = load_simulator_prompt(root)
+    if not prompt:
+        return
+    problems = validate_simulator_prompt(prompt, require_persona=True)
+    if "instruction" not in variables_in(prompt):
+        problems.append("no {{ instruction }} slot for the scenario's task")
+    if problems:
+        raise ReleaseError("suite_simulator_prompt_invalid", "; ".join(problems))
+
+
 def graded_rules(
     profile: PolicyProfile, scenario_sub_goals: Sequence[Sequence[str]]
 ) -> PolicyProfile:
@@ -1424,6 +1439,7 @@ def seal_suite_release(
         parent = (Path(parent_root), load_suite_release(parent_root))
     loaded = _check_suite_contents(root, entries, parent=parent)
     _check_rule_coverage(root, profile, loaded)
+    _check_simulator_prompt(root)
     (root / PROOFS).unlink(missing_ok=True)
     proofs = _prove_all(root, environment_root, policy, profile, loaded)
     if not postgres_dsn and any(entry.get("postgres_only") for entry in proofs.values()):
@@ -1665,7 +1681,11 @@ TOOL_SERVER_DIRECTORY = "generated/tool-server"
 TOOLS_CAPABILITY = "tools"
 PROVIDER_TOOL_PATH = "/provider/tools"
 PROVIDER_EVENT_PATH = "/provider/events"
-_COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi"}
+# Our own agent (`hosted_agent.py`) reaches the world through its MCP endpoint (`world_mcp.py`).
+HOSTED_AGENT = "hosted_agent"
+WORLD_MCP = "world-mcp"
+WORLD_MCP_CAPABILITY = "world_mcp"
+_COMPOSABLE_CONNECTORS = {"retell_chat", "retell", "vapi", HOSTED_AGENT}
 _COMPOSABLE_MODES = {BindingMode.CANONICAL, BindingMode.TOOL_ROUTED}
 _ARG_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
 
@@ -1812,24 +1832,39 @@ def compose_bundle(
             "run_inputs_mismatch",
             f"job connector {connector} differs from the binding's {binding.agent.connector}",
         )
-    if binding.mode not in _COMPOSABLE_MODES or connector not in _COMPOSABLE_CONNECTORS:
+    hosted = connector == HOSTED_AGENT
+    if (
+        binding.mode not in _COMPOSABLE_MODES
+        or connector not in _COMPOSABLE_CONNECTORS
+        or (hosted and binding.mode is not BindingMode.CANONICAL)
+    ):
         raise ReleaseError(
             "compose_unsupported",
-            f"{binding.mode.value} bindings on {connector} are not composed; canonical and "
-            f"tool_routed on {', '.join(sorted(_COMPOSABLE_CONNECTORS))} are",
+            f"{binding.mode.value} bindings on {connector} are not composed; canonical on "
+            f"{', '.join(sorted(_COMPOSABLE_CONNECTORS))} and tool_routed on provider agents are",
         )
-    target_key = "assistant_id" if connector == "vapi" else "agent_id"
-    target_id = str(job.agent.config.get(target_key) or "").strip()
-    if not target_id:
-        raise ReleaseError(
-            "compose_job_invalid", f"agent.config.{target_key} is required"
-        )
-    if target_id != binding.agent.provider_target_id:
-        raise ReleaseError(
-            "run_inputs_mismatch",
-            f"the run calls provider agent {target_id}, the binding was adapted for "
-            f"{binding.agent.provider_target_id}",
-        )
+    target_id = ""
+    if hosted:
+        from .hosted_agent import AgentSpec
+
+        spec = _validated(AgentSpec, job.agent.config.get("spec"), "compose_job_invalid")
+        if spec.digest() != binding.agent.provider_digest:
+            raise ReleaseError(
+                "run_inputs_mismatch", "the run's agent spec is not the one bound"
+            )
+    else:
+        target_key = "assistant_id" if connector == "vapi" else "agent_id"
+        target_id = str(job.agent.config.get(target_key) or "").strip()
+        if not target_id:
+            raise ReleaseError(
+                "compose_job_invalid", f"agent.config.{target_key} is required"
+            )
+        if target_id != binding.agent.provider_target_id:
+            raise ReleaseError(
+                "run_inputs_mismatch",
+                f"the run calls provider agent {target_id}, the binding was adapted for "
+                f"{binding.agent.provider_target_id}",
+            )
     if output.exists():
         raise ReleaseError("compose_output_exists", str(output))
 
@@ -1839,7 +1874,21 @@ def compose_bundle(
         list(binding.agent_tools) if binding.mode is BindingMode.TOOL_ROUTED else tools
     )
     agent_tool_names = sorted(tool.name for tool in agent_tools)
-    modality = "chat" if connector == "retell_chat" else "voice"
+    modality = "chat" if connector in ("retell_chat", HOSTED_AGENT) else "voice"
+    # Provider agents reach the world's tools through the webhook tool server; our agent reaches
+    # the same tools over MCP. Both run from the same directory through WorldTools.
+    if hosted:
+        server_name, capability, health = WORLD_MCP, WORLD_MCP_CAPABILITY, "/healthz"
+        run_command = [interpreter, "-m", "fi.alk.harness.world_mcp"]
+        server_environment: dict[str, str] = {}
+    else:
+        server_name, capability, health = TOOL_SERVER, TOOLS_CAPABILITY, "/health"
+        run_command = [interpreter, "server.py"]
+        server_environment = {
+            "TOOL_PATH": PROVIDER_TOOL_PATH,
+            "EVENT_PATH": PROVIDER_EVENT_PATH,
+            "REQUEST_BINDING": "1",
+        }
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
         shutil.copytree(suite_root / SCENARIOS, staging / SCENARIOS)
@@ -1879,16 +1928,14 @@ def compose_bundle(
             processes=[
                 _managed_world_db(),
                 SourceProcess(
-                    name=TOOL_SERVER,
+                    name=server_name,
                     working_directory=TOOL_SERVER_DIRECTORY,
                     source_origin="bundle",
-                    run_command=[interpreter, "server.py"],
+                    run_command=run_command,
                     environment={
-                        "PORT": f"{{{{PORT_{TOOL_SERVER}}}}}",
+                        "PORT": f"{{{{PORT_{server_name}}}}}",
                         "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
-                        "TOOL_PATH": PROVIDER_TOOL_PATH,
-                        "EVENT_PATH": PROVIDER_EVENT_PATH,
-                        "REQUEST_BINDING": "1",
+                        **server_environment,
                     },
                     started_check=StartedCheck(port=True, timeout_seconds=180),
                     user=ProcessUser.SVC_TOOLS,
@@ -1923,18 +1970,16 @@ def compose_bundle(
                     container_port=5432,
                     configuration_name="WORLD_DATABASE_URL",
                 ),
-                TOOLS_CAPABILITY: CapabilityV2(
+                capability: CapabilityV2(
                     protocol=CapabilityProtocol.HTTP,
-                    service=TOOL_SERVER,
+                    service=server_name,
                     container_port=8080,
-                    configuration_name="TOOLS_URL",
+                    configuration_name=f"{capability.upper()}_URL",
                 ),
             },
             readiness=[
                 ReadinessProbeV2(capability="world_db", timeout_seconds=180),
-                ReadinessProbeV2(
-                    capability=TOOLS_CAPABILITY, path="/health", timeout_seconds=180
-                ),
+                ReadinessProbeV2(capability=capability, path=health, timeout_seconds=180),
             ],
             files=list_files(staging, BUNDLE_V2_MANIFEST),
             provenance=BundleProvenanceV2(
@@ -1950,20 +1995,26 @@ def compose_bundle(
                 ],
             ),
             metadata={
-                "provider_import": ProviderImportSpec(
-                    type=ProviderType.VAPI
-                    if connector == "vapi"
-                    else ProviderType.RETELL,
-                    source_target_id=target_id,
-                    public_capability=TOOLS_CAPABILITY,
-                    environment_tools=agent_tool_names,
-                    event_path=PROVIDER_EVENT_PATH,
-                    tool_path=PROVIDER_TOOL_PATH,
-                    target_modality=modality,
-                    admission="per_tool",
-                    request_binding=True,
-                    profile_digest=binding.agent.provider_digest,
-                ).model_dump(mode="json"),
+                **(
+                    {}
+                    if hosted
+                    else {
+                        "provider_import": ProviderImportSpec(
+                            type=ProviderType.VAPI
+                            if connector == "vapi"
+                            else ProviderType.RETELL,
+                            source_target_id=target_id,
+                            public_capability=TOOLS_CAPABILITY,
+                            environment_tools=agent_tool_names,
+                            event_path=PROVIDER_EVENT_PATH,
+                            tool_path=PROVIDER_TOOL_PATH,
+                            target_modality=modality,
+                            admission="per_tool",
+                            request_binding=True,
+                            profile_digest=binding.agent.provider_digest,
+                        ).model_dump(mode="json")
+                    }
+                ),
                 "release": {
                     "run_manifest": manifest.digest,
                     "environment": [ref.digest for ref in manifest.environment],

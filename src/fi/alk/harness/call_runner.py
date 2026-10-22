@@ -845,9 +845,15 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
     change. Any failure (missing table, connection refused, malformed row) degrades to `()` --
     never a crash, never fabricated evidence, matching `_collect_http_tool_calls`'s stopped
     behavior above."""
+    return _read_tool_trace(runtime) or ()
+
+
+def _read_tool_trace(runtime: EnvironmentRuntime) -> tuple[Call, ...] | None:
+    """The world's trace rows as calls, or None when they could not be read: an empty tuple is a
+    trace that was read and holds no call."""
     endpoint = _find_postgres_endpoint(runtime)
     if endpoint is None:
-        return ()
+        return None
     try:
         import psycopg
 
@@ -869,7 +875,7 @@ def _collect_tool_trace_calls(runtime: EnvironmentRuntime) -> tuple[Call, ...]:
         logger.debug(
             "tool_trace read failed; treating as no evidence: %s", type(exc).__name__
         )
-        return ()
+        return None
 
     calls: list[Call] = []
     for row in rows:
@@ -1624,7 +1630,11 @@ class CallRunnerImpl:
         # tool activity in its partial receipt.  Previously the early CallAborted below discarded
         # every tool call from failed calls, making a real upstream tool error indistinguishable
         # from a proxy/transport failure.
-        calls = self._collect_calls(runtime) if case is not None else ()
+        calls, collected = (
+            self._collect_calls(runtime, request_bound=binding is not None)
+            if case is not None
+            else ((), False)
+        )
         # Provider-hosted agents execute tools outside the guest process, so their
         # authoritative call evidence is returned by Vapi/Retell after the call.
         # Preserve provider-native controls such as ``end_call`` because scenario
@@ -1702,6 +1712,7 @@ class CallRunnerImpl:
                 else None
             ),
             target_metrics=_target_metrics(case),
+            evidence_collected=collected,
         )
 
         if case is None:
@@ -1840,19 +1851,30 @@ class CallRunnerImpl:
         calls = () if is_silent_agent else base.calls
         # Copied rather than rebuilt field by field: relisting them dropped `messages` silently,
         # and the judge then had no transcript to settle a spoken claim against.
-        return replace(base, calls=calls)
+        return replace(
+            base,
+            calls=calls,
+            evidence_collected=base.evidence_collected and not is_silent_agent,
+        )
 
-    def _collect_calls(self, runtime: EnvironmentRuntime) -> tuple[Call, ...]:
+    def _collect_calls(
+        self, runtime: EnvironmentRuntime, *, request_bound: bool
+    ) -> tuple[tuple[Call, ...], bool]:
+        """The call's tool calls, and whether they are a complete record: true only for a
+        release bundle's request-bound world, whose tool server traces every call it runs."""
         seam = self._context.evidence_seam
+        if request_bound and seam is EvidenceSeam.TOOL_TRACE:
+            trace = _read_tool_trace(runtime)
+            return trace or (), trace is not None
         file_calls = _collect_file_tool_calls(runtime)
         if file_calls:
-            return file_calls
+            return file_calls, False
         if seam is EvidenceSeam.HTTP_TOOL:
-            return _collect_http_tool_calls(runtime)
+            return _collect_http_tool_calls(runtime), False
         if seam is EvidenceSeam.TOOL_TRACE:
-            return _collect_tool_trace_calls(runtime)
+            return _collect_tool_trace_calls(runtime), False
         # Unrecognized/None (should not happen for a `kind: process` bundle past preflight --
         # bundle_v2.py requires `evidence_seam` whenever `kind is PROCESS` -- but degrading rather
         # than crashing keeps this on the scheduler's own evidence_missing path, never a raw
         # exception).
-        return ()
+        return (), False

@@ -201,6 +201,8 @@ class _ArtifactCollector:
 
 async def main() -> None:
     from .chat_call_runner import HostedChatCallRunner
+    from .hosted_agent import CONNECTOR as HOSTED_AGENT
+    from .hosted_agent import HostedAgentCallRunner
     from .job import HarnessJob
     from .retell_chat_call_runner import RetellChatCallRunner
 
@@ -221,11 +223,10 @@ async def main() -> None:
             else None,
             usage_reporter=usage,
         )
-        runner_type = (
-            RetellChatCallRunner
-            if job.agent.connector == "retell_chat"
-            else HostedChatCallRunner
-        )
+        runner_type = {
+            "retell_chat": RetellChatCallRunner,
+            HOSTED_AGENT: HostedAgentCallRunner,
+        }.get(job.agent.connector, HostedChatCallRunner)
         outcome = await runner_type(collector, context).run(
             SimpleNamespace(
                 scenario_key=payload["scenario_key"],
