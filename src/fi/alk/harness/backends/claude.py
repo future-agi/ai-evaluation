@@ -433,7 +433,14 @@ class ClaudeBackend:
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
-        builtins = [name for name in spec.builtins if name != DELEGATE_TOOL]
+        # Workers draw their built-ins from this session's set, so it is the union of all of them.
+        builtins = [
+            name
+            for name in dict.fromkeys(
+                [*spec.builtins, *(n for w in spec.workers.values() for n in (w.builtins or spec.builtins))]
+            )
+            if name != DELEGATE_TOOL
+        ]
         options = ClaudeAgentOptions(
             tools=[*builtins, *(DELEGATION_TOOLS if spec.workers else ())],
             system_prompt=_prompt_for(spec.system_prompt),

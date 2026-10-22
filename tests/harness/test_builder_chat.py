@@ -664,4 +664,7 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
     answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
     assert "Nobody answers" in answer["content"][0]["text"]
+    runtime.backend_name = "claude"
+    denied = asyncio.run(runtime._ask("AskUserQuestion", {"questions": [{"question": "Which?"}]}, None))
+    assert type(denied).__name__ == "PermissionResultDeny" and "Nobody answers" in denied.message
     assert calls == [corrected]

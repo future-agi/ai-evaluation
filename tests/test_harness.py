@@ -4444,6 +4444,40 @@ def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path
     assert options.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / ".claude")
 
 
+def test_claude_session_offers_its_workers_builtins_and_routes_questions_through_ask(monkeypatch):
+    import asyncio
+
+    from claude_agent_sdk.types import PermissionResultDeny
+
+    from fi.alk.harness.backends import SessionSpec, WorkerSpec
+    from fi.alk.harness.backends.claude import ClaudeBackend
+
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
+    asked = []
+
+    async def ask(name, payload, context):
+        asked.append(name)
+        return "answered"
+
+    planner = SessionSpec(
+        system_prompt="plan",
+        builtins=("AskUserQuestion", "Delegate"),
+        model="vertex_ai/gemini-3.7-flash",
+        workers={"writer": WorkerSpec(description="w", instructions="w", builtins=("Read", "Glob", "Grep"))},
+        ask=ask,
+    )
+    options = ClaudeBackend().create(planner)._options
+    assert {"Read", "Glob", "Grep", "AskUserQuestion", "Agent", "Task"} <= set(options.tools)
+    assert "Delegate" not in options.tools and "AskUserQuestion" not in options.allowed_tools
+    assert asyncio.run(options.can_use_tool("AskUserQuestion", {"questions": []}, None)) == "answered"
+    assert asked == ["AskUserQuestion"]
+
+    unattended = SessionSpec(system_prompt="s", builtins=("AskUserQuestion",), model="vertex_ai/gemini-3.7-flash")
+    gate = ClaudeBackend().create(unattended)._options.can_use_tool
+    assert isinstance(asyncio.run(gate("AskUserQuestion", {"questions": []}, None)), PermissionResultDeny)
+
+
 def test_claude_backend_routes_gemini_through_agentcc(monkeypatch):
     from fi.alk.harness.backends import SessionSpec
     from fi.alk.harness.backends.claude import ClaudeBackend

@@ -1545,17 +1545,18 @@ class HostedChatRuntime:
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
-        if self._from_platform:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Nobody answers during the build or its check. Decide it yourself from "
-                        "the agent and the contract, and say what you decided in your summary.",
-                    }
-                ]
-            }
         asked = [one for one in payload.get("questions") or [] if isinstance(one, dict)]
+        if self._from_platform:
+            nobody = (
+                "Nobody answers during the build or its check. Decide it yourself from "
+                "the agent and the contract, and say what you decided in your summary."
+            )
+            if asked and self.backend_name == "claude":
+                # The CLI's own question tool arrives as a permission check, which needs a decision.
+                from claude_agent_sdk.types import PermissionResultDeny
+
+                return PermissionResultDeny(message=nobody)
+            return {"content": [{"type": "text", "text": nobody}]}
         question = str(
             payload.get("question")
             or "\n".join(str(one.get("question") or "") for one in asked if one.get("question"))
