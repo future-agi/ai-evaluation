@@ -4,5 +4,11 @@
     "server": "sql",
     "tools": ["query"],
     "attach": {"database_reader": {"tables": ["providers", "slots"]}}
+  },
+  {
+    "id": "docs",
+    "server": "filesystem",
+    "tools": ["read_text_file", "list_directory", "search_files", "list_allowed_directories"],
+    "attach": {"directory": "attached/docs"}
   }
 ]

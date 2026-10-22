@@ -120,8 +120,13 @@ class DatabaseReader(_Strict):
     tables: list[str] = Field(min_length=1)
 
 
+ATTACHED = "attached"
+
+
 class ServerAttach(_Strict):
     database_reader: DatabaseReader | None = None
+    # A folder of the release under `attached/`, the only one the server may read.
+    directory: str | None = None
 
 
 class AttachedServer(_Strict):
@@ -155,7 +160,7 @@ def attached_tool_names(root: Path) -> set[str]:
 
 
 def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
-    from .mcp_servers import DATABASE_READER, REGISTRY
+    from .mcp_servers import DATABASE_READER, DIRECTORY, REGISTRY
 
     servers = load_servers(root)
     problems: list[str] = []
@@ -186,6 +191,22 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
                     problems.append(f"{server.id}: no world table {table!r}")
                 elif table.startswith("_alk_") or table == POLICY_TABLE:
                     problems.append(f"{server.id}: {table} is internal")
+        directory = server.attach.directory
+        if directory is not None:
+            if DIRECTORY not in registered.attach:
+                problems.append(f"{server.id}: {server.server} takes no directory")
+            path = Path(directory)
+            if (
+                path.is_absolute()
+                or ".." in path.parts
+                or path.parts[:1] != (ATTACHED,)
+                or not (Path(root) / path).is_dir()
+            ):
+                problems.append(
+                    f"{server.id}: directory must be a folder of the release under {ATTACHED}/"
+                )
+        if DIRECTORY in registered.attach and directory is None:
+            problems.append(f"{server.id}: {server.server} needs a directory")
     if problems:
         raise ReleaseError("environment_servers_invalid", "; ".join(problems))
 
@@ -1268,7 +1289,7 @@ class PostgresProof:
             self.environment_tools,
             dsn,
             binding=binding,
-            attached=attach_servers(self._servers, dsn),
+            attached=attach_servers(self._servers, dsn, cwd=self._environment_root),
         )
         counts = {table: len(rows) for table, rows in store.state().items()}
         world = HostedWorld(store, 0, random.Random(0), counts)
@@ -1847,7 +1868,10 @@ def compose_bundle(
     if hosted:
         from .hosted_agent import AgentSpec
 
-        spec = _validated(AgentSpec, job.agent.config.get("spec"), "compose_job_invalid")
+        try:
+            spec = AgentSpec.from_config(job.agent.config)
+        except ValueError as exc:
+            raise ReleaseError("compose_job_invalid", str(exc)) from exc
         if spec.digest() != binding.agent.provider_digest:
             raise ReleaseError(
                 "run_inputs_mismatch", "the run's agent spec is not the one bound"
@@ -1901,6 +1925,8 @@ def compose_bundle(
         shutil.copyfile(world_root / TOOLS, server / TOOLS)
         if (world_root / SERVERS).is_file():
             shutil.copyfile(world_root / SERVERS, server / SERVERS)
+        if (world_root / ATTACHED).is_dir():
+            shutil.copytree(world_root / ATTACHED, server / ATTACHED)
         shutil.copyfile(binding_path, server / BINDING_FILE)
         shutil.copyfile(
             Path(__file__).with_name("release_tool_server.py"), server / "server.py"

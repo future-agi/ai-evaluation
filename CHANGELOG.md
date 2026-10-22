@@ -74,6 +74,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   role. Scenarios that use attached tools are proved on PostgreSQL. The clinic
   release attaches it and adds a schedule question only it can answer; for
   agents without that tool, adaptation reports the scenario unscorable.
+- The official filesystem MCP server (`@modelcontextprotocol/server-filesystem`
+  2026.1.14, MIT) can be attached with a `directory` under the release's
+  `attached/`; it is installed in the hosted image from a committed lockfile and
+  never downloaded at run time. The clinic attaches its patient guides through
+  it (read tools only) and adds a first-visit question only the guide answers.
 - Our own agent can run on an environment release: connector `hosted_agent`,
   an `AgentSpec` (instructions and a model) whose digest the binding pins. Its
   bundle serves the world's tools over MCP (`fi.alk.harness.world_mcp`, `/mcp`,

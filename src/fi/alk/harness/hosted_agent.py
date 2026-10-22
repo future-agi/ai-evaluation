@@ -50,13 +50,20 @@ MAX_TOOL_ROUNDS = 12
 
 
 class AgentSpec(BaseModel):
-    """What one of our agents is. Its digest is the agent's identity in a binding."""
+    """What one of our agents is. Its digest is the agent's identity in a binding. A job carries
+    it as its agent's config (`name`, `instructions`, `model`), which holds only scalars."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
     instructions: str = Field(min_length=1)
     model: Model = "vertex_ai/gemini-3.7-flash"
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> AgentSpec:
+        return cls.model_validate(
+            {name: config[name] for name in cls.model_fields if name in config}
+        )
 
     def digest(self) -> str:
         return (
@@ -178,7 +185,7 @@ class HostedAgentCallRunner:
     def __init__(self, adapter: ArtifactUploader, context: CallRunnerContext) -> None:
         self._adapter = adapter
         self._context = context
-        self._spec = AgentSpec.model_validate(context.job.agent.config.get("spec"))
+        self._spec = AgentSpec.from_config(context.job.agent.config)
         self._contract = AgentContract.model_validate_json(
             (context.bundle_dir / "contract.json").read_text(encoding="utf-8")
         )

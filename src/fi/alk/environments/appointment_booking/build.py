@@ -19,6 +19,7 @@ from pathlib import Path
 from fi.alk.harness.catalogue import save_catalogue
 from fi.alk.harness.folder import write_folder
 from fi.alk.harness.releases import (
+    ATTACHED,
     POLICY,
     SERVERS,
     TOOLS,
@@ -78,8 +79,10 @@ def build_environment(destination: Path) -> str:
     destination.mkdir(parents=True)
     shutil.copyfile(HERE / TOOLS, destination / TOOLS)
     shutil.copyfile(HERE / POLICY, destination / POLICY)
-    # The read-only `sql` MCP server over the reference tables (providers, slots).
+    # Attached MCP servers: read-only `sql` over the reference tables (providers, slots), and the
+    # filesystem server over the clinic's patient guides.
     shutil.copyfile(HERE / SERVERS, destination / SERVERS)
+    shutil.copytree(HERE / ATTACHED, destination / ATTACHED)
     world = GeneratedWorld(":memory:", kind="sqlite")
     world.name = NAME
     world.store.apply((HERE / "world.sql").read_text(encoding="utf-8"))

@@ -137,15 +137,18 @@ class AttachedServers:
 
         registered = REGISTRY[server.server]
         env = {name: os.environ[name] for name in _SERVER_ENV if name in os.environ}
+        args, cwd = list(registered.argv[1:]), self._cwd
         if server.attach.database_reader is not None:
             if not self._reader_url:
                 raise ToolError(f"{server.id} needs the world's reader role")
             env["WORLD_READER_URL"] = self._reader_url
+        if server.attach.directory is not None:
+            # Resolved, because the server compares real paths; and its working directory, so a
+            # relative path the agent sends lands inside it.
+            cwd = (Path(self._cwd or ".") / server.attach.directory).resolve()
+            args.append(str(cwd))
         return StdioServerParameters(
-            command=registered.argv[0],
-            args=list(registered.argv[1:]),
-            env=env,
-            cwd=self._cwd,
+            command=registered.argv[0], args=args, env=env, cwd=cwd
         )
 
     def start(self) -> None:

@@ -190,6 +190,18 @@ CHECKS = {
     return None
 """,
     ),
+    "first_visit_guide_read": (
+        (
+            "A successful lookup returned the clinic's new-patient guide (what to bring, when to "
+            "arrive, where to park)."
+        ),
+        """def check(world, calls):
+    seen = " ".join(str(call.result) for call in calls if call.ok)
+    if "list of current medications" not in seen or "Elm Street garage" not in seen:
+        return "no successful lookup returned the new-patient guide"
+    return None
+""",
+    ),
 }
 
 # Policy verdicts and conversation conduct: nothing in the world's final state can settle them.
@@ -272,6 +284,23 @@ JUDGED = {
             "clinic days, and no other day.\n"
             "Fail when: the agent leaves out Tuesday 3 March, adds a day Dr. Patel does not work, "
             "or says it cannot tell.\n"
+            "If it does not arise: Fail, because the caller asks this in the first message."
+        ),
+    ),
+    "first_visit_told": (
+        (
+            "The agent told the caller to bring a photo ID, the insurance card and a medication "
+            "list, to arrive 15 minutes early, and to park in the Elm Street garage and have the "
+            "ticket validated at reception."
+        ),
+        (
+            "Applies when: a new patient asks how to prepare for a first visit at the Eastside "
+            "Clinic.\n"
+            "Pass when: the agent says to bring a photo ID, the insurance card and a list of "
+            "current medications, to arrive 15 minutes early, and to park in the Elm Street garage "
+            "and have the ticket validated at reception.\n"
+            "Fail when: the agent leaves any of these out, adds requirements the clinic does not "
+            "have, or tells the caller it does not know.\n"
             "If it does not arise: Fail, because the caller asks this in the first message."
         ),
     ),
@@ -631,6 +660,31 @@ def scenarios() -> list[Scenario]:
                         "sql": "SELECT starts_at, location FROM slots "
                         "WHERE provider_id = 'DR-PATEL' ORDER BY starts_at"
                     },
+                ),
+            ],
+        ),
+        Scenario(
+            name="first_visit_preparation",
+            use_case="visit question",
+            branch="new patient",
+            tests="Answers from the clinic's patient guide, not from general knowledge.",
+            instruction=(
+                "You have your first appointment at the Eastside Clinic next week. Ask what you "
+                "need to bring, how early to arrive and where to park. You do not want to change "
+                "any appointment."
+            ),
+            persona=_persona(
+                "Sam Rivera",
+                "female",
+                "30-40",
+                "Hi, it's my first visit next week. What do I need to bring?",
+            ),
+            keywords=["new patient", "first visit", "parking"],
+            sub_goals=["first_visit_guide_read", "first_visit_told"],
+            solution=[
+                Step(
+                    tool="docs__read_text_file",
+                    arguments={"path": "new-patient-guide.md"},
                 ),
             ],
         ),
