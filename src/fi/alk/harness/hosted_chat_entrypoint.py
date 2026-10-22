@@ -156,6 +156,24 @@ observable artifact proves that the requested change has taken effect.
 """
 
 
+async def _enter(stage: Stage) -> None:
+    """Open the stage; a stored session the provider refuses to resume opens fresh instead."""
+    servers = stage.spec.servers
+    try:
+        await stage.__aenter__()
+    except Exception:
+        conversation = stage.spec.conversation
+        if conversation is None or conversation.resume_session_id is None:
+            raise
+        # Its transcript never reached this sandbox: the kept references still arrive with
+        # every message, so the conversation carries on in a fresh session.
+        traceback.print_exc()
+        await stage.__aexit__()
+        stage.spec.servers = servers
+        conversation.resume_session_id = None
+        await stage.__aenter__()
+
+
 class CoordinatorConversation:
     """One foreground model that owns the user conversation and delegates stage work."""
 
@@ -166,13 +184,13 @@ class CoordinatorConversation:
 
     async def say(self, message: str, on_event: Any | None = None) -> Any:
         if not self.opened:
-            await self.stage.__aenter__()
+            await _enter(self.stage)
             self.opened = True
         return await self.stage.say(message, on_event=on_event)
 
     async def resume(self, invocation_id: str, on_event: Any | None = None) -> Any:
         if not self.opened:
-            await self.stage.__aenter__()
+            await _enter(self.stage)
             self.opened = True
         return await self.stage.resume_turn(invocation_id, on_event=on_event)
 
@@ -199,7 +217,7 @@ class BuilderConversation:
     async def _opened(self, *, resume: bool = True) -> Stage:
         if self.stage is None:
             self.stage = await self._open_stage(resume=resume)
-            await self.stage.__aenter__()
+            await _enter(self.stage)
         return self.stage
 
     async def say(self, message: str, on_event: Any | None = None) -> Any:

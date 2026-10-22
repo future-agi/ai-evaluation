@@ -1494,3 +1494,54 @@ def test_aim_for_in_a_suite_rebuild_only_raises_the_count(tmp_path, monkeypatch)
         assert said[refused].get("is_error"), said[refused]
     assert not said["near"].get("is_error"), said["near"]
     assert aim_refusal({"count": 2}, 3, 3)
+
+
+@pytest.mark.parametrize("kind", ["builder", "coordinator"])
+def test_a_stored_session_the_provider_will_not_resume_opens_fresh(kind):
+    from fi.alk.harness.backends.base import ConversationSession, SessionSpec
+    from fi.alk.harness.hosted_chat_entrypoint import CoordinatorConversation
+    from fi.alk.harness.session import Stage
+
+    starts: list = []
+
+    class Session:
+        def __init__(self, spec):
+            self.resuming = spec.conversation.resume_session_id
+
+        async def start(self):
+            starts.append(self.resuming)
+            if self.resuming:
+                raise RuntimeError(f"No conversation found with session ID {self.resuming}")
+
+        async def stop(self):
+            pass
+
+    class Backend:
+        def create(self, spec):
+            return Session(spec)
+
+    conversation = ConversationSession(
+        app_name="alk", user_id="u", session_id="s", resume_session_id="sdk-1"
+    )
+    stage = Stage(
+        SessionSpec(system_prompt="", conversation=conversation),
+        name=kind,
+        backend=Backend(),
+    )
+
+    async def say(message, on_event=None):
+        return f"heard {message}"
+
+    stage.say = say  # type: ignore[method-assign]
+
+    async def open_stage(*, resume=True):
+        return stage
+
+    chat = (
+        BuilderConversation(open_stage)
+        if kind == "builder"
+        else CoordinatorConversation(stage)
+    )
+    assert asyncio.run(chat.say("hi")) == "heard hi"
+    assert starts == ["sdk-1", None]
+    assert conversation.resume_session_id is None
