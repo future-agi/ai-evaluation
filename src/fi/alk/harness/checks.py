@@ -23,6 +23,8 @@ two would let a typo read as a finding about the agent.
 
 from __future__ import annotations
 
+import ast
+import inspect
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -43,10 +45,47 @@ class Outcome:
         return f"  [{mark}] {self.name}" + (f" — {self.said}" if self.said else "")
 
 
+def reference_of(solution: Sequence[Any]) -> list[dict[str, Any]]:
+    """The reference a check is given: each step's tool and only the arguments it marks fixed."""
+    steps = []
+    for step in solution or ():
+        step = step if isinstance(step, dict) else step.model_dump()
+        arguments = dict(step.get("arguments") or {})
+        fixed = step.get("fixed")
+        if isinstance(fixed, (dict, list)):
+            arguments = {name: value for name, value in arguments.items() if name in fixed}
+        steps.append({"tool": step.get("tool"), "arguments": arguments})
+    return steps
+
+
+def takes_reference(checker: object) -> bool:
+    """Whether a check, or its source, is written `check(world, calls, reference)`."""
+    source = checker if isinstance(checker, str) else getattr(checker, "_alk_source", None)
+    if source:
+        entry = getattr(checker, "_alk_entry", "check")
+        try:
+            body = ast.parse(source).body
+        except SyntaxError:
+            return False
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry:
+                return len(node.args.args) >= 3
+        return False
+    try:
+        return len(inspect.signature(checker).parameters) >= 3
+    except (TypeError, ValueError):
+        return False
+
+
 def run_check(
-    source: str, world: GeneratedWorld, calls: Sequence[Call], *, name: str = "check"
+    source: str,
+    world: GeneratedWorld,
+    calls: Sequence[Call],
+    *,
+    name: str = "check",
+    reference: Sequence[dict[str, Any]] = (),
 ) -> Outcome:
-    """Execute one check against what the run left behind."""
+    """Execute one check against what the run left behind, with the reference when it takes one."""
     namespace: dict[str, Any] = {}
     try:
         exec(compile(source, f"<check:{name}>", "exec"), namespace)
@@ -62,7 +101,11 @@ def run_check(
         )
 
     try:
-        said = checker(world, list(calls))
+        said = (
+            checker(world, list(calls), list(reference))
+            if takes_reference(checker)
+            else checker(world, list(calls))
+        )
     except Exception as failed:
         # The check is at fault, not the agent. A KeyError in an assertion is our bug, and
         # scoring it against the agent is how a harness invents findings.
