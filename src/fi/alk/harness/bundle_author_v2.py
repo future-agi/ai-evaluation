@@ -889,7 +889,9 @@ def _generic_postgres_seed_artifacts(
             include_rows=False,
         )
     schema_path.write_text(prefix + schema_sql, encoding="utf-8")
-    if canonical_world.is_file():
+    if canonical_world.is_file() and (
+        not legacy_world.is_file() or world_ir_is_imported(authoring)
+    ):
         world_path = seed / "world-ir.json"
         shutil.copy2(canonical_world, world_path)
         adopted_world = "generic-harness/world-ir.json"
@@ -2714,6 +2716,35 @@ def _reseeded(manifest: EnvironmentBundleV2, authoring: Path, staging: Path) -> 
             )
         )
     return manifest.seed.model_copy(update={"stores": stores})
+
+
+def _imports_to(world: Path, source_model: Path, ir: Path) -> bool:
+    """Whether a SQLite world imports, under a source model, exactly to a World IR."""
+    from .source_model import SourceModel
+    from .world_import.sqlite import import_sqlite_world
+
+    try:
+        source = SourceModel.model_validate_json(
+            source_model.read_text(encoding="utf-8")
+        )
+        with closing(sqlite3.connect(f"file:{world}?mode=ro", uri=True)) as connection:
+            imported = import_sqlite_world(connection, source, validate=False).world
+        held = json.loads(ir.read_text(encoding="utf-8"))
+    except (OSError, ValueError, sqlite3.Error):
+        return False
+    return imported.model_dump(mode="json") == held
+
+
+def world_ir_is_imported(authoring: Path) -> bool:
+    """Whether the canonical World IR is exactly what authoring world.sqlite imports to.
+
+    world.sqlite is what world edits write and what an environment is known by; any
+    other IR, or one beside a world.sqlite that does not import, seeds another world.
+    """
+    root = authoring / "generic-harness"
+    return _imports_to(
+        authoring / "world.sqlite", root / "source-model.json", root / "world-ir.json"
+    )
 
 
 def _carried_world(authoring: Path, staging: Path) -> set[str]:

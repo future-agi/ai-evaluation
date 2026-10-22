@@ -1497,9 +1497,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     (artifact_root / "world-ir.schema.json").write_text(
         '{"title":"WorldIR"}\n', encoding="utf-8"
     )
-    # A stale compatibility artifact must not override the canonical semantic artifact.
+    # A world.sqlite the IR was imported from: the IR is its cache.
     with sqlite3.connect(authoring / "world.sqlite") as database:
-        database.execute("CREATE TABLE stale (id TEXT)")
+        database.execute("PRAGMA user_version = 1")
 
     output = tmp_path / "bundle"
     manifest = author_bundle_v2(
@@ -2653,6 +2653,46 @@ def test_reseal_carries_an_added_scenario_into_the_sealed_bundle(tmp_path: Path)
     preflight_bundle(
         bundle, resealed, parallelism=1, secret_refs={"RETELL_API_KEY": "target_provider"}
     )
+
+
+@pytest.mark.parametrize("case", ["edited", "stale", "unimportable"])
+def test_a_compile_seeds_world_sqlite_over_a_world_ir_it_does_not_import_to(
+    tmp_path: Path, case: str
+) -> None:
+    """A stale canonical IR never seeds; the hashed world.sqlite does."""
+    from fi.alk.harness.certification import GenericHarnessArtifactStore
+    from fi.alk.harness.world_import.sqlite import import_sqlite_world
+
+    source, authoring, source_model, _, _ = _places(tmp_path, ir_seed=False)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        # Runtime validation records the World IR it imported from the SQLite seed.
+        world = import_sqlite_world(database, source_model, validate=False).world
+        if case == "edited":
+            database.execute("UPDATE places SET label = 'renamed' WHERE id = 'home'")
+        elif case == "unimportable":
+            database.execute("ALTER TABLE places ADD COLUMN extra TEXT")
+    if case == "stale":
+        # An IR that went stale earlier, with world.sqlite unchanged since.
+        with sqlite3.connect(":memory:") as database:
+            database.execute("CREATE TABLE places (id TEXT PRIMARY KEY, label TEXT)")
+            database.execute("INSERT INTO places VALUES ('home', 'stale')")
+            world = import_sqlite_world(database, source_model, validate=False).world
+    GenericHarnessArtifactStore(authoring / "generic-harness").write_world_ir(world)
+    reseal_scenarios(authoring)
+
+    # A later compile, as certify-only and validation make one.
+    fresh = tmp_path / "fresh"
+    author_bundle_v2(
+        source=source,
+        job=_job(connector="http", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=fresh,
+    )
+    assert not (fresh / "seed" / "world-ir.json").exists()
+    with sqlite3.connect(fresh / "seed" / "world.sqlite") as database:
+        assert database.execute("SELECT label FROM places").fetchall() == [
+            ("renamed" if case == "edited" else "home",)
+        ]
 
 
 def test_reseal_without_a_sealed_bundle_changes_nothing(tmp_path: Path) -> None:
