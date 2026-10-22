@@ -80,6 +80,7 @@ def test_executor_understands_a_materialized_archive_as_a_repository(
         job_id="job-upload",
         run_id="run-upload",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={"kind": "archive", "archive_artifact_id": "source-id"},
         agent={"connector": "auto"},
         metadata={"source_kind": "archive"},
@@ -112,8 +113,10 @@ def test_executor_freezes_the_resolved_github_commit_before_building(
         job_id="job-github",
         run_id="run-github",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "customer/agent",
             "ref": "main",
@@ -990,8 +993,10 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "installation_id": "installation",
             "repository": "customer/agent",
             "ref": "main",
@@ -1000,9 +1005,9 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             "connector": "livekit",
             "secret_refs": {
                 "api_key": {
-                    "manager": "futureagi",
+                    "manager": "platform-vault",
                     "key": "secret_livekit_key",
-                    "purpose": "connect to agent",
+                    "purpose": "target_provider",
                 }
             },
         },
@@ -1015,8 +1020,10 @@ def test_job_carries_references_but_rejects_resolved_secrets() -> None:
             job_id="job",
             run_id="run",
             execution="hosted",
+            runtime={"isolation": "dedicated_vm"},
             source={
                 "kind": "github",
+                "commit_sha": "a" * 40,
                 "installation_id": "installation",
                 "repository": "customer/agent",
             },
@@ -1029,6 +1036,7 @@ def test_public_github_job_needs_no_installation_but_is_commit_pinnable() -> Non
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
             "visibility": "public",
@@ -1048,8 +1056,10 @@ def test_public_github_branch_url_is_normalized_into_repository_and_ref() -> Non
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "https://github.com/future-agi/future-agi/tree/feat/harness",
         },
@@ -1090,8 +1100,10 @@ def test_hosted_job_rejects_unsafe_security_policy(security: dict) -> None:
             job_id="job",
             run_id="run",
             execution="hosted",
+            runtime={"isolation": "dedicated_vm"},
             source={
                 "kind": "github",
+                "commit_sha": "a" * 40,
                 "visibility": "public",
                 "repository": "customer/public-agent",
             },
@@ -1216,6 +1228,8 @@ def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
     observed = {}
 
     def run(command, **kwargs):
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
         observed["command"] = command
         observed["environment"] = kwargs["env"]
         Path(command[-1]).mkdir()
@@ -1226,8 +1240,10 @@ def test_hosted_github_checkout_keeps_token_out_of_process_arguments(
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "installation_id": "installation",
             "repository": "customer/private-agent",
             "ref": "main",
@@ -1253,6 +1269,8 @@ def test_public_github_checkout_does_not_request_or_inject_token(
         raise AssertionError("public checkout must not request an installation token")
 
     def run(command, **kwargs):
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
         observed["environment"] = kwargs["env"]
         Path(command[-1]).mkdir()
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1262,8 +1280,10 @@ def test_public_github_checkout_does_not_request_or_inject_token(
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "customer/public-agent",
         },
@@ -1282,6 +1302,8 @@ def test_public_github_branch_url_clones_the_branch(
     observed = {}
 
     def run(command, **kwargs):
+        if command[1] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
         observed["command"] = command
         Path(command[-1]).mkdir()
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1291,8 +1313,10 @@ def test_public_github_branch_url_clones_the_branch(
         job_id="job",
         run_id="run",
         execution="hosted",
+        runtime={"isolation": "dedicated_vm"},
         source={
             "kind": "github",
+            "commit_sha": "a" * 40,
             "visibility": "public",
             "repository": "https://github.com/acme/agent/tree/feat/harness",
         },
