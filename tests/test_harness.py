@@ -4390,16 +4390,18 @@ def test_granting_a_tool_rebuilds_the_gate_not_just_the_list(tmp_path):
     assert denied != {}
 
 
-def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path):
+def test_hosted_claude_session_uses_durable_resume_and_restricted_tools(tmp_path, monkeypatch):
     from fi.alk.harness.backends import ConversationSession, SessionSpec
     from fi.alk.harness.backends.claude import ClaudeBackend
 
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://gateway.futureagi.test")
+    monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "internal-key")
     transcript_store = object()
     spec = SessionSpec(
         system_prompt="hosted",
         builtins=("Read", "AskUserQuestion"),
         cwd=str(tmp_path),
-        model="claude-sonnet-4-6",
+        model="vertex_ai/gemini-3.7-flash",
         conversation=ConversationSession(
             app_name="alk-harness",
             user_id="conversation-user",

@@ -402,7 +402,9 @@ class ClaudeBackend:
         wire_model = gateway_wire_model(spec.model)
         gateway_compatible = behind_gateway(spec.model)
         # A worker's calls are made inside this session, so the gate covers its tools too.
-        allowed = [name for name in spec.granted_anywhere() if name != DELEGATE_TOOL]
+        # The ask tool stays out: an allowed tool is approved before the permission callback, so the
+        # question would never reach the person.
+        allowed = [name for name in spec.granted_anywhere() if name not in (DELEGATE_TOOL, ASK_TOOL)]
         # Union per server name; each agent is still restricted by its own `tools` allowlist.
         servers: dict[str, ToolServer] = {}
         for source in (spec.servers, *(worker.servers for worker in spec.workers.values())):
@@ -431,7 +433,9 @@ class ClaudeBackend:
             environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
             allowed.extend(DELEGATION_TOOLS)
         _can_reach_its_workers(spec, allowed)
+        builtins = [name for name in spec.builtins if name != DELEGATE_TOOL]
         options = ClaudeAgentOptions(
+            tools=[*builtins, *(DELEGATION_TOOLS if spec.workers else ())],
             system_prompt=_prompt_for(spec.system_prompt),
             allowed_tools=allowed,
             mcp_servers={
