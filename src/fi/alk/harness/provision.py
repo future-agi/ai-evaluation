@@ -145,6 +145,7 @@ _FINGERPRINT_IGNORED = {
     "__pycache__",
     "node_modules",
 }
+_APPLEDOUBLE_MAGIC = b"\x00\x05\x16\x07"
 
 
 def source_fingerprint(source: str | Path, *, exclude: str | Path | None = None) -> str:
@@ -180,6 +181,13 @@ def source_fingerprint(source: str | Path, *, exclude: str | Path | None = None)
             continue
         if not path.is_file():
             continue
+        if path.name.startswith("._"):
+            try:
+                with path.open("rb") as source_file:
+                    if source_file.read(len(_APPLEDOUBLE_MAGIC)) == _APPLEDOUBLE_MAGIC:
+                        continue
+            except OSError as exc:
+                raise ProvisionError(f"could not fingerprint {path}: {exc}") from exc
         relative = path.relative_to(root).as_posix().encode()
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)

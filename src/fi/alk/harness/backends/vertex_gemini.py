@@ -268,7 +268,7 @@ def _stopped(said: str) -> Any:
 
 
 # ADK refuses a compaction threshold without a retention, so both must be set.
-COMPACT_ABOVE_TOKENS = int(os.environ.get("ALK_HARNESS_COMPACT_ABOVE", "100000") or 0)
+COMPACT_ABOVE_TOKENS = int(os.environ.get("ALK_HARNESS_COMPACT_ABOVE", "0") or 0)
 EVENTS_KEPT_RAW = int(os.environ.get("ALK_HARNESS_EVENTS_KEPT_RAW", "20") or 0)
 
 

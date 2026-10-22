@@ -1625,6 +1625,11 @@ Preserve the endpoint, protocol, request template, model, failure rule and compl
 Every other runtime and interface field must remain identical, including command and model.
 Preserve requested provider/model intent. Do not invent secrets or bind simulator credentials.
 If source evidence does not justify a correction, stop without submitting a patch.
+When an existing setup request imports a graph or workflow and the runtime reports a missing
+model or provider, inspect the source-owned graph schema and correct that setup body so every
+required component input is bound. Configure the requested target provider/model through the
+repository's supported component or setting; changing templates without binding a model is not a
+repair.
 The identical chat request and reset must pass after rebuilding before readiness is established."""
     if allow_ingress_repair and allowed == {"chat_ingress_failed"}:
         system_prompt += """ Before certification only, you may instead select mode=chat_ingress
