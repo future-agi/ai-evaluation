@@ -109,7 +109,7 @@ def _replay(
     perturbed.
 
     Each committed agent call becomes one replay call whose steps are its recorded environment
-    operations with constant arguments, so it runs through `execute_agent_call` in one
+    operations with constant arguments, so it runs through `WorldTools.call` in one
     transaction: a refused later step rolls the earlier ones back exactly as it did for the agent.
     """
     agent_tools: list[AgentTool] = []

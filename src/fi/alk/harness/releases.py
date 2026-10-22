@@ -1047,8 +1047,8 @@ class PostgresProof:
     That is the engine and the code a hosted run uses, so a handler written for SQLite alone is
     refused here rather than faulting in a run. One template database is seeded exactly as a run's
     world is; every attempt gets a fresh clone of it with the scenario's setup applied, plays its
-    calls through `execute_agent_call` (with a binding, or canonically when it is None) and is
-    graded through the hosted world handle. Suite sealing and binding proofs share it.
+    calls through `WorldTools` (with a binding, or canonically when it is None) and is graded
+    through the hosted world handle. Suite sealing and binding proofs share it.
     """
 
     def __init__(
@@ -1061,7 +1061,7 @@ class PostgresProof:
         import secrets
 
         from .catalogue import load_catalogue
-        from .release_tool_server import load_handlers
+        from .world_tools import load_handlers
 
         self._environment_root = environment_root
         self._profile = profile
@@ -1130,7 +1130,7 @@ class PostgresProof:
 
         from .checks import run_check
         from .folder import apply_setup, check_ready
-        from .release_tool_server import execute_agent_call
+        from .world_tools import WorldTools
         from .world.handle import HostedWorld
         from .world.runtime import Call
         from .world.stores.postgres import AttachedPostgresStore
@@ -1141,6 +1141,9 @@ class PostgresProof:
         )
         dsn = self._dsn(self._target)
         store = AttachedPostgresStore(dsn)
+        tools = WorldTools(
+            self._handlers, self.environment_tools, dsn, binding=binding
+        )
         counts = {table: len(rows) for table, rows in store.state().items()}
         world = HostedWorld(store, 0, random.Random(0), counts)
         ready = apply_setup(scenario, world)
@@ -1150,14 +1153,7 @@ class PostgresProof:
         faults: list[str] = []
         outcomes: list[Any] = []
         for tool, arguments in calls if ready.ok else ():
-            outcome = execute_agent_call(
-                self._handlers,
-                dsn,
-                binding,
-                tool,
-                arguments,
-                environment_tools=self.environment_tools,
-            )
+            outcome = tools.call(tool, arguments)
             outcomes.append(outcome)
             if outcome.status == "fault":
                 faults.append(f"{tool}: {outcome.error}")
