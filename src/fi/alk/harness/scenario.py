@@ -6,8 +6,7 @@ must hold. It is not a template with values slotted into it; the harness writes 
 
 It also carries a **solution**: what a correct agent would do. That is not decoration. It is what
 proves, before the scenario is ever used, that the scenario can be passed at all and that its
-checks are not vacuous — the two gates in ``prove.py``. Terminal-bench keeps its tasks honest the
-same way, and it needs no model to do it.
+checks are not vacuous — the two gates in ``prove.py``. It needs no model to do it.
 """
 
 from __future__ import annotations

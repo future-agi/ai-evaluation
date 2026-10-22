@@ -1,8 +1,7 @@
 """Proving a scenario is worth keeping, before anything is ever run against the agent.
 
 Three gates, all pure code. No model is asked whether a scenario is good; the environment
-decides. Terminal-bench keeps its tasks honest this way, and it is the cheapest useful thing in
-the whole harness: no tokens, no network, a few milliseconds.
+decides. It is the cheapest useful thing in the whole harness: no tokens, no network, a few milliseconds.
 
 **Ready.** Reset the world, run the scenario's own ``setup.py``, then its ``ready.py``. The world
 has to hold what the scenario presumes. A scenario about the last five chocolates is only a test
