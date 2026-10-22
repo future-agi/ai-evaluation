@@ -2102,6 +2102,44 @@ def resolve_environment_plan(
             contract_runtime or {},
             public_environment=declared_runtime_environment,
         )
+        if (
+            not isinstance(selected, ComposeSelection)
+            and runtime_model.execution == "native"
+            and (
+                runtime_model.required_environment
+                or any(
+                    dependency.get("kind", "").lower()
+                    in {"datastore", "database", "file", "queue"}
+                    or (dependency.get("reached") or {}).get("database")
+                    for dependency in (runtime_dependencies or [])
+                )
+            )
+        ):
+            topology_runtime = {
+                **(contract_runtime or {}),
+                "execution": "auto",
+                "compose_file": "",
+                "service": "",
+            }
+            try:
+                topology = select_runtime(
+                    root,
+                    topology_runtime,
+                    public_environment=declared_runtime_environment,
+                )
+            except ValueError:
+                topology = None
+            if isinstance(topology, ComposeSelection):
+                required = runtime_model.required_environment
+                requirements_are_wired = all(
+                    all(
+                        name in (topology.services.get(process, {}).get("environment") or {})
+                        for name in names
+                    )
+                    for process, names in required.items()
+                )
+                if requirements_are_wired:
+                    selected = topology
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
     compose = selected.compose_file if isinstance(selected, ComposeSelection) else None
@@ -2568,6 +2606,8 @@ def resolve_environment_plan(
             if is_livekit
             else dict(declared_runtime_environment)
         )
+        if port is not None and not is_livekit:
+            environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(root) if is_callback else None
         )
@@ -3137,10 +3177,9 @@ def author_bundle_v2(
                 contract_modality == "chat"
                 and adk_interface is not None
                 and contract_interface_kind in {"", "http"}
-                and not str(interface.get("path") or "").strip()
             ):
-                # Repair an incomplete model-authored HTTP declaration from deterministic source
-                # evidence. A complete source interface always wins and is never overwritten.
+                # ADK's source-owned web API is deterministic; do not retain stale model-authored
+                # request shapes from older ADK releases.
                 runtime = dict(runtime)
                 runtime["interface"] = adk_interface
                 contract_body = {**contract_body, "runtime": runtime}

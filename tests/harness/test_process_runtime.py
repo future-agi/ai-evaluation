@@ -1029,11 +1029,16 @@ def test_transient_package_network_failure_is_retried_in_place(tmp_path: Path) -
     def fake_run(step, *, cwd, env, **kwargs):
         calls.append(step)
         if len(calls) < 3:
+            detail = (
+                "operation timed out"
+                if len(calls) == 1
+                else "Failed to download distribution due to network timeout"
+            )
             return subprocess.CompletedProcess(
                 step,
                 2,
                 stdout="",
-                stderr="Failed to fetch package: client error (Connect): operation timed out",
+                stderr=f"Failed to fetch package: client error (Connect): {detail}",
             )
         return subprocess.CompletedProcess(step, 0, stdout="", stderr="")
 
@@ -1142,6 +1147,33 @@ def test_a_build_step_that_times_out_is_build_failed(tmp_path: Path) -> None:
             build_step_timeout_seconds=5,
         )
     assert excinfo.value.code == "build_failed"
+
+
+def test_build_timeout_stops_descendant_processes(tmp_path: Path) -> None:
+    (tmp_path / "source" / "svc").mkdir(parents=True)
+    marker = tmp_path / "orphan-ran"
+    child = (
+        "import time; from pathlib import Path; time.sleep(0.4); "
+        f"Path({str(marker)!r}).write_text('orphan')"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(10)"
+    )
+
+    with pytest.raises(pr.ProcessRuntimeError, match="timeout"):
+        pr.build_process_tree(
+            _source_process(
+                working_directory="svc",
+                build_commands=[[sys.executable, "-c", parent]],
+            ),
+            source_root=tmp_path / "source",
+            build_root=tmp_path / "build",
+            build_step_timeout_seconds=0.1,
+        )
+
+    time.sleep(0.5)
+    assert not marker.exists()
 
 
 # --- F5: typed copy-phase failures ----------------------------------------------------------------

@@ -1111,6 +1111,60 @@ def test_fixed_multi_store_fixture_compiles_to_a_preflight_clean_bundle(
     preflight_bundle(output, manifest, parallelism=2, secret_refs={})
 
 
+def test_native_multi_store_contract_uses_source_compose_dependency_topology(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "harness"
+        / "generic_multi_store_chat"
+    )
+    runtime = {
+        "language": "python",
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {
+            "name": "account store",
+            "kind": "datastore",
+            "engine": "postgresql",
+            "reached": {"dsn_env": "DATABASE_URL", "database": "app"},
+        },
+        {
+            "name": "access cache",
+            "kind": "queue",
+            "engine": "redis",
+            "reached": {"dsn_env": "CACHE_URL"},
+        },
+    ]
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+    assert plan.capabilities["target_http"].service == "agent"
+    assert plan.capabilities["cache_redis"].service == "cache"
+
+
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -2844,6 +2898,7 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert agent.working_directory == "."
     assert agent.run_command == runtime["command"]
     assert agent.fixed_port == 9090
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
     readiness = next(
         item for item in plan.readiness if item.capability == "target_http"
     )
@@ -3255,7 +3310,7 @@ def test_explicit_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
     assert "ALK_SUBPROCESS_COMMAND" in agent.environment
 
 
-def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> None:
+def test_adk_web_command_repairs_stale_http_interface(tmp_path: Path) -> None:
     source = tmp_path / "source"
     app = source / "bug_agent"
     app.mkdir(parents=True)
@@ -3268,7 +3323,14 @@ def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> No
     _write_chat_contract(
         authoring,
         command=["uv", "run", "adk", "web", "--port=9090"],
-        interface={"kind": "http", "port": 9090},
+        interface={
+            "kind": "http",
+            "port": 9090,
+            "path": "/run",
+            "request_template": {
+                "new_message": {"parts": [{"text": "{{new_message}}"}]}
+            },
+        },
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")

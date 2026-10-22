@@ -21,6 +21,24 @@ def fixture(source):
     return path
 
 
+def test_source_fingerprint_ignores_appledouble_metadata(tmp_path):
+    (tmp_path / "agent.py").write_text("ready = True\n")
+    expected = source_fingerprint(tmp_path)
+
+    (tmp_path / "._agent.py").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 28)
+
+    assert source_fingerprint(tmp_path) == expected
+
+
+def test_source_fingerprint_keeps_non_appledouble_dot_underscore_files(tmp_path):
+    (tmp_path / "agent.py").write_text("ready = True\n")
+    expected = source_fingerprint(tmp_path)
+
+    (tmp_path / "._agent.py").write_text("submitted_source = True\n")
+
+    assert source_fingerprint(tmp_path) != expected
+
+
 def test_image_only_needs_no_source_copy_but_keeps_full_identity(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

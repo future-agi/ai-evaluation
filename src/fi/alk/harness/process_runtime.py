@@ -1272,6 +1272,7 @@ _TRANSIENT_BUILD_NETWORK_MARKERS = (
     "request failed after",
     "client error (connect)",
     "operation timed out",
+    "network timeout",
     "connection timed out",
     "connection reset",
     "temporary failure in name resolution",
@@ -1284,6 +1285,27 @@ _TRANSIENT_BUILD_NETWORK_MARKERS = (
     "status code 503",
     "status code 504",
 )
+
+
+def _run_build_step(
+    args: Sequence[str], **kwargs: Any
+) -> subprocess.CompletedProcess:
+    capture_output = kwargs.pop("capture_output", False)
+    timeout = kwargs.pop("timeout", None)
+    if capture_output:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    process = subprocess.Popen(args, start_new_session=True, **kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
 def _is_transient_build_network_failure(result: subprocess.CompletedProcess) -> bool:
@@ -1337,7 +1359,7 @@ def build_process_tree(
     *,
     source_root: Path,
     build_root: Path,
-    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    run: Callable[..., subprocess.CompletedProcess] = _run_build_step,
     copy: Callable[[Path, Path], None] | None = None,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,

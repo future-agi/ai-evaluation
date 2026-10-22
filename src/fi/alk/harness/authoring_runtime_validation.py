@@ -858,7 +858,7 @@ async def validate_once(
                 from .action_certification import certify_actions
 
                 contract = AgentContract.model_validate_json(
-                    (authoring / "contract.json").read_text(encoding="utf-8")
+                    (bundle / "contract.json").read_text(encoding="utf-8")
                 )
                 tool_report = certify_tool_inventory(
                     contract, bundle, external_provider=provider_owned_tools

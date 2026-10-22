@@ -1644,6 +1644,7 @@ def test_the_skill_exists_and_forbids_guessing():
     text = load_skill("understand-agent")
     assert "submit_contract" in text
     assert "guess" in text.lower()
+    assert "Prefer a source-owned example with no model dependency" in text
 
 
 def test_artifacts_land_under_the_agent_name():
