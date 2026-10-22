@@ -1160,6 +1160,7 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "agent_name_not_world_unique",
         "public_material_admission_requires_native_compose",
         "public_material_admission_source_changed",
+        "runtime_local_auth_requires_native_http_target",
     }
 )
 _SECTION_2E_MECHANICAL_CODES = frozenset(
