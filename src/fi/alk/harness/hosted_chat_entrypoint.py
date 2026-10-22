@@ -69,6 +69,8 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_rule",
         "drop_rule",
         "add_sub_goal",
+        "add_sub_actor",
+        "drop_sub_actor",
     }
 )
 _CONFIRM = "Yes, make this change"

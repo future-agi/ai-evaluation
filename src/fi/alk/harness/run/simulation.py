@@ -361,6 +361,8 @@ async def _run_one(
             )
         # The setup's own calls are not the agent's.
         world.calls = []
+        # One seed per run decides whether a participant bound by probability enters.
+        seed = new_run_id()
 
         if not spoken:
             # Typed, and driven by a model rather than by ALK's chat simulator.
@@ -375,7 +377,7 @@ async def _run_one(
             # build stage wrote for this agent. Everything around it is unchanged: same world,
             # same setup, same checks, same run folder.
             return await _typed_to(
-                scenario, contract, world, world_root, folder, roles=roles
+                scenario, contract, world, world_root, folder, roles=roles, seed=seed
             )
 
         # Spoken. The agent is not here: it runs in Vapi, with its own prompt, its own model
@@ -420,6 +422,7 @@ async def _typed_to(
     folder: Path,
     *,
     roles: dict[str, str],
+    seed: str = "",
 ) -> Result:
     """A typed conversation, with a model on both sides.
 
@@ -452,10 +455,10 @@ async def _typed_to(
     else:
         agent = resolve("local")(contract, world, model=roles["agent"])
     transcript = await converse(
-        agent, scenario, contract, world_root=world_root, model=roles["user"]
+        agent, scenario, contract, world_root=world_root, model=roles["user"], seed=seed
     )
     catalogue = load_catalogue(world_root)
-    settled = grade_sub_goals(world, scenario, catalogue, transcript.calls)
+    settled = grade_sub_goals(world, scenario, catalogue, transcript.calls, transcript.canonical_messages())
     ending = ", ".join(
         f"{name}: {len(rows)} rows"
         for name, rows in sorted(world.observe().state.items())
@@ -733,7 +736,7 @@ async def _spoken_to(
         return result
 
     catalogue = load_catalogue(world_root)
-    settled = grade_sub_goals(world, scenario, catalogue, world.calls)
+    settled = grade_sub_goals(world, scenario, catalogue, world.calls, case.get("messages") or ())
     # Judged the same way a typed run is. Without this a spoken scenario reports "1/2" when what
     # happened is that one check passed and the other was never asked, which reads as the agent
     # half-failing rather than as the suite not having looked.

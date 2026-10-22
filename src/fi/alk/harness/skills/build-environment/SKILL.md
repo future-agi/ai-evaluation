@@ -716,6 +716,30 @@ fixed value wrong at a time. A check that fails a correct agent is refused as to
 value that no check notices when wrong is refused as unchecked. The five steps above are how you pass
 these the first time.
 
+## The cast
+
+Only when `add_sub_actor` is offered. The person the agent serves is the primary actor; a sub-actor is
+someone on the person's side who is not the person, whom the agent has to cope with: someone with them
+who speaks up or takes over. Never anyone on the agent's side: the agent, its staff and its systems are
+what is being tested, so the run never plays them. Real use has these people, so a world without them
+tests only the easy case. Read the contract and give each slot below that this agent has one sub-actor:
+
+- a voice agent gets a sub-actor on `audio_mix` (someone near the person), and one on
+  `audio_handoff` (someone who takes the line from them) where the person could hand the phone over;
+- an agent that places calls gets an `ivr`: the person's own menu that answers before they do;
+- a conversation the agent shares with more than one person gets a `thread_message` participant.
+
+A sub-actor is a person, so give it a `persona` in the same fields as the person the
+agent serves: gender, age group, the language it speaks, its accent, personality and communication
+style, each true to who it is in this world. Every channel uses what applies to it, so how it sounds or writes is chosen from the
+persona and never set by you. Its `behaviour.prompt` says what it wants and what it knows, and
+`loudness_db` how loud it is beside the person: below them for someone further away, above them for
+someone louder.
+
+The cast belongs to the world, so every scenario sees the same one, and a scenario binds the ones it
+needs. Only an agent with none of these slots has an empty cast; never add a sub-actor for a slot the
+agent does not have. `add_sub_actor` refuses a channel this agent cannot be reached on.
+
 ## If the contract is wrong
 
 You will sometimes find the contract does not match the source: a tool recorded with the wrong
@@ -746,7 +770,7 @@ Never work around a contract you believe is wrong. Everything after you inherits
    before adding a check, run it with `try_check` against three agents you write yourself, one that
    does it right the way the reference does, one that does it right another way its instructions
    allow, and one that gets a fixed value wrong. The first two must hold and the third must fail;
-   if any verdict is wrong, the check is wrong.
+   if any verdict is wrong, the check is wrong. Where `add_sub_actor` is offered, add the cast too.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

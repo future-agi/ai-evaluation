@@ -4632,7 +4632,7 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
 
     surface = {
         "understand-agent": {"submit_contract"},
-        "build-environment": set(world_tools.TOOL_NAMES),
+        "build-environment": set(world_tools.TOOL_NAMES) | set(world_tools.CAST_TOOL_NAMES),
         "write-scenarios": set(scenario_tools.TOOL_NAMES),
         "run-scenarios": set(run_tools.TOOL_NAMES),
     }
@@ -4657,8 +4657,14 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
     )
     from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
 
+    from fi.alk.harness.cast import KINDS
+    from fi.simulate.simulation.sub_actors import CHANNELS, TRIGGERS
+
     ignore = (
         fields
+        | set(CHANNELS)
+        | set(TRIGGERS)
+        | set(KINDS)
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)

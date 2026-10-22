@@ -84,6 +84,22 @@ def test_authoring_hears_the_platform_noise_catalogue(tmp_path, monkeypatch) -> 
     assert gateway.is_file()
 
 
+def test_authoring_hears_the_platform_sub_actor_switch(tmp_path, monkeypatch) -> None:
+    from fi.alk.harness.cast import SWITCH, sub_actors_enabled
+
+    secrets, gateway = tmp_path / "secrets.json", tmp_path / "simulator-secrets.json"
+    secrets.write_text("{}", encoding="utf-8")
+    gateway.write_text(json.dumps({SWITCH: "true"}), encoding="utf-8")
+    monkeypatch.setattr(entrypoint, "_SECRETS_PATH", secrets)
+    monkeypatch.setattr(entrypoint, "_SIMULATOR_SECRETS_PATH", gateway)
+    monkeypatch.setattr(entrypoint, "_ADC_PATH", tmp_path / "adc.json")
+    monkeypatch.setenv(SWITCH, "")
+    monkeypatch.setattr(entrypoint, "authoring_main", lambda argv, *, validate_runtime: 0)
+
+    assert entrypoint.main([]) == 0
+    assert sub_actors_enabled()
+
+
 def test_vertex_generation_region_is_not_copied_from_google_location(
     tmp_path, monkeypatch
 ) -> None:

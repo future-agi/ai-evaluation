@@ -24,6 +24,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .cast import Binding
 from .catalogue import Catalogue
 from .simulator import variables_in
 
@@ -280,6 +281,9 @@ class Scenario(BaseModel):
     # the name, so a suite still covers both conditions but the same suite decides the same way
     # twice; a coin flip here made a seeded run unreproducible.
     background_noise: bool | str = ""
+
+    # The world's sub-actors this scenario uses, each with when it enters. Empty: the primary only.
+    sub_actors: list[Binding] = Field(default_factory=list)
 
     # Whether the agent placed this call or answered it. Voice only: a chat is always started by
     # the person, so it stays inbound. An outbound caller has no opening request to make, which is

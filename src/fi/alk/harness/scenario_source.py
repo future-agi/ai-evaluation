@@ -253,6 +253,7 @@ class _CompiledSubGoal:
     judged: str
     check: Callable[..., object]
     what: str = ""
+    sub_actor: str = ""
     both: bool = False
     compares: str = ""
 
@@ -430,6 +431,7 @@ def _load_catalogue_claims(bundle_dir: Path) -> dict[str, dict[str, str]]:
         claims[entry["name"]] = {
             "what": str(entry.get("what") or ""),
             "judged": str(entry.get("judged") or ""),
+            "sub_actor": str(entry.get("sub_actor") or ""),
             "contract": goal.contract(),
             "both": "yes" if goal.both else "",
         }
@@ -590,6 +592,7 @@ def _with_claims(
             if goal.judged or combined(goal)
             else goal.judged,
             what=claims[goal.name].get("what", "") or goal.what,
+            sub_actor=claims[goal.name].get("sub_actor", "") or goal.sub_actor,
             both=combined(goal),
             compares=claims[goal.name].get("contract", "") or goal.compares,
         )

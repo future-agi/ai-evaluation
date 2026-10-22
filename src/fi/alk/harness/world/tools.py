@@ -23,15 +23,18 @@ import re
 from pathlib import Path
 from typing import Any
 
+from fi.simulate.simulation.sub_actors import CHANNELS as CHANNEL_REGISTRY
+from fi.simulate.simulation.sub_actors import delivered_channels, described
+
 from ..backends import tool, tool_server
 
 from ..amend import add_rule, drop_rule, fix_tool, set_modality, widen
 from ..catalogue import (
     CONTRACT_FIELDS,
-    CONTRACT_SCHEMA,
     CHECK_RULES,
     CRITERIA_RULES,
     SUB_GOAL_RULES,
+    add_sub_goal_fields,
     already_claimed,
     SubGoal,
     load_catalogue,
@@ -41,6 +44,15 @@ from ..catalogue import (
     judged_wording_advisory,
     weak_check_advisory,
     without_delivery_overlay,
+)
+from ..cast import (
+    PrimaryActor,
+    SubActor,
+    load_cast,
+    save_cast,
+    sub_actor_problems,
+    sub_goal_subject_problems,
+    sub_actors_enabled,
 )
 from ..checks import reference_of, run_check, run_world_check
 from ..contract import AgentContract, is_data_free_conversation
@@ -355,6 +367,23 @@ def _binding(
     )
 
 
+def _bound_anywhere(destination: Path, sub_actor_id: str) -> list[str]:
+    """The scenarios already written that bind this sub-actor."""
+    found = []
+    for document in sorted((destination / "scenarios").glob("*/scenario.json")):
+        try:
+            body = json.loads(document.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        ids = [
+            one if isinstance(one, str) else (one or {}).get("id")
+            for one in body.get("sub_actors") or []
+        ]
+        if sub_actor_id in ids:
+            found.append(document.parent.name)
+    return found
+
+
 def _ok(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
@@ -517,6 +546,91 @@ def _tables_the_source_lacks(
                     f"exist: {', '.join(dangling[:5])}"
                 )
     return problems
+
+
+def cast_tools(contract: AgentContract, destination: Path, *, origin: str = "derived") -> list[Any]:
+    """The tools that keep the world's cast: shared by the build stage and the builder session."""
+    from ..scenario_tools import persona_properties
+
+    @tool(
+        "add_sub_actor",
+        "Add or replace someone on the person's side who is not the person: someone with them "
+        "who may speak or take over, never anyone on the agent's side. The cast is shared by every "
+        "scenario; a scenario binds the ones it needs and says when each enters.\n\n"
+        "Give a `persona`, who they are, in the same fields as the person's, and `behaviour.prompt`: "
+        "what they want and what they know; how they sound is chosen from the persona. `channel`, "
+        "which this agent must be reachable on: "
+        + described({name: CHANNEL_REGISTRY[name]["about"] for name in delivered_channels()})
+        + ". `primary_role` describes the person the agent serves, once.",
+        schema(
+            {
+                "id": str,
+                "name": str,
+                "role": str,
+                "channel": {"type": "string", "enum": delivered_channels()},
+                "persona": {"type": "object", "properties": persona_properties()},
+                "behaviour": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "loudness_db": {"type": "number"},
+                        "max_lines": {"type": "integer"},
+                    },
+                },
+                "primary_role": str,
+            },
+            ["id", "name", "channel", "behaviour"],
+        ),
+    )
+    async def add_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            actor = SubActor.model_validate(
+                {
+                    **{
+                        key: value
+                        for key, value in args.items()
+                        if key not in ("primary_role", "origin") and value is not None
+                    },
+                    "origin": origin,
+                }
+            )
+        except Exception as invalid:  # noqa: BLE001 - the model is told what was wrong
+            return _err(f"Not added. {invalid}"[:600])
+        problems = sub_actor_problems(actor, modality=str(contract.modality or ""))
+        if problems:
+            return _err("Not added:\n  - " + "\n  - ".join(problems))
+        cast = load_cast(destination)
+        cast.sub_actors = [one for one in cast.sub_actors if one.id != actor.id] + [actor]
+        if args.get("primary_role"):
+            cast.primary = PrimaryActor(
+                role=str(args["primary_role"]),
+                description=cast.primary.description or "the person the agent serves",
+            )
+        save_cast(destination, cast)
+        return _ok(
+            f"{actor.id} added. The cast has {len(cast.sub_actors)}:\n{cast.summary()}"
+        )
+
+    @tool(
+        "drop_sub_actor",
+        "Remove a sub-actor from the cast. Refused while any scenario binds it.",
+        schema({"id": str}, ["id"]),
+    )
+    async def drop_sub_actor(args: dict[str, Any]) -> dict[str, Any]:
+        sub_actor_id = str(args.get("id") or "")
+        cast = load_cast(destination)
+        if cast.get(sub_actor_id) is None:
+            return _err(f"Not dropped. {sub_actor_id!r} is not in the cast.")
+        bound = _bound_anywhere(destination, sub_actor_id)
+        if bound:
+            return _err(
+                f"Not dropped. These scenarios bind {sub_actor_id}: " + ", ".join(bound)
+            )
+        cast.sub_actors = [one for one in cast.sub_actors if one.id != sub_actor_id]
+        save_cast(destination, cast)
+        return _ok(f"{sub_actor_id} dropped. The cast has {len(cast.sub_actors)}.")
+
+    return [add_sub_actor, drop_sub_actor]
 
 
 def world_tools(
@@ -1281,6 +1395,8 @@ def world_tools(
             + ", ".join(sorted(variables_in(prompt)))
         )
 
+    sub_actor_said, sub_goal_fields = add_sub_goal_fields()
+
     @tool(
         "add_sub_goal",
         "Add a named thing this agent can be checked on, shared by every scenario that needs "
@@ -1297,11 +1413,9 @@ def world_tools(
         "`prompt_injection`, `social_engineering`, `privacy_pii`. A scenario carrying an "
         "overlay is refused until it names a sub-goal that fails when that overlay is "
         "mishandled, so this is what makes one available. Leave it empty for an ordinary "
-        "task sub-goal.",
-        schema(
-            {"name": str, "what": str, "check": str, "judged": str, "output": str, "overlay": str, **CONTRACT_SCHEMA},
-            ["name", "what"],
-        ),
+        "task sub-goal."
+        + sub_actor_said,
+        schema(sub_goal_fields, ["name", "what"]),
     )
     async def add_sub_goal(args: dict[str, Any]) -> dict[str, Any]:
         sub_goal = SubGoal(
@@ -1311,9 +1425,10 @@ def world_tools(
             judged=str(args.get("judged") or ""),
             output=str(args.get("output") or "pass_fail"),
             overlay=str(args.get("overlay") or ""),
+            sub_actor=str(args.get("sub_actor") or ""),
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
-        problems = validate_sub_goal(sub_goal)
+        problems = validate_sub_goal(sub_goal) + sub_goal_subject_problems(sub_goal.sub_actor, destination)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1717,7 +1832,12 @@ def world_tools(
             run_env_command,
             check_world,
             save_world,
-        ],
+        ]
+        + (
+            cast_tools(contract, destination)
+            if sub_actors_enabled()
+            else []
+        ),
     )
     return server, world
 
@@ -1748,3 +1868,9 @@ TOOL_NAMES = (
     "check_world",
     "save_world",
 )
+CAST_TOOL_NAMES = ("add_sub_actor", "drop_sub_actor")
+
+
+def tool_names() -> tuple[str, ...]:
+    """What the world stage publishes in this environment: the cast tools only where sub-actors are on."""
+    return TOOL_NAMES + (CAST_TOOL_NAMES if sub_actors_enabled() else ())

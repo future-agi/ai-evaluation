@@ -106,6 +106,23 @@ def selected_call_indices(run_id: str, count: int, rate: float) -> set[int]:
     return set(rng.sample(range(count), min(count, round(count * rate))))
 
 
+async def complete_text(model: Any, context: Any) -> str:
+    """The model's whole reply to this context, with no tools."""
+    parts: list[str] = []
+    async with model.chat(chat_ctx=context, tools=[], tool_choice="none") as stream:
+        async for chunk in stream:
+            content = getattr(getattr(chunk, "delta", None), "content", None)
+            if isinstance(content, str):
+                parts.append(content)
+    return "".join(parts)
+
+
+async def synthesize_frames(tts: Any, text: str) -> list[Any]:
+    """The audio frames this voice speaks the text in."""
+    async with tts.synthesize(text) as stream:
+        return [item.frame async for item in stream]
+
+
 def caller_language(persona: Any) -> str | None:
     data = getattr(persona, "persona", {}) or {}
     language = data.get("language") or data.get("languages")
@@ -354,16 +371,7 @@ class CallerBargeIn:
                 )
             context.add_message(role="user", content=_PREPARE_INSTRUCTIONS)
             for attempt in range(3):
-                parts: list[str] = []
-                async with self.model.chat(
-                    chat_ctx=context, tools=[], tool_choice="none"
-                ) as stream:
-                    async for chunk in stream:
-                        delta = getattr(chunk, "delta", None)
-                        content = getattr(delta, "content", None)
-                        if isinstance(content, str):
-                            parts.append(content)
-                phrase = "".join(parts).strip().strip('"\u201c\u201d')
+                phrase = (await complete_text(self.model, context)).strip().strip('"\u201c\u201d')
                 if not phrase or phrase.upper() == "NONE":
                     self._count("preparation_declined")
                     return
@@ -387,8 +395,7 @@ class CallerBargeIn:
                     )
                     continue
                 break
-            async with self.tts.synthesize(phrase) as stream:
-                frames = [item.frame async for item in stream]
+            frames = await synthesize_frames(self.tts, phrase)
             if frames and not self._closed:
                 await self.audio_output.prepare(frames[0])
                 self._candidate = (phrase, frames)

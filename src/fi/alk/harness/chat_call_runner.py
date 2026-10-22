@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -298,8 +299,11 @@ class _HostedChatTarget:
         world: GeneratedWorld,
         scenario_key: str,
         scenario_id: str,
+        seed: str = "",
     ) -> None:
         self._wrapper = wrapper
+        # The call's own seed: one draw decides whether a participant bound by probability enters.
+        self.seed = seed
         self._contract = contract
         self.world = world
         self._scenario_key = scenario_key
@@ -309,6 +313,11 @@ class _HostedChatTarget:
 
     async def open(self) -> None:
         return
+
+    def interject(self, name: str, text: str) -> None:
+        """A second participant's message, heard by the agent with the person's next turn."""
+        label = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:64] or "participant"
+        self._messages.append({"role": "user", "name": label, "content": text})
 
     async def say(self, utterance: str) -> str:
         self._messages.append({"role": "user", "content": utterance})
@@ -438,6 +447,7 @@ async def _drive_conversation(
         scenario,
         contract,
         world_root=bundle_dir,
+        seed=target.seed,
     )
 
 
@@ -532,6 +542,8 @@ class HostedChatCallRunner:
         transcript: Transcript | None = None
         failure: CallAborted | None = None
         _clear_file_tool_calls(runtime)
+        # Drawn once per call, so a probability binding varies across runs and agrees within one.
+        seed = secrets.token_hex(8)
         try:
             transcript = await _drive_conversation(
                 _HostedChatTarget(
@@ -540,6 +552,7 @@ class HostedChatCallRunner:
                     world=target_world,
                     scenario_key=scenario.scenario_key,
                     scenario_id=scenario.scenario_id,
+                    seed=seed,
                 ),
                 conversation_scenario,
                 self._contract,
@@ -606,7 +619,7 @@ class HostedChatCallRunner:
             )
         return CallOutcome(
             calls=calls,
-            turns=len(transcript.exchanges),
+            turns=sum(1 for turn in transcript.exchanges if turn.speaker != "sub_actor"),
             started_at=format_rfc3339_millis(started),
             ended_at=format_rfc3339_millis(ended),
             duration_ms=_duration_ms(started, ended),

@@ -24,6 +24,7 @@ from typing import Any
 
 from ..backends import SessionSpec, tool, tool_server
 
+from ..cast import absent
 from ..catalogue import criteria_text
 from ..config import chosen_model
 from ..contract import AgentContract
@@ -413,9 +414,17 @@ async def judge(
     ending: str = "",
 ) -> tuple[list[Judgement], float]:
     """Judge only the sub-goals nothing observable settles."""
-    claims = _claims(scenario, catalogue)
+    messages = transcript.canonical_messages()
+    standing_aside = [
+        Judgement(claim=criteria_text(goal.judged or goal.what), kind=name, holds=True, why=missing)
+        for name in scenario.sub_goals
+        if (goal := catalogue.named(name)) is not None
+        and not goal.deterministic()
+        and (missing := absent(goal.sub_actor, messages))
+    ]
+    claims = [one for one in _claims(scenario, catalogue) if one[1] not in {j.kind for j in standing_aside}]
     if not claims:
-        return [], 0.0
+        return standing_aside, 0.0
 
     from . import platform_evals
 
@@ -425,7 +434,7 @@ async def judge(
         # platform rather than living only in this run folder.
         judged = _on_platform(claims, scenario, transcript, contract, ending)
         if judged is not None:
-            return judged, 0.0
+            return judged + standing_aside, 0.0
 
     collected: list[dict[str, Any]] = []
     spec = SessionSpec(
@@ -446,7 +455,7 @@ async def judge(
             f"CLAIMS TO JUDGE:\n{listed}"
         )
 
-    return to_judgements(claims, collected), stage.spent_usd
+    return to_judgements(claims, collected) + standing_aside, stage.spent_usd
 
 
 def to_judgements(
@@ -489,13 +498,21 @@ def ungraded_sub_goals(scenario: Scenario, catalogue: Catalogue) -> list[str]:
 
 
 def grade_sub_goals(
-    world: GeneratedWorld, scenario: Scenario, catalogue: Catalogue, calls: list[Any]
+    world: GeneratedWorld,
+    scenario: Scenario,
+    catalogue: Catalogue,
+    calls: list[Any],
+    messages: Any = (),
 ) -> list[Outcome]:
     """Every sub-goal settled by code, run against what this run left behind."""
     outcomes: list[Outcome] = []
     for name in scenario.sub_goals:
         sub_goal = catalogue.named(name)
         if sub_goal is None or not sub_goal.deterministic():
+            continue
+        missing = absent(sub_goal.sub_actor, messages)
+        if missing:
+            outcomes.append(Outcome(name=name, held=True, said=missing))
             continue
         outcomes.append(run_check(sub_goal.check, world, calls, name=name))
     return outcomes

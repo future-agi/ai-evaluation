@@ -145,7 +145,7 @@ def sub_goal_schema(server) -> dict:
 
 @pytest.mark.parametrize("build_server", ["provision", "world"])
 def test_add_sub_goal_agrees_with_the_sub_goal_model(
-    build_server: str, tmp_path
+    build_server: str, tmp_path, monkeypatch
 ) -> None:
     """A schema that promises a boolean for a field the model stores as a string means the
     stage cannot add a sub-goal at all -- it is rejected on every attempt, whichever it sends.
@@ -153,6 +153,7 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
     Worse for ``judged`` specifically, which is not a flag: it is the sentence saying what a
     model has to decide and why code cannot. Typed as a boolean, the reason has nowhere to go.
     """
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
     contract = AgentContract(agent="a")
     server = (
         provision_tools(contract, tmp_path)[0]
@@ -161,6 +162,8 @@ def test_add_sub_goal_agrees_with_the_sub_goal_model(
     )
     offered = sub_goal_schema(server)
     for name, annotation in SubGoal.model_fields.items():
+        if name == "sub_actor" and build_server == "provision":
+            continue
         assert name in offered, f"{build_server}: cannot write SubGoal.{name}"
         expected = JSON_TYPE.get(annotation.annotation)
         if expected:

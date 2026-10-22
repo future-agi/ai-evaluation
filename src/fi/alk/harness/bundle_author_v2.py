@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from .bundle import CapabilityProtocol
+from .cast import CAST_FILE
 from .catalogue import CATALOGUE
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -2058,6 +2059,10 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
     sub-goal's claim and `_deterministic_names` all come back empty, each silently. A warning
     rather than an error, since failing the run is worse than the degraded reporting.
     """
+    adopted = []
+    if (authoring / CAST_FILE).is_file():
+        shutil.copy2(authoring / CAST_FILE, staging / CAST_FILE)
+        adopted.append(CAST_FILE)
     catalogue = authoring / CATALOGUE
     if not catalogue.is_file():
         logger.warning(
@@ -2065,9 +2070,9 @@ def _copy_sub_goal_catalogue(authoring: Path, staging: Path) -> list[str]:
             CATALOGUE,
             authoring,
         )
-        return []
+        return adopted
     shutil.copy2(catalogue, staging / CATALOGUE)
-    return [CATALOGUE]
+    return [CATALOGUE, *adopted]
 
 
 def _copy_chat_authoring(authoring: Path, staging: Path) -> list[str]:
@@ -2653,8 +2658,9 @@ def reseal_scenarios(authoring: str | Path) -> str | None:
         (staging / BUNDLE_V2_MANIFEST).unlink()
         shutil.rmtree(staging / "scenarios", ignore_errors=True)
         _copy_scenarios(authoring_root, staging, count=count)
-        if (authoring_root / CATALOGUE).is_file():
-            shutil.copy2(authoring_root / CATALOGUE, staging / CATALOGUE)
+        for document in (CATALOGUE, CAST_FILE):
+            if (authoring_root / document).is_file():
+                shutil.copy2(authoring_root / document, staging / document)
         if (staging / "contract.json").is_file() and (authoring_root / "contract.json").is_file():
             shutil.copy2(authoring_root / "contract.json", staging / "contract.json")
         seed = _reseeded(manifest, authoring_root, staging)

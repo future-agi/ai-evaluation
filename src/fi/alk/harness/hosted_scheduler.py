@@ -45,6 +45,7 @@ from typing import Any, Awaitable, Callable, Protocol, Sequence
 
 from . import observability
 from .job import FailureDomain, HarnessStage
+from .cast import absent
 from .checks import reference_of, takes_reference
 from .joint_judge import OFF_SCRIPT
 from .judge import judge_sub_goal as _judge
@@ -2209,6 +2210,14 @@ class HostedScheduler:
         check_handle = world.read_only()
         broken_failure: ReceiptFailure | None = None
         for goal in scenario.sub_goals:
+            missing = absent(str(getattr(goal, "sub_actor", "") or ""), call_outcome.messages)
+            if missing:
+                sub_goal_results.append(
+                    SubGoalResult(
+                        name=goal.name, held=True, reason=missing, judged=goal.judged != ""
+                    )
+                )
+                continue
             if broken_failure is not None:
                 sub_goal_results.append(
                     SubGoalResult(

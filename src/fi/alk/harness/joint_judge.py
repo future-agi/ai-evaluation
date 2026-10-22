@@ -134,7 +134,7 @@ async def judge_sub_goals_jointly(
             f"=== End of {name} ===\n\n"
             for index, (name, goal) in enumerate(zip(names, goals), start=1)
         )
-        + describe_call(agent_instructions, scenario, calls, recording)
+        + describe_call(agent_instructions, scenario, calls, recording, messages)
         + "Look as needed, then call decide once for each sub-goal."
     )
     conversation = await run_judge_conversation(

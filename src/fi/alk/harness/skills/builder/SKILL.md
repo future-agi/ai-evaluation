@@ -151,6 +151,9 @@ what the gates check. Then:
   difference. "Twenty more like #5" is `aim_for` plus a writer brief naming #5's cell and what differs.
 - **Prove again without changing**: `prove_scenarios`.
 - **Sub-goals**: `add_sub_goal` defines or repairs one in the shared catalogue.
+- **The cast**, where offered: `add_sub_actor` adds or changes someone on the person's side other than the
+  person, and `drop_sub_actor` removes one no scenario binds. A
+  scenario says which it uses and when each enters through its `sub_actors`.
 - **The contract's reading of the agent**: `amend_contract`, `add_rule`, `drop_rule`, `fix_tool`, and
   `declare_tool` for a tool the contract lacks (with the line in the agent's source that defines it),
   always with the reason. This corrects the harness's understanding; it never changes the agent.

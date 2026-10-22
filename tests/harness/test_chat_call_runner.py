@@ -731,3 +731,50 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
 
     assert result is not None
     assert result.result == {"account_id": "ACC-2048", "status": "active"}
+
+
+def test_hosted_chat_gives_each_call_its_own_seed(tmp_path: Path, monkeypatch: Any) -> None:
+    from fi.alk.harness.cast import Behaviour, Cast, SubActor, save_cast
+
+    monkeypatch.setenv("HARNESS_SUB_ACTORS", "1")
+    tool_world = _ToolWorld()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: tool_world)
+    seen: dict = {}
+
+    async def remember(target: Any, scenario: Any, _contract: Any, _bundle_dir: Path) -> Transcript:
+        seen["seed"] = target.seed
+        return Transcript()
+
+    monkeypatch.setattr(chat, "_drive_conversation", remember)
+    monkeypatch.setattr(chat, "HTTPAgentWrapper", lambda **_kwargs: None)
+    context = _context(tmp_path)
+    save_cast(
+        context.bundle_dir,
+        Cast(
+            sub_actors=[
+                SubActor(
+                    id="subactor_friend",
+                    name="Friend",
+                    channel="thread_message",
+                    behaviour=Behaviour(prompt="asks for one more"),
+                )
+            ]
+        ),
+    )
+    document = context.bundle_dir / "scenarios" / "one" / "scenario.json"
+    body = json.loads(document.read_text())
+    body["sub_actors"] = [{"id": "subactor_friend", "trigger": {"kind": "always"}}]
+    document.write_text(json.dumps(body))
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime-1",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(capability="target_http", protocol="http", address="http://localhost:18080"),
+            "world_db": RuntimeEndpoint(capability="world_db", protocol="postgres", address="postgresql://u:p@localhost/w"),
+        },
+    )
+    asyncio.run(chat.HostedChatCallRunner(_Adapter(), context).run(SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime))
+
+    assert seen["seed"]
