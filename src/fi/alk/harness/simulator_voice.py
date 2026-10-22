@@ -950,8 +950,11 @@ _CARTESIA_LOCAL_AGE_ORDER = {
 def _cartesia_voice_ages() -> dict[str, str]:
     """Each voice's age from its Cartesia description: "young", "older", or absent when unstated."""
     path = Path(__file__).parent / "run" / "data" / "voice_ages.json"
-    # Shipped with the package: unreadable means a broken install, never "no ages known".
-    ages = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        ages = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.error("cartesia_voice_ages_unreadable", extra={"path": str(path)})
+        return {}
     return {voice: age for age, voices in ages.items() for voice in voices}
 
 

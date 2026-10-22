@@ -4586,14 +4586,15 @@ def test_a_refusal_other_than_not_found_keeps_the_voice_and_is_asked_again(monke
     assert simulator_voice._cartesia_voice_served(first, "k") is False
 
 
-def test_an_unreadable_voice_age_table_fails_loudly(monkeypatch):
+def test_an_unreadable_voice_age_table_is_logged_and_skipped(monkeypatch, caplog):
     from fi.alk.harness import simulator_voice
 
     simulator_voice._cartesia_voice_ages.cache_clear()
     monkeypatch.setattr(simulator_voice.Path, "read_text", lambda self, encoding=None: "{not json")
     try:
-        with pytest.raises(ValueError):
-            simulator_voice._cartesia_voice_ages()
+        with caplog.at_level("ERROR", logger=simulator_voice.logger.name):
+            assert simulator_voice._cartesia_voice_ages() == {}
+        assert "cartesia_voice_ages_unreadable" in caplog.text
     finally:
         monkeypatch.undo()
         simulator_voice._cartesia_voice_ages.cache_clear()
