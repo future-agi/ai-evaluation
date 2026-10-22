@@ -83,9 +83,9 @@ How to decide:
    excuse what they state.
 5. Where nothing you were given records the right answer, never call what the agent said accurate
    or correct, and never assume it is.
-6. What was said reached you through speech recognition and can contain its errors. A garbled
-   phrase, or a word that sounds like one the context calls for, is a mishearing, not something the
-   agent said: judge what the agent evidently said.
+6. The transcript comes from speech recognition and can be wrong. Where it is unclear, the recording
+   settles what was said; where neither does and the verdict turns on it, the verdict is
+   inconclusive.
 7. The channel can add content of its own that the agent did not produce, such as a recorded
    notice a phone line plays or a system message around a chat. When the agent's instructions do
    not ask for it, it is not the agent's: judge the agent only on what it said and did itself.
@@ -177,8 +177,19 @@ class CallEvidence:
         self.messages = messages
         self.recording = recording
         self.label = label
+        # Evidence a tool returned this turn: looked at only once the judge's next turn has read it.
+        self.fetched: set[str] = set()
+        # False where tool results reach the model inside one session, with no turns to count.
+        self.batched = True
         self.looked: set[str] = set()
         self.audio = "waiting" if recording else "none"
+
+    def delivered(self) -> None:
+        self.looked |= self.fetched
+        self.fetched.clear()
+
+    def _fetched(self, what: str) -> None:
+        (self.fetched if self.batched else self.looked).add(what)
 
     def tools(self) -> list[Any]:
         @tool(
@@ -220,7 +231,7 @@ class CallEvidence:
             schema({}, []),
         )
         async def read_transcript(args: dict[str, Any]) -> dict[str, Any]:
-            self.looked.add("transcript")
+            self._fetched("transcript")
             if not self.messages:
                 return _say(
                     "Nothing was captured of what was said. Decide from the actions and the records."
@@ -233,7 +244,7 @@ class CallEvidence:
             schema({}, []),
         )
         async def listen(args: dict[str, Any]) -> dict[str, Any]:
-            self.looked.add("listen")
+            self._fetched("listen")
             if self.audio == "unplayable":
                 return _say(_UNPLAYABLE)
             if self.audio == "waiting":
@@ -251,6 +262,8 @@ class CallEvidence:
             return "a verdict needs an explanation of what the agent did"
         if not str(args.get("evidence") or "").strip():
             return "a verdict needs the evidence it rests on and where it came from"
+        if self.fetched:
+            return "read what you just asked for before deciding"
         if self.recording and "listen" not in self.looked:
             return "listen to the call recording before deciding"
         if self.messages and "transcript" not in self.looked:
@@ -276,6 +289,7 @@ async def run_judge_conversation(
     failed_turns = 0
     for step in range(steps):
         forced = step == steps - 1
+        evidence.delivered()
         try:
             reply = await asyncio.to_thread(_complete, conversation, tools, forced)
         except NoGateway:
@@ -333,14 +347,26 @@ async def request_final_verdicts(
         f"{prompt}\n\nWhat was said:\n{said}\n\n"
         f"What was found while looking:\n{found or '(nothing)'}\n\n{ask}"
     )
+    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": final}]
+    if evidence.recording and evidence.audio != "unplayable":
+        try:
+            messages.append(_recording(evidence.recording))
+        except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
+            logger.warning("judge could not read the recording for %s: %s", evidence.label, exc)
+            messages.append({"role": "user", "content": _UNPLAYABLE})
+    evidence.fetched.clear()
     evidence.looked.update({"listen", "transcript"})
     try:
-        reply = await asyncio.to_thread(
-            _complete,
-            [{"role": "system", "content": instructions}, {"role": "user", "content": final}],
-            [decide],
-            True,
-        )
+        try:
+            reply = await asyncio.to_thread(_complete, messages, [decide], True)
+        except NoGateway:
+            raise
+        except Exception:
+            if len(messages) == 2:
+                raise
+            # The recording itself was refused: decide from the transcript.
+            unplayable = [*messages[:2], {"role": "user", "content": _UNPLAYABLE}]
+            reply = await asyncio.to_thread(_complete, unplayable, [decide], True)
         for call in reply.get("tool_calls") or []:
             await _run([decide], call)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
@@ -420,6 +446,8 @@ async def judge_sub_goal(
         if "it" not in verdict:
             await request_final_verdicts(_INSTRUCTIONS, prompt, conversation, evidence, decide, ask)
     except NoGateway:
+        evidence.batched = False
+        evidence.delivered()
         evidence.looked.add("listen")
         spec = SessionSpec(
             system_prompt=_INSTRUCTIONS,

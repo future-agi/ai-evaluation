@@ -59,7 +59,7 @@ def _run(monkeypatch, turns):
 def test_each_sub_goal_gets_its_own_verdict_and_its_criteria_are_kept_apart(monkeypatch):
     verdicts, prompts, _ = _run(
         monkeypatch,
-        [[_call("read_transcript", {}), _decide("confirmed_first", True, 1), _decide("no_card_by_voice", False, 2)]],
+        [[_call("read_transcript", {})], [_decide("confirmed_first", True, 1), _decide("no_card_by_voice", False, 2)]],
     )
     assert verdicts == {
         "confirmed_first": (True, "confirmed_first explained"),
@@ -76,7 +76,8 @@ def test_unknown_repeated_or_premature_verdicts_are_refused(monkeypatch):
         monkeypatch,
         [
             [_decide("confirmed_first", True, 1)],
-            [_call("read_transcript", {}, 2), _decide("made_up", True, 3), _decide("confirmed_first", True, 4)],
+            [_call("read_transcript", {}, 2)],
+            [_decide("made_up", True, 3), _decide("confirmed_first", True, 4)],
             [_decide("confirmed_first", False, 5)],
             [_decide("no_card_by_voice", True, 6)],
         ],
@@ -90,8 +91,20 @@ def test_unknown_repeated_or_premature_verdicts_are_refused(monkeypatch):
     }
 
 
+def test_verdicts_batched_with_the_evidence_they_rest_on_all_wait_for_it(monkeypatch):
+    verdicts, _, said = _run(
+        monkeypatch,
+        [
+            [_call("read_transcript", {}, 1), _decide("confirmed_first", True, 2), _decide("no_card_by_voice", True, 3)],
+            [_decide("confirmed_first", True, 4), _decide("no_card_by_voice", True, 5)],
+        ],
+    )
+    assert said[1:] == ["read what you just asked for before deciding"] * 2
+    assert set(verdicts) == {"confirmed_first", "no_card_by_voice"}
+
+
 def test_an_undecided_sub_goal_is_left_out_for_the_caller_to_fall_back(monkeypatch):
-    turns = [[_call("read_transcript", {}), _decide("confirmed_first", True, 1)]] + [
+    turns = [[_call("read_transcript", {})], [_decide("confirmed_first", True, 1)]] + [
         [_call("inspect_world", {}, i)] for i in range(2, 200)
     ]
     verdicts, prompts, _ = _run(monkeypatch, turns)

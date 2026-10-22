@@ -254,7 +254,8 @@ def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transc
             [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"})],
             [_call("listen", {})],
             RuntimeError("413 request too large"),
-            [_call("read_transcript", {}), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
+            [_call("read_transcript", {})],
+            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
         ]
     )
 
@@ -276,7 +277,47 @@ def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transc
     )
     assert verdict == (True, "it confirmed the order")
     assert said[0] == "listen to the call recording before deciding"
-    assert audio == [False, False, True, False]
+    assert audio == [False, False, True, False, False]
+
+
+def test_evidence_asked_for_in_the_same_turn_as_a_verdict_is_read_before_the_verdict_counts(monkeypatch, tmp_path):
+    """A verdict batched with the evidence it rests on was made before that evidence reached the model."""
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    seen: list[tuple[bool, bool]] = []
+    decide = _call("decide", {"verdict": "pass", "evidence": "what was said", "explanation": "consent obtained"}, 3)
+    turns = iter([[_call("listen", {}, 1), _call("read_transcript", {}, 2), decide], [decide]])
+
+    def _complete(conversation, tools, forced):
+        heard = any(isinstance(m.get("content"), list) for m in conversation)
+        read = any(m.get("role") == "tool" and "NO consent" in str(m.get("content")) for m in conversation)
+        seen.append((heard, read))
+        return {"role": "assistant", "tool_calls": next(turns)}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "user", "content": "NO consent"}]
+    verdict = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
+    )
+    assert verdict == (True, "consent obtained")
+    assert seen == [(False, False), (True, True)]
+
+
+def test_the_last_request_plays_the_recording_it_counts_as_heard(monkeypatch, tmp_path):
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    finals: list[list[dict]] = []
+
+    def _complete(conversation, tools, forced):
+        if [t.name for t in tools] == ["decide"]:
+            finals.append(conversation)
+            return {"role": "assistant", "tool_calls": [_call("decide", {"verdict": "fail", "evidence": "the recording", "explanation": "it kept the number"})]}
+        return {"role": "assistant", "tool_calls": [_call("inspect_world", {})]}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    held = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording)))
+    assert held == (False, "it kept the number")
+    assert any(isinstance(m.get("content"), list) for m in finals[0])
 
 
 def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypatch):
@@ -515,7 +556,8 @@ def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_trans
         [
             [_call("listen", {})],
             [_call("inspect_world", {}), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
-            [_call("read_transcript", {}, 2), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 3)],
+            [_call("read_transcript", {}, 2)],
+            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 3)],
         ]
     )
 
