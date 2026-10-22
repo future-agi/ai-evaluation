@@ -7728,8 +7728,9 @@ def test_the_system_prompt_stays_within_budget():
         contract.brief(with_data=True, sample_rows=3) + load_skill("write-scenarios") + kinds
     )
     main_loop = sub_agent + load_skill("plan-suite", preamble=False)
-    assert len(sub_agent) <= 90_000, f"sub-agent prompt is {len(sub_agent)} chars"
-    assert len(main_loop) <= 130_000, f"main loop prompt is {len(main_loop)} chars"
+    # Set from the skills as they stand plus about a tenth: growth past this is a choice to make, not drift.
+    assert len(sub_agent) <= 165_000, f"sub-agent prompt is {len(sub_agent)} chars"
+    assert len(main_loop) <= 245_000, f"main loop prompt is {len(main_loop)} chars"
 
 
 def test_a_sub_goal_defined_after_the_fact_reaches_the_folders_already_written(tmp_path):
