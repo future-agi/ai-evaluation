@@ -29,12 +29,7 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
-from .usage import (
-    UsageDenied,
-    UsageUnavailable,
-    failure_domain_for_code,
-    simulator_funding,
-)
+from .usage import failure_domain_for_code, simulator_funding
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -517,17 +512,6 @@ class HostedChatCallRunner:
             },
         )
         funding = simulator_funding()
-        if self._context.usage_reporter is not None and funding == "platform":
-            try:
-                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
-            except UsageDenied as exc:
-                raise CallAborted(
-                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
-                ) from exc
-            except UsageUnavailable as exc:
-                raise CallAborted(
-                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
-                ) from exc
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None

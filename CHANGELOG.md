@@ -62,6 +62,11 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Hosted voice calls whose agent writes its own tool trace no longer report
   each call twice: the agent's line (real arguments, structured result) takes
   the time from the LiveKit hook's line for the same call.
+- Hosted chat simulations are metered again. Since chat calls moved into an
+  isolated worker, the worker had no usage reporter, so no chat call was checked
+  against the usage limit or recorded as `text_call`. The parent now checks
+  before starting the worker and records the simulator tokens the worker
+  measured, for repository and Retell chat agents alike.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

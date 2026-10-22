@@ -38,7 +38,7 @@ from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .usage import UsageDenied, UsageUnavailable, simulator_funding
+from .usage import simulator_funding
 
 logger = logging.getLogger(__name__)
 
@@ -338,17 +338,6 @@ class RetellChatCallRunner:
             scenario_id=scenario.scenario_id,
         )
         funding = simulator_funding()
-        if self._context.usage_reporter is not None and funding == "platform":
-            try:
-                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
-            except UsageDenied as exc:
-                raise CallAborted(
-                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
-                ) from exc
-            except UsageUnavailable as exc:
-                raise CallAborted(
-                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
-                ) from exc
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None
