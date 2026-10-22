@@ -1549,12 +1549,14 @@ def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> 
                 "scenario_key": "a",
                 "scenario_id": "platform-a",
                 "trial_index": 1,
+                "call_execution_id": "call-1",
             },
             {
                 "execution_key": "a-trial-2",
                 "scenario_key": "a",
                 "scenario_id": "platform-a",
                 "trial_index": 2,
+                "call_execution_id": "call-2",
             },
         ],
     )
@@ -1567,6 +1569,7 @@ def test_execution_manifest_selects_and_expands_trials_without_reauthoring() -> 
         "platform-a",
         "platform-a",
     ]
+    assert [scenario.call_execution_id for scenario in selected] == ["call-1", "call-2"]
     assert selected[0].setup is authored[0].setup
     assert selected[1].ready is authored[0].ready
 
@@ -2753,3 +2756,20 @@ def test_the_run_specific_policy_reaches_writers_and_planner_before_their_checkl
     assert writer.index(policy) < writer.index("a scenario coherent in itself")
     assert said.index(policy) < said.index("Before you brief anyone")
 
+
+
+def test_a_level_the_person_asked_for_is_not_held_to_its_share() -> None:
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenario_tools import _over_its_share
+
+    grid = {"interface": ["noisy_line", "quiet_line", "accented"]}
+    quiet = [Scenario(name=f"q{one}", coverage={"interface": "quiet_line"}) for one in range(5)]
+
+    refused = _over_its_share({"interface": "quiet_line"}, grid, quiet, 25)
+    assert "whole share" in refused and "asked_for" in refused
+    assert _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["quiet_line"]}
+    ) == ""
+    assert "whole share" in _over_its_share(
+        {"interface": "quiet_line"}, grid, quiet, 25, asked={"interface": ["accented"]}
+    )

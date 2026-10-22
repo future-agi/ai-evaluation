@@ -20,6 +20,7 @@ from .contract import (
     known_modalities,
     validate_contract,
 )
+from .instrumentation_evidence import detect_instrumentation
 
 CONTRACT_SERVER = "contract"
 
@@ -144,6 +145,9 @@ def accept_contract(
         problems.extend(tool_evidence_problems(contract, source_root))
     if problems:
         return _problems(problems, arrived)
+    contract = contract.model_copy(
+        update={"instrumentation": detect_instrumentation(source_root)}
+    )
 
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / "contract.json"

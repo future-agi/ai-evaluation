@@ -12,6 +12,10 @@ import argparse
 import asyncio
 import json
 import os
+import sys
+import shutil
+import threading
+import time
 from pathlib import Path
 import tempfile
 
@@ -63,6 +67,19 @@ def _load_provider_import_profile(
             "system_prompt": str(job.agent.config["target_system_prompt"]),
             "tools": [],
         }
+    if (
+        job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and job.agent.connector.strip().lower() == "livekit"
+    ):
+        if secrets_path is not None:
+            secrets_path.unlink(missing_ok=True)
+        return {
+            "provider": "livekit",
+            "modality": "voice",
+            "agent_name": str(job.agent.config["agent_name"]),
+            "system_prompt": str(job.agent.config["target_system_prompt"]),
+            "tools": [],
+        }
     inspect_connect_only_provider = (
         job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
         and job.agent.connector.strip().lower() in {"vapi", "retell", "retell_chat"}
@@ -105,6 +122,105 @@ def _load_provider_import_profile(
     return profile
 
 
+def agent_source_kind(job: HarnessJob, profile: dict[str, object] | None) -> str:
+    """How authoring reads the agent: `provider`, `repo` or `spec`.
+
+    Transport kinds such as ``archive`` and ``github`` describe how the platform acquired the
+    source. Once extracted, they are repositories. A source-free connect-only provider is the
+    exception: its fetched definition is the source of truth and must never be represented by
+    the intentionally empty /work/source directory.
+    """
+    if (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+        and profile is not None
+    ):
+        return "provider"
+    kind = str(job.metadata.get("source_kind") or "repo")
+    return kind if kind in {"repo", "spec"} else "repo"
+
+
+def _await_harness(output: Path) -> int:
+    """Wait while the conversation's harness builds the environment in this sandbox."""
+    finished = output / ".futureagi-build-finished.json"
+    deadline = time.monotonic() + int(os.environ.get("ALK_HOSTED_AUTHORING_MAX_DURATION_SECONDS") or 3300)
+    while time.monotonic() < deadline:
+        if finished.is_file():
+            return 0
+        time.sleep(5)
+    print("the harness did not finish the build in time", file=sys.stderr)
+    return 1
+
+
+def _review_while_writing(job: HarnessJob, source: Path, output: Path, done: threading.Event) -> None:
+    """Run the source data review against the saved world while the harness writes scenarios.
+
+    Best effort: whatever it does not finish, validation reviews exactly as before."""
+    from .authoring_runtime_validation import validate_once
+    from .contract import is_data_free_conversation
+    from .source_data_invariants import review_while_writing, world_digest
+    from .understand import load as load_contract
+    from .world.snapshot import saved as world_saved
+
+    failures: dict[str, int] = {}
+    while not done.is_set():
+        if not world_saved(output):
+            time.sleep(5)
+            continue
+        contract = load_contract(output)
+        if contract is None or is_data_free_conversation(contract) or (
+            contract.data_store and contract.data_store.kind.strip().lower() == "in_process"
+        ):
+            return
+        world_key = world_digest(output)
+        if failures.get(world_key, 0) >= 2:
+            time.sleep(5)
+            continue
+        changed: list[bool] = []
+        try:
+            print("early source data review: world saved, reviewing", flush=True)
+            with tempfile.TemporaryDirectory(prefix="early-review-", dir=output.parent) as root:
+                staging = Path(root) / "authoring"
+                shutil.copytree(
+                    output,
+                    staging,
+                    ignore=shutil.ignore_patterns(".claude", "scenarios", "environment-bundle"),
+                )
+                (staging / "scenarios").mkdir()
+
+                async def review(world, endpoints):
+                    changed.append(
+                        await review_while_writing(
+                            source,
+                            output,
+                            world,
+                            endpoints=endpoints,
+                            world_key=world_key,
+                            done=done,
+                            expected=job.scenario_count,
+                        )
+                    )
+
+                asyncio.run(
+                    validate_once(
+                        job.model_copy(update={"scenario_count": 0}), source, staging, review=review
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001 - validation reviews whatever this did not
+            failures[world_key] = failures.get(world_key, 0) + 1
+            note = output / "generic-harness" / "source-data-review-early-error.txt"
+            try:
+                note.parent.mkdir(parents=True, exist_ok=True)
+                with note.open("a", encoding="utf-8") as handle:
+                    handle.write(f"{type(exc).__name__}: {exc}"[:4000] + "\n")
+            except OSError:
+                pass
+            time.sleep(30)
+            continue
+        if not any(changed):
+            return
+
+
 def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("job", type=Path)
@@ -126,6 +242,11 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         help="Control-owned sanitized profile reused across authoring retries",
     )
     parser.add_argument(
+        "--await-harness",
+        action="store_true",
+        help="The conversation's harness builds the environment; wait for it to finish the build",
+    )
+    parser.add_argument(
         "--conversation-capabilities",
         type=Path,
         help="Conversation capability document for messages delivered to the current stage",
@@ -136,22 +257,8 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
     profile = _load_provider_import_profile(
         job, args.target_secrets, args.provider_profile_cache
     )
-    # Transport kinds such as ``archive`` and ``github`` describe how the platform acquired the
-    # source. Once extracted, they are repositories. A source-free connect-only provider is the
-    # exception: its fetched definition is the source of truth and must never be represented by
-    # the intentionally empty /work/source directory.
-    source_free_provider = (
-        job.source.kind is SourceKind.PROVIDER
-        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
-        and profile is not None
-    )
-    source_kind = (
-        "provider"
-        if source_free_provider
-        else str(job.metadata.get("source_kind") or "repo")
-    )
-    if source_kind not in {"repo", "spec", "provider"}:
-        source_kind = "repo"
+    source_kind = agent_source_kind(job, profile)
+    source_free_provider = source_kind == "provider"
     namespace = argparse.Namespace(
         path=str(args.source.resolve()),
         name=str(job.metadata.get("agent_name") or args.source.name),
@@ -180,8 +287,33 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
                 json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
             os.environ[PROVIDER_IMPORT_PROFILE_PATH_ENV] = str(profile_path)
+        early = threading.Event()
+        reviewer = None
+        if (
+            args.await_harness
+            and validate_runtime
+            and job.metadata.get("generic_harness_v1") is True
+            and not source_free_provider
+            and job.source.kind is not SourceKind.PROVIDER
+        ):
+            reviewer = threading.Thread(
+                target=_review_while_writing,
+                args=(job, args.source.resolve(), args.output.resolve(), early),
+                name="early-source-data-review",
+                daemon=True,
+            )
+            reviewer.start()
         try:
-            status = asyncio.run(_auto(namespace))
+            try:
+                status = (
+                    _await_harness(args.output.resolve())
+                    if args.await_harness
+                    else asyncio.run(_auto(namespace))
+                )
+            finally:
+                early.set()
+                if reviewer is not None:
+                    reviewer.join()
             if status == 0 and validate_runtime:
                 from .authoring_runtime_validation import validate_and_repair
 

@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import quote as urlquote, urlsplit
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from .bundle import CapabilityProtocol
 from .bundle_v2 import (
@@ -64,6 +64,7 @@ from .bundle_v2 import (
 )
 from .diagnostics import DiagnosticLocation, HarnessDiagnostic
 from .job import FailureDomain
+from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
 from .provider_import import (
@@ -549,6 +550,20 @@ _SPAWN_GUARDED_KEYS = (
     "FI_WORKER_HEALTH_PORT",
 )
 
+# The mark hook alone, for a process that needs no LiveKit hook. A failure to import or run it
+# writes the failed line and the process starts without the mark; the next `sitecustomize` on the
+# path, which `install()` runs, does not run either.
+_SIMULATION_MARK_SITECUSTOMIZE = (
+    "# Installs the simulation mark hook beside this file; a failure is reported on stderr.\n"
+    "try:\n"
+    "    import simulation_mark_bootstrap\n"
+    "    simulation_mark_bootstrap.install()\n"
+    "except Exception:\n"
+    "    import sys\n"
+    "\n"
+    "    sys.stderr.write('simulation mark hook: failed\\n')\n"
+)
+
 
 # --- C1 §4 bind-error attribution -------------------------------------------------------------
 
@@ -867,6 +882,7 @@ def select_process_secrets(
     *,
     secret_values: dict[str, str],
     secret_purposes: dict[str, str],
+    include_observability_export: bool = False,
 ) -> dict[str, str]:
     """§2b: "the provisioner injects every alias whose ref's `purpose` is listed [in
     `secret_purposes`], under the **alias** as the env-var name." `secret_purposes` maps each
@@ -877,7 +893,12 @@ def select_process_secrets(
     `SecretPurpose.SOURCE_CHECKOUT` and `SecretPurpose.SIMULATOR_PROVIDER` are excluded
     unconditionally. Checkout credentials are gateway-only. Simulator credentials belong to the
     harness control/caller and must never enter a customer-authored process environment, even if
-    an untrusted or generated bundle attempts to claim that purpose.
+    an untrusted or generated bundle attempts to claim that purpose. `SecretPurpose.
+    OBSERVABILITY_EXPORT` is the opposite: the platform owns it and, when
+    `include_observability_export` is true (the process's platform-decided environment holds
+    `FI_SIMULATION_EXPORT`), the process gets it whether or not the bundle claims it
+    (preflight refuses a claim, and a claim that reaches here is dropped). Without a mode it gets
+    none.
     """
     claimed = {
         purpose.value
@@ -886,8 +907,11 @@ def select_process_secrets(
         not in {
             SecretPurpose.SOURCE_CHECKOUT,
             SecretPurpose.SIMULATOR_PROVIDER,
+            SecretPurpose.OBSERVABILITY_EXPORT,
         }
     }
+    if include_observability_export:
+        claimed.add(SecretPurpose.OBSERVABILITY_EXPORT.value)
     return {
         alias: value
         for alias, value in secret_values.items()
@@ -2100,6 +2124,7 @@ def spawn_source_process(
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
     chown: Callable[[Path, int, int], None] = _default_chown,
+    customer_code_environment: dict[str, str] | None = None,
 ) -> SpawnedWorldProcess:
     """§2b: `run_command` "exec'd once per world with cwd `/work/build/<name>/`" — the build tree
     is read-only by convention at run time; `world_dir` (`{{WORLD_DIR}}`) is this process's own
@@ -2107,7 +2132,13 @@ def spawn_source_process(
     Chowned to the process's declared `user` before spawn (F1, p5-round1-review) — otherwise a
     process running as anyone but the harness's own uid could not write into its own `{{WORLD_
     DIR}}` at all, since the harness (as `svc-control`) is the one that just created it.
+
+    `customer_code_environment` is the platform's decision for this run, taken from `job.json`:
+    its names replace or extend the process environment (`OTEL_RESOURCE_ATTRIBUTES` is appended
+    to the customer's own value), and `FI_SIMULATION_EXPORT` in it places the mark hook beside
+    the world directory's `sitecustomize.py`. This function repeats none of that decision.
     """
+    customer_code_environment = dict(customer_code_environment or {})
     resolved_user = _resolve_process_user(
         process.user,
         resolver=user_resolver,
@@ -2123,24 +2154,46 @@ def spawn_source_process(
         # worker isolation) behind one `sitecustomize.py`, so either env marker alone is
         # enough to justify writing it -- a worker-isolation-only job must not silently miss
         # the hook just because it happens not to also want tool tracing.
-        if (
+        livekit_hook_due = (
             "HARNESS_TOOL_TRACE" in process.environment
             or "FI_WORKER_HEALTH_PORT" in process.environment
-        ):
+        )
+        mark_hook_due = "FI_SIMULATION_EXPORT" in customer_code_environment
+        if livekit_hook_due or mark_hook_due:
             sitecustomize_hook = world_dir / "sitecustomize.py"
             # Reset reuses this agent-owned directory. The hook is immutable for the job,
             # so preserve an existing copy instead of overwriting a 0444 file after ownership
-            # has already moved from svc-control to svc-agent.
+            # has already moved from svc-control to svc-agent. One job's hooks never change
+            # between attempts, so a copy of the other kind is not expected here.
             if not sitecustomize_hook.exists():
-                sitecustomize_hook.write_bytes(
+                if livekit_hook_due:
+                    # The LiveKit file carries the mark hook's guarded import itself, so
+                    # both hooks share this one file.
+                    sitecustomize_hook.write_bytes(
+                        Path(__file__)
+                        .with_name("livekit_tool_trace_bootstrap.py")
+                        .read_bytes()
+                    )
+                else:
+                    sitecustomize_hook.write_text(
+                        _SIMULATION_MARK_SITECUSTOMIZE, encoding="utf-8"
+                    )
+                sitecustomize_hook.chmod(0o444)
+        if mark_hook_due:
+            # The customer's interpreter has no `fi.alk`, so the module sits beside the hook.
+            mark_module = world_dir / "simulation_mark_bootstrap.py"
+            if not mark_module.exists():
+                mark_module.write_bytes(
                     Path(__file__)
-                    .with_name("livekit_tool_trace_bootstrap.py")
+                    .with_name("simulation_mark_bootstrap.py")
                     .read_bytes()
                 )
-                sitecustomize_hook.chmod(0o444)
+                mark_module.chmod(0o444)
         if resolved_user is not None:
             chown(world_dir, resolved_user.pw_uid, resolved_user.pw_gid)
     except OSError as exc:
+        # A hook that cannot be placed fails the spawn on purpose: a process that exports with
+        # our key but without its mark is worse than a failed run.
         # N9, p6-review-r2: same class as `spawn_managed_process`'s own data-dir setup boundary —
         # a permission error creating/chowning this process's `{{WORLD_DIR}}` used to raise bare.
         raise ProcessRuntimeError(
@@ -2159,7 +2212,10 @@ def spawn_source_process(
         configuration_addresses=configuration_addresses,
     )
     injected = select_process_secrets(
-        process, secret_values=secret_values, secret_purposes=secret_purposes
+        process,
+        secret_values=secret_values,
+        secret_purposes=secret_purposes,
+        include_observability_export=mark_hook_due,
     )
     injected = _materialize_process_secret_files(
         process,
@@ -2257,6 +2313,16 @@ def spawn_source_process(
         },
     )
     env.update(runtime_environment)
+    for name, value in customer_code_environment.items():
+        if name == "OTEL_RESOURCE_ATTRIBUTES":
+            # OpenTelemetry reads the variable left to right into a map, so the platform's
+            # pairs come last and win a shared key while the customer's other pairs stay.
+            existing = env.get(name, "").strip()
+            env[name] = f"{existing},{value}" if existing else value
+        else:
+            env[name] = value
+    if mark_hook_due:
+        env["FI_SIMULATION_CALL_FILE"] = str(world_dir.parent / SIMULATION_CALL_FILE)
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
@@ -2325,6 +2391,13 @@ def build_tree_dir(work_directory: Path, process_name: str) -> Path:
         process_name=process_name,
         stage="build",
     )
+
+
+SIMULATION_CALL_FILE = "simulation_call_execution_id"
+
+
+def simulation_call_file(work_directory: Path, world_index: int) -> Path:
+    return work_directory / "worlds" / f"w{world_index}" / SIMULATION_CALL_FILE
 
 
 def world_scratch_dir(
@@ -3805,6 +3878,9 @@ class SpawnContext:
     # A dedicated Daytona sandbox can still share one LiveKit project with other jobs. Carry the
     # stable job identity into placeholder rendering so each worker gets a unique dispatch name.
     job_id: str = "local"
+    # The platform's per-run decision for customer code (job.json `metadata`), applied to every
+    # customer process's environment as is.
+    customer_code_environment: dict[str, str] = field(default_factory=dict)
     runner: ProcessRunner = default_process_runner
     # Shared by `build_process_trees`' `build_commands` steps and `spawn_managed_process`'s
     # postgres `initdb` bootstrap — both are "run one synchronous step, check its exit code."
@@ -3919,6 +3995,7 @@ def spawn_world(
                     user_resolver=context.user_resolver,
                     require_declared_user=context.require_declared_user,
                     chown=context.chown,
+                    customer_code_environment=context.customer_code_environment,
                 )
             handles[name] = handle
             if isinstance(process, SourceProcess) and process.started_check is not None:
@@ -5391,6 +5468,40 @@ def _read_job_id(work_directory: Path) -> str:
     return value or "local"
 
 
+def _read_customer_code_environment(work_directory: Path) -> dict[str, str]:
+    """Return the platform's per-run environment for customer processes, or ``{}``.
+
+    The platform decides at launch whether the run exports and writes the answer into
+    ``/work/job.json`` as ``metadata.customer_code_environment``. A missing file, metadata or
+    key leaves the run exactly as it would be without the feature, silently. A value of the wrong
+    shape does too, but with one warning that names neither the key nor the value, so that
+    someone can find out why the run is neither marked nor exporting. Nothing here raises. The
+    shape is checked through `HarnessJobMetadata` (job.py); the names and the values are not
+    re-checked, the platform already did.
+    """
+    try:
+        raw = json.loads((work_directory / "job.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    metadata = raw.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    if "customer_code_environment" not in metadata:
+        return {}
+    try:
+        typed = HarnessJobMetadata.model_validate(
+            {"customer_code_environment": metadata["customer_code_environment"]}
+        )
+    except ValidationError:
+        logger.warning(
+            "the job's customer code environment is not a map of text to text; ignored"
+        )
+        return {}
+    return dict(typed.customer_code_environment)
+
+
 def _read_job_secret_purposes(work_directory: Path) -> dict[str, str]:
     """§0.2/§4.1: `/work/job.json` is the provisioner's own configuration source — `agent.
     secret_refs` (§1: `{alias: {manager, key, version, purpose}}`) is where each alias's REAL
@@ -6082,6 +6193,9 @@ class ProcessRuntimeProvider:
                 secret_values=self._secret_values,
                 secret_purposes=self._secret_purposes,
                 job_id=_read_job_id(work_directory),
+                customer_code_environment=_read_customer_code_environment(
+                    work_directory
+                ),
                 runner=self._runner,
                 sync_run=self._sync_run,
                 prober=self._prober,
@@ -6845,6 +6959,73 @@ class ProcessRuntimeProvider:
             self._manifest, current, prober=self._context.prober
         )
         current.state = RuntimeState.READY if healthy_now else RuntimeState.UNHEALTHY
+
+    async def clone_world_database(
+        self, runtime: EnvironmentRuntime, name: str
+    ) -> EnvironmentRuntime | None:
+        """`runtime` with its postgres endpoint on logical database `name`, freshly cloned from
+        the sealed baseline on the same job-shared engine. None unless the world is exactly one
+        `template_database` store, so callers keep whole-runtime worlds for every other shape."""
+        import asyncio
+
+        return await asyncio.to_thread(self._clone_world_database_sync, runtime, name)
+
+    def _clone_world_database_sync(
+        self, runtime: EnvironmentRuntime, name: str
+    ) -> EnvironmentRuntime | None:
+        manifest, context, build_output = (
+            self._manifest,
+            self._context,
+            self._build_output,
+        )
+        if (
+            manifest is None
+            or context is None
+            or build_output is None
+            or not _stores_reset_in_place(manifest)
+        ):
+            return None
+        stores = _store_by_process_name(manifest)
+        endpoints = [
+            (key, endpoint)
+            for key, endpoint in runtime.endpoints.items()
+            if endpoint.protocol == "postgres"
+        ]
+        if len(stores) != 1 or len(endpoints) != 1:
+            return None
+        key, endpoint = endpoints[0]
+        process_name = next(iter(stores))
+        capability = manifest.capabilities.get(endpoint.capability)
+        record = next(
+            (r for r in build_output.stores if r.process_name == process_name), None
+        )
+        credentials = context.credentials.get(process_name)
+        if (
+            capability is None
+            or capability.service != process_name
+            or process_name not in self._job_shared_handles
+            or record is None
+            or credentials is None
+        ):
+            return None
+        _reset_template_database(
+            host="localhost",
+            port=context.port_plan.port_for(process_name, runtime.world_index),
+            credentials=credentials,
+            world_db=name,
+            template_db=record.baseline_reference,
+            sql_runner=context.sql_runner,
+            process_name=process_name,
+        )
+        address = urlsplit(endpoint.address)._replace(path=f"/{name}").geturl()
+        return runtime.model_copy(
+            update={
+                "endpoints": {
+                    **runtime.endpoints,
+                    key: endpoint.model_copy(update={"address": address}),
+                }
+            }
+        )
 
     async def close(self, *, work_directory: Path) -> None:
         import asyncio

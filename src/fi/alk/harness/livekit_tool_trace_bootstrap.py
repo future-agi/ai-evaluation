@@ -21,6 +21,22 @@ operator reading worker logs should know that report is suppressed by design, no
 
 from __future__ import annotations
 
+# The mark hook sits beside this file only for a run that exports, so its absence is normal and
+# silent; any other failure is reported, and must never cost tool tracing or worker isolation.
+try:
+    import simulation_mark_bootstrap
+
+    simulation_mark_bootstrap.install()
+except ImportError as exc:
+    if exc.name != "simulation_mark_bootstrap":
+        import sys
+
+        sys.stderr.write("simulation mark hook: failed\n")
+except Exception:  # noqa: BLE001 - the mark must never cost tool tracing or worker isolation
+    import sys
+
+    sys.stderr.write("simulation mark hook: failed\n")
+
 import functools
 import json
 import logging
@@ -54,6 +70,9 @@ def _record(event: Any) -> None:
                 ),
                 # Epoch seconds when the model issued the call; places it in the transcript.
                 "at": getattr(call, "created_at", None),
+                # An agent may also write its own line to this file for the same call; the
+                # collector merges the two by this marker (call_runner._collect_file_tool_calls).
+                "source": "livekit",
             }
         )
     if not records:

@@ -7,6 +7,7 @@ import pytest
 
 from fi.alk.harness.job import (
     HarnessJob,
+    HarnessJobMetadata,
 )
 from fi.simulate.runtime.spec import RuntimeRequirements
 
@@ -70,6 +71,37 @@ def test_hosted_job_requires_resolved_commit():
     payload["source"]["commit_sha"] = None
     with pytest.raises(ValueError, match="github_commit_sha_required"):
         HarnessJob.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "mark",
+    [{"FI_SIMULATION_EXPORT": "our_keys"}, [], None, {"A": 1}],
+    ids=["good", "list", "null", "non_string_value"],
+)
+def test_a_hosted_job_loads_with_any_customer_code_environment(mark):
+    """`metadata.customer_code_environment` stays a loose entry of the job, so no value of it
+    can fail the run at load; readers validate it through `HarnessJobMetadata`."""
+    payload = _job().model_dump(mode="json")
+    # What the platform's `_with_simulation_mark` writes (future-agi
+    # `simulate/services/hosted_harness_gateway.py`).
+    payload["metadata"] = {**payload["metadata"], "customer_code_environment": mark}
+
+    job = HarnessJob.model_validate(payload)
+
+    assert job.metadata["customer_code_environment"] == mark
+
+
+def test_a_loaded_hosted_job_reads_its_customer_code_environment_through_the_typed_model():
+    mark = {"FI_SIMULATION_EXPORT": "our_keys"}
+    payload = _job().model_dump(mode="json")
+    payload["metadata"] = {**payload["metadata"], "customer_code_environment": mark}
+
+    job = HarnessJob.model_validate(payload)
+    typed = HarnessJobMetadata.model_validate(
+        {"customer_code_environment": job.metadata["customer_code_environment"]}
+    )
+
+    assert typed.customer_code_environment == mark
 
 
 def test_snapshot_catalog_matches_engine_contract():

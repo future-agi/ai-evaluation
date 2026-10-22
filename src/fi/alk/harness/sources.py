@@ -199,7 +199,7 @@ class ProviderSource:
     def briefing(self) -> str:
         return (
             "This is an external agent, not a repository. The sanitized definition below is "
-            "the only supplied source of truth. A phone-only connection may contain just the "
+            "the only supplied source of truth. A phone or LiveKit connection may contain just the "
             "user-supplied prompt; it is not a verified provider inspection. There is no source "
             "code to search or open. Do not invent behavior or tool inputs absent from this "
             "definition.\n\n"

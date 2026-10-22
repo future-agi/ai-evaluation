@@ -32,6 +32,8 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 
+from fi import agentcc
+
 from .base import (
     ASK_TOOL,
     DELEGATE_TOOL,
@@ -362,22 +364,15 @@ class ClaudeBackend:
 
     def can_drive(self, model: str) -> bool:
         # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
-        # translates it for the provider named by the model. Without a gateway, this backend
-        # still only advertises models supported by Claude Code directly.
+        # translates it for any provider configured behind the virtual key. Without a gateway,
+        # this backend only advertises models supported by Claude Code directly.
         named = (model or "").lower()
         if "claude" in named:
             return True
-        if os.environ.get("AGENTCC_API_KEY", "").strip():
-            return True
-        gateway_ready = bool(
-            (
-                os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
-                and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
-            )
-            or os.environ.get("AGENTCC_API_KEY", "").strip()
+        gateway_ready = agentcc.gateway() is not None or bool(
+            os.environ.get("ALK_CLAUDE_GATEWAY_URL", "").strip()
+            and os.environ.get("ALK_CLAUDE_GATEWAY_API_KEY", "").strip()
         )
-        # Agent CC's native Anthropic endpoint accepts the Claude Agent SDK wire format and
-        # translates it for any provider configured behind the virtual key.
         return gateway_ready and bool(named)
 
     def create(self, spec: SessionSpec) -> ClaudeSession:
@@ -422,6 +417,8 @@ class ClaudeBackend:
                     tools=[*existing.tools, *(t for t in server.tools if t.name not in seen)],
                 )
         environment = dict(provider_env(spec.model))
+        # A whole skill with its references is one tool result; the default cap refuses it.
+        environment.setdefault("MAX_MCP_OUTPUT_TOKENS", "60000")
         context = spec.conversation
         if context is not None:
             environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
@@ -467,7 +464,7 @@ class ClaudeBackend:
             # is consulted, so a stage could rewrite an artifact by hand and skip the tool whose
             # whole job is to validate that change.
             options.permission_mode = "default"
-            options.disallowed_tools = list(UNWANTED)
+            options.disallowed_tools = [name for name in UNWANTED if name not in spec.builtins]
             options.hooks = gate_hooks(allowed)
             options.can_use_tool = spec.permission_override or permission_gate(
                 spec.ask, allowed

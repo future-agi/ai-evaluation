@@ -12,6 +12,7 @@ write tools is asking to skip the gates, and the answer is no.
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from pathlib import Path
 
@@ -34,6 +35,36 @@ def _error(text: str) -> dict:
 def _resolved(raw: str, cwd: Path) -> Path:
     path = Path(raw).expanduser()
     return path if path.is_absolute() else cwd / path
+
+
+# Where credentials live in a sandbox or a checkout, and what reads them. A session never needs
+# any of them: the platform hands secrets to processes as files and environment, not to a model.
+_SECRET_PATHS = re.compile(
+    r"(^|/)(\.env[^/]*|\.claude|\.ssh|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc"
+    r"|\.authoring-credentials)(/|$)"
+    r"|^/proc(/|$)|^/run/futureagi(/|$)|^/run/secrets(/|$)"
+    r"|(credential|secret|token|service[-_]?account)[^/]*\.json$|\.(pem|key|p12)$",
+    re.IGNORECASE,
+)
+# A search rooted here would reach into where credentials live.
+_SECRET_ROOTS = re.compile(r"^/(proc|run/futureagi|run/secrets)/")
+SECRET_REFUSAL = (
+    "Environment variables, credentials, keys and tokens are kept out of this session on purpose. "
+    "Do not read, print or work around this; tell the person you cannot share or handle secrets, "
+    "and carry on with the rest of the task."
+)
+
+
+def secret_path(raw: str, cwd: Path | None = None) -> bool:
+    """Whether a path leads to where credentials live, judged where it resolves, not how it is written."""
+    resolved = os.path.realpath(_resolved(raw, cwd or Path.cwd()))
+    return bool(_SECRET_PATHS.search(raw) or _SECRET_PATHS.search(resolved))
+
+
+def above_secrets(raw: str, cwd: Path | None = None) -> bool:
+    """Whether a search rooted here would reach into where credentials live."""
+    root = os.path.realpath(_resolved(raw, cwd or Path.cwd()))
+    return bool(_SECRET_ROOTS.match(root + "/")) or root in ("/", "/run", os.path.expanduser("~"))
 
 
 def _walk(root: Path):
@@ -62,6 +93,8 @@ def file_tools(cwd: str | None) -> list[ToolSpec]:
         if not raw:
             return _error("file_path is required")
         path = _resolved(raw, base)
+        if secret_path(raw, base):
+            return _error(SECRET_REFUSAL)
         if not path.is_file():
             return _error(f"{path} is not a file that exists")
         try:
@@ -85,10 +118,14 @@ def file_tools(cwd: str | None) -> list[ToolSpec]:
         if not pattern:
             return _error("pattern is required")
         root = _resolved(str(args.get("path") or "."), base)
+        if secret_path(str(root)) or above_secrets(str(root)):
+            return _error(SECRET_REFUSAL)
         if not root.is_dir():
             return _error(f"{root} is not a directory that exists")
         matches = []
         for entry in _walk(root):
+            if secret_path(str(entry)):
+                continue
             relative = str(entry.relative_to(root))
             if fnmatch.fnmatch(relative, pattern) or fnmatch.fnmatch(
                 entry.name, pattern
@@ -107,13 +144,15 @@ def file_tools(cwd: str | None) -> list[ToolSpec]:
         except re.error as exc:
             return _error(f"invalid regular expression: {exc}")
         root = _resolved(str(args.get("path") or "."), base)
+        if secret_path(str(root)) or above_secrets(str(root)):
+            return _error(SECRET_REFUSAL)
         wanted = str(args.get("glob") or "")
         hits: list[str] = []
         targets = [root] if root.is_file() else list(_walk(root)) if root.is_dir() else []
         if not targets:
             return _error(f"{root} does not exist")
         for entry in targets:
-            if wanted and not fnmatch.fnmatch(entry.name, wanted):
+            if secret_path(str(entry)) or (wanted and not fnmatch.fnmatch(entry.name, wanted)):
                 continue
             try:
                 text = entry.read_text(encoding="utf-8", errors="replace")

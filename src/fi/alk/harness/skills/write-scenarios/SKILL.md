@@ -493,7 +493,7 @@ called. Assert on what the world looks like afterwards and on what the caller wa
 | `try_calls` | Runs calls against a **throwaway copy** of the world and shows the state they leave. This is how you work out a solution and what its checks should assert. Nothing you do here is visible to anybody else. |
 | `add_sub_goal` | Adds a named thing this agent can be checked on, with its check in code. |
 | `submit_scenario` | Keeps one scenario, after validation and the three gates. |
-| `drop_scenario` | Removes one by name, or all of them with `*`. |
+| `drop_scenario` | Removes one by name; all of them only with `*` and `everything=true`. A suite is never saved empty: the saved scenarios stay until you submit a new one, which replaces them. |
 | `aim_for` | Sets how many scenarios are wanted. Needed when reopening an existing suite to add more, because the target starts at what is already there. Not for saving a suite nobody asked for. |
 | `save_scenarios` | Finishes the suite. Reports what is off about it as a whole. |
 | `amend_contract`, `add_rule`, `drop_rule`, `fix_tool` | Correct the contract when it is wrong. See the last section. |

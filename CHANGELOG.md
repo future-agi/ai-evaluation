@@ -36,6 +36,32 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   ringing call so people and slow lines could never answer; the engine now
   waits for `sip.callStatus == "active"` in the room within the answer
   deadline and reports a rejected call's reason (e.g. `user_unavailable`).
+- With `AGENTCC_API_KEY` (and `AGENTCC_BASE_URL`) set, the simulated caller's
+  LLM and the `vertex-gemini` harness backend reach Gemini through Agent
+  Command Center in the Gemini API's own format, as the claude backend already
+  did, so no Vertex credential is needed. `fi.agentcc` is the one place that
+  reads the gateway settings. A caller on `SIMULATOR_LLM_PROVIDER=vertex`, and
+  the `vertex-gemini` backend, stay on Vertex: a bare model name such as
+  `gemini-3.7-flash` is sent as `vertex_ai/gemini-3.7-flash`, which the gateway
+  routes to Vertex rather than to the Gemini API.
+- Simulator model fallbacks: `SIMULATOR_LLM_FALLBACK_MODELS` (ordered,
+  comma-separated) gives the simulated caller models to switch to when an
+  attempt fails or times out before it speaks.
+- The simulated caller's speech goes through Agent Command Center too: with
+  `AGENTCC_API_KEY` set, Deepgram and Cartesia speech-to-text and
+  text-to-speech connect to the gateway's copy of each vendor's streaming API
+  with the gateway key, so a sandbox needs no `DEEPGRAM_API_KEY` or
+  `CARTESIA_API_KEY`. Without a speech provider named, the caller then speaks
+  through Cartesia, as it does when a Cartesia key is present.
+- The `vertex-gemini` backend no longer fails on its first reply with the locked
+  ADK (2.7.1), which does not re-export `GetSessionConfig` from
+  `google.adk.sessions`.
+- Hosted chat transcripts stamp each turn with when it was delivered (`at`,
+  on the tool trace's clock), so tool calls sort between the customer's turn
+  and the agent's reply instead of after the conversation.
+- Hosted voice calls whose agent writes its own tool trace no longer report
+  each call twice: the agent's line (real arguments, structured result) takes
+  the time from the LiveKit hook's line for the same call.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

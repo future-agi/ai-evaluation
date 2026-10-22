@@ -18,9 +18,14 @@ EDITS = {
     "scenario_edits": {
         "book-ride": {
             "background_noise": "street",
+            "max_turns": 4,
             "tests": "unused by a call",
             "instruction": "ignored",
-            "persona": {"personality": "impatient", "name": "ignored"},
+            "persona": {
+                "personality": "impatient",
+                "languages": ["English", "Hindi"],
+                "name": "ignored",
+            },
         }
     }
 }
@@ -30,7 +35,13 @@ def test_edits_replace_only_what_a_call_plays():
     merged = _with_scenario_edits(SEALED, EDITS, "book-ride")
 
     assert merged["background_noise"] == "street"
-    assert merged["persona"] == {"name": "Asha", "accent": "Indian", "personality": "impatient"}
+    assert merged["persona"] == {
+        "name": "Asha",
+        "accent": "Indian",
+        "personality": "impatient",
+        "languages": ["English", "Hindi"],
+    }
+    assert merged["max_turns"] == 4
     assert merged["tests"] == "books the ride"
     assert merged["instruction"] == "book a ride"
     assert SEALED["background_noise"] == "office"
@@ -47,7 +58,10 @@ def test_a_voice_call_plays_the_edited_place():
 def test_a_chat_caller_is_the_edited_persona():
     merged = _with_scenario_edits(SEALED, EDITS, "book-ride")
 
-    assert _conversation_scenario(merged).persona.personality == "impatient"
+    scenario = _conversation_scenario(merged)
+
+    assert scenario.persona.personality == "impatient"
+    assert scenario.max_turns == 4
 
 
 def test_no_edits_leave_the_sealed_document():

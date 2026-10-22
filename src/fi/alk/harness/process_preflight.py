@@ -486,6 +486,19 @@ def _verify_secret_purposes(
             + ", ".join(sorted(simulator_claimants)),
         )
 
+    export_claimants = [
+        process.name
+        for process in manifest.processes
+        if isinstance(process, SourceProcess)
+        and SecretPurpose.OBSERVABILITY_EXPORT in process.secret_purposes
+    ]
+    if export_claimants:
+        raise PreflightError(
+            "secret_purpose_forbidden",
+            "customer processes cannot claim observability_export credentials: "
+            + ", ".join(sorted(export_claimants)),
+        )
+
     ref_has_target_provider = any(
         purpose == SecretPurpose.TARGET_PROVIDER.value
         for purpose in secret_refs.values()
@@ -508,7 +521,7 @@ def _verify_secret_purposes(
     # the phone connector dials with platform-owned telephony credentials.
     connect_only_claims_target_provider = isinstance(connect_only, dict) and str(
         connect_only.get("connector") or ""
-    ).lower() in {"vapi", "retell", "retell_chat"}
+    ).lower() in {"vapi", "retell", "retell_chat", "livekit"}
     guest_claims_target_provider = (
         process_claims_target_provider
         or lifecycle_claims_target_provider

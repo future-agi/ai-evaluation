@@ -3766,7 +3766,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         / "tools.py"
     ).read_text(encoding="utf-8")
     # Set by the amendment tools during later stages, never by whoever submits the contract.
-    ours = {"amendments"}
+    ours = {"amendments", "instrumentation"}
 
     def named(model: type[BaseModel]) -> list[str]:
         """Every field the model would have to fill, nested ones included.
@@ -7978,3 +7978,34 @@ def test_sub_goals_no_scenario_names_are_the_ones_left_out():
     assert unused_sub_goals(catalogue, kept) == ["test_probe_sub_goal_ast"]
 
 
+def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
+    import asyncio
+
+    from mcp.types import CallToolRequestParams
+
+    from fi.alk.harness import scenario_tools as module
+
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, contract, catalogue = _built_environment(tmp_path)
+    saved = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=saved)
+    module.write_scenarios(saved, root, catalogue)
+    server, _kept = module.scenario_tools(contract, root, root, wanted=1)
+    instance = _instance(server)
+
+    async def drop(arguments):
+        handler = _request_handler(instance, "tools/call")
+        answer = await handler.handler(
+            None, CallToolRequestParams(name="drop_scenario", arguments=arguments)
+        )
+        return answer.isError, answer.content[0].text
+
+    refused = asyncio.run(drop({"name": "*"}))
+    by_name = asyncio.run(drop({"name": saved[0].name}))
+    everything = asyncio.run(drop({"name": "*", "everything": True}))
+
+    assert refused[0] and "everything=true" in refused[1]
+    assert not by_name[0] and "nothing is saved yet" in by_name[1]
+    assert not everything[0] and "nothing is saved yet" in everything[1]
+    assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]

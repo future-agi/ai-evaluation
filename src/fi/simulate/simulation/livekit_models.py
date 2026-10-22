@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from collections.abc import Callable
@@ -9,6 +10,7 @@ from types import ModuleType
 import aiohttp
 
 try:
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
     from livekit.agents import llm as livekit_llm
     from livekit.agents import stt as livekit_stt
     from livekit.agents import tts as livekit_tts
@@ -17,6 +19,7 @@ except ImportError as exc:
         "LiveKit model construction requires the 'livekit' optional dependency"
     ) from exc
 
+from fi import agentcc
 from fi.simulate.agent.definition import LLMConfig, STTConfig, TTSConfig
 
 logger = logging.getLogger(__name__)
@@ -57,12 +60,14 @@ def _openai_llm(config: LLMConfig) -> livekit_llm.LLM:
         "model": config.model,
         "temperature": config.temperature,
     }
-    api_key = os.environ.get("SIMULATOR_LLM_API_KEY") or os.environ.get(
-        "OPENAI_API_KEY"
-    )
-    base_url = os.environ.get("SIMULATOR_LLM_BASE_URL") or os.environ.get(
-        "OPENAI_BASE_URL"
-    )
+    api_key = os.environ.get("SIMULATOR_LLM_API_KEY")
+    base_url = os.environ.get("SIMULATOR_LLM_BASE_URL")
+    # An endpoint named for the simulator wins; otherwise the gateway, when there is one.
+    gateway = agentcc.gateway()
+    if not base_url and gateway is not None:
+        base_url, api_key = gateway.openai_base_url, gateway.api_key
+    api_key = api_key or os.environ.get("OPENAI_API_KEY")
+    base_url = base_url or os.environ.get("OPENAI_BASE_URL")
     if api_key:
         kwargs["api_key"] = api_key
     if base_url:
@@ -112,7 +117,7 @@ def _deepgram_stt(
 ) -> livekit_stt.STT:
     deepgram = _import_plugin("deepgram")
     return deepgram.STT(
-        api_key=_required_env("DEEPGRAM_API_KEY"),
+        **_speech_credentials("deepgram", "DEEPGRAM_API_KEY", "/v1/listen"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -129,7 +134,7 @@ def _cartesia_stt(
 ) -> livekit_stt.STT:
     cartesia = _import_plugin("cartesia")
     return cartesia.STT(
-        api_key=_required_env("CARTESIA_API_KEY"),
+        **_speech_credentials("cartesia", "CARTESIA_API_KEY"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -171,7 +176,7 @@ def _deepgram_tts(
 ) -> livekit_tts.TTS:
     deepgram = _import_plugin("deepgram")
     return deepgram.TTS(
-        api_key=_required_env("DEEPGRAM_API_KEY"),
+        **_speech_credentials("deepgram", "DEEPGRAM_API_KEY", "/v1/speak"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -208,7 +213,7 @@ def _cartesia_tts(
         config.language,
     )
     return cartesia.TTS(
-        api_key=_required_env("CARTESIA_API_KEY"),
+        **_speech_credentials("cartesia", "CARTESIA_API_KEY"),
         http_session=http_session,
         model=_provider_model(
             config.model,
@@ -260,23 +265,55 @@ def _google_speech_credentials_kwargs() -> dict[str, object]:
 
 def _google_llm(config: LLMConfig) -> livekit_llm.LLM:
     google = _import_plugin("google")
-    kwargs = _google_credentials_kwargs()
     model = _provider_model(
         config.model,
         default="gpt-4o",
         replacement="gemini-2.5-flash-lite",
     )
+    # The gateway names a model by the provider serving it: vertex_ai/gemini-3.7-flash is Vertex,
+    # a bare name is the Gemini API. A caller configured for Vertex gets the prefix, so one model
+    # setting means the same thing with or without the gateway. Everything else uses the bare name.
+    name = agentcc.vendor_model(model)
+    thinking = _simulator_thinking(name)
+    gateway = agentcc.gateway()
+    if gateway is not None:
+        # Gemini API mode with the gateway key; the gateway reaches Vertex on its own credentials.
+        return _gateway_google_llm(google)(
+            model=agentcc.vertex_model(model)
+            if config.provider.lower() == "vertex"
+            else model,
+            temperature=config.temperature,
+            vertexai=False,
+            api_key=gateway.api_key,
+            http_options=gateway.genai_http_options(),
+            **({"thinking_config": thinking} if thinking is not None else {}),
+        )
+    kwargs = _google_credentials_kwargs()
     if (
         kwargs.get("vertexai") is True
-        and model.startswith("gemini-3")
+        and name.startswith("gemini-3")
         and not os.environ.get("GOOGLE_CLOUD_LOCATION")
         and not os.environ.get("VERTEX_LOCATION")
     ):
         kwargs["location"] = "global"
-    thinking = _simulator_thinking(model)
     if thinking is not None:
         kwargs["thinking_config"] = thinking
-    return google.LLM(model=model, temperature=config.temperature, **kwargs)
+    return google.LLM(model=name, temperature=config.temperature, **kwargs)
+
+
+@functools.cache
+def _gateway_google_llm(google: ModuleType) -> type[livekit_llm.LLM]:
+    """The plugin's LLM, minus a prewarm that would carry the gateway key to Google.
+
+    The plugin applies ``http_options`` per request, but warms up with a client built without
+    them, so its prewarm call would go to Google's Gemini API with the gateway's key.
+    """
+
+    class GatewayGoogleLLM(google.LLM):
+        async def _prewarm_impl(self) -> None:
+            return None
+
+    return GatewayGoogleLLM
 
 
 # Which control a model accepts for deliberation is a provider fact and cannot be inferred from a
@@ -421,7 +458,27 @@ _HTTP_PROVIDERS = {"cartesia", "deepgram", "elevenlabs"}
 def build_livekit_llm(config: LLMConfig) -> livekit_llm.LLM:
     provider = config.provider.lower()
     factory = _factory(_LLM_FACTORIES, provider, "LLM")
-    return factory(config)
+    primary = factory(config)
+    fallback_models = [
+        model.strip()
+        for model in os.environ.get("SIMULATOR_LLM_FALLBACK_MODELS", "").split(",")
+        if model.strip() and model.strip() != config.model
+    ]
+    if not fallback_models:
+        return primary
+    # Each fallback runs on the same provider. LiveKit moves to the next model when an attempt
+    # fails or times out before anything was said, so the caller is not left silent; each attempt
+    # gets the time one LLM gets without fallbacks.
+    return livekit_llm.FallbackAdapter(
+        [
+            primary,
+            *(
+                factory(config.model_copy(update={"model": model}))
+                for model in fallback_models
+            ),
+        ],
+        attempt_timeout=DEFAULT_API_CONNECT_OPTIONS.timeout,
+    )
 
 
 async def build_livekit_models(
@@ -469,6 +526,18 @@ def _required_env(*names: str) -> str:
         if value:
             return value
     raise ValueError(f"Missing provider credential: {' or '.join(names)}")
+
+
+def _speech_credentials(vendor: str, key_env: str, path: str = "") -> dict[str, str]:
+    """``api_key`` for a speech vendor's plugin, and its ``base_url`` when the gateway relays it.
+
+    Through the gateway the sandbox holds no vendor key: the plugin connects to the gateway's
+    copy of the vendor's API with the gateway key.
+    """
+    gateway = agentcc.gateway()
+    if gateway is None:
+        return {"api_key": _required_env(key_env)}
+    return {"api_key": gateway.api_key, "base_url": gateway.speech_url(vendor, path)}
 
 
 def _provider_model(configured: str, *, default: str, replacement: str) -> str:
