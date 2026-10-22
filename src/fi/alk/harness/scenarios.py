@@ -713,7 +713,6 @@ def callers_for(index: int, wanted: int, slice_name: str = "", spoken: bool = Tr
         )
     locations = offered("location")
     if locations:
-        # Parallel writers otherwise all default to the same country and fill its share at once.
         homes = [
             locations[(index + step) % len(locations)]
             for step in range(min(len(locations), max(2, wanted)))

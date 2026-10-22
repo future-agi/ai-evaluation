@@ -828,7 +828,6 @@ def world_tools(
                 world.connection.executescript(args["sql"])
                 world.connection.commit()
         except Exception as failed:
-            # Statements before the failing one were applied, so say what exists to resend only the rest.
             standing = sorted(world.state())
             return _err(
                 f"schema rejected: {failed}. Tables that already exist: {', '.join(standing) or 'none'}"
