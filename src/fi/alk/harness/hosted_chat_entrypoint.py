@@ -509,15 +509,7 @@ class HostedChatRuntime:
 
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
-        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
-        try:
-            held = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False
-        return any(
-            field in args and args.get(field) != held.get(field)
-            for field in ("use_case", "branch", "tests", "coverage")
-        )
+        return self._changes(args, ("instruction", "use_case", "branch", "tests", "coverage", "fixture"))
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
         from .catalogue import load_catalogue
@@ -526,14 +518,17 @@ class HostedChatRuntime:
 
     def _changes_meaning(self, args: dict[str, Any]) -> bool:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
+        return self._changes(args, ("instruction", "use_case", "branch", "sub_goals", "solution"))
+
+    def _changes(self, args: dict[str, Any], fields: tuple[str, ...]) -> bool:
+        """Whether a submission changes any of these fields of an existing scenario, or who its person is."""
         path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
-        for field in ("instruction", "use_case", "branch", "sub_goals", "solution"):
-            if field in args and args.get(field) != held.get(field):
-                return True
+        if any(field in args and args.get(field) != held.get(field) for field in fields):
+            return True
         persona, before = args.get("persona") or {}, held.get("persona") or {}
         return any(
             key in persona and persona.get(key) != before.get(key)
