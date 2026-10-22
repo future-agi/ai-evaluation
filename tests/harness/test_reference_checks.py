@@ -255,7 +255,7 @@ def _notes_world(tmp_path):
 
     class W(GeneratedWorld):
         name = "notes"
-        tools = [{"name": "save_note"}, {"name": "book"}]
+        tools = [{"name": "save_note"}, {"name": "book"}, {"name": "lookup"}]
         handlers = {
             "save_note": (
                 "def handle(args, db):\n"
@@ -268,6 +268,7 @@ def _notes_world(tmp_path):
                 "    db.execute('INSERT INTO bookings (time) VALUES (?)', [args['time']])\n"
                 "    return {'ok': 1}\n"
             ),
+            "lookup": "def handle(args, db):\n    return {'account': args['account']}\n",
         }
 
     world = W(":memory:")
@@ -318,6 +319,15 @@ def test_a_draft_a_later_step_corrects_is_not_a_value_the_checks_must_catch(tmp_
     ]
     proof = _proof(_notes_world(tmp_path), solution, check)
     assert proof.unchecked == []
+
+
+def test_a_wrong_read_only_lookup_is_still_a_value_the_checks_must_catch(tmp_path):
+    from fi.alk.harness.scenario import Step
+
+    check = "def check(world, calls, reference):\n    return None if any(c.name == 'lookup' and c.ok for c in calls) else 'not done'\n"
+    solution = [Step(tool="lookup", arguments={"account": "A"}, fixed={"account": "caller: A"})]
+    proof = _proof(_notes_world(tmp_path), solution, check)
+    assert proof.unchecked == ["lookup.account"]
 
 
 def test_a_writer_is_told_which_coverage_levels_already_hold_their_share():

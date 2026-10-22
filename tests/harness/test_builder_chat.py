@@ -641,7 +641,7 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
                 "branch": "the account is on hold",
                 "instruction": "Order one Big Mac. Ask whether it is safe for a peanut allergy first.",
                 "fixture": {"allergy": "peanut"},
-                "persona": {"name": "Asha", "gender": "female"},
+                "persona": {"name": "Asha", "gender": "female", "languages": ["French"]},
                 "solution": [{"tool": "a"}],
             }
         )
@@ -649,13 +649,16 @@ def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_on
     drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
     submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
     runtime._from_platform = True
-    corrected = {"name": "one", "branch": "the account is on hold", "solution": [{"tool": "b"}]}
+    person = {"name": "Asha", "gender": "female", "languages": ["French"]}
+    corrected = {"name": "one", "branch": "the account is on hold", "persona": person, "solution": [{"tool": "b"}]}
     assert asyncio.run(submit.handler(corrected)).get("is_error") is None
     assert asyncio.run(submit.handler({**corrected, "branch": "a lost item"}))["is_error"] is True
     for situation in (
         {"instruction": "Order one Big Mac. Do not ask about allergies."},
         {"fixture": {"allergy": "none"}},
         {"persona": {"name": "Ravi", "gender": "male"}},
+        {"persona": {**person, "languages": ["English"]}},
+        {"persona": None},
     ):
         assert asyncio.run(submit.handler({**corrected, **situation}))["is_error"] is True
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True

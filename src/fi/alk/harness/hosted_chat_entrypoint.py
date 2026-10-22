@@ -509,7 +509,9 @@ class HostedChatRuntime:
 
     def _changes_situation(self, args: dict[str, Any]) -> bool:
         """Whether a submission changes what an existing scenario tests, not how it is graded."""
-        return self._changes(args, ("instruction", "use_case", "branch", "tests", "coverage", "fixture"))
+        return self._changes(
+            args, ("instruction", "use_case", "branch", "tests", "coverage", "fixture"), whole_persona=True
+        )
 
     def _replaces_sub_goal(self, args: dict[str, Any]) -> bool:
         from .catalogue import load_catalogue
@@ -520,8 +522,12 @@ class HostedChatRuntime:
         """Whether a submission rewrites an existing scenario's test rather than its surface."""
         return self._changes(args, ("instruction", "use_case", "branch", "sub_goals", "solution"))
 
-    def _changes(self, args: dict[str, Any], fields: tuple[str, ...]) -> bool:
-        """Whether a submission changes any of these fields of an existing scenario, or who its person is."""
+    def _changes(self, args: dict[str, Any], fields: tuple[str, ...], whole_persona: bool = False) -> bool:
+        """Whether a submission changes any of these fields of an existing scenario, or who its person is.
+
+        `whole_persona` compares the persona the submission would save, so a changed language or a
+        dropped persona counts: a submission replaces the scenario rather than patching it.
+        """
         path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
@@ -530,6 +536,16 @@ class HostedChatRuntime:
         if any(field in args and args.get(field) != held.get(field) for field in fields):
             return True
         persona, before = args.get("persona") or {}, held.get("persona") or {}
+        if whole_persona:
+            from .scenario import Persona
+
+            def saved(one: dict[str, Any]) -> dict[str, Any]:
+                return Persona.model_validate(one).model_dump(exclude_defaults=True) if one else {}
+
+            try:
+                return saved(persona) != saved(before)
+            except ValueError:  # an unreadable persona is never a safe unattended change
+                return True
         return any(
             key in persona and persona.get(key) != before.get(key)
             for key in ("name", "gender", "age_group")

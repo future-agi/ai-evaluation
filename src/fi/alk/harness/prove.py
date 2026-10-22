@@ -376,8 +376,9 @@ def _other_choices(scenario: Scenario, declared: set[str] = frozenset()) -> tupl
     return varied, changed
 
 
-def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any]]]:
-    """For each fixed value, the solution with only that value changed."""
+def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any], bool]]:
+    """For each fixed value, the solution with only that value changed, and whether a later step
+    sets that argument again (a draft the solution itself corrects)."""
     steps = list(getattr(scenario, "solution", None) or ())
     wrong = []
     for at, step in enumerate(steps):
@@ -393,7 +394,8 @@ def _with_one_wrong(scenario: Scenario) -> list[tuple[str, list[Any]]]:
                 continue
             changed = _with_value(step, name, other)
             if changed is not None:
-                wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]]))
+                corrected = any(name in (later.arguments or {}) for later in steps[at + 1 :])
+                wrong.append((f"{step.tool}.{name}", [*steps[:at], changed, *steps[at + 1 :]], corrected))
     return wrong
 
 
@@ -475,13 +477,13 @@ def prove(
             ]
         finally:
             alt_world.close()
-    for label, steps in _with_one_wrong(scenario) if held else ():
+    for label, steps, corrected in _with_one_wrong(scenario) if held else ():
         wrong_world, wrong_calls, _, _ = _run(scenario, world_root, with_solution=True, steps=steps)
         try:
-            # A wrong value that leaves the end state as the right one left is a draft a later step
-            # corrected, or one nothing executes: no outcome is wrong for a check to notice.
+            # Only a value a later step sets again, leaving the right end state, is a corrected draft
+            # no check must notice; a read-only lookup leaves the same state and is still checked.
             ended = _end_state(wrong_world)
-            if (ended is None or ended != right_state) and all(
+            if not (corrected and ended is not None and ended == right_state) and all(
                 run_check(source, wrong_world, wrong_calls, name=name, reference=reference).held
                 for name, source in held
             ):
