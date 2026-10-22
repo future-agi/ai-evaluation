@@ -4257,17 +4257,34 @@ def test_joint_judging_decides_every_sub_goal_in_one_conversation(monkeypatch) -
     }
 
 
-def test_joint_judging_falls_back_to_each_alone_on_any_failure(monkeypatch) -> None:
-    async def _partial(goals, world, calls, *, messages=()):
-        return {"confirmed": (False, "it never confirmed")}
-
+def test_joint_judging_falls_back_to_each_alone_when_it_fails(monkeypatch) -> None:
     async def _broken(goals, world, calls, *, messages=()):
         raise RuntimeError("gateway down")
 
-    for joint_judge in (_partial, _broken):
-        receipt, alone = _two_judged(monkeypatch, joint_judge)
-        assert alone == ["confirmed", "refused_card"]
-        assert receipt.status == "passed"
+    receipt, alone = _two_judged(monkeypatch, _broken)
+    assert alone == ["confirmed", "refused_card"]
+    assert receipt.status == "passed"
+
+
+def test_a_sub_goal_the_joint_judge_left_out_is_judged_alone_and_the_rest_are_kept(monkeypatch) -> None:
+    async def _partial(goals, world, calls, *, messages=()):
+        return {"confirmed": (False, "it never confirmed")}
+
+    receipt, alone = _two_judged(monkeypatch, _partial)
+    assert alone == ["refused_card"]
+    assert receipt.status == "failed"
+    assert {g.name: g.held for g in receipt.sub_goals} == {"confirmed": False, "refused_card": True}
+
+
+def test_a_customer_off_script_survives_a_sub_goal_the_joint_judge_left_out(monkeypatch) -> None:
+    from fi.alk.harness.joint_judge import OFF_SCRIPT
+
+    async def _partial(goals, world, calls, *, messages=()):
+        return {"confirmed": (True, "it confirmed"), OFF_SCRIPT: (False, "the customer changed the policy number")}
+
+    receipt, alone = _two_judged(monkeypatch, _partial)
+    assert alone == ["refused_card"]
+    assert receipt.status == "errored" and receipt.failure.code == "caller_off_script"
 
 
 def test_a_call_with_no_words_and_no_actions_is_not_judged(monkeypatch) -> None:

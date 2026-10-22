@@ -1619,21 +1619,20 @@ class HostedScheduler:
         calls: Sequence[Any],
         call_outcome: Any,
         offered: dict[str, Any],
-    ) -> tuple[list[tuple[bool | None, str]] | None, str]:
-        """All of a call's judged sub-goals in one conversation (None to judge each alone), and any
-        report that the customer left their side."""
+    ) -> tuple[dict[str, Any], str]:
+        """The verdicts one conversation reached for a call's judged sub-goals, by name, and any
+        report that the customer left their side. Sub-goals it left out are judged each alone."""
         if self._joint_judge is None or os.environ.get(JUDGE_MODE_ENV, "").strip().lower() == "separate":
-            return None, ""
+            return {}, ""
         try:
             accepted = inspect.signature(self._joint_judge).parameters
             context = {name: value for name, value in offered.items() if name in accepted}
             decided = await self._joint_judge(goals, world, calls, messages=call_outcome.messages, **context)
-            off_script = decided.get(OFF_SCRIPT, (None, ""))[1] if isinstance(decided, dict) else ""
-            verdicts = [decided[goal.name] for goal in goals]
+            off_script = str(decided.get(OFF_SCRIPT, (None, ""))[1] or "")
         except Exception as exc:  # noqa: BLE001 - a failed shared judge falls back, never errors the call
             logger.warning("judging %d sub-goals together failed, judging each alone: %r", len(goals), exc)
-            return None, ""
-        return verdicts, str(off_script or "")
+            return {}, ""
+        return {goal.name: decided[goal.name] for goal in goals if goal.name in decided}, off_script
 
     async def run(self, scenarios: Sequence[Scenario]) -> RunResult:
         results: list[ResultReceipt | None] = [None] * len(scenarios)
@@ -2301,11 +2300,11 @@ class HostedScheduler:
                         **context,
                     )
 
-                verdicts = joint_verdicts or await asyncio.gather(
-                    *(_settle(goal) for _, goal in judged_pending),
-                    return_exceptions=True,
-                )
-            for (slot, goal), outcome in zip(judged_pending, verdicts):
+                alone = [goal for _, goal in judged_pending if goal.name not in joint_verdicts]
+                settled = await asyncio.gather(*(_settle(goal) for goal in alone), return_exceptions=True)
+                verdicts = {**joint_verdicts, **{goal.name: outcome for goal, outcome in zip(alone, settled)}}
+            for slot, goal in judged_pending:
+                outcome = verdicts[goal.name]
                 if isinstance(outcome, BaseException):
                     logger.warning("judge could not run for %s: %r", goal.name, outcome)
                     held, why = None, ""
