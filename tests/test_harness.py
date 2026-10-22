@@ -2678,6 +2678,47 @@ def test_a_scenario_is_proved_before_it_is_kept(tmp_path):
     assert (root / "scenarios" / "adds-a-big-mac" / "scenario.json").exists()
 
 
+def test_a_renamed_scenario_keeps_its_key_and_replaces_the_old_one(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    said = accept_scenario(
+        _delta(name="orders-one-big-mac", scenario_key=key), world_root=root, catalogue=catalogue, kept=kept
+    )
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [("orders-one-big-mac", key)]
+    assert (root / "scenarios" / "orders-one-big-mac" / "scenario.json").exists()
+    assert not (root / "scenarios" / "adds-a-big-mac").exists()
+
+
+def test_an_edit_under_the_same_name_keeps_the_key_it_was_kept_with(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(scenario_key="kept-key"), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(_delta(instruction="Order one Big Mac, please."), world_root=root, catalogue=catalogue, kept=kept)
+    assert [(one.name, one.scenario_key) for one in kept] == [("adds-a-big-mac", "kept-key")]
+
+
+def test_a_rename_onto_another_scenario_s_name_is_refused(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(_delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    said = accept_scenario(
+        _delta(name="orders-again", scenario_key=key), world_root=root, catalogue=catalogue, kept=kept
+    )
+    assert said.get("is_error") and "already named orders-again" in said["content"][0]["text"]
+    assert sorted(one.name for one in kept) == ["adds-a-big-mac", "orders-again"]
+
+
 def test_a_scenario_whose_solution_cannot_pass_its_own_checks_is_refused(tmp_path):
     """Either the scenario is impossible or the checks are wrong. Both have happened."""
     from fi.alk.harness.scenario_tools import accept_scenario

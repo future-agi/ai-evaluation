@@ -845,6 +845,18 @@ def accept_scenario(
                 world.close()
         return _err(said)
 
+    # The scenario this one replaces: the one whose key it carries, else the one with its name. It
+    # keeps that key, so a rename is the same scenario under a new name, not a new one.
+    named = str(payload.get("scenario_key") or "").strip()
+    previous = next((one for one in kept if named and one.scenario_key == named), None) or next(
+        (one for one in kept if one.name == scenario.name), None
+    )
+    if previous is not None and previous.name != scenario.name:
+        if any(one.name == scenario.name for one in kept):
+            return _err(f"Not kept. Another scenario is already named {scenario.name}; choose another name.")
+        kept[:] = [one for one in kept if one is not previous]
+    if previous is not None:
+        scenario.scenario_key = previous.scenario_key
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:
         taken = {one.name for one in kept}
@@ -1295,6 +1307,11 @@ def scenario_tools(
                     "description": "Short identifier, lower case with hyphens or underscores. "
                     "It becomes this scenario's folder name. It says what this scenario tests and "
                     "carries, without a counter or an invented code, PIN or reference.",
+                },
+                "scenario_key": {
+                    "type": "string",
+                    "description": "Only when editing a scenario already kept: its scenario_key, read "
+                    "from it. With a new name this renames it, keeping its number and its history.",
                 },
                 "use_case": {
                     "type": "string",

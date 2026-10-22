@@ -139,6 +139,8 @@ what the gates check. Then:
 
 - **Edit one**: read it in full first, change only what was asked, and `submit_scenario` it under the
   same name with every other field kept exactly. That replaces it, keeps its number, and proves it.
+- **Rename one**: read it in full, then `submit_scenario` it with its `scenario_key`, the new name and every
+  other field kept exactly. It stays the same scenario, with its number and its run history.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
   brief `scenario_writer` sub-agents in one message. When the person asks for a level of an axis (no
   background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to
