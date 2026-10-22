@@ -7889,6 +7889,43 @@ def test_a_scenario_placed_nowhere_is_refused_once_a_grid_is_dealt(tmp_path):
     assert not _off_the_grid(None, {})
 
 
+def test_renaming_through_the_tool_is_not_refused_as_a_duplicate_of_itself(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.scenario_tools import scenario_tools
+
+    root, _contract, _catalogue = _built_environment(tmp_path)
+    server, kept = scenario_tools(_contract, root, root, wanted=2)
+    submit = next(one for one in server.tools if one.name == "submit_scenario")
+    person = {"persona": {"name": "Asha Rao", "personality": "Friendly and cooperative", "communication_style": "Direct and concise", "initial_message": "Hi, I want a Big Mac.", "languages": ["English"]}}
+    said = asyncio.run(submit.handler(_delta(**person)))
+    assert not said.get("is_error"), said
+    key = kept[0].scenario_key
+    said = asyncio.run(submit.handler(_delta(name="orders-one-big-mac", scenario_key=key, **person)))
+    assert not said.get("is_error"), said
+    assert [(one.name, one.scenario_key) for one in kept] == [("orders-one-big-mac", key)]
+
+
+def test_the_builder_renames_a_scenario_keeping_its_key(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.builder import suite_server
+    from fi.alk.harness.scenario_tools import accept_scenario, load_scenarios
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(_delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    rename = next(one for one in suite_server(root, kept).tools if one.name == "rename_scenario")
+    said = asyncio.run(rename.handler({"name": "adds-a-big-mac", "new_name": "orders-one-big-mac"}))
+    assert not said.get("is_error"), said
+    on_disk = {one.name: one.scenario_key for one in load_scenarios(root)}
+    assert on_disk == {"orders-one-big-mac": key, "orders-again": kept[1].scenario_key}
+    taken = asyncio.run(rename.handler({"name": "orders-one-big-mac", "new_name": "orders-again"}))
+    assert taken.get("is_error")
+
+
 def test_a_redeclared_grid_only_ever_grows(tmp_path):
     import asyncio
 

@@ -86,6 +86,7 @@ _WRITING_TOOLS = frozenset(
         "submit_scenario",
         "drop_scenario",
         "drop_scenarios",
+        "rename_scenario",
         "save_scenarios",
         "add_sub_goal",
         "amend_contract",

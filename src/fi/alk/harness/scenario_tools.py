@@ -1519,6 +1519,12 @@ def scenario_tools(
             if problem:
                 return _refuse(problem)
 
+        # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
+        # so the checks below never count it against itself.
+        key = str(args.get("scenario_key") or "").strip()
+        same = next(
+            (one.name for one in kept if key and one.scenario_key == key), str(args.get("name") or "")
+        )
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
@@ -1528,7 +1534,7 @@ def scenario_tools(
             target.get("axes"),
             kept,
             cap(),
-            str(args.get("name") or ""),
+            same,
             target.get("asked"),
         )
         if crowded_level:
@@ -1537,15 +1543,13 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
-        twin = _already_in_the_suite(
-            args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
-        )
+        twin = _already_in_the_suite({**args, "name": same}, kept, _first_names_on_disk(destination, same))
         if twin:
             return _refuse(twin)
         if cap() and target.get("people") != "alike":
             # A replacement does not count against itself.
             crowded = crowded_field(
-                [one for one in kept if one.name != str(args.get("name") or "")],
+                [one for one in kept if one.name != same],
                 Scenario.model_validate(args).persona,
                 cap(),
             ) if args.get("persona") else ""
@@ -1561,8 +1565,7 @@ def scenario_tools(
             if stranger:
                 return _refuse(stranger[0])
         if cap():
-            named = str(args.get("name") or "").strip()
-            already = any(one.name == named for one in kept)
+            already = any(one.name == same for one in kept)
             if not already and len(kept) >= cap():
                 return _err(
                     f"This is complete: {len(kept)} of {cap()} written. Do not write another. "
