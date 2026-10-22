@@ -10046,7 +10046,6 @@ def test_clone_world_database_declines_every_other_world_shape(strategies, share
 
     assert asyncio.run(provider.clone_world_database(runtime, "lane0")) is None
     assert statements == []
-=======
 def test_build_failure_retains_redacted_output_and_late_error(tmp_path: Path) -> None:
     (tmp_path / "source" / "svc").mkdir(parents=True)
     retained = []
