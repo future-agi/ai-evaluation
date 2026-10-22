@@ -2272,8 +2272,8 @@ class HostedScheduler:
                 )
             )
 
-        # A call with no words and no actions leaves its judged sub-goals undecided, never guessed.
-        if judged_pending and (calls or call_outcome.messages):
+        # A call with no words, no actions and no recording leaves its judged sub-goals undecided, never guessed.
+        if judged_pending and (calls or call_outcome.messages or call_outcome.recording):
             # A scenario's judged sub-goals can run together, but judge batches from parallel
             # worlds must not overlap on the shared provider session.
             async with self._judge_batch_lock:

@@ -4200,7 +4200,7 @@ def test_a_judge_whose_signature_does_not_match_is_not_a_pass(
     asyncio.run(scenario())
 
 
-def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None):
+def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None, recording=None):
     """Run one scenario with two judged sub-goals; return (receipt, sub-goals the per-goal judge saw)."""
     alone: list[str] = []
 
@@ -4218,7 +4218,7 @@ def _two_judged(monkeypatch, joint_judge, *, mode="", silent=False, goals=None):
         await pool.start()
         class Runner:
             async def run(self, scenario, runtime):
-                return _call_outcome(turns=0 if silent else 4)
+                return replace(_call_outcome(turns=0 if silent else 4), recording=recording)
 
         scheduler = hs.HostedScheduler(
             pool=pool,
@@ -4294,6 +4294,14 @@ def test_a_call_with_no_words_and_no_actions_is_not_judged(monkeypatch) -> None:
     receipt, alone = _two_judged(monkeypatch, _all, silent=True)
     assert alone == []
     assert receipt.status == "errored" and receipt.failure.code == "judge_undecided"
+
+
+def test_a_call_whose_only_evidence_is_its_recording_is_still_judged(monkeypatch) -> None:
+    async def _all(goals, world, calls, *, messages=()):
+        return {goal.name: (True, "heard it") for goal in goals}
+
+    receipt, _ = _two_judged(monkeypatch, _all, silent=True, recording="/work/call.wav")
+    assert receipt.status == "passed"
 
 
 def test_joint_judging_is_the_default_and_separate_turns_it_off(monkeypatch) -> None:
