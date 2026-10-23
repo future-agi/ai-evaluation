@@ -40,7 +40,7 @@ from .config import (
 from .contract import AgentContract
 from .job import HarnessJob
 from .poc_guest_booking import guest_booking_pin_guidance, guest_booking_pin_scenario_problem
-from .scenario import Scenario, voicemail_enabled
+from .scenario import Scenario, unused_key, voicemail_enabled
 from .scenario_tools import (
     SCENARIO_SERVER,
     TOOL_NAMES,
@@ -919,6 +919,7 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
     """
     suite: list[Scenario] = []
     taken: set[str] = set()
+    keys: set[str] = set()
     for batch in written:
         for one in batch:
             if one.name in taken:
@@ -929,7 +930,12 @@ def merged(written: list[list[Scenario]]) -> list[Scenario]:
                     update={"name": f"{stem}-{suffix}", "scenario_key": ""}
                 )
                 logger.info("renamed a duplicate folder name to %s", one.name)
+            if one.scenario_key in keys and batch is not written[0]:
+                one = one.model_copy(
+                    update={"scenario_key": unused_key(one.scenario_key, keys)}
+                )
             taken.add(one.name)
+            keys.add(one.scenario_key)
             suite.append(one)
     return suite
 

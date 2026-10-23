@@ -270,16 +270,27 @@ def test_world_change_is_all_or_nothing_and_reports_counts(tmp_path):
     assert "a: 2, b: 1" in world_change(tmp_path, "UPDATE b SET id = '2'")
 
 
-def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tmp_path, monkeypatch):
+def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(
+    tmp_path, monkeypatch
+):
     from fi.alk.harness.backends import ToolSpec
     from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
 
     client = BuilderClient()
     runtime = _runtime(tmp_path, client, monkeypatch)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
-        json.dumps({"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana"}})
+        json.dumps(
+            {
+                "name": "one",
+                "scenario_key": "one",
+                "instruction": "ask for a refund",
+                "persona": {"name": "Ana"},
+            }
+        )
     )
-    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]})
+    )
     calls, asked, answers = [], [], []
 
     async def handler(args):
@@ -295,12 +306,39 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
     goal = runtime._confirmed(ToolSpec("add_sub_goal", "", {}, handler))
 
-    surface = {"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana", "accent": "Indian"}}
-    meaning = {"name": "one", "instruction": "ask for a cancellation", "persona": {"name": "Ana"}}
+    surface = {
+        "name": "one",
+        "instruction": "ask for a refund",
+        "persona": {"name": "Ana", "accent": "Indian"},
+    }
+    meaning = {
+        "name": "one",
+        "instruction": "ask for a cancellation",
+        "persona": {"name": "Ana"},
+    }
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
-    assert asyncio.run(submit.handler({"name": "two", "instruction": "anything"})).get("is_error") is None
+    assert (
+        asyncio.run(submit.handler({"name": "two", "instruction": "anything"})).get(
+            "is_error"
+        )
+        is None
+    )
     assert asyncio.run(goal.handler({"name": "new-goal"})).get("is_error") is None
+    assert (
+        asyncio.run(
+            submit.handler({**surface, "name": "uno", "scenario_key": "one"})
+        ).get("is_error")
+        is None
+    )
     assert asked == []
+    answers.append("No")
+    assert (
+        asyncio.run(submit.handler({**meaning, "name": "uno", "scenario_key": "one"}))[
+            "is_error"
+        ]
+        is True
+    )
+    assert "ask for a cancellation" in asked.pop()
 
     answers.extend(["No, keep it", "Which scenarios use it?"])
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
@@ -319,7 +357,7 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     answers.append("No")
     assert asyncio.run(submit.handler(meaning))["is_error"] is True
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
-    assert len(calls) == 5
+    assert len(calls) == 6
 
 
 def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exists(tmp_path, monkeypatch):

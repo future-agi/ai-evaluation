@@ -528,7 +528,19 @@ class HostedChatRuntime:
         `whole_persona` compares the persona the submission would save, so a changed language or a
         dropped persona counts: a submission replaces the scenario rather than patching it.
         """
-        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
+        from .scenario_tools import load_scenarios
+
+        name, key = str(args.get("name") or ""), str(args.get("scenario_key") or "")
+        if key:
+            name = next(
+                (
+                    one.name
+                    for one in load_scenarios(self.workspace)
+                    if one.scenario_key == key
+                ),
+                name,
+            )
+        path = self.workspace / "scenarios" / name / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):

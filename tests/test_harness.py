@@ -2704,17 +2704,69 @@ def test_an_edit_under_the_same_name_keeps_the_key_it_was_kept_with(tmp_path):
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
     accept_scenario(
-        _delta(scenario_key="kept-key"), world_root=root, catalogue=catalogue, kept=kept
+        _delta(name="orders-one-big-mac", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
     )
     accept_scenario(
-        _delta(instruction="Order one Big Mac, please."),
+        _delta(name="orders-one-big-mac", instruction="Order one Big Mac, please."),
         world_root=root,
         catalogue=catalogue,
         kept=kept,
     )
     assert [(one.name, one.scenario_key) for one in kept] == [
-        ("adds-a-big-mac", "kept-key")
+        ("orders-one-big-mac", key)
+    ]
+
+
+def test_a_new_scenario_never_takes_a_key_another_one_holds_or_one_it_made_up(tmp_path):
+    from fi.alk.harness.scenario_tools import accept_scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    kept = []
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    key = kept[0].scenario_key
+    accept_scenario(
+        _delta(name="orders-one-big-mac", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again", scenario_key="not-in-this-suite"),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    keys = {one.name: one.scenario_key for one in kept}
+    assert keys["orders-one-big-mac"] == key
+    assert keys["adds-a-big-mac"] == f"{key}-2"
+    assert keys["orders-again"] == "orders-again"
+
+
+def test_merging_writers_never_changes_a_saved_key_or_repeats_one():
+    from fi.alk.harness.scenario import Scenario
+    from fi.alk.harness.scenarios import merged
+
+    def one(name, key=""):
+        return Scenario(name=name, instruction="x", scenario_key=key)
+
+    saved = [
+        one("renamed", key="first-name"),
+        one("twin", key="same"),
+        one("twin-too", key="same"),
+    ]
+    suite = merged([saved, [one("first-name")]])
+    assert [(item.name, item.scenario_key) for item in suite] == [
+        ("renamed", "first-name"),
+        ("twin", "same"),
+        ("twin-too", "same"),
+        ("first-name", "first-name-2"),
     ]
 
 

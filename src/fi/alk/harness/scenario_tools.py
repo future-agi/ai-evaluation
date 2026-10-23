@@ -66,6 +66,8 @@ from .scenario import (
     redteam_problems,
     level_name,
     _pinned_identity,
+    _slug,
+    unused_key,
     _QUIET_INTERFACE,
     unpinned_callers,
     crowded_cells,
@@ -962,6 +964,11 @@ def accept_scenario(
         kept[:] = [one for one in kept if one is not previous]
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
+    else:
+        scenario.scenario_key = unused_key(
+            _slug(scenario.name) if named else scenario.scenario_key,
+            {one.scenario_key for one in kept},
+        )
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:
         taken = {one.name for one in kept}
