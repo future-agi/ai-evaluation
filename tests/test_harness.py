@@ -4692,9 +4692,16 @@ def test_a_skill_only_names_tools_its_stage_actually_has():
         _SILENT_ENVIRONMENTS,
     )
     from fi.alk.harness.scenario import _AXIS_LABELS, _LEVEL_LABELS
+    from fi.alk.harness.catalogue import CONTRACT_SCHEMA
+    from fi.alk.harness.simulator_voice import _CALLER_PHONE_KEYS
+    from fi.alk.harness.understand import READER
 
     ignore = (
         fields
+        # A sub-agent, a verifier value and the fixture key for the calling number, not tools.
+        | {READER}
+        | set(CONTRACT_SCHEMA["verifier"]["enum"])
+        | set(_CALLER_PHONE_KEYS)
         | set(MODALITIES)
         | set(CALL_DIRECTIONS)
         | set(CALLER_AWARENESS)
