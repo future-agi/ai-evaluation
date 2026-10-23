@@ -8,6 +8,22 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
 from .diagnostics import HarnessDiagnostic, RepairOwner
+from .job import HarnessStage
+
+
+DEPENDENCY_INVESTIGATION = (
+    "investigate source-declared dependency selection; cause unproven"
+)
+
+
+def is_chat_dependency_investigation(diagnostics) -> bool:
+    return bool(diagnostics) and all(
+        item.code == "chat_ingress_failed"
+        and item.component == "chat_ingress"
+        and item.stage is HarnessStage.CONNECTING_AGENT
+        and item.owner is RepairOwner.SOURCE
+        for item in diagnostics
+    )
 
 
 class RepairAction(str, Enum):
@@ -197,6 +213,28 @@ class RepairController:
                 observation,
                 RepairAction.CERTIFY,
                 "candidate passed validation",
+                diagnostics,
+            )
+
+        if (
+            observation.phase is RepairPhase.ENVIRONMENT
+            and is_chat_dependency_investigation(diagnostics)
+            and self._environment_patches < self.budgets.environment_patches
+            and not any(
+                item.reason == DEPENDENCY_INVESTIGATION for item in self._history
+            )
+        ):
+            self._environment_patches += 1
+            self._repair_signatures.add(
+                (
+                    observation.candidate_hash,
+                    tuple(sorted({d.fingerprint for d in diagnostics})),
+                )
+            )
+            return self._decision(
+                observation,
+                RepairAction.PATCH_ENVIRONMENT,
+                DEPENDENCY_INVESTIGATION,
                 diagnostics,
             )
 

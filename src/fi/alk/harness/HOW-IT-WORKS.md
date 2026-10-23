@@ -354,7 +354,24 @@ without a project manifest. Locked uv installs and their stale-lock retry preser
 the same selection. Source manifests and lockfiles are not rewritten by selection.
 `runtime.install` remains descriptive metadata; arbitrary installation instructions
 are not executed by the process compiler. Declare supported optional groups through
-`runtime.extras` rather than relying on that string.
+`runtime.extras` rather than relying on that string. A complete local editable declaration
+such as `pip install -e sdk[cloud] -e tools` is checked against the selected
+project and its uv workspace. If the exact source owner declares an installable
+group omitted from `extras`, compilation returns `generated_runtime_extra_omitted`
+through the runtime-plan repair path. A repair must preserve the proven source
+owner and select the group; deleting the install text does not resolve the error.
+Unsupported install syntax remains documentary and never executes.
+
+`runtime.requirements_files` selects additional Python dependency manifests relative
+to the selected component. Both compilers install these into the same environment
+after project dependencies and extras, preserving every installed package version.
+Conflicting supplemental requirements fail instead of replacing the selected baseline.
+Selection accepts registry package requirements
+and local `-r` / `-c` includes; paths must remain inside the submitted component,
+exist in the build context, and have an acyclic bounded include graph. URLs and
+other pip options fail explicitly. The bounded chat-readiness repair may add
+source-evidenced manifests while retaining existing selections and all other runtime
+fields. `runtime.install` alone does not select a requirements file.
 
 HTTP endpoint paths can reference canonical inputs and earlier setup captures, such
 as `/threads/{{session_id}}/turns`. Setup runs first; the main path then renders for
@@ -385,3 +402,26 @@ redaction, not a guarantee that arbitrary personal data has been removed.
 Public PEM keys and certificate-only chains may pass source and artifact checks when
 the complete bounded content parses as public material. Private, mixed, malformed,
 oversized, and credential-named files remain blocked.
+
+## Chat readiness before certification
+
+For generic source-owned HTTP or callable chat agents, ALK runs one representative
+opening request after scenario setup and ready checks, before source-data invariant
+review. It uses the execution transport, edited persona opening or a greeting, and
+the declared model, setup requests, response mapping, and tools. Valid text,
+clarification, refusal, or structurally usable tool requests establish interface
+readiness. ALK does not replay returned tools or judge task success in this check.
+The target itself may execute tools during the request.
+
+Failed requests prevent certification. Candidate configuration errors use the
+existing source-backed runtime-plan repair budget. Authentication and unexplained
+application failures remain errors; they do not permit rewriting scenario outcomes.
+Each attempt retains a bounded sanitized receipt under `generic-harness/chat-readiness`.
+ALK resets a successful disposable instance before continuing and closes failed
+instances. Certificates require explicit `chat_ingress` evidence. Voice and external
+connect-only providers record that this check is not applicable.
+
+One successful opening does not prove every scenario or a complete workflow. Socket
+operations share a deadline, but urllib DNS resolution and response-header parsing
+are not independently interruptible. The enclosing job and sandbox limits remain
+the final execution bounds; cancellation drains the client worker before cleanup.

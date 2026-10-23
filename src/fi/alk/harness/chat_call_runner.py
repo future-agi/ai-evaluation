@@ -11,7 +11,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import urljoin
 
 from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
@@ -306,6 +305,7 @@ class _HostedChatTarget:
         self._scenario_key = scenario_key
         self._scenario_id = scenario_id
         self._messages: list[dict[str, Any]] = []
+        self._tool_call_ids: set[str] = set()
         self._turn = 0
 
     async def open(self) -> None:
@@ -333,10 +333,19 @@ class _HostedChatTarget:
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
                 raise HTTPCallFailure(trace)
+            for observed in (response.metadata or {}).get("native_completed_tools", []):
+                _record_completed_tool_call(
+                    self.world, name=observed["name"],
+                    arguments=observed["arguments"], response=observed,
+                )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
             )
-            returned = list(response.tool_calls or [])
+            returned = [
+                call
+                for call in (response.tool_calls or [])
+                if not call.get("id") or str(call["id"]) not in self._tool_call_ids
+            ]
             if not returned:
                 answer = response.content.strip()
                 if conversation_ended:
@@ -362,6 +371,8 @@ class _HostedChatTarget:
             for index, call in enumerate(returned, start=1):
                 name, arguments, call_id = _tool_call(call, index)
                 returned_ids.add(call_id)
+                if call.get("id"):
+                    self._tool_call_ids.add(call_id)
                 provided = response_by_id.get(call_id)
                 if provided is not None:
                     _record_completed_tool_call(
@@ -479,7 +490,9 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        source_key = (
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        )
         document = _with_scenario_edits(
             _scenario_document(self._context.bundle_dir, source_key),
             getattr(self._context.job, "metadata", None),
@@ -494,26 +507,13 @@ class HostedChatCallRunner:
             runtime,
             self._context.source_directory,
         )
-        adapter_path = "/invoke" if interface.kind == "callable" else interface.path
-        adapter_protocol = (
-            "fi.alk" if interface.kind == "callable" else interface.protocol
-        )
-        wrapper = HTTPAgentWrapper(
-            endpoint=urljoin(
-                endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
-            ),
-            protocol=adapter_protocol,
-            model=interface.model,
-            include_tools=interface.include_tools,
-            request_template=interface.request_template,
-            response_path=interface.response_path,
-            failure_rule=interface.failure_rule.model_dump()
-            if interface.failure_rule
-            else None,
+        from .chat_transport import create_chat_wrapper
+
+        wrapper = create_chat_wrapper(
+            interface,
+            endpoint.address,
+            wrapper_type=HTTPAgentWrapper,
             secret_values=self._context.target_provider_secret_values,
-            setup_requests=[
-                item.model_dump(mode="python") for item in interface.setup_requests
-            ],
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",

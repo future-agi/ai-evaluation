@@ -188,6 +188,32 @@ def detect_generated_runtime(
         dependency, strategy, install, extras = _python_install(
             component, runtime, command
         )
+        requirements = select_python_requirements(
+            component,
+            list(getattr(runtime, "requirements_files", None) or []),
+            context_excludes=_context_excludes(component, runtime, dependency, command),
+        )
+        if requirements:
+            interpreter = (
+                "/app/.venv/bin/python" if strategy.startswith("uv-") else "python"
+            )
+            install.append("RUN pip install --no-cache-dir uv==0.8.13")
+            install.append(
+                "RUN "
+                + shlex.join(supplemental_requirements_command(interpreter, requirements))
+            )
+            install.append(
+                "RUN "
+                + shlex.join(
+                    [
+                        "uv",
+                        "pip",
+                        "check",
+                        "--python",
+                        interpreter,
+                    ]
+                )
+            )
         dockerfile = _python_dockerfile(version, dependency, strategy, install, command)
     else:
         version = _language_version(str(getattr(runtime, "version", "") or ""), "22")
@@ -260,6 +286,7 @@ def _runtime_override(runtime: Any | None, **values: str) -> Any:
         "workdir": str(getattr(runtime, "workdir", "") or ""),
         "command": list(getattr(runtime, "command", None) or []),
         "extras": list(getattr(runtime, "extras", None) or []),
+        "requirements_files": list(getattr(runtime, "requirements_files", None) or []),
         "context_excludes": list(getattr(runtime, "context_excludes", None) or []),
     }
     payload.update(values)
@@ -365,37 +392,49 @@ def _language_version(value: str, default: str) -> str:
     return match.group(1) if match else default
 
 
-def _python_language_version(root: Path, configured: str) -> str:
-    """Choose a concrete image version that satisfies a declared Python range.
+def _python_language_version(
+    root: Path, configured: str, *, interpreter_selector: bool = False
+) -> str:
+    """Choose an image version or a native interpreter constraint.
 
     ``>=3.10`` is a compatibility floor, not an instruction to use 3.10. Selecting the first
     number from it makes otherwise reproducible projects fail as transitive dependencies retire
-    old interpreter wheels. Exact values remain exact; ranges prefer the harness' stable default.
+    old interpreter wheels. Exact patch values remain exact; native minor selectors let uv
+    resolve a compatible patch. Image ranges prefer the harness' stable default.
     """
-    declared = configured.strip()
-    if not declared:
-        requires = (
-            _pyproject_document(root / "pyproject.toml")
-            .get("project", {})
-            .get("requires-python", "")
-        )
-        declared = str(requires or "").strip()
-    if not declared:
-        return "3.12"
-    if not any(marker in declared for marker in "<>=!~,*"):
-        return _language_version(declared, "3.12")
-    try:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
-        from packaging.version import Version
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    from packaging.version import Version
 
-        specifier = SpecifierSet(declared)
-        for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
-            if Version(candidate) in specifier:
-                return candidate
+    declared = configured.strip()
+    requires = str(
+        _pyproject_document(root / "pyproject.toml")
+        .get("project", {})
+        .get("requires-python", "")
+        or ""
+    ).strip()
+    try:
+        project = SpecifierSet(requires)
+        if re.fullmatch(r"3\.\d+", declared):
+            if interpreter_selector:
+                return str(SpecifierSet(f"=={declared}.*,{requires}".rstrip(",")))
+            # Image tags select a moving patch; installation validates Requires-Python.
+            return declared
+        if declared and not any(marker in declared for marker in "<>=!~,*"):
+            if (
+                re.fullmatch(r"3\.\d+(?:\.\d+)?", declared)
+                and Version(declared) in project
+            ):
+                return declared
+        else:
+            specifier = SpecifierSet(declared)
+            for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
+                if Version(candidate) in specifier and Version(candidate) in project:
+                    return candidate
     except (InvalidSpecifier, ValueError):
         pass
     raise GeneratedRuntimeError(
-        f"generated_runtime_python_version_unsupported: {declared}"
+        f"generated_runtime_python_version_unsupported: {declared or requires}"
+        f" (project requires-python: {requires or 'unspecified'})"
     )
 
 
@@ -526,7 +565,13 @@ def _needs_livekit_model_download(path: Path) -> bool:
     )
 
 
-def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelection:
+def select_python_extras(
+    root: Path,
+    requested: list[str],
+    *,
+    required_owner: Path | None = None,
+    context_excludes: tuple[str, ...] = (),
+) -> PythonExtraSelection:
     """Resolve explicit extras in the selected project or unambiguous uv workspace members."""
     if not requested:
         return PythonExtraSelection()
@@ -543,7 +588,7 @@ def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelecti
         }
 
     root_names = declared(document)
-    if set(names) <= root_names:
+    if required_owner is None and set(names) <= root_names:
         return PythonExtraSelection(names)
     workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
     members: set[Path] = set()
@@ -562,6 +607,10 @@ def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelecti
                     paths.add(resolved)
     owners = {name: [root] if name in root_names else [] for name in names}
     for member in sorted(members - excluded):
+        if _context_path_excluded(
+            member.relative_to(root) / "pyproject.toml", context_excludes
+        ):
+            continue
         available = declared(_pyproject_document(member / "pyproject.toml"))
         for name in names:
             if name in available:
@@ -576,15 +625,208 @@ def select_python_extras(root: Path, requested: list[str]) -> PythonExtraSelecti
         raise GeneratedRuntimeError(
             "generated_runtime_extra_ambiguous: " + ", ".join(ambiguous)
         )
-    return PythonExtraSelection(names, all_packages=True)
+    if required_owner is not None and any(
+        projects[0].resolve() != required_owner.resolve()
+        for projects in owners.values()
+    ):
+        raise GeneratedRuntimeError("generated_runtime_extra_owner_mismatch")
+    return PythonExtraSelection(
+        names,
+        all_packages=any(
+            projects[0].resolve() != root.resolve() for projects in owners.values()
+        ),
+    )
+
+
+def supplemental_requirements_command(
+    interpreter: str, requirements: tuple[str, ...]
+) -> list[str]:
+    """Add dependencies without changing the source-selected project resolution."""
+    script = (
+        "import importlib.metadata as m, subprocess, sys, tempfile; "
+        "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt'); "
+        "f.write(''.join(d.metadata['Name'] + '==' + d.version + '\\n' "
+        "for d in m.distributions())); f.flush(); "
+        "result = subprocess.run(['uv', 'pip', 'install', '--python', sys.executable, "
+        "'--constraint', f.name, *[a for p in sys.argv[1:] for a in ('--requirement', p)]]); "
+        "f.close(); sys.exit(result.returncode)"
+    )
+    return [interpreter, "-c", script, *requirements]
+
+
+def select_python_requirements(
+    root: Path, requested: list[str], *, context_excludes: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """Validate selected manifests and their local include graph before packaging."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    root = root.resolve()
+    visited: set[Path] = set()
+    active: set[Path] = set()
+
+    def visit(relative: Path) -> None:
+        target = root / relative
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or not target.resolve().is_relative_to(root)
+            or not target.is_file()
+            or any(
+                path.is_symlink()
+                for path in (target, *target.parents)
+                if path != root and path.is_relative_to(root)
+            )
+            or any(part in _IGNORED_DIRECTORIES for part in relative.parts)
+            or _context_path_excluded(relative, context_excludes)
+            or _sensitive_file(relative, target)
+        ):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_requirements_path_invalid: {relative}"
+            )
+        relative = target.resolve().relative_to(root)
+        if _context_path_excluded(relative, context_excludes):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_requirements_path_invalid: {relative}"
+            )
+        if relative in active:
+            raise GeneratedRuntimeError("generated_runtime_requirements_cycle")
+        if relative in visited:
+            return
+        if len(visited) >= 100 or target.stat().st_size > 1024 * 1024:
+            raise GeneratedRuntimeError("generated_runtime_requirements_limit")
+        visited.add(relative)
+        active.add(relative)
+        for line in target.read_text(encoding="utf-8").splitlines():
+            line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+            if not line or line.startswith("#"):
+                continue
+            include = re.fullmatch(
+                r"(?:-r\s*|--requirement[ =]|-c\s*|--constraint[ =])([^\s]+)", line
+            )
+            if include:
+                visit(relative.parent / include.group(1))
+                continue
+            try:
+                requirement = Requirement(line)
+            except InvalidRequirement as exc:
+                raise GeneratedRuntimeError(
+                    f"generated_runtime_requirements_entry_unsupported: {relative}"
+                ) from exc
+            if requirement.url:
+                raise GeneratedRuntimeError(
+                    f"generated_runtime_requirements_url_unsupported: {relative}"
+                )
+        active.remove(relative)
+
+    names = tuple(dict.fromkeys(requested))
+    for name in names:
+        visit(Path(name))
+    return names
+
+
+def local_editable_install_operands(install: str) -> tuple[tuple[str, list[str]], ...]:
+    """Read only complete local editable pip declarations; never execute install text."""
+    try:
+        tokens = shlex.split(install)
+    except ValueError:
+        return ()
+    if tokens[:2] != ["pip", "install"] or not tokens[2:] or len(tokens[2:]) % 2:
+        return ()
+    operands = []
+    for flag, token in zip(tokens[2::2], tokens[3::2]):
+        if flag not in {"-e", "--editable"} or not re.fullmatch(
+            r"[A-Za-z0-9_./-]+(?:\[[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*\])?", token
+        ):
+            return ()
+        relative, _, groups = token.partition("[")
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            return ()
+        operands.append((relative, groups.rstrip("]").split(",") if groups else []))
+    return tuple(operands)
+
+
+def local_install_extra_claims(
+    root: Path,
+    install: str,
+    *,
+    reject_unselectable: bool = False,
+    context_excludes: tuple[str, ...] = (),
+) -> tuple[tuple[Path, str], ...]:
+    operands = []
+    for relative, groups in local_editable_install_operands(install):
+        owner = (root / relative).resolve()
+        manifest = owner / "pyproject.toml"
+        if (
+            not owner.is_relative_to(root.resolve())
+            or not manifest.resolve().is_relative_to(root.resolve())
+            or not manifest.is_file()
+        ):
+            return ()
+        operands.append((owner, groups))
+    claims = []
+    for owner, groups in operands:
+        declared = (
+            _pyproject_document(owner / "pyproject.toml")
+            .get("project", {})
+            .get("optional-dependencies", {})
+        )
+        for group in groups:
+            if canonicalize_name(group) not in {
+                canonicalize_name(name) for name in declared
+            }:
+                continue
+            try:
+                selection = select_python_extras(
+                    root,
+                    [group],
+                    required_owner=owner,
+                    context_excludes=context_excludes,
+                )
+            except GeneratedRuntimeError as exc:
+                if reject_unselectable and str(exc).startswith(
+                    (
+                        "generated_runtime_extra_unknown",
+                        "generated_runtime_extra_ambiguous",
+                        "generated_runtime_extra_owner_mismatch",
+                    )
+                ):
+                    raise
+                continue
+            claims.append((owner, selection.names[0]))
+    return tuple(claims)
+
+
+def validate_local_install_extras(
+    root: Path,
+    install: str,
+    extras: list[str],
+    *,
+    original_claims: tuple[tuple[Path, str], ...] = (),
+    context_excludes: tuple[str, ...] = (),
+) -> None:
+    selected = {canonicalize_name(name) for name in extras}
+    for owner, name in (
+        *original_claims,
+        *local_install_extra_claims(
+            root, install, reject_unselectable=True, context_excludes=context_excludes
+        ),
+    ):
+        select_python_extras(
+            root, [name], required_owner=owner, context_excludes=context_excludes
+        )
+        if name not in selected:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_extra_omitted: {owner.relative_to(root.resolve()) / 'pyproject.toml'} requires {name} in runtime.extras"
+            )
 
 
 def _python_extras(
     root: Path, runtime: Any | None, command: list[str]
 ) -> PythonExtraSelection:
+    exclusions = _context_excludes(root, runtime, "pyproject.toml", command)
     requested = [str(item) for item in (getattr(runtime, "extras", None) or [])]
     if requested:
-        return select_python_extras(root, requested)
+        return select_python_extras(root, requested, context_excludes=exclusions)
     document = _pyproject_document(root / "pyproject.toml")
     declared = document.get("project", {}).get("optional-dependencies", {})
     available = (
@@ -599,6 +841,7 @@ def _python_extras(
             if extra.lower() not in {"all", "dev", "test", "tests"}
             and extra.lower() in tokens
         ],
+        context_excludes=exclusions,
     )
 
 
@@ -802,16 +1045,19 @@ def _context_excludes(
     return tuple(sorted(values))
 
 
+def _context_path_excluded(relative: Path, exclusions: tuple[str, ...]) -> bool:
+    return any(
+        relative == Path(value) or Path(value) in relative.parents
+        for value in exclusions
+    )
+
+
 def _copy_sanitized_context(
     source: Path, destination: Path, exclusions: tuple[str, ...] = ()
 ) -> None:
     count = 0
     total = 0
     source = source.resolve()
-    excluded = tuple(Path(value) for value in exclusions)
-
-    def is_excluded(relative: Path) -> bool:
-        return any(relative == value or value in relative.parents for value in excluded)
 
     def copy_file(path: Path, relative: Path) -> None:
         nonlocal count, total
@@ -858,7 +1104,7 @@ def _copy_sanitized_context(
         next_ancestors = ancestors | {resolved_directory}
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
             relative = relative_directory / path.name
-            if is_excluded(relative):
+            if _context_path_excluded(relative, exclusions):
                 continue
             if path.name in _IGNORED_DIRECTORIES and path.is_dir():
                 continue

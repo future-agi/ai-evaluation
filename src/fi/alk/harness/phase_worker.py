@@ -42,6 +42,7 @@ async def main() -> None:
             state["baseline"],
             # The parent already validated this handle before scenario execution.
             _validate_baseline=False,
+            workspace_roots=state.get("workspace_roots", {}),
         )
         handle = world.read_only() if state["read_only"] else world
         namespace: dict[str, Any] = {}

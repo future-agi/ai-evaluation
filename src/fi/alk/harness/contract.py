@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from fi.simulate.agent.wrappers.http_events import CompletedToolEvents
+
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
@@ -394,6 +396,7 @@ class RuntimeInterface(BaseModel):
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
     response_path: str = ""
+    completed_tool_events: CompletedToolEvents | None = None
     failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
         default_factory=list, max_length=8
@@ -433,6 +436,8 @@ class RuntimeInterface(BaseModel):
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
             if not self.path:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_path")
+        if self.completed_tool_events is not None and self.kind != "http":
+            raise ValueError("completed tool events require an HTTP interface")
         if self.kind == "http":
             if self.protocol not in {"fi.alk", "openai_chat", "json_template"}:
                 raise ValueError(
@@ -483,10 +488,21 @@ class Runtime(BaseModel):
     # an otherwise unambiguous Node repository fail the generated-runtime admission path.
     language: str = ""
     version: str = ""
-    install: str = ""
+    install: str = Field(
+        default="",
+        description="Source install command recorded as evidence only; never executed. Required source-declared optional groups must also appear in extras.",
+    )
     # Optional dependency groups declared by the repository itself (for example ``voice`` in
     # pyproject.toml). Generated packaging validates these names against the manifest.
-    extras: list[str] = Field(default_factory=list)
+    extras: list[str] = Field(
+        default_factory=list,
+        description="Executable selection of source-declared optional dependency groups required by this runtime. Include groups required by install evidence; never invent undeclared groups.",
+    )
+    requirements_files: list[str] = Field(
+        default_factory=list,
+        description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+    )
+    workspaces: dict[str, str] = Field(default_factory=dict, description="Named native workspace roots relative to the agent process working directory; requires source evidence.")
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
     execution: Literal["auto", "native", "compose"] = "auto"
@@ -513,6 +529,9 @@ class Runtime(BaseModel):
 
     @model_validator(mode="after")
     def _validate_selection(self) -> "Runtime":
+        from .world.files import validate_bindings
+
+        validate_bindings(self.workspaces)
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:

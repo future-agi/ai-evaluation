@@ -64,6 +64,45 @@ def test_successful_authoring_save_is_terminal() -> None:
     )
 
 
+def test_provider_timeout_reaches_sdk_and_fails_without_retry(monkeypatch) -> None:
+    import httpx
+    from google.genai import _api_client
+
+    from fi.alk.harness.backends import SessionSpec, StageDone
+    from fi.alk.harness.backends.vertex_gemini import VertexGeminiSession
+
+    timeouts = []
+
+    async def timeout(self, http_request, stream=False):
+        timeouts.append(http_request.timeout)
+        raise httpx.ReadTimeout("Provider request timed out")
+
+    monkeypatch.setattr(_api_client.BaseApiClient, "_async_request_once", timeout)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    async def run():
+        session = VertexGeminiSession(
+            SessionSpec(system_prompt="Reply briefly", max_turns=2),
+            model="gemini-3.7-flash",
+        )
+        await session.start()
+        try:
+            await session.send("Hello")
+            return [event async for event in session.replies()]
+        finally:
+            await session.stop()
+
+    events = asyncio.run(run())
+    assert timeouts == [300.0]
+    assert isinstance(events[-1], StageDone)
+    assert events[-1].outcome == "failed"
+    assert events[-1].is_error
+    assert events[-1].errors == ["Provider request timed out"]
+
+
 def test_terminal_save_closes_adk_invocation_in_its_original_context(monkeypatch, caplog):
     from google.adk.models.google_llm import Gemini
     from google.adk.models.llm_response import LlmResponse

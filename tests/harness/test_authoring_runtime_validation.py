@@ -510,6 +510,7 @@ def test_runtime_evidence_reads_generic_models_when_world_isolation_not_run(
         action_report=action_report,
         reset_equivalence=CheckStatus.PASSED,
         world_isolation=CheckStatus.NOT_RUN,
+        chat_ingress=CheckStatus.PASSED,
     )
 
     evidence = captured["evidence"]
@@ -585,6 +586,7 @@ def test_external_provider_runtime_evidence_marks_state_checks_not_applicable(
         action_report=action_report,
         reset_equivalence=CheckStatus.NOT_APPLICABLE,
         world_isolation=CheckStatus.NOT_APPLICABLE,
+        chat_ingress=CheckStatus.NOT_APPLICABLE,
     )
 
     checks = captured["evidence"].checks
@@ -1194,6 +1196,7 @@ def test_provider_lifecycle_transient_failure_is_retryable_infrastructure(detail
     "detail",
     (
         "GeneratedRuntimeError: generated_runtime_component_ambiguous",
+        "BundleAuthorError: generated_runtime_extra_omitted: sdk/pyproject.toml requires cloud",
         "ProcessRuntimeError: no runnable shipped entrypoint was identified",
         "docker build failed while installing dependencies",
         "agent process exited before readiness probe passed",
@@ -1651,16 +1654,38 @@ def test_missing_storage_routes_to_understanding_only_when_metadata_can_help(
 def test_storage_diagnostic_accepts_only_known_exception_wrapper(
    tmp_path, prefix, storage_repair
 ):
-   (tmp_path / "world.sqlite").touch()
-   (tmp_path / "contract.json").write_text('{"data_store": null}')
-   diagnostic = _fallback_diagnostic(
-       RuntimeValidationError(
-           "runtime",
-           prefix
-           + "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found",
-       ),
-       authoring=tmp_path,
-   )
-   assert (
-       diagnostic.code == "generated_storage_declaration_missing"
-   ) is storage_repair
+    (tmp_path / "world.sqlite").touch()
+    (tmp_path / "contract.json").write_text('{"data_store": null}')
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError(
+            "runtime",
+            prefix
+            + "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found",
+        ),
+        authoring=tmp_path,
+    )
+    assert (
+        diagnostic.code == "generated_storage_declaration_missing"
+    ) is storage_repair
+
+
+@pytest.mark.parametrize("repair_result", [None, 0, 1])
+def test_dependency_investigation_rejects_untyped_repair_results(tmp_path, repair_result):
+    source = tmp_path / "source"
+    authoring = tmp_path / "authoring"
+    source.mkdir()
+    authoring.mkdir()
+    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application failed")
+    calls = []
+
+    async def validate(*_args):
+        calls.append("validate")
+        raise RuntimeValidationError("environment", "application failed", diagnostics=(diagnostic,))
+
+    async def repair(*_args):
+        calls.append("repair")
+        return repair_result
+
+    with pytest.raises(RuntimeValidationError, match="application failed"):
+        asyncio.run(validate_and_repair(SimpleNamespace(metadata={"generic_harness_v1": True}), source, authoring, validate=validate, repair=repair))
+    assert calls == ["validate", "repair"]

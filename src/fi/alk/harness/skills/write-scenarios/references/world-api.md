@@ -5,6 +5,26 @@ world is kept in, which is deliberate: the store varies more between agents than
 
 ## Changing it directly
 
+For a native file task, use a named workspace declared in `runtime.workspaces`.
+Each declaration maps a name to a directory relative to the target process's working directory.
+The directory must come from the target's actual configuration. A database collection called
+`files` does not populate that directory.
+
+```python
+def setup(world):
+    world.write_file("project", "notes.txt", "Review the delivery date.\n")
+
+def ready(world):
+    if world.read_file("project", "notes.txt") != "Review the delivery date.\n":
+        return "The target workspace is missing the expected note."
+```
+
+`read_file` returns UTF-8 text and is available in checks. `write_file` is available only in
+setup. Both require a declared workspace and a relative path inside it. Missing files, links,
+special files and oversized contents raise errors. Reset restores the private runtime copy;
+fixtures never modify the submitted source. Use this surface only when the target reads the
+same configured directory.
+
 Where no tool of the agent's can produce the state you need, change the world's collections and
 records yourself:
 

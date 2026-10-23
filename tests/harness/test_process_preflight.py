@@ -1139,6 +1139,7 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "build_requires_root",
         "user_assignment_invalid",
         "configuration_name_duplicate",
+        "workspace_name_duplicate",
         "configuration_name_required",
         "configuration_name_reserved",
         "sentinel_shape_invalid",
@@ -1324,6 +1325,7 @@ _INTERNAL_ONLY_RUNTIME_CODES = frozenset(
         # authoring pipeline. Its absence is an internal call-order/provenance invariant, not a
         # customer-facing process-runtime failure code.
         "internal_source_digest_missing",
+        "workspace_name_collision",
         # Phase 6: marks a bundle-shape/state invariant an earlier layer (the model layer, or this
         # module's own baseline-freeze-before-clone ordering) should already guarantee — e.g.
         # `reset()` called before `provision()`, or a store's backing service turning out not to be a

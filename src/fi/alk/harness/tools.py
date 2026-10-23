@@ -11,12 +11,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from fi.simulate.agent.wrappers.http_events import CompletedToolEvents
+
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
 
 from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
+    Runtime,
     known_modalities,
     validate_contract,
 )
@@ -682,16 +685,12 @@ def contract_tools(
                         "version": {"type": "string"},
                         "install": {
                             "type": "string",
-                            "description": "Its own install command, e.g. from its lockfile or "
-                            "requirements. Recorded as evidence; generated packaging derives "
-                            "the executable install from the submitted manifest/lockfile.",
+                            "description": Runtime.model_fields["install"].description,
                         },
                         "extras": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional dependency groups declared by the source "
-                            "manifest that this runtime needs, such as voice or qdrant. Never "
-                            "invent a group that the manifest does not declare.",
+                            "description": Runtime.model_fields["extras"].description,
                         },
                         "workdir": {
                             "type": "string",
@@ -809,6 +808,7 @@ def contract_tools(
                                     "to assistant text in the JSON response, including numeric "
                                     "list indexes such as '-1.content.parts.0.text'.",
                                 },
+                                "completed_tool_events": CompletedToolEvents.model_json_schema(),
                                 "failure_rule": {
                                     "type": "object",
                                     "required": ["status_path", "failure_values"],

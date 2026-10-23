@@ -59,7 +59,14 @@ from .bundle_v2 import (
     seal_bundle_v2,
 )
 from .contract import Runtime, ToolEntry
-from .generated_runtime import GeneratedRuntimeError, select_python_extras
+from .generated_runtime import (
+    GeneratedRuntimeError,
+    _python_language_version,
+    select_python_extras,
+    select_python_requirements,
+    supplemental_requirements_command,
+    validate_local_install_extras,
+)
 from .credentials import assess_configuration, discover_credentials
 from .secrets import process_secret_environment_names
 from .runtime_selection import ComposeSelection, select_runtime
@@ -151,6 +158,7 @@ def _reuse_certified_bundle(
         CheckStatus,
         GenericHarnessArtifactStore,
         verify_runtime_certification,
+        requires_chat_ingress,
     )
 
     manifest = load_bundle_v2(frozen)
@@ -159,6 +167,7 @@ def _reuse_certified_bundle(
         certificate_path,
         bundle_digest=manifest.digest,
         source_digest=source_digest,
+        chat_ingress_required=requires_chat_ingress(job, frozen),
     )
     store = GenericHarnessArtifactStore(artifact_root)
     scenarios = authoring / "scenarios"
@@ -1152,6 +1161,10 @@ def _plan_python(
     livekit_download: bool = False,
     run_override: list[str] | None = None,
     extras: list[str] | None = None,
+    install: str = "",
+    version: str = "",
+    requirements_files: list[str] | None = None,
+    context_excludes: tuple[str, ...] = (),
 ) -> SourceProcess:
     if (
         run_override
@@ -1178,9 +1191,16 @@ def _plan_python(
         environment=environment,
         depends_on=depends_on,
     )
-    python = _docker_python(root)
     try:
-        selection = select_python_extras(root, extras or [])
+        if version:
+            python = _python_language_version(root, version, interpreter_selector=True)
+            if not any(marker in python for marker in "<>=!~,*"):
+                python = f"python{python}"
+        else:
+            python = _docker_python(root)
+        validate_local_install_extras(root, install, extras or [], context_excludes=context_excludes)
+        selection = select_python_extras(root, extras or [], context_excludes=context_excludes)
+        requirements = select_python_requirements(root, requirements_files or [], context_excludes=context_excludes)
     except GeneratedRuntimeError as exc:
         raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
@@ -1208,20 +1228,26 @@ def _plan_python(
         ]
     elif (root / "requirements.txt").is_file():
         commands = [
-            [python, "-m", "venv", ".venv"],
+            ["uv", "venv", "--python", python, ".venv"]
+            if version else [python, "-m", "venv", ".venv"],
             [
-                ".venv/bin/python",
-                "-m",
-                "pip",
+                *(["uv", "pip"] if version else [".venv/bin/python", "-m", "pip"]),
                 "install",
+                *(["--python", ".venv/bin/python"] if version else []),
                 "--requirement",
                 "requirements.txt",
             ],
         ]
         run = [".venv/bin/python", *([entry] if entry is not None else [])]
     else:
-        commands = []
-        run = [python, *([entry] if entry is not None else [])]
+        commands = [["uv", "venv", "--python", python, ".venv"]] if version else []
+        run = [".venv/bin/python" if version else python, *([entry] if entry is not None else [])]
+    if requirements:
+        if not commands:
+            commands.append([python, "-m", "venv", ".venv"])
+            run = [".venv/bin/python", *([entry] if entry is not None else [])]
+        commands.append(supplemental_requirements_command(".venv/bin/python", requirements))
+        commands.append(["uv", "pip", "check", "--python", ".venv/bin/python"])
     return process.model_copy(
         update={"build_commands": commands, "run_command": run_override or run}
     )
@@ -1240,7 +1266,13 @@ def _uv_sync_build_command(
     """
 
     base = [
-        "uv", "sync", "--no-cache", "--python", python, "--no-dev", *(extra_arguments or [])
+        "uv",
+        "sync",
+        "--no-cache",
+        "--python",
+        python,
+        "--no-dev",
+        *(extra_arguments or []),
     ]
     if not (root / "uv.lock").is_file():
         return base
@@ -1486,6 +1518,32 @@ def _subprocess_adapter_source() -> str:
         .with_name("subprocess_http_adapter.py")
         .read_text(encoding="utf-8")
     )
+
+
+def _discovered_python_component(root: Path) -> tuple[Path, str]:
+    candidates = sorted(
+        path
+        for path in root.glob("**/agent.py")
+        if not any(
+            part in _IGNORED_ARTIFACT_PARTS
+            for part in path.relative_to(root).parts[:-1]
+        )
+    )
+    if len(candidates) != 1:
+        raise BundleAuthorError("component_ambiguous: expected exactly one agent.py")
+    component = candidates[0].parent
+    # An entrypoint directory is not necessarily its Python project root. Preserve
+    # the nearest enclosing manifest and its sibling packages instead of flattening
+    # src/ and silently running without the repository's dependencies.
+    for parent in (component, *component.parents):
+        if not parent.is_relative_to(root):
+            break
+        if any(
+            (parent / name).is_file() for name in ("pyproject.toml", "requirements.txt")
+        ):
+            component = parent
+            break
+    return component, candidates[0].relative_to(component).as_posix()
 
 
 def _runtime_component(root: Path, configured_workdir: str) -> Path:
@@ -2120,6 +2178,9 @@ def resolve_environment_plan(
                 depends_on=[item for item in depends if item != "postgres"],
                 livekit_download=is_livekit and service_name == control_name,
                 extras=runtime_model.extras if service_name == control_name else [],
+                install=runtime_model.install if service_name == control_name else "",
+                requirements_files=runtime_model.requirements_files if service_name == control_name else [],
+                context_excludes=tuple(runtime_model.context_excludes) if service_name == control_name else (),
                 run_override=(
                     runtime_command
                     or _compose_command(service.get("command"))
@@ -2313,35 +2374,7 @@ def resolve_environment_plan(
                 "an internal agent.py is not evidence of an HTTP server"
             )
         elif not is_callback and not (root / entry).is_file():
-            # A submitted checkout may contain a developer's virtualenv or dependency tree.
-            # Those files are not agent entrypoints and must not make source discovery
-            # ambiguous.  Apply the same generated-artifact exclusions used by staging.
-            candidates = sorted(
-                path
-                for path in root.glob("**/agent.py")
-                if not any(
-                    part in _IGNORED_ARTIFACT_PARTS
-                    for part in path.relative_to(root).parts[:-1]
-                )
-            )
-            if len(candidates) != 1:
-                raise BundleAuthorError(
-                    "component_ambiguous: expected exactly one agent.py"
-                )
-            component = candidates[0].parent
-            # An entrypoint directory is not necessarily its Python project root. Preserve
-            # the nearest enclosing manifest and its sibling packages instead of flattening
-            # src/ and silently running without the repository's dependencies.
-            for parent in (component, *component.parents):
-                if not parent.is_relative_to(root):
-                    break
-                if any(
-                    (parent / name).is_file()
-                    for name in ("pyproject.toml", "requirements.txt")
-                ):
-                    component = parent
-                    break
-            entry = candidates[0].relative_to(component).as_posix()
+            component, entry = _discovered_python_component(root)
         else:
             component = root
         control_name = "agent"
@@ -2387,6 +2420,10 @@ def resolve_environment_plan(
             environment=environment,
             livekit_download=is_livekit,
             extras=runtime_model.extras,
+            install=runtime_model.install,
+            version=runtime_model.version,
+            requirements_files=runtime_model.requirements_files,
+            context_excludes=tuple(runtime_model.context_excludes),
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph
@@ -2560,7 +2597,12 @@ def resolve_environment_plan(
         admission.require_no_missing_declarations()
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
-    processes = normalized_processes
+    processes = [
+        process.model_copy(update={"workspaces": dict(runtime_model.workspaces)})
+        if isinstance(process, SourceProcess) and process.name == control_name
+        else process
+        for process in normalized_processes
+    ]
 
     return EnvironmentPlanV2(
         packaging=packaging,

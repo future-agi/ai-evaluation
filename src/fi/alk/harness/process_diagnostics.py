@@ -96,3 +96,39 @@ async def upload_process_logs(root: Path, adapter, **kwargs) -> None:
             )
     finally:
         os.close(fd)
+
+
+def retained_process_evidence(directory: Path, before: set[Path], secrets) -> str:
+    """Read only bounded, sanitized logs retained by the current validation attempt."""
+    if not directory.is_dir() or directory.is_symlink():
+        return ""
+    pieces = []
+    remaining = 12000
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in sorted(os.listdir(fd)):
+            if not name.endswith(".log") or directory / name in before:
+                continue
+            try:
+                log_fd = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd
+                )
+            except OSError:
+                continue
+            with os.fdopen(log_fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 32768:
+                    continue
+                text = sanitize_diagnostic(
+                    stream.read(32768).decode("utf-8", errors="replace"),
+                    secrets,
+                    limit=32768,
+                )
+            piece = (sanitize_diagnostic(name, secrets) + "\n" + text)[:remaining]
+            pieces.append(piece)
+            remaining -= len(piece)
+            if not remaining:
+                break
+    finally:
+        os.close(fd)
+    return "\n".join(pieces)[:12000]

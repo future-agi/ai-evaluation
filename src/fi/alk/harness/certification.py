@@ -73,6 +73,7 @@ class CertificationChecks(BaseModel):
     static: CheckStatus = CheckStatus.NOT_RUN
     schema_and_seed: CheckStatus = CheckStatus.NOT_RUN
     processes: CheckStatus = CheckStatus.NOT_RUN
+    chat_ingress: CheckStatus = CheckStatus.NOT_RUN
     source_invariants: CheckStatus = CheckStatus.NOT_RUN
     scenario_setup_ready: str = "0/0"
     tool_contract: str = "0/0"
@@ -176,11 +177,32 @@ class CertificationGateError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
+def requires_chat_ingress(job, bundle_dir: Path) -> bool:
+    from .contract import AgentContract
+    from .job import ProviderExecutionMode, SourceKind
+
+    if (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+    ):
+        return False
+    try:
+        contract = AgentContract.model_validate_json(
+            (bundle_dir / "contract.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise CertificationGateError(
+            "certification_invalid", "certified contract is unavailable"
+        ) from exc
+    return contract.modality != "voice"
+
+
 def verify_runtime_certification(
     path: Path,
     *,
     bundle_digest: str,
     source_digest: str,
+    chat_ingress_required: bool = True,
 ) -> HarnessCertification:
     """Fail closed unless a tamper-evident certificate matches the execution bundle."""
 
@@ -217,8 +239,14 @@ def verify_runtime_certification(
     required = {
         "static": certificate.checks.static,
         "processes": certificate.checks.processes,
+        **(
+            {"chat_ingress": certificate.checks.chat_ingress}
+            if chat_ingress_required
+            else {}
+        ),
     }
     required_or_not_applicable = {
+        "chat_ingress": certificate.checks.chat_ingress,
         "schema_and_seed": certificate.checks.schema_and_seed,
         "source_invariants": certificate.checks.source_invariants,
         "reset_equivalence": certificate.checks.reset_equivalence,

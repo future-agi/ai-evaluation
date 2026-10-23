@@ -153,3 +153,220 @@ def test_compose_repair_path_is_relative_to_repository_not_workdir(tmp_path):
     )
     assert repaired.runtime.compose_file == "deployment/custom.yaml"
     assert repaired.runtime.service == "dialogue"
+
+
+@pytest.fixture
+def dependency_patch(tmp_path):
+    (tmp_path / "app.py").write_text("print('source')")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="fixture"\nversion="1"\n'
+        '[project.optional-dependencies]\nexisting=[]\ncustom_transport=["some-library"]\n'
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "app.py"],
+            extras=["existing"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
+        ),
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(
+            update={"extras": ["existing", "custom_transport"]}
+        ),
+        evidence_paths=("pyproject.toml",),
+        diagnostic_codes=("chat_ingress_failed",),
+        summary="The relevant branch imports a dependency in custom_transport.",
+    )
+    return contract, patch
+
+
+def test_readiness_patch_accepts_only_source_declared_additive_extras(
+    tmp_path, dependency_patch
+):
+    contract, patch = dependency_patch
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+    )
+    assert repaired.runtime.extras == ["existing", "custom_transport"]
+    assert repaired.runtime.model_dump(
+        exclude={"extras"}
+    ) == contract.runtime.model_dump(exclude={"extras"})
+
+
+@pytest.mark.parametrize(
+    "extras",
+    [["existing"], ["custom_transport"], ["existing", "unknown"], ["EXISTING"]],
+)
+def test_readiness_patch_rejects_noop_removal_and_undeclared_group(
+    tmp_path, dependency_patch, extras
+):
+    contract, patch = dependency_patch
+    patch = patch.model_copy(
+        update={"runtime": patch.runtime.model_copy(update={"extras": extras})}
+    )
+    with pytest.raises(ValueError):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"command": ["python", "other.py"]},
+        {"workdir": "other"},
+        {"install": "pip install arbitrary"},
+        {"execution": "compose"},
+        {"interface": RuntimeInterface(kind="http", port=8080, path="/error")},
+        {"language": "javascript"},
+        {"required_environment": {"agent": ["NEW"]}},
+        {"context_excludes": ["tests"]},
+        {"platform": "linux/amd64"},
+    ],
+)
+def test_readiness_patch_locks_runtime_fields(tmp_path, dependency_patch, changes):
+    contract, patch = dependency_patch
+    patch = patch.model_copy(
+        update={"runtime": patch.runtime.model_copy(update=changes)}
+    )
+    with pytest.raises(ValueError, match="only_extras_allowed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+        )
+
+
+@pytest.mark.parametrize("layout", ["ambiguous", "excluded", "escaped"])
+def test_readiness_patch_rejects_unselectable_workspace_groups(
+    tmp_path, dependency_patch, layout
+):
+    contract, patch = dependency_patch
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="fixture"\nversion="1"\n[project.optional-dependencies]\nexisting=[]\n'
+        '[tool.uv.workspace]\nmembers=["modules/*"]\n'
+        + ('exclude=["modules/*"]\n' if layout == "excluded" else "")
+    )
+    for name in ["a", "b"] if layout == "ambiguous" else ["a"]:
+        member = tmp_path / "modules" / name
+        member.mkdir(parents=True)
+        (member / "pyproject.toml").write_text(
+            '[project]\nname="member"\nversion="1"\n[project.optional-dependencies]\ncustom_transport=[]\n'
+        )
+    if layout == "escaped":
+        outside = tmp_path.parent / "outside-member"
+        outside.mkdir()
+        (tmp_path / "modules/link").symlink_to(outside)
+    with pytest.raises(ValueError):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+        )
+
+
+def test_dependency_investigation_may_decline_without_nudge(
+    tmp_path, dependency_patch, monkeypatch
+):
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    contract, _patch_value = dependency_patch
+    calls = []
+
+    class DecliningStage:
+        def __init__(self, spec, **kwargs):
+            assert spec.max_turns == 12
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing):
+            calls.append(briefing)
+
+    monkeypatch.setattr(runtime_repair, "Stage", DecliningStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code="chat_ingress_failed",
+        message="unproven",
+    )
+    assert (
+        asyncio.run(
+            runtime_repair.request_runtime_plan_patch(tmp_path, contract, (diagnostic,))
+        )
+        is None
+    )
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "code,install",
+    [
+        ("chat_ingress_failed", ""),
+        ("generated_runtime_plan_invalid", "pip install -e modules/a[transport]"),
+    ],
+)
+def test_runtime_patch_cannot_select_context_excluded_extra_owner(
+    tmp_path, code, install
+):
+    (tmp_path / "app.py").write_text("print('agent')")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="root"\nversion="1"\n[tool.uv.workspace]\nmembers=["modules/*"]\n'
+    )
+    member = tmp_path / "modules/a"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text(
+        '[project]\nname="member"\nversion="1"\n[project.optional-dependencies]\ntransport=["some-library"]\n'
+    )
+    contract = AgentContract(
+        agent="fixture",
+        runtime=Runtime(
+            language="python",
+            execution="native",
+            command=["python", "app.py"],
+            context_excludes=["modules/a"],
+            install=install,
+        ),
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=contract.runtime.model_copy(update={"extras": ["transport"]}),
+        evidence_paths=("modules/a/pyproject.toml",),
+        diagnostic_codes=(code,),
+        summary="Select the declared transport",
+    )
+    with pytest.raises(ValueError, match="extra_unknown"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={code}
+        )
+
+
+def test_readiness_patch_adds_source_requirements_without_changing_extras(
+    tmp_path, dependency_patch
+):
+    contract, patch = dependency_patch
+    (tmp_path / "backend.txt").write_text("client>=1\n")
+    patch = patch.model_copy(
+        update={
+            "runtime": contract.runtime.model_copy(
+                update={"requirements_files": ["backend.txt"]}
+            ),
+            "evidence_paths": ("backend.txt",),
+        }
+    )
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+    )
+    assert repaired.runtime.requirements_files == ["backend.txt"]
+    assert repaired.runtime.extras == ["existing"]
+    (tmp_path / "backend.txt").write_text("-r missing.txt\n")
+    with pytest.raises(ValueError, match="requirements_path_invalid"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"}
+        )

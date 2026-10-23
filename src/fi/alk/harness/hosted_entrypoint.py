@@ -680,7 +680,12 @@ class ProcessWorldFactory:
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
         store = AttachedPostgresStore(endpoint.address)
         return await asyncio.to_thread(
-            HostedWorld, store, runtime.world_index, rng, row_counts
+            HostedWorld,
+            store,
+            runtime.world_index,
+            rng,
+            row_counts,
+            workspace_roots=runtime.metadata.get("workspace_roots", {}),
         )
 
 
@@ -731,7 +736,11 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
         if excerpt and not prompt:
             parts.append(excerpt)
         summary = str(body.get("one_liner") or "").strip()
-        rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
+        rules = [
+            str(rule).strip()
+            for rule in body.get("hard_constraints") or []
+            if str(rule).strip()
+        ]
         if summary:
             parts.append(f"Summary: {summary}")
         if rules:
@@ -2419,6 +2428,7 @@ async def run_job(
             from .certification import (
                 CertificationGateError,
                 verify_runtime_certification,
+                requires_chat_ingress,
             )
 
             try:
@@ -2427,6 +2437,7 @@ async def run_job(
                     work_directory / "runtime-validation.json",
                     bundle_digest=manifest.digest,
                     source_digest=manifest.provenance.source_digest,
+                    chat_ingress_required=requires_chat_ingress(job, bundle_dir),
                 )
             except CertificationGateError as exc:
                 return await _fail(

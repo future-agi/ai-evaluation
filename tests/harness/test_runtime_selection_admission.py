@@ -648,3 +648,41 @@ def test_materialized_secret_path_does_not_satisfy_sibling_process(tmp_path):
                 "required_environment": {"worker": ["GOOGLE_APPLICATION_CREDENTIALS"]},
             },
         )
+
+
+def test_local_editable_extra_must_be_selected(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='shell'\nversion='1'\n[tool.uv.workspace]\nmembers=['sdk', 'tools']\n"
+    )
+    for name in ("sdk", "tools"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "pyproject.toml").write_text(
+            f"[project]\nname='{name}'\nversion='1'\n"
+            + (
+                "[project.optional-dependencies]\ncloud=['cloud-client']\n"
+                if name == "sdk"
+                else ""
+            )
+        )
+    (tmp_path / "server.py").write_text("print('source')")
+    runtime = native() | {"install": "pip install -e sdk[cloud] -e tools", "extras": []}
+    with pytest.raises(
+        BundleAuthorError, match="generated_runtime_extra_omitted.*cloud"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            job(),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime=runtime,
+        )
+    runtime["extras"] = ["cloud"]
+    plan = resolve_environment_plan(
+        tmp_path,
+        job(),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    command = plan.processes[-1].build_commands[0]
+    assert "--all-packages --extra cloud" in " ".join(command)
