@@ -448,6 +448,19 @@ class ReadOnlyWorld(HttpObservationHandle):
     def read_file(self, workspace: str, path: str) -> str:
         return self.__world.read_file(workspace, path)
 
+    def observe(self, name, parameters=None):
+        checkpoint = self.__world.checkpoint()
+        changed = False
+        try:
+            result = self._http_client.observe(name, parameters)
+        finally:
+            changed = self.__world.checkpoint() != checkpoint
+            if changed:
+                self.__world.revert(checkpoint)
+        if changed:
+            raise WorldReadOnly("observation changed the world")
+        return result
+
     def write_file(self, workspace: str, path: str, content: str) -> None:
         raise WorldReadOnly("write_file reached a read-only handle")
 

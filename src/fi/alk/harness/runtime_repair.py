@@ -42,6 +42,13 @@ _SAFE_RUNTIME_LAUNCHERS = {
     "yarn",
 }
 _SHELL_LAUNCHERS = {"sh", "bash", "zsh", "dash", "fish", "cmd", "powershell"}
+_PACKAGE_RUNNER_SUBCOMMANDS = {
+    "bun": {"x"},
+    "npm": {"exec"},
+    "pnpm": {"dlx", "exec"},
+    "yarn": {"dlx"},
+}
+_PACKAGE_RUNNERS = {"npx"}
 
 
 def _contract_hash(contract: AgentContract) -> str:
@@ -659,6 +666,15 @@ def validate_runtime_plan_patch(
             if runtime.command[0] not in declared:
                 raise ValueError("runtime_repair_launcher_not_source_evidenced")
         entry_tokens = runtime.command[1:]
+        subcommand = next(
+            (token.casefold() for token in entry_tokens if not token.startswith("-")),
+            "",
+        )
+        if (
+            launcher in _PACKAGE_RUNNERS
+            or subcommand in _PACKAGE_RUNNER_SUBCOMMANDS.get(launcher, set())
+        ):
+            raise ValueError("runtime_repair_registry_package_execution_forbidden")
         if launcher == "bun":
             directories = []
             arguments = iter(entry_tokens)
@@ -999,8 +1015,6 @@ The private conversation must capture actual completed tool evidence after recom
             try:
                 resolved = path.resolve()
                 unsafe = not resolved.is_relative_to(root)
-                if not unsafe and resolved.is_dir():
-                    unsafe = any(entry.is_symlink() for entry in resolved.rglob("*"))
             except (OSError, RuntimeError, ValueError):
                 unsafe = True
             if unsafe:

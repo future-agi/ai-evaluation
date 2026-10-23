@@ -37,6 +37,7 @@ SELECT cls.relname AS table_name,
        defaults.adbin IS NOT NULL AS has_default,
        pg_catalog.pg_get_expr(defaults.adbin, defaults.adrelid) AS default_expression,
        attr.attgenerated <> '' AS generated,
+       attr.attidentity <> '' AS identity,
        typ.typtype AS type_kind,
        typ.typname AS udt_name,
        element.typname AS element_udt_name
@@ -233,6 +234,7 @@ def _columns(
                 has_default=default is not None,
                 default_expression=str(default) if default is not None else None,
                 generated=generated,
+                identity=bool(row.get("identity", False)),
                 enum_values=enum_values,
                 element_type=element_type,
             )

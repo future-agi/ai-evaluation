@@ -175,6 +175,7 @@ def accept_contract(
         from .source_tool_evidence import tool_evidence_problems
 
         problems.extend(tool_evidence_problems(contract, source_root))
+        problems.extend(_copy_prompt(contract, source_root))
     if problems:
         return _problems(problems, arrived)
     contract = contract.model_copy(
@@ -194,6 +195,29 @@ def accept_contract(
         f"{len(contract.real_use_cases)} use cases, "
         f"{len(contract.open_questions)} open questions."
     )
+
+
+def _copy_prompt(contract: AgentContract, source_root: Path) -> list[str]:
+    """Replace the quoted excerpt with the lines `system_prompt_from` names, as written."""
+    root = source_root.resolve()
+    parts: list[str] = []
+    problems: list[str] = []
+    for index, where in enumerate(contract.system_prompt_from):
+        path = (root / where.path).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            problems.append(f"system_prompt_from[{index}]: {where.path} is not a file in the source")
+            continue
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not 1 <= where.start_line <= where.end_line <= len(lines):
+            problems.append(
+                f"system_prompt_from[{index}]: lines {where.start_line}-{where.end_line} are "
+                f"outside {where.path}, which has {len(lines)} lines"
+            )
+            continue
+        parts.append("\n".join(lines[where.start_line - 1 : where.end_line]))
+    if parts and not problems:
+        contract.system_prompt_excerpt = "\n\n".join(parts)
+    return problems
 
 
 def _without_nulls(value: Any) -> Any:
@@ -255,7 +279,9 @@ def contract_tools(
         "one flat object. Every field is described in the schema; fill in what the source "
         "supports and leave the rest out.\n\n"
         "It is validated when you call it. If anything is wrong you get the whole list back at "
-        "once, in terms of what to fix, and you submit again.",
+        "once, in terms of what to fix, and you submit again. When the agent's source is in front "
+        "of you, submit only after an `agent_reader` has checked your draft against it and you "
+        "have corrected what it found.",
         # Nothing required, and that is deliberate. This layer runs before the tool body, so
         # anything it rejects never reaches the code that could have understood it — a contract
         # sent inside a wrapper is complete and correct, and is unwrapped a few lines below, but
@@ -311,6 +337,21 @@ def contract_tools(
                     "description": "The agent's own instructions, quoted. Often lives away from "
                     "the main agent file.",
                 },
+                "system_prompt_from": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "start_line": {"type": "integer"},
+                            "end_line": {"type": "integer"},
+                        },
+                        "required": ["path", "start_line", "end_line"],
+                    },
+                    "description": "Where the agent's whole prompt is written: every part it is "
+                    "assembled from, in order, as a path relative to the source root and the first "
+                    "and last line of each. These lines replace system_prompt_excerpt as written.",
+                },
                 "hard_constraints": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -355,6 +396,26 @@ def contract_tools(
                                 "since it holds before any tool runs. Empty means callable first "
                                 "thing, and naming a tool that is not gated makes every future "
                                 "test of it replay a preamble it never needed.",
+                            },
+                            "refuses": {
+                                "type": "string",
+                                "description": "Every refusal that depends on an argument's value "
+                                "or on something outside the call, each with what it waits for, and "
+                                "every refusal the code returns as an ordinary value rather than an "
+                                "error. Read from the tool, the helpers it calls and the service "
+                                "behind it.",
+                            },
+                            "effects": {
+                                "type": "string",
+                                "description": "What a successful call reads, creates and changes, "
+                                "and what earlier state it clears, which a later step then has to "
+                                "produce again.",
+                            },
+                            "inputs_from": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"},
+                                "description": "Arguments whose value must come from an earlier "
+                                "tool's output, as argument name to that tool's name.",
                             },
                         },
                         # Nothing required: a tool genuinely taking no arguments is ordinary,
@@ -465,6 +526,14 @@ def contract_tools(
                     "a narrated situation with a customer, a name and an outcome. Each one is "
                     "something the agent's own text says it does, never stretched from a passing "
                     "word or a tool name. Scenarios are written later, from these.",
+                },
+                "caller_identity": {
+                    "type": "string",
+                    "description": "How the agent knows who it is talking to (the number they "
+                    "call from, a login, an account id passed in), and what it loads from that "
+                    "before any tool runs (their account, an order or booking already in flight). "
+                    "Read it from the code that starts a session. Empty only when the agent never "
+                    "identifies the person.",
                 },
                 "notes": {
                     "type": "string",

@@ -70,6 +70,7 @@ class SourceColumn(BaseModel):
     has_default: bool
     default_expression: str | None = None
     generated: bool = False
+    identity: bool = False
     enum_values: tuple[str, ...] = ()
     element_type: LogicalType | None = None
 

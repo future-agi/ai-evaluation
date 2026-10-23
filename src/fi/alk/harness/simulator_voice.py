@@ -9,7 +9,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import random
+import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -29,6 +33,11 @@ from fi.simulate.runtime import (
 logger = logging.getLogger(__name__)
 
 CARTESIA_DEFAULT_VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+# The last voice tried for each gender, so a caller never falls back to the other one.
+_CARTESIA_DEFAULT_VOICES = {
+    "female": CARTESIA_DEFAULT_VOICE,
+    "male": "630ed21c-2c5c-41cf-9d82-10a7fd668370",
+}
 
 CONNECT_TIMEOUT_SECONDS = 60.0
 READINESS_TIMEOUT_SECONDS = 120.0
@@ -209,6 +218,12 @@ SIMULATOR_INSTRUCTIONS = (
     "for a step that does not get you there. Rules 6, 9, 12g and 12i do not hold you: no please, no "
     "thanks, no wind-down, and you hang up in a few words once you have it or see you will not get it "
     "here.\n"
+    "12k. When you are frustrated or angry, because the scenario makes you so or because the agent "
+    "keeps failing you, it is in every turn and it is heard, not only in what you ask for: short "
+    "bursts of a few words, an exclamation where you would raise your voice, the thing that went "
+    "wrong and how long it has gone on said again, the demand repeated, and no please, thanks or "
+    "softeners. It does not fade because the agent apologises; it eases only when the agent "
+    "actually fixes something.\n"
     "13. Never say you have done something away from this call that you cannot actually do: "
     "tapped a link, opened an app, read a message that arrived, paid something elsewhere. You are "
     "on a phone call and nothing else. Say plainly that nothing has arrived or that you cannot do "
@@ -716,6 +731,13 @@ def _cartesia_lang_key(persona: dict) -> str:
     return "en"
 
 
+def persona_tts_language(persona: Mapping[str, Any] | None) -> str:
+    """The language the caller's voice speaks, from their first language; "" leaves the default."""
+    language = _persona_language_name(dict(persona or {}))
+    code = _CARTESIA_LANGUAGE_TO_LANG.get(language) or language
+    return code if code in _CARTESIA_SUPPORTED_LANGS else ""
+
+
 _CARTESIA_EMOTION_VOICES = {
     "female": (
         "26403c37-80c1-4a1a-8692-540551ca2ae5",
@@ -732,13 +754,267 @@ _CARTESIA_EMOTION_VOICES = {
 }
 _CARTESIA_EMOTION_VOICE_ACCENTS = frozenset({"", "american", "canadian", "neutral"})
 
+# English voices by the age their Cartesia description gives, and voices recorded angry. Ages 32 to
+# 49 keep the general catalog; no Cartesia voice sounds under 18, so teenagers get young adults.
+_CARTESIA_AGE_VOICES = {
+    "young": {
+        "female": (
+            "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+            "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+            "e8e5fffb-252c-436d-b842-8879b84445b6",
+            "8d8ce8c9-44a4-46c4-b10f-9a927b99a853",
+            "5abd2130-146a-41b1-bcdb-974ea8e19f56",
+            "c9440d34-5641-427b-bbb7-80ef7462576d",
+        ),
+        "male": (
+            "630ed21c-2c5c-41cf-9d82-10a7fd668370",
+            "87286a8d-7ea7-4235-a41a-dd9fa6630feb",
+            "86e30c1d-714b-4074-a1f2-1cb6b552fb49",
+            "9fa83ce3-c3a8-4523-accc-173904582ced",
+            "4df027cb-2920-4a1f-8c34-f21529d5c3fe",
+            "5ee9feff-1265-424a-9d7f-8e4d431a12c7",
+        ),
+    },
+    "mature": {
+        "female": (
+            "8634bd27-0acf-4056-b014-4fea0385ed9e",
+            "3d9b50f9-10c5-4026-9ae1-c4a698f67fc5",
+            "ea93f57f-7c71-4d79-aeaa-0a39b150f6ca",
+            "01eaafa9-308a-4276-a017-6ab0cf061b1f",
+            "af346552-54bf-4c2b-a4d4-9d2820f51b6c",
+        ),
+        "male": (
+            "0ad65e7f-006c-47cf-bd31-52279d487913",
+            "dcddf1f4-b114-4b5d-9158-895cbba0e406",
+            "aec42b73-8c46-4528-a377-537b5ecb8e7b",
+            "bbee10a8-4f08-4c5c-8282-e69299115055",
+            "b9cf5ec3-eaa4-46a5-a5b2-b0d0f22395a2",
+        ),
+    },
+    "elderly": {
+        "female": (
+            "c8605446-247c-4d39-acd4-8f4c28aa363c",
+            "a2364c9d-1fe3-4553-9eff-100c4fe5ffc8",
+            "e5a6cd18-d552-4192-9533-82a08cac8f23",
+            "bf0a246a-8642-498a-9950-80c35e9276b5",
+        ),
+        "male": (
+            "c45bc5ec-dc68-4feb-8829-6e6b2748095d",
+            "c99d36f3-5ffd-4253-803a-535c1bc9c306",
+            "0ad65e7f-006c-47cf-bd31-52279d487913",
+            "aec42b73-8c46-4528-a377-537b5ecb8e7b",
+        ),
+    },
+    "angry": {
+        "female": ("04bfd756-4fd4-42c2-9ccf-37f647c5bf54",),
+        "male": (
+            "0b32066b-2bcc-44b9-89ab-0223a09d1606",
+            "61001bc6-9064-40a4-b8b2-29178e0fa558",
+            "7c8ba972-4960-4c43-bea0-8178e2205696",
+        ),
+    },
+}
 
-def cartesia_voice_for(persona: dict) -> str:
-    """A stable Cartesia voice id for one caller, chosen by accent/language and gender.
 
-    Deterministic by persona name so a caller keeps its voice across runs while a suite still
-    spreads voices. Falls back across gender and to English when a long-tail language lacks one.
-    """
+# Voices outside American English whose Cartesia description gives an age, by language or by
+# English accent. A caller of that language or accent tries these before the English age pools.
+_CARTESIA_LOCAL_AGE_VOICES: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
+    "es": {
+        "elderly": {
+            "female": ("dbaa1a0d-e004-442d-866f-5431b18d8d54",),
+            "male": ("7b001dff-b8b2-4da7-92e4-5c794798effa",),
+        },
+        "mature": {
+            "female": (
+                "b503f001-80b8-49d3-8666-8d7700fc5ca2",
+                "fb936dd1-66ea-43a0-86bd-18a6203dcda2",
+                "ae823354-f9be-4aef-8543-f569644136b4",
+            ),
+            "male": ("948196a7-fe02-417b-9b6d-c45ee0803565",),
+        },
+        "young": {
+            "female": ("ad8eee76-d702-4a1f-a1bd-7596755ae4c9",),
+            "male": (
+                "9ebc775b-c579-4c31-b37c-2306cbe9cc91",
+                "399002e9-7f7d-42d4-a6a8-9b91bd809b9d",
+            ),
+        },
+    },
+    "de": {
+        "elderly": {"male": ("d42fc8d7-efdd-44df-bb2e-a6e093601917",)},
+        "young": {"female": ("de07efe3-b309-418b-bdca-42827223efd2",)},
+    },
+    "fr": {
+        "mature": {
+            "male": ("2d693a9c-fc75-4313-aefb-c9cfaa17dd83", "5deeaea9-c3cf-4288-82ec-22d8f04eb158")
+        },
+        "young": {
+            "female": (
+                "2f8e82c4-cb94-4e6d-8b6a-29bf58ceb60a",
+                "c9115185-0086-4cf4-bfdd-0d36425db387",
+                "735287ee-ce91-4b08-8de4-63315c5ba1fb",
+                "187d1cc5-a771-4ccd-9110-9df8c4e39499",
+            )
+        },
+    },
+    "hi": {
+        "mature": {"female": ("56e35e2d-6eb6-4226-ab8b-9776515a7094",)},
+        "young": {
+            "female": ("faf0731e-dfb9-4cfc-8119-259a79b27e12",),
+            "male": ("791d5162-d5eb-40f0-8189-f19db44611d8",),
+        },
+    },
+    "it": {"elderly": {"male": ("88b329db-85d7-47cc-a5c5-98225a756721",)}},
+    "pl": {"elderly": {"male": ("887149a8-4616-42ad-b2ce-c3819176f45d",)}},
+    "ar": {"elderly": {"male": ("db873303-3a70-4d9d-867a-0d70a6377195",)}},
+    "el": {
+        "mature": {
+            "female": ("50849023-76e9-46c7-af52-9ec39888a165",),
+            "male": ("b45eba5b-2215-4da7-9c7c-121c95ed7b81",),
+        }
+    },
+    "kn": {"mature": {"male": ("6baae46d-1226-45b5-a976-c7f9b797aae2",)}},
+    "ro": {"mature": {"male": ("3f64ef99-d87b-4b51-b217-df7351f7886a",)}},
+    "ms": {"mature": {"male": ("8281db18-6ac5-47bb-91a8-ce23a1f1d951",)}},
+    "gu": {
+        "young": {
+            "female": ("4590a461-bc68-4a50-8d14-ac04f5923d22",),
+            "male": ("91925fe5-42ee-4ebe-96c1-c84b12a85a32",),
+        }
+    },
+    "ja": {
+        "young": {
+            "female": ("c7eafe22-8b71-40cd-850b-c5a3bbd8f8d2",),
+            "male": ("49e02441-83ea-4c77-bda8-79fdd7f07e92",),
+        }
+    },
+    "nl": {"young": {"female": ("de075c71-b2dd-4723-848d-ea9aa9cd010b",)}},
+    "pt": {
+        "young": {
+            "female": ("2f4d204f-a5dc-4196-81bc-155986b76ab6",),
+            "male": ("b0f46533-d4bb-493f-a26f-a99e1f2e86e3",),
+        }
+    },
+    "tl": {"young": {"male": ("c4cbcb7d-d9fa-4eac-b547-46831718ef58",)}},
+    "zh": {
+        "young": {
+            "female": ("7a5d4663-88ae-47b7-808e-8f9b9ee4127b",),
+            "male": ("c59c247b-6aa9-4ab6-91f9-9eabea7dc69e",),
+        }
+    },
+    "british": {
+        "elderly": {
+            "male": (
+                "c45bc5ec-dc68-4feb-8829-6e6b2748095d",
+                "c99d36f3-5ffd-4253-803a-535c1bc9c306",
+                "34d923aa-c3b5-4f21-aac7-2c1f12730d4b",
+            )
+        },
+        "mature": {
+            "male": (
+                "0ad65e7f-006c-47cf-bd31-52279d487913",
+                "dcddf1f4-b114-4b5d-9158-895cbba0e406",
+                "f114a467-c40a-4db8-964d-aaba89cd08fa",
+            )
+        },
+        "young": {
+            "female": ("71a7ad14-091c-4e8e-a314-022ece01c121",),
+            "male": (
+                "1463a4e1-56a1-4b41-b257-728d56e93605",
+                "4f7f1324-1853-48a6-b294-4e78e8036a83",
+                "ee7ea9f8-c0c1-498c-9279-764d6b56d189",
+            ),
+        },
+    },
+    "australian": {
+        "mature": {"female": ("8985388c-1332-4ce7-8d55-789628aa3df4",)},
+        "young": {
+            "male": ("da4a4eff-3b7e-4846-8f70-f075ff61222c", "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d")
+        },
+    },
+    "indian english": {
+        "elderly": {"male": ("39d518b7-fd0b-4676-9b8b-29d64ff31e12",)},
+        "mature": {"female": ("f8f5f1b2-f02d-4d8e-a40d-fd850a487b3d",)},
+        "young": {"female": ("3b554273-4299-48b9-9aaf-eefd438e3941",)},
+    },
+}
+# The age bands an aged caller tries in-language, nearest first.
+_CARTESIA_LOCAL_AGE_ORDER = {
+    "elderly": ("elderly", "mature"),
+    "mature": ("mature", "elderly"),
+    "young": ("young",),
+}
+
+
+@lru_cache(maxsize=1)
+def _cartesia_voice_ages() -> dict[str, str]:
+    """Each voice's age from its Cartesia description: "young", "older", or absent when unstated."""
+    path = Path(__file__).parent / "run" / "data" / "voice_ages.json"
+    try:
+        ages = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.error("cartesia_voice_ages_unreadable", extra={"path": str(path)})
+        return {}
+    return {voice: age for age, voices in ages.items() for voice in voices}
+
+
+def _age_band(persona: Mapping[str, Any]) -> str:
+    """The voice band for the age group's lower bound ("13-17", "50-60", "60+"), or "" for none."""
+    digits = re.match(r"\s*(\d+)", str(persona.get("age_group") or ""))
+    if not digits:
+        return ""
+    youngest = int(digits.group(1))
+    if youngest >= 60:
+        return "elderly"
+    if youngest >= 50:
+        return "mature"
+    if youngest < 32:
+        return "young"
+    return ""
+
+
+# Languages an English voice speaks as clearly as a native one; elsewhere an older caller keeps a
+# native voice.
+_CARTESIA_CROSS_LINGUAL_LANGS = frozenset(
+    {
+        "ar",
+        "bg",
+        "cs",
+        "da",
+        "de",
+        "fi",
+        "fr",
+        "gu",
+        "hi",
+        "hr",
+        "hu",
+        "id",
+        "it",
+        "ja",
+        "kn",
+        "ko",
+        "ms",
+        "nl",
+        "no",
+        "pa",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sv",
+        "te",
+        "th",
+        "tl",
+        "tr",
+        "uk",
+        "vi",
+    }
+)
+
+
+def _cartesia_voice_candidates(persona: dict) -> list[str]:
+    """This caller's Cartesia voices in the order to try: their own first, then its neighbours."""
     gender = _norm(persona.get("gender"))
     if gender not in ("male", "female"):
         gender = "female"
@@ -751,16 +1027,116 @@ def cartesia_voice_for(persona: dict) -> str:
         or (catalog.get("en") or {}).get(gender)
         or []
     )
+    fallback = [
+        *((catalog.get("en") or {}).get(gender) or [])[:_VOICE_TRIES],
+        _CARTESIA_DEFAULT_VOICES[gender],
+    ]
     if not voices:
-        return CARTESIA_DEFAULT_VOICE
-    if key == "en" and _norm(persona.get("accent")) in _CARTESIA_EMOTION_VOICE_ACCENTS:
-        voices = list(voices) + [
-            voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices
+        return fallback
+    age = _age_band(persona)
+    band = age
+    if band != "elderly" and set(persona_emotion(persona)) & _ANGRY_EMOTIONS:
+        band = "angry"
+    general = list(voices)
+    accent = _norm(persona.get("accent"))
+    american = key == "en" and accent in _CARTESIA_EMOTION_VOICE_ACCENTS
+
+    def rotated(pool) -> list[str]:
+        pool = list(pool)
+        if not pool:
+            return pool
+        index = sum(ord(character) for character in str(persona.get("name") or "")) % len(pool)
+        return pool[index:] + pool[:index]
+
+    if american and band:
+        voices = rotated(_CARTESIA_AGE_VOICES[band][gender])
+    elif american:
+        voices = rotated(
+            list(voices)
+            + [voice for voice in _CARTESIA_EMOTION_VOICES.get(gender, ()) if voice not in voices]
+        )
+    elif age:
+        # In the caller's language or accent first; an older caller with none there gets an English
+        # voice of their age where Cartesia speaks that language well in an English voice.
+        local = _CARTESIA_LOCAL_AGE_VOICES.get(accent if key == "en" else key, {})
+        voices = [
+            voice
+            for nearest in _CARTESIA_LOCAL_AGE_ORDER[age]
+            for voice in rotated(local.get(nearest, {}).get(gender, ()))
         ]
-    index = sum(ord(character) for character in str(persona.get("name") or "")) % len(
-        voices
+        if age != "young" and (key == "en" or key in _CARTESIA_CROSS_LINGUAL_LANGS):
+            voices += rotated(_CARTESIA_AGE_VOICES[age][gender])
+        voices = voices or rotated(general)
+    else:
+        voices = rotated(voices)
+    candidates = list(dict.fromkeys([*voices, *general, *fallback[:-1]]))
+    # Never a voice described younger than an older caller, or older than a young one.
+    unwanted = {"elderly": "young", "mature": "young", "young": "older"}.get(age)
+    ages = _cartesia_voice_ages()
+    return [*(voice for voice in candidates if not unwanted or ages.get(voice) != unwanted), fallback[-1]]
+
+
+def cartesia_voice_for(persona: dict) -> str:
+    """A stable Cartesia voice id for one caller, chosen by accent/language, gender and age group.
+
+    Deterministic by persona name so a caller keeps its voice across runs while a suite still
+    spreads voices. Falls back across gender and to English when a long-tail language lacks one.
+    """
+    return _cartesia_voice_candidates(persona)[0]
+
+
+# Voices tried before settling for the default when Cartesia says they are gone.
+_VOICE_TRIES = 5
+
+
+# Cartesia's answer per (key, voice). Only a definite answer is kept: one that could not be had is
+# asked again, since another call may carry a key that can.
+_SERVED: dict[tuple[str, str], bool] = {}
+
+
+def _cartesia_voice_served(voice: str, key: str) -> bool | None:
+    """Whether Cartesia still serves this voice: False when it says not, None when it cannot say."""
+    key = (key or "").strip()
+    if not key:
+        return None
+    if (key, voice) in _SERVED:
+        return _SERVED[(key, voice)]
+    request = urllib.request.Request(
+        f"https://api.cartesia.ai/voices/{voice}",
+        headers={"X-API-Key": key, "Cartesia-Version": "2025-04-16"},
     )
-    return voices[index]
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            served = response.status == 200
+    except urllib.error.HTTPError as refused:
+        # Only 'not found' means removed; any other refusal says nothing about the voice.
+        if refused.code not in (404, 410):
+            return None
+        served = False
+    except Exception:  # noqa: BLE001 - an unreachable check never holds up a call
+        return None
+    _SERVED[(key, voice)] = served
+    return served
+
+
+def served_cartesia_voice(persona: dict, key: str | None = None) -> str:
+    """This caller's voice, or the next one Cartesia still serves when it has removed theirs.
+
+    `key` is the call's own Cartesia key; None reads this process's. Without one (a gateway-relayed
+    call) nothing can be checked and the caller's voice is kept.
+    """
+    key = os.environ.get("CARTESIA_API_KEY", "") if key is None else key
+    candidates = _cartesia_voice_candidates(persona)
+    last = candidates[-1]
+    for voice in [*candidates[:_VOICE_TRIES], *candidates[-_VOICE_TRIES - 1 :]]:
+        if _cartesia_voice_served(voice, key) is not False:
+            if voice != candidates[0]:
+                logger.warning(
+                    "cartesia_voice_unavailable", extra={"voice": candidates[0], "using": voice}
+                )
+            return voice
+    logger.warning("cartesia_voice_unavailable", extra={"voice": candidates[0], "using": last})
+    return last
 
 
 # How fast this person talks. Derived from the persona rather than randomised, so a rerun of the
@@ -768,6 +1144,9 @@ def cartesia_voice_for(persona: dict) -> str:
 # scenario incomparable. Cartesia documents 0.6 to 2.0 for sonic-3; this stays close to natural
 # because the point is that callers differ from each other, not that any of them sounds odd.
 _SPEECH_RATES = (0.9, 0.95, 1.0, 1.05, 1.12)
+_ANGRY_RATE = 1.12
+# An angry caller is also louder; Cartesia takes 0.5 to 2.0 on sonic-3.
+_ANGRY_VOLUME = 1.4
 
 
 def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
@@ -779,23 +1158,31 @@ def persona_speech_rate(persona: Mapping[str, Any] | None) -> float:
     if not isinstance(persona, Mapping):
         return 1.0
     name = str(persona.get("name") or "").strip()
-    if not name:
-        return 1.0
-    return _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)]
+    rate = _SPEECH_RATES[sum(ord(character) for character in name) % len(_SPEECH_RATES)] if name else 1.0
+    # Anger is quick: a frustrated caller never drawls.
+    if set(persona_emotion(persona)) & _ANGRY_EMOTIONS:
+        return max(rate, _ANGRY_RATE)
+    return rate
 
 
 # The only emotion names and levels sonic-3 accepts, established against the live API. It rejects
 # name and level separately with HTTP 400, so nothing outside this set is ever sent.
 _CARTESIA_EMOTION_NAMES = frozenset({"anger", "positivity", "surprise", "sadness", "curiosity"})
 _CARTESIA_EMOTION_LEVELS = frozenset({"lowest", "low", "high", "highest"})
+_CARTESIA_NAMED_EMOTIONS = frozenset({"outraged"})
+# Emotions voiced with a voice recorded angry, at a quicker pace.
+_ANGRY_EMOTIONS = frozenset({"outraged"})
 
 # What a personality sounds like, as a baseline colour for the whole call. A caller's feeling really
 # moves during a call and this control does not, so it is a starting register rather than an arc:
 # two personas that read the same on paper stop sounding identical. Anything unrecognised gets no
 # control at all, which is the provider default and the behaviour before this existed.
 _PERSONALITY_EMOTION = (
-    (("furious", "livid", "irate", "hostile", "enraged"), "anger:high"),
-    (("irritated", "annoyed", "frustrated", "angry", "impatient", "abrupt"), "anger:low"),
+    (
+        ("furious", "livid", "irate", "hostile", "enraged", "irritated", "annoyed", "frustrated", "angry",
+         "impatient", "abrupt", "emotional"),
+        "outraged",
+    ),
     (("warm", "friendly", "cheerful", "enthusiastic", "chatty", "upbeat"), "positivity:high"),
     (("professional", "formal", "businesslike", "efficient"), "positivity:low"),
     (("curious", "inquisitive", "questioning", "sceptical", "skeptical"), "curiosity:high"),
@@ -812,7 +1199,9 @@ def persona_emotion(persona: Mapping[str, Any] | None) -> list[str]:
         for words, emotion in _PERSONALITY_EMOTION:
             if any(word in described for word in words):
                 name, _, level = emotion.partition(":")
-                if name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS:
+                if emotion in _CARTESIA_NAMED_EMOTIONS or (
+                    name in _CARTESIA_EMOTION_NAMES and level in _CARTESIA_EMOTION_LEVELS
+                ):
                     return [emotion]
     return []
 
@@ -910,6 +1299,8 @@ def simulator_definition(
             "voice": (get("SIMULATOR_TTS_VOICE") or "").strip() or default_voice,
             "speed": persona_speech_rate(persona),
             "emotion": persona_emotion(persona),
+            "volume": _ANGRY_VOLUME if set(persona_emotion(persona)) & _ANGRY_EMOTIONS else None,
+            "language": persona_tts_language(persona) or None,
         },
         instructions=simulator_instructions(
             get("HARNESS_CALL_DIRECTION") or "",
@@ -1011,7 +1402,9 @@ def caller_when_blocked(persona: Mapping[str, Any] | None, variation: str = "") 
 _CALL_HABITS = (
     (("detail", "analytical", "cautious", "sceptical", "skeptical", "technical"),
      "you say steps and figures back in your own words to make sure you have them right"),
-    (("anxious", "emotional", "reserved", "passive", "nervous"),
+    (("emotional",),
+     "you are short with the agent, say again what has gone wrong, and want it sorted now"),
+    (("anxious", "reserved", "passive", "nervous"),
      "you ask to take things one step at a time, and ask again when you are not sure"),
     (("impatient", "direct", "assertive", "confident", "abrupt"),
      "you want the short version, skip ahead, and question any step that sounds unnecessary"),
@@ -1062,6 +1455,7 @@ def caller_scenario(
     outcome: str = "",
     initial_message: str = "",
     variation: str = "",
+    cartesia_key: str | None = None,
 ) -> "simulate.Scenario":
     """One simulated caller.
 
@@ -1074,7 +1468,7 @@ def caller_scenario(
     # A voice from the persona's accent/language, so callers in one suite sound different.
     if not persona.get("voice") and not persona.get("voice_id"):
         if provider == "cartesia":
-            persona["voice"] = cartesia_voice_for(persona)
+            persona["voice"] = served_cartesia_voice(persona, cartesia_key)
         elif provider == "deepgram":
             persona["voice"] = aura_voice_for(persona)
     fixture = fixture if isinstance(fixture, Mapping) else {}
@@ -1103,8 +1497,9 @@ def caller_scenario(
             simulate.Persona(
                 persona=persona,
                 situation=f"{situation}\n\nIf rule 12g's push gets you nowhere, "
-                f"{caller_when_blocked(persona, variation)}. On a call, {caller_habit(persona)}. "
-                f"Somewhere in this call, where it fits, "
+                f"{caller_when_blocked(persona, variation)}. On a call, {caller_habit(persona)}, unless "
+                f"you are upset or the situation is urgent, when you act on a clear instruction at "
+                f"once. Somewhere in this call, where it fits and the situation allows, "
                 f"{'; and '.join(caller_moves(persona, name, variation))}.",
                 outcome=outcome,
                 knowledge=knowledge,
@@ -1206,6 +1601,7 @@ __all__ = [
     "fixture_caller_phone",
     "cartesia_voice_for",
     "persona_stt_language",
+    "persona_tts_language",
     "simulation_spec",
     "simulator_definition",
     "transcriber_for",

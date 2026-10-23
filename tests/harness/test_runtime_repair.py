@@ -182,6 +182,40 @@ def test_runtime_patch_rejects_model_authored_shell_commands(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["bun", "x", "tsx", "app.ts"],
+        ["npm", "exec", "tsx", "--", "app.ts"],
+        ["npx", "tsx", "app.ts"],
+        ["pnpm", "dlx", "tsx", "app.ts"],
+        ["pnpm", "exec", "tsx", "app.ts"],
+        ["yarn", "dlx", "tsx", "app.ts"],
+    ],
+)
+def test_runtime_patch_rejects_registry_package_execution(tmp_path, command) -> None:
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "package.json").write_text('{"scripts":{"start":"node app.js"}}')
+    (service / "app.ts").write_text("console.log('agent')")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="javascript"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="javascript", workdir="service", command=command),
+        evidence_paths=("service/package.json", "service/app.ts"),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the TypeScript service.",
+    )
+
+    with pytest.raises(ValueError, match="registry_package_execution_forbidden"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
 def test_compose_repair_path_is_relative_to_repository_not_workdir(tmp_path):
     (tmp_path / "service").mkdir()
     (tmp_path / "deployment").mkdir()
