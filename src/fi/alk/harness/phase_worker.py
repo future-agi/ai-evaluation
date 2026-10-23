@@ -35,15 +35,19 @@ async def main() -> None:
     rng = random.Random()
     rng.setstate(tuples(state["rng"]))
     try:
-        world = HostedWorld(
-            AttachedPostgresStore(state["dsn"]),
-            state["world_index"],
-            rng,
-            state["baseline"],
-            # The parent already validated this handle before scenario execution.
-            _validate_baseline=False,
-            workspace_roots=state.get("workspace_roots", {}),
-        )
+        if state.get("kind") == "native_observation":
+            from .world.observation import ObservationWorld
+            world = ObservationWorld(state["world_index"], rng, state.get("endpoints", {}))
+        else:
+            world = HostedWorld(
+                AttachedPostgresStore(state["dsn"]),
+                state["world_index"],
+                rng,
+                state["baseline"],
+                # The parent already validated this handle before scenario execution.
+                _validate_baseline=False,
+                workspace_roots=state.get("workspace_roots", {}),
+            )
         handle = world.read_only() if state["read_only"] else world
         namespace: dict[str, Any] = {}
         exec(compile(payload["source"], "<scenario-phase>", "exec"), namespace)  # noqa: S102 - isolated scenario execution

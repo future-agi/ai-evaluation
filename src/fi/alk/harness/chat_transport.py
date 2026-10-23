@@ -33,6 +33,7 @@ def create_chat_wrapper(
     )
     if interface.kind != "websocket":
         options.update(
+            headers_template=interface.headers_template,
             failure_rule=interface.failure_rule.model_dump()
             if interface.failure_rule
             else None,

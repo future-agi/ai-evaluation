@@ -154,6 +154,7 @@ def _reuse_certified_bundle(
         return None
 
     from .authoring_runtime_validation import _artifact_digest
+    from .compose_integration import enabled as compose_enabled
     from .certification import (
         CheckStatus,
         GenericHarnessArtifactStore,
@@ -212,6 +213,7 @@ def _reuse_certified_bundle(
             alias: reference.purpose
             for alias, reference in job.agent.secret_refs.items()
         },
+        allow_compose=compose_enabled(),
     )
 
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
@@ -2895,6 +2897,12 @@ def author_bundle_v2(
             contract_body = {**contract_body, "runtime": runtime}
             contract_interface_kind = "command"
             command_adapter_contract = True
+    from .compose_integration import enabled as compose_enabled, compile_bundle
+    if compose_enabled():
+        composed = compile_bundle(source=source_root, job=job, authoring=authoring_root,
+                                  output=output_root, contract=contract_body)
+        if composed is not None:
+            return composed
     plan = resolve_environment_plan(
         source_root,
         job,

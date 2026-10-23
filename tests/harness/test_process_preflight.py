@@ -1325,7 +1325,6 @@ _INTERNAL_ONLY_RUNTIME_CODES = frozenset(
         # authoring pipeline. Its absence is an internal call-order/provenance invariant, not a
         # customer-facing process-runtime failure code.
         "internal_source_digest_missing",
-        "workspace_name_collision",
         # Phase 6: marks a bundle-shape/state invariant an earlier layer (the model layer, or this
         # module's own baseline-freeze-before-clone ordering) should already guarantee — e.g.
         # `reset()` called before `provision()`, or a store's backing service turning out not to be a

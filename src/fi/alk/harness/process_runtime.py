@@ -1767,7 +1767,7 @@ def _dispatch_metadata(
 #
 # §2b fixes the catalog (engine/version/role/db-name/strategies) and the port formula; it does
 # not fix an exact launch invocation for any of the three engines — that is provisioner-internal,
-# same status as `LocalComposeRuntimeProvider`'s own Compose mechanics. The commands below are a
+# same status as the certified Compose provider's lifecycle mechanics. The commands below are a
 # defensible V1 default, kept swappable through `ProcessRunner`/`sync_run` injection; they are
 # never executed in this module's own test lane (§0: assumed on PATH, never required in tests).
 
@@ -4111,8 +4111,7 @@ async def healthy(
     *,
     prober: CapabilityProber = default_capability_prober,
 ) -> bool:
-    """Async wrapper matching §4's `RuntimeProvider.healthy` shape (`runtime.py`'s own
-    `LocalComposeRuntimeProvider.healthy` uses the same `asyncio.to_thread` idiom).
+    """Async wrapper matching §4's `RuntimeProvider.healthy` shape.
 
     §3's `state` transitions are fixed: `preparing->ready`, `ready->unhealthy`, and
     `unhealthy->ready` ONLY via re-provision reconcile (§4 point 1: "a sick world mid-job is
@@ -6374,7 +6373,7 @@ class ProcessRuntimeProvider:
             if armed and world_index >= 1:
                 try:
                     self._ensure_world(world_index)
-                except (ProcessRuntimeError, OSError, shutil.Error) as exc:
+                except (ProcessRuntimeError, OSError, shutil.Error):
                     # Rule 2: continue on the contiguous 0..k−1 prefix — NO renumbering. Tear
                     # down whatever this world published, drop the ceiling to k, ledger
                     # `world_start_failed`, re-write build.json.
@@ -6785,10 +6784,6 @@ class ProcessRuntimeProvider:
         for item in self._manifest.processes:
             if isinstance(item, SourceProcess):
                 for name, relative in item.workspaces.items():
-                    if name in workspace_roots:
-                        raise ProcessRuntimeError(
-                            "spawn", "workspace_name_collision", name
-                        )
                     workspace_roots[name] = str(
                         world_scratch_dir(
                             self._context.work_directory, world_index, item.name

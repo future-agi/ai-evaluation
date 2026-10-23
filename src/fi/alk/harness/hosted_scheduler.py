@@ -681,9 +681,11 @@ async def _invoke(
         from .process_runtime import _allowlisted_ambient_env
         from .world.handle import HostedWorld, ReadOnlyWorld as HostedReadOnlyWorld
 
+        from .world.observation import ObservationWorld
+
         if (
             args
-            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld))
+            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld, ObservationWorld))
             and hasattr(fn, "_alk_source")
         ):
             started_flag.set()

@@ -20,6 +20,8 @@ from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
+    RuntimeSecretFile,
+    RuntimeConfigFile,
     known_modalities,
     validate_contract,
 )
@@ -692,6 +694,38 @@ def contract_tools(
                             "items": {"type": "string"},
                             "description": Runtime.model_fields["extras"].description,
                         },
+                        "requirements_files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": Runtime.model_fields[
+                                "requirements_files"
+                            ].description,
+                        },
+                        "workspaces": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                            "description": Runtime.model_fields[
+                                "workspaces"
+                            ].description,
+                        },
+                        "config_files": {
+                            "type": "object",
+                            "additionalProperties": RuntimeConfigFile.model_json_schema(),
+                            "description": "Source-relative dotenv instance resources. Public values and declared target-provider aliases only; confidential files remain outside build contexts.",
+                        },
+                        "directories": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Source-relative missing writable bind directories created independently per instance.",
+                        },
+                        "secret_files": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": RuntimeSecretFile.model_json_schema(),
+                            },
+                            "description": "Confidential files by selected service. Bind declared target-provider aliases to absolute container destinations; never include secret values.",
+                        },
                         "workdir": {
                             "type": "string",
                             "description": "Where in the source imports resolve from, if not the "
@@ -838,6 +872,12 @@ def contract_tools(
                                         },
                                     },
                                 },
+                                "headers_template": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 32,
+                                    "description": "Chat request headers using prior setup captures. Session cookies are preserved automatically in an isolated cookie jar.",
+                                },
                                 "setup_requests": {
                                     "type": "array",
                                     "maxItems": 8,
@@ -856,6 +896,25 @@ def contract_tools(
                                             },
                                             "path": {"type": "string"},
                                             "body_template": {},
+                                            "encoding": {
+                                                "type": "string",
+                                                "enum": ["json", "form"],
+                                            },
+                                            "headers_template": {
+                                                "type": "object",
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 32,
+                                            },
+                                            "capture_headers": {
+                                                "type": "object",
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 16,
+                                                "description": "Map placeholder names to response header names. Use capture for JSON response fields; cookies are automatic.",
+                                            },
                                             "accepted_statuses": {
                                                 "type": "array",
                                                 "items": {"type": "integer"},

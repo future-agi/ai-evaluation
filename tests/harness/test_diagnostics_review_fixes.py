@@ -110,7 +110,12 @@ def test_local_runs_collect_only_their_own_logs_even_with_same_clock(
 
     monkeypatch.setattr(local, "datetime", FixedClock)
     monkeypatch.setattr(local, "validate_and_repair", validated)
-    monkeypatch.setattr(local, "load_bundle_v2", lambda _: SimpleNamespace())
+    from fi.alk.harness.bundle_v2 import RuntimeKindV2
+
+    monkeypatch.setattr(
+        local, "load_bundle_v2",
+        lambda _: SimpleNamespace(runtime=SimpleNamespace(kind=RuntimeKindV2.PROCESS)),
+    )
     monkeypatch.setattr(local, "_make_local_seed_files_readable", lambda _: None)
     monkeypatch.setattr(local, "ProcessRuntimeProvider", Provider)
     monkeypatch.setattr(local, "WorldPool", Pool)

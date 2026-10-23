@@ -293,6 +293,9 @@ class RuntimeHttpSetupRequest(BaseModel):
     method: str = "POST"
     path: str
     body_template: Any = Field(default_factory=dict)
+    encoding: Literal["json", "form"] = "json"
+    headers_template: dict[str, str] = Field(default_factory=dict)
+    capture_headers: dict[str, str] = Field(default_factory=dict)
     accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
     # Captured response values become placeholders for later setup requests and turns. This
     # models generic create-then-use APIs without teaching the harness about a framework.
@@ -325,6 +328,25 @@ class RuntimeHttpSetupRequest(BaseModel):
         ):
             raise ValueError("runtime_http_setup_statuses_invalid")
         return normalized
+
+    @field_validator("headers_template")
+    @classmethod
+    def _safe_headers(cls, values):
+        from fi.simulate.agent.wrappers.http import validate_http_headers
+
+        return validate_http_headers(values)
+
+    @field_validator("capture_headers")
+    @classmethod
+    def _safe_header_captures(cls, values):
+        values = cls._safe_captures(values)
+        if any(
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", value)
+            or value.lower() == "set-cookie"
+            for value in values.values()
+        ):
+            raise ValueError("runtime_http_capture_header_invalid")
+        return values
 
     @field_validator("capture")
     @classmethod
@@ -396,11 +418,19 @@ class RuntimeInterface(BaseModel):
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
     response_path: str = ""
+    headers_template: dict[str, str] = Field(default_factory=dict)
     completed_tool_events: CompletedToolEvents | None = None
     failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
         default_factory=list, max_length=8
     )
+
+    @field_validator("headers_template")
+    @classmethod
+    def _safe_headers(cls, values):
+        from fi.simulate.agent.wrappers.http import validate_http_headers
+
+        return validate_http_headers(values)
 
     @field_validator("kind")
     @classmethod
@@ -448,21 +478,26 @@ class RuntimeInterface(BaseModel):
                 raise ValueError("runtime_json_template_requires_request_template")
             available = set(_RUNTIME_TEMPLATE_INPUTS)
             for setup in self.setup_requests:
-                unknown = _runtime_template_names(setup.path) - available
-                if self.protocol == "json_template":
-                    unknown |= _runtime_template_names(setup.body_template) - available
+                unknown = (
+                    _runtime_template_names(setup.path)
+                    | _runtime_template_names(setup.headers_template)
+                ) - available
+                unknown |= _runtime_template_names(setup.body_template) - available
                 if unknown:
                     raise ValueError(
                         "runtime_http_setup_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
-                duplicate = set(setup.capture) & available
+                captures = set(setup.capture) | set(setup.capture_headers)
+                duplicate = (captures & available) | (
+                    set(setup.capture) & set(setup.capture_headers)
+                )
                 if duplicate:
                     raise ValueError(
                         "runtime_http_setup_capture_shadows_input: "
                         + ", ".join(sorted(duplicate))
                     )
-                available.update(setup.capture)
+                available.update(captures)
             if self.protocol == "json_template":
                 unknown = _runtime_template_names(self.request_template) - available
                 if unknown:
@@ -470,7 +505,10 @@ class RuntimeInterface(BaseModel):
                         "runtime_http_request_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
-            unknown = _runtime_template_names(self.path) - available
+            unknown = (
+                _runtime_template_names(self.path)
+                | _runtime_template_names(self.headers_template)
+            ) - available
             if unknown:
                 raise ValueError(
                     "runtime_http_request_unknown_placeholders: "
@@ -479,6 +517,112 @@ class RuntimeInterface(BaseModel):
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
         return self
+
+
+class RuntimeSecretFile(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    destination: str
+    environment_variable: str | None = Field(
+        default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+
+    @model_validator(mode="after")
+    def _contained_destination(self):
+        from pathlib import PurePosixPath
+
+        path = PurePosixPath(self.destination)
+        forbidden = (
+            "/proc",
+            "/sys",
+            "/dev",
+            "/etc",
+            "/bin",
+            "/sbin",
+            "/usr",
+            "/lib",
+            "/lib64",
+            "/var/run",
+            "/run/docker",
+            "/run/containerd",
+        )
+        if (
+            not path.is_absolute()
+            or str(path) != self.destination
+            or len(path.parts) < 3
+            or ".." in path.parts
+            or "$" in self.destination
+            or any(
+                path == PurePosixPath(root) or path.is_relative_to(root)
+                for root in forbidden
+            )
+            or self.environment_variable
+            in {"PATH", "HOME", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+            or (self.environment_variable or "").startswith(
+                ("DOCKER_", "COMPOSE_", "BUILDKIT_", "BUILDX_")
+            )
+        ):
+            raise ValueError("runtime_secret_file_destination_invalid")
+        return self
+
+
+class RuntimeConfigFile(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    format: Literal["dotenv"] = "dotenv"
+    values: dict[str, str] = Field(default_factory=dict)
+    secret_aliases: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _bounded_values(self):
+        if (set(self.values) & set(self.secret_aliases)
+            or len(self.values) + len(self.secret_aliases) > 256
+            or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
+                   for key in [*self.values, *self.secret_aliases, *self.secret_aliases.values()])
+            or sum(len(value.encode()) for value in self.values.values()) > 65536
+            or any("\x00" in value or "\n" in value or "\r" in value for value in self.values.values())):
+            raise ValueError("runtime_config_file_invalid")
+        return self
+
+
+def runtime_public_environment(runtime: dict) -> dict[str, str]:
+    result = {}
+    confidential = set()
+    for raw in runtime.get("config_files", {}).values():
+        resource = RuntimeConfigFile.model_validate(raw)
+        confidential.update(resource.secret_aliases.values())
+        for key, value in resource.values.items():
+            if key in result and result[key] != value:
+                raise ValueError("compose_config_public_value_conflict")
+            result[key] = value
+    if confidential & result.keys():
+        raise ValueError("compose_config_public_secret_alias_conflict")
+    return result
+
+
+def validate_runtime_resource_paths(config_files, directories):
+    from pathlib import PurePosixPath
+
+    if (not isinstance(config_files, dict) or not isinstance(directories, list)
+        or any(not isinstance(value, str) for value in [*config_files, *directories])
+        or len(config_files) > 32 or len(directories) > 64 or len(set(directories)) != len(directories)):
+        raise ValueError("runtime_resources_limit")
+    paths = [*config_files, *directories]
+    for value in paths:
+        path = PurePosixPath(value)
+        if (not value or path.is_absolute() or str(path) != value or value == "."
+            or ".." in path.parts or any(char in value for char in "$\\\x00")
+            or any(part in {".git", ".aws", ".ssh"} for part in path.parts)):
+            raise ValueError("runtime_resource_path_invalid")
+    for value in config_files:
+        path = PurePosixPath(value)
+        if not (path.name == ".env" or path.suffix in {".env", ".dotenv"}):
+            raise ValueError("runtime_config_file_extension_invalid")
+    for index, value in enumerate(paths):
+        if any(PurePosixPath(value).is_relative_to(old) or PurePosixPath(old).is_relative_to(value)
+               for old in paths[:index]):
+            raise ValueError("runtime_resources_overlap")
 
 
 class Runtime(BaseModel):
@@ -502,13 +646,19 @@ class Runtime(BaseModel):
         default_factory=list,
         description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
     )
-    workspaces: dict[str, str] = Field(default_factory=dict, description="Named native workspace roots relative to the agent process working directory; requires source evidence.")
+    workspaces: dict[str, str] = Field(
+        default_factory=dict,
+        description="Named native workspace roots relative to the agent process working directory; requires source evidence.",
+    )
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
     service: str = ""
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
+    secret_files: dict[str, list[RuntimeSecretFile]] = Field(default_factory=dict)
+    config_files: dict[str, RuntimeConfigFile] = Field(default_factory=dict)
+    directories: list[str] = Field(default_factory=list)
     dockerfile: str = ""
     # For repositories without container metadata, this is an argv vector for the submitted
     # process. It is optional when one conventional entrypoint can be proven from source.
@@ -532,6 +682,7 @@ class Runtime(BaseModel):
         from .world.files import validate_bindings
 
         validate_bindings(self.workspaces)
+        validate_runtime_resource_paths(self.config_files, self.directories)
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:

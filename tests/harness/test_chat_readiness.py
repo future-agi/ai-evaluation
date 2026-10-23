@@ -6,6 +6,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
+
+from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
+from fi.simulate.runtime.spec import RuntimeRequirements
 from urllib.request import urlopen
 
 import pytest
@@ -340,7 +343,8 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         scenario.mkdir(parents=True)
         (scenario / "scenario.json").write_text(json.dumps({"scenario_key": "one"}))
         return SimpleNamespace(
-            digest="bundle", provenance=SimpleNamespace(source_digest="source")
+            digest="bundle", provenance=SimpleNamespace(source_digest="source"),
+            runtime=BundleRuntimeV2(kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL),
         )
 
     async def invariants(*args, **kwargs):
@@ -381,6 +385,7 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         agent=SimpleNamespace(secret_refs={}),
         metadata={"generic_harness_v1": True},
         scenario_count=1,
+        runtime=RuntimeRequirements(),
         seed=0,
     )
 

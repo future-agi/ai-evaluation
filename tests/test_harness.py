@@ -3767,19 +3767,32 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
     downstream shows the difference. The failure is silent, which is why this is checked by
     reflection over the model rather than by remembering to keep a list in step.
     """
-    from pathlib import Path
-
+    import asyncio
     from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.tools import contract_tools
+    from mcp.types import PaginatedRequestParams
     from pydantic import BaseModel
 
-    advertised = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "fi"
-        / "alk"
-        / "harness"
-        / "tools.py"
-    ).read_text(encoding="utf-8")
+    async def advertised_fields():
+        instance = _instance(contract_tools(tmp_path))
+        result = await _request_handler(instance, "tools/list").handler(None, PaginatedRequestParams())
+        target = next(tool for tool in result.tools if tool.name == "submit_contract")
+        schema = getattr(target, "input_schema", None) or target.inputSchema
+        names = set()
+
+        def visit(node):
+            if isinstance(node, dict):
+                names.update(node.get("properties", {}))
+                for value in node.values():
+                    visit(value)
+            elif isinstance(node, list):
+                for value in node:
+                    visit(value)
+
+        visit(schema)
+        return names
+
+    advertised = asyncio.run(advertised_fields())
     # Set by the amendment tools during later stages, never by whoever submits the contract.
     ours = {"amendments", "instrumentation"}
 
@@ -3801,7 +3814,7 @@ def test_every_contract_field_is_advertised_to_the_model(tmp_path):
         {
             name
             for name in named(AgentContract)
-            if name not in ours and f'"{name}"' not in advertised
+            if name not in ours and name not in advertised
         }
     )
     assert not missing, f"submit_contract never mentions: {missing}"

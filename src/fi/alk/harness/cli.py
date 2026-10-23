@@ -348,11 +348,14 @@ async def _build(args: argparse.Namespace) -> int:
 
     source_root = _source_root(destination, args.path or "")
     external_runtime = bool(getattr(args, "external_runtime", False))
+    from .build import uses_native_runtime
+    native_runtime = uses_native_runtime(contract, source_root)
     try:
         require_buildable(
             contract,
             source_root,
             external_runtime=external_runtime,
+            native_runtime=native_runtime,
         )
     except RuntimeError as failed:
         print(str(failed), file=sys.stderr)
@@ -361,7 +364,7 @@ async def _build(args: argparse.Namespace) -> int:
     from .provision import ProvisionError, provision_if_present
 
     environment = None
-    if not bool(getattr(args, "skip_source_provision", False)):
+    if not native_runtime and not bool(getattr(args, "skip_source_provision", False)):
         try:
             environment = await asyncio.to_thread(
                 provision_if_present, source_root, destination, contract
@@ -381,6 +384,7 @@ async def _build(args: argparse.Namespace) -> int:
         source_root=source_root,
         deferred_runtime=bool(getattr(args, "skip_source_provision", False)),
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     deferred_runtime = bool(getattr(args, "skip_source_provision", False))
     await _converse(
@@ -390,6 +394,7 @@ async def _build(args: argparse.Namespace) -> int:
             provisioned=environment is not None,
             deferred_runtime=deferred_runtime,
             external_runtime=external_runtime,
+            native_runtime=native_runtime,
         )
         + _guidance(args),
         interactive=args.interactive,
