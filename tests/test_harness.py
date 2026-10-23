@@ -6343,19 +6343,16 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
 @pytest.mark.parametrize(
     "openings, first",
     [
-        (["", ""], None),
+        (["", ""], "Hello."),
+        (["", "Hi, where is my order?"], "Hi, where is my order?"),
         (
             ["Sure! Let me look that up for you.", "Hi, where is my order?"],
             "Hi, where is my order?",
         ),
-        (["", "Hi, let me ask about my order."], "Hi, let me ask about my order."),
+        (["Sure! Let me look that up for you.", ""], "Hello."),
         (
-            ["Hi, let me ask about my order.", "Hi, let me ask about my order."],
-            "Hi, let me ask about my order.",
-        ),
-        (
-            ["Sure! Let me look that up for you.", ""],
-            "Sure! Let me look that up for you.",
+            ["Sure! Let me look that up for you.", "Sure! Let me look that up for you."],
+            "Hello.",
         ),
     ],
 )
@@ -6366,7 +6363,6 @@ def test_an_unusable_opening_is_asked_again_once_and_the_instruction_is_never_se
     from types import SimpleNamespace
 
     from fi.alk.harness.contract import AgentContract
-    from fi.alk.harness.hosted_scheduler import CallAborted
     from fi.alk.harness.run import conversation
     from fi.alk.harness.scenario import Scenario
 
@@ -6397,14 +6393,8 @@ def test_an_unusable_opening_is_asked_again_once_and_the_instruction_is_never_se
         name="s",
         instruction="You contact support. You open by asking about your order.",
     )
-    if first is None:
-        with pytest.raises(CallAborted) as aborted:
-            asyncio.run(conversation.converse(target, scenario, AgentContract()))
-        assert aborted.value.code == "simulator_stalled"
-        assert sent == []
-    else:
-        asyncio.run(conversation.converse(target, scenario, AgentContract()))
-        assert sent == [first]
+    asyncio.run(conversation.converse(target, scenario, AgentContract()))
+    assert sent == [first]
 
 
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():

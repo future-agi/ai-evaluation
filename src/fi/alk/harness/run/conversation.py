@@ -235,15 +235,11 @@ async def converse(
         said = opening.text.strip()
         if not said or _answered_as_the_agent(said):
             # Speaking into an empty conversation, a model sometimes says nothing or answers as
-            # the agent. Ask once more.
-            said = (await customer.say(OPENING)).text.strip() or said
-        if not said:
-            from ..hosted_scheduler import CallAborted
-
-            raise CallAborted(
-                "simulator_no_opening: the caller gave no usable first message",
-                code="simulator_stalled",
-            )
+            # the agent. Ask once more; if that is no better, open as a caller does, with a
+            # greeting, and the request follows the agent's reply.
+            said = (await customer.say(OPENING)).text.strip()
+            if not said or _answered_as_the_agent(said):
+                said = "Hello."
         record("customer", said)
         for _turn in range(max(1, scenario.max_turns)):
             try:
