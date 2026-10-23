@@ -167,8 +167,14 @@ def _database_lanes() -> int:
         try:
             return max(1, int(configured))
         except ValueError:
-            raise ValueError(f"ALK_VALIDATION_DB_LANES must be a whole number, not {configured!r}") from None
-    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+            raise ValueError(
+                f"ALK_VALIDATION_DB_LANES must be a whole number, not {configured!r}"
+            ) from None
+    cpus = (
+        len(os.sched_getaffinity(0))
+        if hasattr(os, "sched_getaffinity")
+        else os.cpu_count() or 1
+    )
     quota = _cgroup_cpu_quota()
     return max(1, min(cpus, int(quota)) if quota else cpus)
 

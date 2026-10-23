@@ -1095,26 +1095,58 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         (authoring_runtime_validation, "_database_lanes", lambda: 3),
         (authoring_runtime_validation, "_world_isolation_status", lambda output: None),
         (authoring_runtime_validation, "_world_state_digest", lambda world: "baseline"),
-        (authoring_runtime_validation, "_GeneratedWorldActionAdapter", lambda world: None),
-        (authoring_runtime_validation, "_setup_check_keys", lambda *args: [str(i) for i in range(10)]),
-        (authoring_runtime_validation, "_write_runtime_evidence", lambda **kwargs: None),
+        (
+            authoring_runtime_validation,
+            "_GeneratedWorldActionAdapter",
+            lambda world: None,
+        ),
+        (
+            authoring_runtime_validation,
+            "_setup_check_keys",
+            lambda *args: [str(i) for i in range(10)],
+        ),
+        (
+            authoring_runtime_validation,
+            "_write_runtime_evidence",
+            lambda **kwargs: None,
+        ),
         (authoring_runtime_validation, "_freeze_certified_bundle", lambda *args: None),
         (process_runtime, "ProcessRuntimeProvider", Provider),
         (hosted_entrypoint, "ProcessWorldFactory", Factory),
         (certification, "GenericHarnessArtifactStore", Store),
-        (contract, "AgentContract", SimpleNamespace(model_validate_json=lambda text: None)),
-        (tool_certification, "certify_tool_inventory", lambda *args, **kwargs: SimpleNamespace(tools=[])),
-        (action_certification, "certify_actions", lambda *args, **kwargs: SimpleNamespace(actions=[])),
+        (
+            contract,
+            "AgentContract",
+            SimpleNamespace(model_validate_json=lambda text: None),
+        ),
+        (
+            tool_certification,
+            "certify_tool_inventory",
+            lambda *args, **kwargs: SimpleNamespace(tools=[]),
+        ),
+        (
+            action_certification,
+            "certify_actions",
+            lambda *args, **kwargs: SimpleNamespace(actions=[]),
+        ),
         (bundle_author_v2, "author_bundle_v2", lambda **kwargs: object()),
         (process_preflight, "preflight_bundle", lambda *args, **kwargs: None),
-        (outbound, "load_capabilities", lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None)),
+        (
+            outbound,
+            "load_capabilities",
+            lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None),
+        ),
         (source_data_invariants, "author_invariants", no_invariants),
         (source_data_invariants, "check_invariants", no_invariants),
         (
             scenario_source,
             "load_scenarios",
             lambda bundle: [
-                SimpleNamespace(scenario_key=str(i), setup=lambda world: None, ready=lambda world: True)
+                SimpleNamespace(
+                    scenario_key=str(i),
+                    setup=lambda world: None,
+                    ready=lambda world: True,
+                )
                 for i in range(10)
             ],
         ),
@@ -1128,7 +1160,10 @@ def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
         metadata={"generic_harness_v1": True},
     )
 
-    assert asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 10
+    assert (
+        asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original))
+        == 10
+    )
     assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
 
 
