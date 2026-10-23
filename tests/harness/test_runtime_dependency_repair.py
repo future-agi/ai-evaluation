@@ -325,6 +325,54 @@ def test_submission_forwards_dependency_patch(repair_case, monkeypatch):
     assert result.base_contract_hash == _contract_hash(contract)
 
 
+def test_submission_rejects_native_patch_that_leaves_dependency_seam_missing(
+    repair_case, monkeypatch
+):
+    import asyncio
+    from fi.alk.harness import runtime_repair
+    from fi.alk.harness.diagnostics import HarnessDiagnostic
+    from fi.alk.harness.job import HarnessStage
+
+    source, _, contract, patch = repair_case
+    rejected = []
+
+    class SubmittingStage:
+        def __init__(self, spec, **kwargs):
+            self.spec = spec
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, briefing, *, on_event=None):
+            submit = self.spec.servers["runtime_repair"].tools[0].handler
+            submission = patch.model_dump(
+                mode="json", exclude={"base_contract_hash", "diagnostic_codes"}
+            )
+            submission.pop("runtime_dependencies")
+            rejected.append(await submit(submission))
+
+    monkeypatch.setattr(runtime_repair, "Stage", SubmittingStage)
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="runtime",
+        code="generated_runtime_plan_invalid",
+        message="missing connection seam",
+    )
+    with pytest.raises(RuntimeError, match="typed_runtime_plan_patch_not_submitted"):
+        asyncio.run(
+            runtime_repair.request_runtime_plan_patch(source, contract, (diagnostic,))
+        )
+    assert len(rejected) == 2
+    assert all(
+        item["is_error"]
+        and "runtime_repair_dependency_seam_unresolved" in item["content"][0]["text"]
+        for item in rejected
+    )
+
+
 @pytest.mark.parametrize("field", ["dsn_env", "host", "config_key", "loader_module"])
 def test_existing_compiler_seam_cannot_be_repaired(repair_case, field):
     _, path, contract, patch = repair_case

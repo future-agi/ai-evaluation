@@ -324,4 +324,5 @@ def test_generic_job_briefs_authoring_on_its_execution_limit(tmp_path):
     job.metadata["generic_harness_v1"] = True
     briefing = "\n".join(job.authoring_guidance())
     assert "A standalone Dockerfile cannot be built or run" in briefing
+    assert "does not prohibit source-owned Compose deployment when enabled" in briefing
     assert "Do not invent a replacement agent" in briefing

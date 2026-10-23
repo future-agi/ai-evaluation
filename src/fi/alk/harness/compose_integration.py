@@ -32,6 +32,44 @@ def enabled() -> bool:
     )
 
 
+def runtime_capability_briefing() -> str:
+    heading = (
+        "\n\n## Available execution capabilities\n\n"
+        "Generated native process execution supports Python or source-declared pinned Bun, "
+        "not arbitrary native Node.js startup. Do not translate a Node.js project to Bun "
+        "without source evidence or invent a replacement entrypoint or runtime. "
+    )
+    if not enabled():
+        return heading + (
+            "Managed source-owned Compose deployment is not enabled in this session. "
+            "Inspect deployment files as evidence for supported native source startup; "
+            "do not assume container execution or select published Compose images."
+        )
+    return heading + (
+        "Managed source-owned Compose deployment is available for chat agents with an HTTP ingress. "
+        "Choose supported native startup or Compose from repository deployment evidence; "
+        "neither mode is required. For Compose, "
+        "declare runtime.execution=compose, the repository-relative runtime.compose_file, "
+        "and runtime.service. ALK runs the selected service and its declared dependency closure, "
+        "including source-defined startup and migrations. Source-owned overlays may be selected "
+        "with runtime.compose_overrides; additional source-declared workflow roots use "
+        "runtime.additional_services. Use runtime.compose_image_services only for an already "
+        "selected service's source-declared image. Never invent deployment files or images. "
+        "Prefer source-declared Compose when native startup would otherwise recreate services "
+        "or migration steps that the repository already assembles. "
+        "For agents with multiple model providers, inspect the source-owned provider selection "
+        "mechanism and declare its public selector in runtime.config_files; forwarding provider "
+        "credentials alone is not configuration. Bind confidential values with secret_aliases. "
+        "When startup exceeds available resources, inspect and prefer a source-declared minimal "
+        "or development deployment that still provides the selected chat service and its dependencies. "
+        "Auto selection discovers conventional Compose filenames only at the repository root; "
+        "nested or ambiguous deployment files require an explicit selection. Explicit native "
+        "execution does not auto-select Compose. This capability does not add standalone "
+        "Dockerfile execution. Source validation, deployment policy, and real chat readiness "
+        "still must pass; capability availability is not evidence that an agent works."
+    )
+
+
 def provider(values, artifact_root):
     from .certified_compose_runtime import CertifiedComposeRuntimeProvider
 
@@ -250,11 +288,20 @@ def compile_bundle(*, source, job, authoring, output, contract, include_scenario
                 adopted_files=(["scenarios/"] if include_scenarios else []) + ["contract.json"],
                 generated_files=["compose.json", "manifest.json"],
             ),
-            metadata={"observation_mode": "native", "generic_harness": "v1"},
+            metadata={
+                "observation_mode": "native",
+                "generic_harness": "v1",
+                "context_excludes": list(runtime.get("context_excludes") or ()),
+            },
         )
         from .compose_source import source_inputs
 
-        inputs = source_inputs(source, document, capabilities=manifest.capabilities)
+        inputs = source_inputs(
+            source,
+            document,
+            capabilities=manifest.capabilities,
+            context_excludes=tuple(runtime.get("context_excludes") or ()),
+        )
         validate_source(
             source, job.public_material_admissions,
             fixtures=job.public_test_fixture_admissions,

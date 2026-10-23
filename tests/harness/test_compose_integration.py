@@ -370,3 +370,55 @@ def test_source_compose_definitions_keep_content_admission(
     with pytest.raises(BundleError, match="bundle_secret_material_detected"):
         compile_bundle(source=source, job=job, authoring=authoring,
                        output=tmp_path / "bundle", contract=contract, include_scenarios=False)
+
+
+def test_compose_bundle_seals_declared_source_exclusions(
+    tmp_path, monkeypatch, resolved_compose_images
+):
+    from fi.alk.harness.compose_integration import compile_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text(
+        "services:\n  app:\n    image: example/chat:1\n    ports: ['3000:3000']\n"
+    )
+    (source / "tests").mkdir()
+    (source / "tests/fixture.ts").write_text("const token = 'ghp_" + "x" * 36 + "';\n")
+    runtime = {
+        "execution": "compose",
+        "compose_file": "compose.yaml",
+        "service": "app",
+        "context_excludes": ["tests/**"],
+        "interface": {
+            "kind": "http",
+            "protocol": "json_template",
+            "port": 3000,
+            "path": "/chat",
+            "request_template": {"message": "{{new_message_content}}"},
+        },
+    }
+    authoring = tmp_path / "authoring"
+    authoring.mkdir()
+    contract = {"modality": "chat", "runtime": runtime}
+    (authoring / "contract.json").write_text(json.dumps(contract))
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "compose",
+            "run_id": "compose",
+            "execution": "local",
+            "source": {"kind": "local_repository", "local_path": str(source)},
+            "agent": {"connector": "auto"},
+        }
+    )
+    monkeypatch.setenv("ALK_TRUSTED_COMPOSE_SOCKET", "/private/alk/docker.sock")
+
+    manifest = compile_bundle(
+        source=source,
+        job=job,
+        authoring=authoring,
+        output=tmp_path / "bundle",
+        contract=contract,
+        include_scenarios=False,
+    )
+
+    assert manifest.metadata["context_excludes"] == ["tests/**"]

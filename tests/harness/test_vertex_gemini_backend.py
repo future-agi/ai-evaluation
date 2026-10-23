@@ -66,20 +66,25 @@ def test_successful_authoring_save_is_terminal() -> None:
     )
 
 
-def test_provider_timeout_reaches_sdk_and_fails_without_retry(monkeypatch) -> None:
-    import httpx
+def test_provider_429_exhausts_bounded_retries(monkeypatch) -> None:
     from google.genai import _api_client
+    from google.genai.errors import ClientError
 
     from fi.alk.harness.backends import SessionSpec, StageDone
     from fi.alk.harness.backends.vertex_gemini import VertexGeminiSession
 
     timeouts = []
 
-    async def timeout(self, http_request, stream=False):
+    async def rate_limited(self, http_request, stream=False):
         timeouts.append(http_request.timeout)
-        raise httpx.ReadTimeout("Provider request timed out")
+        raise ClientError(
+            429,
+            {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}},
+        )
 
-    monkeypatch.setattr(_api_client.BaseApiClient, "_async_request_once", timeout)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda _: real_sleep(0))
+    monkeypatch.setattr(_api_client.BaseApiClient, "_async_request_once", rate_limited)
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
@@ -98,11 +103,11 @@ def test_provider_timeout_reaches_sdk_and_fails_without_retry(monkeypatch) -> No
             await session.stop()
 
     events = asyncio.run(run())
-    assert timeouts == [300.0]
+    assert timeouts == [300.0] * 8
     assert isinstance(events[-1], StageDone)
     assert events[-1].outcome == "failed"
     assert events[-1].is_error
-    assert events[-1].errors == ["Provider request timed out"]
+    assert "429" in events[-1].errors[0]
 
 
 @pytest.mark.parametrize("server,tool", [("world", "save_world"), ("runtime_repair", "submit_runtime_plan_patch")])

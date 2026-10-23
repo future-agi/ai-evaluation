@@ -188,6 +188,26 @@ def test_existing_local_auth_repair_authenticates_setup_before_captured_chat_hea
     assert state["calls"][-1][2]["X-Setup-Result"] == "hello user"
 
 
+def test_generated_local_credential_can_login_by_form_and_use_cookie(auth_app):
+    url, state = auth_app
+    config = RuntimeInterface(
+        kind="http", port=8080, path="/chat", protocol="json_template",
+        local_auth={"server_environment": "LOCAL_PASSWORD", "template_variable": "password"},
+        setup_requests=[{
+            "path": "/login-form", "encoding": "form",
+            "body_template": {"username": "fixture", "password": "{{password}}"},
+        }],
+        request_template={"user": "fixture"}, response_path="content",
+    )
+    wrapper = create_chat_wrapper(
+        config, url, local_auth_values={"LOCAL_PASSWORD": "fixture password"},
+    )
+    response = asyncio.run(wrapper.call(AgentInput(thread_id="one", messages=[])))
+    assert response.content == "hello fixture"
+    assert state["calls"][0][1]["password"] == ["fixture password"]
+    assert state["calls"][-1][2]["Cookie"] == "session=session-fixture"
+
+
 @pytest.mark.parametrize("change", [
     "body", "path", "remove_header", "replace_header", "unbound_token",
     "auth_identity", "global_headers", "config", "no_evidence",

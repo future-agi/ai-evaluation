@@ -519,7 +519,14 @@ class VertexGeminiSession:
             max_llm_calls=max(self._spec.max_turns, 1),
             http_options=types.HttpOptions(
                 timeout=300_000,
-                retry_options=types.HttpRetryOptions(attempts=1),
+                retry_options=types.HttpRetryOptions(
+                    attempts=8,
+                    initial_delay=2,
+                    max_delay=60,
+                    exp_base=2,
+                    jitter=1,
+                    http_status_codes=[408, 429, 500, 502, 503, 504],
+                ),
             ),
             streaming_mode=(
                 StreamingMode.SSE

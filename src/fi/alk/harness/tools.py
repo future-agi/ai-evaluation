@@ -845,7 +845,8 @@ def contract_tools(
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Repository-relative large generated outputs or "
-                            "documentation to omit from a generated build context. Never omit "
+                            "documentation or repeated test-only patterns to omit from a generated "
+                            "build context. Simple * and ** patterns are supported. Never omit "
                             "runtime source, dependency manifests, seed data, or tool data.",
                         },
                         "platform": {

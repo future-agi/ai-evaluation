@@ -315,8 +315,9 @@ class HarnessJob(BaseModel):
         if self.metadata.get("generic_harness_v1") is True:
             instructions.append(
                 "A standalone Dockerfile cannot be built or run in this job's runtime. Inspect it "
-                "as source evidence for dependencies and startup, then select a supported "
-                "native source command when the repository provides one. Do not invent a replacement agent "
+                "as source evidence for dependencies and startup. Choose a source-backed deployment "
+                "using the available execution capabilities; this standalone Dockerfile limitation "
+                "does not prohibit source-owned Compose deployment when enabled. Do not invent a replacement agent "
                 "when its required runtime is unsupported."
             )
         names = self.available_target_environment_names()

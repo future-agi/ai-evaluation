@@ -372,10 +372,15 @@ def test_invalid_selection_and_required_names():
         {"compose_file": "../outside.yaml"},
         {"required_environment": {"agent": ["X", "X"]}},
         {"required_environment": {"agent": ["bad-name"]}},
-        {"context_excludes": ["clients/**"]},
+        {"context_excludes": ["clients/[generated]"]},
+        {"context_excludes": ["../source"]},
+        {"context_excludes": ["tests", "tests"]},
     ]:
         with pytest.raises(ValueError):
             Runtime.model_validate(runtime)
+    assert Runtime.model_validate(
+        {"context_excludes": ["clients/**", "**/*.test.ts"]}
+    ).context_excludes == ["clients/**", "**/*.test.ts"]
 
 
 def test_explicit_native_survives_unselected_compose_ambiguity(tmp_path):

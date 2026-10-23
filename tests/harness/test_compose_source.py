@@ -52,6 +52,49 @@ def test_consumed_test_credentials_still_need_content_admission(tmp_path, kind):
         validate_source(tmp_path, paths=inputs.files)
 
 
+def test_declared_context_patterns_remove_test_only_build_inputs(tmp_path):
+    (tmp_path / "Dockerfile").write_text("FROM busybox\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/app.ts").write_text("export const ready = true;\n")
+    (tmp_path / "src/app.test.ts").write_text("const token = 'ghp_" + "x" * 36 + "';\n")
+    inputs = source_inputs(
+        tmp_path,
+        document(build="."),
+        capabilities={},
+        context_excludes=("**/*.test.ts",),
+    )
+
+    validate_source(tmp_path, paths=inputs.files)
+    destination = tmp_path / "copy"
+    inputs.copy_to(destination)
+    assert (destination / "src/app.ts").is_file()
+    assert not (destination / "src/app.test.ts").exists()
+
+
+def test_declared_context_pattern_cannot_remove_required_source_root(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app/Dockerfile").write_text("FROM busybox\n")
+
+    with pytest.raises(ComposeRuntimeError, match="required_path_excluded"):
+        source_inputs(
+            tmp_path,
+            document(build="./app"),
+            capabilities={},
+            context_excludes=("app",),
+        )
+
+
+@pytest.mark.parametrize("excluded", ["../outside", "/tmp/source", "tests/[fixture]"])
+def test_context_exclusion_must_be_safe_relative_pattern(tmp_path, excluded):
+    with pytest.raises(ComposeRuntimeError, match="context_exclude_invalid"):
+        source_inputs(
+            tmp_path,
+            document(image="example/app:1"),
+            capabilities={},
+            context_excludes=(excluded,),
+        )
+
+
 @pytest.mark.parametrize("kind", ["file", "directory", "parent_alias", "env_file"])
 def test_alias_chains_and_nested_targets_are_copied_with_their_closure(tmp_path, kind):
     source = tmp_path / "source"

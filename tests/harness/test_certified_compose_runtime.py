@@ -658,6 +658,19 @@ def test_config_failure_does_not_log_unresolved_secret(tmp_path, monkeypatch):
     assert "unknown-secret" not in (tmp_path / "logs/project.log").read_text()
 
 
+def test_disk_exhaustion_has_a_safe_repairable_error(tmp_path, monkeypatch):
+    def popen(command, **kwargs):
+        kwargs["stdout"].write(b"failed to apply diff: no space left on device")
+        return SimpleNamespace(wait=lambda **kwargs: 1, returncode=1)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    provider = CertifiedComposeRuntimeProvider(
+        socket_path=tmp_path / "socket", artifact_root=tmp_path / "logs"
+    )
+    with pytest.raises(ComposeRuntimeError, match="^compose_resource_exhausted$"):
+        provider._command(tmp_path, "project", "up")
+
+
 def test_failed_resolution_never_collects_unredacted_service_logs(
     tmp_path, monkeypatch
 ):

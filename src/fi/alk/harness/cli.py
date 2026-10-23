@@ -274,6 +274,7 @@ async def _understand(args: argparse.Namespace) -> int:
         ask=permission_gate(_ask_operator) if args.interactive else None,
         available_evals=offered if isinstance(offered, list) else None,
         require_setup_contract=generic and not args.interactive,
+        max_turns=140 if generic and not args.interactive else 70,
     )
 
     print(f"agent: {source.name}  ({source.kind})")
@@ -415,6 +416,11 @@ async def _build(args: argparse.Namespace) -> int:
         print("\nNo world was saved.", file=sys.stderr)
         return 1
     if native_runtime:
+        if deferred_runtime:
+            print(f"\nworld: {destination}")
+            print("Native source admission and runtime validation follow authoring.")
+            print(f"spent: ${stage.spent_usd:.4f}")
+            return 0
         from .bundle import BundleError
         from .certified_compose_runtime import ComposeRuntimeError
         from .compose_integration import validate_source

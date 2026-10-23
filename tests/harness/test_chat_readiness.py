@@ -225,6 +225,9 @@ def test_healthy_server_requires_profile_then_typed_runtime_patch_passes(
         (403, "credential_missing"),
         (408, "external_service_unavailable"),
         (429, "external_service_unavailable"),
+        (502, "external_service_unavailable"),
+        (503, "external_service_unavailable"),
+        (504, "external_service_unavailable"),
         (500, "chat_ingress_failed"),
     ],
 )
@@ -292,6 +295,39 @@ def test_setup_and_chat_share_deadline(tmp_path, profile_app):
     assert receipt["status"] == "failed"
     assert receipt["timeout_seconds"] == 0.1
     assert receipt["trace"]["timeout_error"] is True
+
+
+def test_readiness_prefers_broadest_generated_tool_workflow(tmp_path):
+    from fi.alk.harness.authoring_runtime_validation import (
+        _representative_chat_scenario,
+    )
+
+    bundle = tmp_path / "bundle"
+    scenarios = [
+        SimpleNamespace(scenario_key="explain", requires_tool_evidence=True),
+        SimpleNamespace(scenario_key="edit", requires_tool_evidence=True),
+        SimpleNamespace(scenario_key="chat", requires_tool_evidence=False),
+    ]
+    solutions = {
+        "explain": ["think", "finish"],
+        "edit": ["think", "file_editor", "terminal", "file_editor", "finish"],
+        "chat": ["one", "two", "three", "four", "five", "six"],
+    }
+    for key, tools in solutions.items():
+        folder = bundle / "scenarios" / key
+        folder.mkdir(parents=True)
+        (folder / "scenario.json").write_text(
+            json.dumps(
+                {
+                    "scenario_key": key,
+                    "solution": [{"tool": tool} for tool in tools],
+                }
+            )
+        )
+
+    selected = _representative_chat_scenario(scenarios, bundle)
+
+    assert selected.scenario_key == "edit"
 
 
 @pytest.mark.parametrize("readiness_only", [False, True])

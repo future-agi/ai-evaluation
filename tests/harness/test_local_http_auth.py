@@ -18,7 +18,9 @@ from fi.alk.harness.authoring_runtime_validation import (
 )
 from fi.alk.harness.chat_readiness import probe_chat_ingress
 from fi.alk.harness.bundle_v2 import EnvironmentBundleV2, SourceProcess
-from fi.alk.harness.contract import AgentContract, Runtime, RuntimeInterface
+from fi.alk.harness.contract import (
+    AgentContract, LocalHttpAuth, Runtime, RuntimeHttpSetupRequest, RuntimeInterface,
+)
 from fi.alk.harness.runtime_repair import (
     RuntimePlanPatch,
     _contract_hash,
@@ -301,6 +303,26 @@ def test_auth_interface_rejects_ambiguous_bindings(change):
         interface(**change)
 
 
+def test_auth_interface_allows_private_credential_login_exchange():
+    configured = interface(
+        headers_template={"Authorization": "Bearer {{access_token}}"},
+        setup_requests=[{
+            "path": "/login", "encoding": "form",
+            "body_template": {"username": "local-user", "password": "{{local_auth}}"},
+            "capture": {"access_token": "access_token"},
+        }],
+    )
+    assert configured.setup_requests[0].body_template["password"] == "{{local_auth}}"
+
+
+@pytest.mark.parametrize("field", ["path", "request_template"])
+def test_auth_interface_rejects_private_credential_in_urls_or_chat_body(field):
+    change = ({"path": "/chat/{{local_auth}}"} if field == "path"
+              else {"request_template": {"password": "{{local_auth}}"}})
+    with pytest.raises(ValueError, match="url_or_chat_body_forbidden"):
+        interface(**change)
+
+
 def test_auth_rejects_public_config_and_external_alias_collisions(tmp_path):
     with pytest.raises(ValueError, match="name_collision"):
         Runtime(
@@ -378,6 +400,41 @@ def test_local_auth_repair_is_additive_and_requires_source_evidence(tmp_path):
             contract,
             patch(replacement),
             allowed_diagnostic_codes={"credential_missing"},
+        )
+
+
+def test_local_auth_repair_can_append_source_owned_login_exchange(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'import os\npassword = os.environ["LOCAL_PASSWORD"]\nLOGIN_PATH = "/login"\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", protocol="json_template", port=8080, path="/chat",
+            request_template={"text": "{{new_message_content}}"}, response_path="content",
+        ),
+    ))
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.local_auth = LocalHttpAuth(
+        server_environment="LOCAL_PASSWORD", template_variable="password",
+    )
+    runtime.interface.setup_requests.append(RuntimeHttpSetupRequest(
+        path="/login", encoding="form",
+        body_template={"username": "local-user", "password": "{{password}}"},
+    ))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("app.py",), diagnostic_codes=("credential_missing",),
+        summary="Use the source-owned local login route.",
+    )
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"credential_missing"},
+    )
+    assert repaired.runtime.interface.setup_requests[-1].path == "/login"
+    patch.runtime.interface.setup_requests[-1].path = "/invented"
+    with pytest.raises(ValueError, match="login_evidence_required"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"credential_missing"},
         )
 
 

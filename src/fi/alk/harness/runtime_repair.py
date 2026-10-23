@@ -21,7 +21,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .backends import SessionSpec, tool, tool_server
 from .backends.base import ToolSpec
 from .backends.files import file_tools
-from .contract import AgentContract, Dependency, Runtime, generated_chat_interface_problem
+from .contract import (
+    AgentContract,
+    Dependency,
+    Runtime,
+    RuntimeConfigFile,
+    generated_chat_interface_problem,
+)
 from .diagnostics import HarnessDiagnostic
 from .session import DONE, RESULT, TOOL, Event, Stage
 
@@ -314,6 +320,382 @@ def _explicit_dependency_candidate(
             contract,
             patch,
             allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
+
+
+def _provider_selector_candidate(
+    source_root: Path,
+    contract: AgentContract,
+    guidance: str,
+    *,
+    diagnostic_code: Literal[
+        "chat_ingress_failed", "chat_tool_evidence_unverified"
+    ] = "chat_ingress_failed",
+) -> RuntimePlanPatch | None:
+    """Select a source-declared provider when the target reports none is configured."""
+    marker = "<untrusted_current_target_process_logs>"
+    closing = "</untrusted_current_target_process_logs>"
+    runtime = contract.runtime
+    interface = runtime.interface if runtime else None
+    if (
+        marker not in guidance
+        or closing not in guidance
+        or not interface
+    ):
+        return None
+    logs = guidance.rsplit(marker, 1)[1].split(closing, 1)[0]
+    if not re.search(
+        r"(?:no_provider_configured|provider.{0,40}(?:not|isn't).{0,20}configured|"
+        r"not connected to any AI provider)",
+        logs,
+        re.I,
+    ):
+        return None
+
+    providers = _provider_values(runtime)
+
+    evidence: list[tuple[Path, str, str, int]] = []
+    for raw in re.findall(r'File "([^"]+)", line \d+', logs):
+        parts = Path(raw).parts
+        for index in range(len(parts)):
+            path = source_root.joinpath(*parts[index:])
+            try:
+                resolved = path.resolve()
+                if (
+                    resolved.is_relative_to(source_root.resolve())
+                    and resolved.is_file()
+                    and resolved.stat().st_size <= 1_000_000
+                ):
+                    text = resolved.read_text(encoding="utf-8", errors="replace")
+                    names = set(
+                        re.findall(
+                            r"(?:getenv|get_secret_str|environ\.get|env::var)"
+                            r"\(\s*[\"']([A-Z][A-Z0-9_]*)[\"']",
+                            text,
+                        )
+                    ) | set(re.findall(r"process\.env\.([A-Z][A-Z0-9_]*)", text))
+                    for name in names:
+                        if "PROVIDER" not in name:
+                            continue
+                        for provider_rank, provider in enumerate(providers):
+                            if re.search(
+                                rf"[\"']{re.escape(provider)}[\"']", text, re.I
+                            ):
+                                score = (
+                                    (20 if name.endswith("INFERENCE_PROVIDER") else 0)
+                                    + (10 if name.endswith("MODEL_PROVIDER") else 0)
+                                    + text.count(name)
+                                    + len(providers)
+                                    - provider_rank
+                                )
+                                evidence.append((resolved, name, provider, score))
+                    break
+            except (OSError, RuntimeError, ValueError):
+                continue
+    if not evidence:
+        return None
+    evidence.sort(key=lambda item: (-item[3], item[1], item[2], str(item[0])))
+    selected = evidence[0]
+    if (
+        len(evidence) > 1
+        and evidence[1][3] == selected[3]
+        and evidence[1][1:3] != selected[1:3]
+    ):
+        return None
+    path, name, provider, _score = selected
+    resources = dict(runtime.config_files)
+    config_path = ".env" if not (source_root / ".env").exists() else ".alk-runtime.env"
+    previous = resources.get(config_path, RuntimeConfigFile())
+    if previous.values.get(name) == provider:
+        return None
+    resources[config_path] = previous.model_copy(
+        update={"values": {**previous.values, name: provider}}
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(update={"config_files": resources}),
+        evidence_paths=(path.relative_to(source_root.resolve()).as_posix(),),
+        diagnostic_codes=(diagnostic_code,),
+        summary="Select the source-declared model provider requested by the submitted runtime.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={diagnostic_code},
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
+
+
+def _provider_values(runtime: Runtime) -> tuple[str, ...]:
+    interface = runtime.interface
+    if not interface:
+        return ()
+    if not interface.model:
+        return tuple(dict.fromkeys(runtime.extras))
+    namespace = interface.model.split("/", 1)[0].strip().lower()
+
+    def canonical(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+    namespace_key = canonical(namespace)
+    providers = [
+        value
+        for value in runtime.extras
+        if canonical(value) in namespace_key or namespace_key in canonical(value)
+    ]
+    providers.extend((namespace, namespace_key, namespace_key.removesuffix("-ai")))
+    return tuple(dict.fromkeys(value for value in providers if value))
+
+
+def _source_backed_provider_selector_update(
+    original: Runtime | None,
+    runtime: Runtime,
+    evidence_files: list[Path],
+) -> bool:
+    if (
+        original is None
+        or runtime.model_dump(exclude={"config_files"})
+        != original.model_dump(exclude={"config_files"})
+        or not original.config_files.keys() <= runtime.config_files.keys()
+    ):
+        return False
+    changes: list[tuple[str, str]] = []
+    for path, resource in runtime.config_files.items():
+        previous = original.config_files.get(path)
+        if previous is None:
+            if path not in {".env", ".alk-runtime.env"} or resource.secret_aliases:
+                return False
+            before = {}
+        else:
+            if (
+                resource.format != previous.format
+                or resource.secret_aliases != previous.secret_aliases
+                or not previous.values.keys() <= resource.values.keys()
+            ):
+                return False
+            before = previous.values
+        changes.extend(
+            (name, value)
+            for name, value in resource.values.items()
+            if before.get(name) != value
+        )
+    if len(changes) != 1:
+        return False
+    name, provider = changes[0]
+    if "PROVIDER" not in name or provider not in _provider_values(runtime):
+        return False
+    return any(
+        path.stat().st_size <= 1_000_000
+        and re.search(
+            rf"(?:getenv|get_secret_str|environ\.get|env::var)\(\s*[\"']{re.escape(name)}[\"']|"
+            rf"process\.env\.{re.escape(name)}",
+            text := path.read_text(encoding="utf-8", errors="replace"),
+        )
+        and re.search(rf"[\"']{re.escape(provider)}[\"']", text, re.I)
+        for path in evidence_files
+    )
+
+
+_FILE_SECRET_ALIAS_SUFFIXES = ("_JSON", "_FILE", "_PATH")
+
+
+def _file_secret_alias_stem(alias: str) -> str:
+    stem = alias
+    while suffix := next(
+        (suffix for suffix in _FILE_SECRET_ALIAS_SUFFIXES if stem.endswith(suffix)),
+        None,
+    ):
+        stem = stem[: -len(suffix)]
+    return stem
+
+
+def _validate_secret_file_alias_repair(
+    original: Runtime,
+    runtime: Runtime,
+    available_secret_aliases: frozenset[str],
+) -> None:
+    if (
+        runtime.model_dump(exclude={"secret_files"})
+        != original.model_dump(exclude={"secret_files"})
+        or runtime.secret_files.keys() != original.secret_files.keys()
+    ):
+        raise ValueError("runtime_repair_secret_file_alias_change_invalid")
+    changed = False
+    for service, bindings in runtime.secret_files.items():
+        previous = original.secret_files[service]
+        if len(bindings) != len(previous):
+            raise ValueError("runtime_repair_secret_file_alias_change_invalid")
+        for before, after in zip(previous, bindings, strict=True):
+            if before == after:
+                continue
+            if (
+                before.model_dump(exclude={"alias"})
+                != after.model_dump(exclude={"alias"})
+                or after.alias not in available_secret_aliases
+                or _file_secret_alias_stem(before.alias)
+                != _file_secret_alias_stem(after.alias)
+            ):
+                raise ValueError("runtime_repair_secret_file_alias_change_invalid")
+            changed = True
+    if not changed:
+        raise ValueError("runtime_repair_secret_file_alias_change_required")
+
+
+def _config_file_aliases_only_changed(original: Runtime, runtime: Runtime) -> bool:
+    if (
+        runtime.model_dump(exclude={"config_files"})
+        != original.model_dump(exclude={"config_files"})
+        or runtime.config_files.keys() != original.config_files.keys()
+    ):
+        return False
+    changed = False
+    for path, resource in runtime.config_files.items():
+        previous = original.config_files[path]
+        if (
+            resource.format != previous.format
+            or resource.values != previous.values
+            or resource.secret_aliases.keys() != previous.secret_aliases.keys()
+        ):
+            return False
+        changed = changed or resource.secret_aliases != previous.secret_aliases
+    return changed
+
+
+def _validate_config_file_alias_repair(
+    original: Runtime,
+    runtime: Runtime,
+    available_secret_aliases: frozenset[str],
+) -> None:
+    for path, resource in runtime.config_files.items():
+        previous = original.config_files[path]
+        for name, alias in resource.secret_aliases.items():
+            before = previous.secret_aliases[name]
+            if alias == before:
+                continue
+            if (
+                alias not in available_secret_aliases
+                or _file_secret_alias_stem(before)
+                != _file_secret_alias_stem(alias)
+            ):
+                raise ValueError("runtime_repair_config_file_alias_change_invalid")
+
+
+def _config_file_alias_candidate(
+    source_root: Path,
+    contract: AgentContract,
+    available_secret_aliases: frozenset[str],
+) -> RuntimePlanPatch | None:
+    runtime = contract.runtime
+    if (
+        runtime is None
+        or runtime.execution != "compose"
+        or not runtime.compose_file
+        or not runtime.config_files
+    ):
+        return None
+    resources = {}
+    changed = False
+    for path, resource in runtime.config_files.items():
+        aliases = {}
+        for name, alias in resource.secret_aliases.items():
+            if alias in available_secret_aliases:
+                aliases[name] = alias
+                continue
+            matches = sorted(
+                candidate
+                for candidate in available_secret_aliases
+                if _file_secret_alias_stem(candidate)
+                == _file_secret_alias_stem(alias)
+            )
+            if len(matches) != 1:
+                return None
+            aliases[name] = matches[0]
+            changed = True
+        resources[path] = resource.model_copy(update={"secret_aliases": aliases})
+    compose_file = (source_root / runtime.compose_file).resolve()
+    if (
+        not changed
+        or not compose_file.is_file()
+        or not compose_file.is_relative_to(source_root.resolve())
+    ):
+        return None
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(update={"config_files": resources}),
+        evidence_paths=(runtime.compose_file,),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Bind generated config files to the unique supplied file-secret aliases.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            available_secret_aliases=available_secret_aliases,
+        )
+    except (OSError, ValueError):
+        return None
+    return patch
+
+
+def _secret_file_alias_candidate(
+    source_root: Path,
+    contract: AgentContract,
+    available_secret_aliases: frozenset[str],
+) -> RuntimePlanPatch | None:
+    runtime = contract.runtime
+    if (
+        runtime is None
+        or runtime.execution != "compose"
+        or not runtime.compose_file
+        or not runtime.secret_files
+    ):
+        return None
+    repaired = {}
+    changed = False
+    for service, bindings in runtime.secret_files.items():
+        repaired[service] = []
+        for binding in bindings:
+            if binding.alias in available_secret_aliases:
+                repaired[service].append(binding)
+                continue
+            matches = sorted(
+                alias
+                for alias in available_secret_aliases
+                if _file_secret_alias_stem(alias)
+                == _file_secret_alias_stem(binding.alias)
+            )
+            if len(matches) != 1:
+                return None
+            repaired[service].append(
+                binding.model_copy(update={"alias": matches[0]})
+            )
+            changed = True
+    compose_file = (source_root / runtime.compose_file).resolve()
+    if not changed or not compose_file.is_file() or not compose_file.is_relative_to(source_root.resolve()):
+        return None
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=runtime.model_copy(update={"secret_files": repaired}),
+        evidence_paths=(runtime.compose_file,),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Bind generated secret-file mounts to the unique supplied file-secret aliases.",
+    )
+    try:
+        validate_runtime_plan_patch(
+            source_root,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+            available_secret_aliases=available_secret_aliases,
         )
     except (OSError, ValueError):
         return None
@@ -695,9 +1077,34 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_dependency_requires_missing_loader")
 
     runtime = patch.runtime
+    if (
+        allowed_diagnostic_codes == {"generated_runtime_plan_invalid"}
+        and contract.runtime is not None
+        and runtime.secret_files != contract.runtime.secret_files
+    ):
+        _validate_secret_file_alias_repair(
+            contract.runtime, runtime, available_secret_aliases
+        )
+    if (
+        allowed_diagnostic_codes == {"generated_runtime_plan_invalid"}
+        and contract.runtime is not None
+        and _config_file_aliases_only_changed(contract.runtime, runtime)
+    ):
+        _validate_config_file_alias_repair(
+            contract.runtime, runtime, available_secret_aliases
+        )
+    provider_selector_repair = (
+        allowed_diagnostic_codes == {"chat_tool_evidence_unverified"}
+        and _source_backed_provider_selector_update(
+            contract.runtime, runtime, evidence_files
+        )
+    )
     from .contract import _runtime_template_names
 
-    if allowed_diagnostic_codes == {"chat_tool_evidence_unverified"}:
+    if (
+        allowed_diagnostic_codes == {"chat_tool_evidence_unverified"}
+        and not provider_selector_repair
+    ):
         original = contract.runtime
         transport_fields = {"path", "protocol", "request_template", "response_path", "failure_rule"}
         observation_fields = {"completed_tools", "completed_tool_events"}
@@ -789,6 +1196,11 @@ def validate_runtime_plan_patch(
         ):
             raise ValueError("runtime_repair_local_auth_source_evidence_required")
     repair_setup_auth = allowed_diagnostic_codes == {"credential_missing"} and bool(original_auth)
+    add_local_auth = (
+        allowed_diagnostic_codes == {"credential_missing"}
+        and original_auth is None
+        and auth is not None
+    )
     if allowed_diagnostic_codes == {"credential_missing"}:
         if not auth:
             raise ValueError("runtime_repair_local_auth_addition_required")
@@ -828,16 +1240,27 @@ def validate_runtime_plan_patch(
                 exclude=mutable_interface
             ):
                 raise ValueError("runtime_repair_readiness_interface_changed")
-            if len(runtime.interface.setup_requests) != len(
-                original.interface.setup_requests
-            ) or any(
+            original_setup = original.interface.setup_requests
+            repaired_setup = runtime.interface.setup_requests
+            added_setup = repaired_setup[len(original_setup):]
+            setup_count_valid = len(repaired_setup) == len(original_setup) or (
+                add_local_auth and len(repaired_setup) == len(original_setup) + 1
+            )
+            if not setup_count_valid or any(
                 before.model_dump(exclude={"headers_template"} if repair_setup_auth else {"body_template"})
                 != after.model_dump(exclude={"headers_template"} if repair_setup_auth else {"body_template"})
-                for before, after in zip(
-                    original.interface.setup_requests, runtime.interface.setup_requests
-                )
+                for before, after in zip(original_setup, repaired_setup)
             ):
                 raise ValueError("runtime_repair_readiness_setup_protocol_changed")
+            if added_setup:
+                step = added_setup[0]
+                if auth.template_variable not in _runtime_template_names(
+                    [step.headers_template, step.body_template]
+                ) or not any(
+                    step.path in path.read_text(encoding="utf-8", errors="replace")
+                    for path in evidence_files if path.stat().st_size <= 1_000_000
+                ):
+                    raise ValueError("runtime_repair_local_auth_login_evidence_required")
             if repair_setup_auth:
                 for before, after in zip(
                     original.interface.setup_requests, runtime.interface.setup_requests, strict=True
@@ -856,18 +1279,31 @@ def validate_runtime_plan_patch(
             if any(new_headers.get(key) != value for key, value in old_headers.items()):
                 raise ValueError("runtime_repair_readiness_header_binding_changed")
             added_headers = set(new_headers) - set(old_headers)
+            setup_captures = {
+                name for step in added_setup for name in (*step.capture, *step.capture_headers)
+            }
             if added_headers and (
                 not auth
-                or original_auth
                 or any(
-                    auth.template_variable
-                    not in _runtime_template_names(new_headers[key])
+                    not _runtime_template_names(new_headers[key])
+                    or not _runtime_template_names(new_headers[key])
+                       <= {auth.template_variable, *setup_captures}
+                    for key in added_headers
+                )
+                or any(
+                    not any(
+                        key.lower()
+                        in path.read_text(encoding="utf-8", errors="replace").lower()
+                        for path in evidence_files
+                        if path.stat().st_size <= 1_000_000
+                    )
                     for key in added_headers
                 )
             ):
                 raise ValueError("runtime_repair_readiness_header_binding_changed")
             if allowed_diagnostic_codes == {"credential_missing"} and (
-                (not repair_setup_auth and runtime.interface.setup_requests != original.interface.setup_requests)
+                (not (repair_setup_auth or add_local_auth)
+                 and runtime.interface.setup_requests != original.interface.setup_requests)
                 or runtime.interface.setup_secrets != original.interface.setup_secrets
             ):
                 raise ValueError("runtime_repair_credential_only_local_auth_allowed")
@@ -1122,6 +1558,37 @@ async def request_runtime_plan_patch(
 
     allowed = {item.code for item in diagnostics}
     setup_investigation = allowed in ({"chat_ingress_failed"}, {"credential_missing"})
+    if allowed in ({"chat_ingress_failed"}, {"chat_tool_evidence_unverified"}):
+        diagnostic_code = next(iter(allowed))
+        candidate = _provider_selector_candidate(
+            source_root,
+            contract,
+            guidance,
+            diagnostic_code=diagnostic_code,
+        )
+        if candidate is not None:
+            print("runtime repair: source-declared provider selector", flush=True)
+            return candidate
+    if allowed == {"generated_runtime_plan_invalid"} and any(
+        "compose_secret_file_target_reference_required" in item.redacted_message
+        for item in diagnostics
+    ):
+        candidate = _secret_file_alias_candidate(
+            source_root, contract, available_secret_aliases
+        )
+        if candidate is not None:
+            print("runtime repair: supplied secret-file alias", flush=True)
+            return candidate
+    if allowed == {"generated_runtime_plan_invalid"} and any(
+        "compose_config_target_reference_required" in item.redacted_message
+        for item in diagnostics
+    ):
+        candidate = _config_file_alias_candidate(
+            source_root, contract, available_secret_aliases
+        )
+        if candidate is not None:
+            print("runtime repair: supplied config-file alias", flush=True)
+            return candidate
     if allowed == {"chat_ingress_failed"}:
         candidate = _explicit_dependency_candidate(source_root, contract, guidance)
         if candidate is not None:
@@ -1160,6 +1627,13 @@ async def request_runtime_plan_patch(
                 diagnostic_codes=tuple(sorted(allowed)),
                 summary=submission.summary,
             )
+            if (
+                missing_loader
+                and patch.runtime_dependencies is None
+                and patch.runtime.execution != "compose"
+                and not patch.runtime.compose_file
+            ):
+                raise ValueError("runtime_repair_dependency_seam_unresolved")
             validate_runtime_plan_patch(
                 source_root,
                 contract,
@@ -1202,8 +1676,13 @@ Use runtime.context_excludes only for paths unnecessary for the selected runtime
 component directory. Retain required modules, manifests, assets and tool implementations. Never
 approve credential-like material, rewrite it, or disable scanning. Every retained file is rescanned;
 the packaged context must build and answer a real chat before the plan is accepted.
+Simple * and ** patterns may exclude repeated test-only files when the diagnostic proves exact
+paths would be impractical. Patterns cannot exclude a required command or dependency manifest.
 Call the tool once the smallest complete correction is known, then stop."""
     if allowed == {"generated_runtime_plan_invalid"}:
+        from .compose_integration import runtime_capability_briefing
+
+        system_prompt += runtime_capability_briefing()
         system_prompt += """ You may also submit runtime_dependencies only to fill a missing
 reached.loader_module on existing entries with a nonempty engine and empty dsn_env, host,
 config_key, and loader_module. Preserve the complete list, its order, and every other field.
@@ -1218,16 +1697,19 @@ Inspect source manifests and the failing source branch. Retain all extras and re
 add only specifically justified source-declared dependencies. You may correct config_files public
 values or add secret bindings to supplied target aliases. Preserve existing config paths, formats
 and secret bindings. You may correct body_template in existing interface.setup_requests and add
-interface.setup_secrets bindings to supplied aliases. Preserve the setup request count and every
-other request field, including paths, accepted statuses, capture and failure rules. For a source-owned
-local HTTP server token only, you may add interface.local_auth with server_environment and
- template_variable names and add its source-required headers_template binding. Inspect and cite the
-server auth guard. ALK supplies a private random token; never write a value, disable auth, or use
+interface.setup_secrets bindings to supplied aliases. Preserve existing setup requests and every
+request field, including paths, accepted statuses, capture and failure rules. When adding local_auth
+after credential_missing, you may append one source-evidenced login request. For a source-owned
+local HTTP server credential only, you may add interface.local_auth with server_environment and
+template_variable names and add its source-required binding. Inspect and cite the server auth guard.
+ALK supplies a private random value; never write a value, disable auth, or use
 this for external account credentials. Preserve existing auth and header bindings. On
-credential_missing, add local_auth plus its chat header binding only when local_auth is absent.
+credential_missing, add local_auth plus its source-required binding only when local_auth is absent.
 If local_auth is already declared, you may instead add missing headers_template entries to
 existing setup_requests, using only that same local_auth.template_variable. Cite the setup
-route's auth guard. Preserve every existing header and every other setup field, including bodies.
+route's auth guard. A source-owned login exchange may use the generated credential in a setup
+request body and capture its returned token or cookie for chat. Never put the credential in a URL
+or the ordinary chat request body. Preserve every unrelated setup field.
 Chat headers_template applies after setup completes and is not inherited by setup requests.
 Keep existing local_auth, top-level headers, setup_secrets and all other runtime fields unchanged.
 On chat_ingress_failed for an existing HTTP json_template interface, you may also correct

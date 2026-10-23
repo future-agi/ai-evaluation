@@ -5,6 +5,8 @@ import pytest
 from fi.alk.harness.contract import AgentContract, Runtime
 from fi.alk.harness.generated_runtime import (
     GeneratedRuntimeError,
+    _context_excludes,
+    _copy_sanitized_context,
     local_install_extra_claims,
     select_python_extras,
     validate_local_install_extras,
@@ -32,6 +34,41 @@ def workspace(root: Path):
             )
         )
     (root / "server.py").write_text("print('source')")
+
+
+def test_generated_context_exclude_glob_omits_only_matching_test_files(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (tmp_path / "server.py").write_text("print('ready')\n")
+    (tmp_path / "agent.py").write_text("VALUE = 1\n")
+    (tmp_path / "agent.test.py").write_text("TOKEN = 'ghp_" + "x" * 36 + "'\n")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", "server.py"],
+        context_excludes=["**/*.test.py"],
+    )
+    exclusions = _context_excludes(
+        tmp_path, runtime, "pyproject.toml", runtime.command
+    )
+    destination = tmp_path / "copy"
+    _copy_sanitized_context(tmp_path, destination, exclusions)
+
+    assert (destination / "agent.py").is_file()
+    assert not (destination / "agent.test.py").exists()
+
+
+def test_generated_context_exclude_glob_cannot_remove_required_files(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (tmp_path / "server.py").write_text("print('ready')\n")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", "server.py"],
+        context_excludes=["**/*.py"],
+    )
+
+    with pytest.raises(GeneratedRuntimeError, match="context_exclude_required"):
+        _context_excludes(tmp_path, runtime, "pyproject.toml", runtime.command)
 
 
 INSTALL = "pip install -e ./sdk[cloud-sdk] -e tools"
