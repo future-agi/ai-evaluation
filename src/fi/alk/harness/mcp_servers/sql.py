@@ -14,6 +14,7 @@ from typing import Any
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 ROW_CAP = 200
 STATEMENT_TIMEOUT_MS = 5_000
@@ -26,7 +27,8 @@ server = FastMCP("sql", log_level="WARNING")
     description=(
         "Run one read-only SQL query (PostgreSQL) and get the rows back, at most "
         f"{ROW_CAP}. Only SELECT on the tables you are allowed to read works."
-    )
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 def query(sql: str) -> dict[str, Any]:
     with psycopg.connect(

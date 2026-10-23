@@ -126,6 +126,7 @@ class AttachedServers:
         self._cwd = cwd
         self.names = {name for server in self._servers for name in server.tool_names()}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._stop: asyncio.Event | None = None
         self._sessions: dict[str, tuple[Any, str]] = {}
         self.definitions: list[Any] = []
@@ -156,7 +157,8 @@ class AttachedServers:
             return
         loop = asyncio.new_event_loop()
         ready: asyncio.Future[None] = loop.create_future()
-        threading.Thread(target=loop.run_forever, daemon=True).start()
+        self._thread = threading.Thread(target=loop.run_forever, daemon=True)
+        self._thread.start()
         self._loop = loop
         asyncio.run_coroutine_threadsafe(self._serve(ready), loop)
         try:
@@ -192,12 +194,17 @@ class AttachedServers:
                     for tool in server.tools:
                         name = f"{server.id}__{tool}"
                         self._sessions[name] = (session, tool)
+                        hints = offered[tool].annotations
                         self.definitions.append(
                             ToolDefinition(
                                 name=name,
                                 description=offered[tool].description or tool,
                                 parameters=offered[tool].inputSchema,
-                                mutates_state=False,
+                                # MCP's default is a tool that may write; only a declared
+                                # read-only tool is safe to treat as changing nothing.
+                                mutates_state=not (
+                                    hints is not None and hints.readOnlyHint
+                                ),
                             )
                         )
                 ready.set_result(None)
@@ -233,7 +240,7 @@ class AttachedServers:
             return text
 
     def close(self) -> None:
-        loop, stop = self._loop, self._stop
+        loop, stop, thread = self._loop, self._stop, self._thread
         if loop is None:
             return
         if stop is not None:
@@ -241,7 +248,11 @@ class AttachedServers:
         # Give the servers' exit stacks a moment to terminate their processes, then stop.
         asyncio.run_coroutine_threadsafe(asyncio.sleep(0.5), loop).result(5)
         loop.call_soon_threadsafe(loop.stop)
-        self._loop = None
+        if thread is not None:
+            thread.join(5)
+        if not loop.is_running():
+            loop.close()
+        self._loop, self._thread = None, None
 
 
 async def _wait(future: asyncio.Future[None]) -> None:

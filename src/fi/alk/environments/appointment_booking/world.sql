@@ -1,5 +1,8 @@
--- The clinic's world: schema, invariants and seed. Times are clinic-local ISO strings and the
--- clock is fixed, so every scenario starts from the same "now".
+-- The clinic's world: schema and seed. Times are clinic-local ISO strings and the clock is fixed,
+-- so every scenario starts from the same "now". Hosted runs seed PostgreSQL from this world, which
+-- carries no foreign keys, CHECK constraints or partial indexes, so the schema declares none and
+-- the handlers enforce the clinic's invariants (one booking per slot, known statuses, channels and
+-- teams) on both engines alike.
 
 CREATE TABLE clock (now TEXT NOT NULL);
 
@@ -22,47 +25,44 @@ CREATE TABLE providers (
 
 CREATE TABLE slots (
     slot_id TEXT PRIMARY KEY,
-    provider_id TEXT NOT NULL REFERENCES providers (provider_id),
+    provider_id TEXT NOT NULL,
     starts_at TEXT NOT NULL,
     location TEXT NOT NULL
 );
 
 CREATE TABLE appointments (
     appointment_id TEXT PRIMARY KEY,
-    patient_id TEXT NOT NULL REFERENCES patients (patient_id),
-    slot_id TEXT NOT NULL REFERENCES slots (slot_id),
+    patient_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
     reason TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('booked', 'cancelled')),
+    status TEXT NOT NULL,
     cancel_reason TEXT
 );
 
--- no_double_booking, enforced by the store as well as by the handlers.
-CREATE UNIQUE INDEX one_booking_per_slot ON appointments (slot_id) WHERE status = 'booked';
-
 CREATE TABLE insurance (
-    patient_id TEXT PRIMARY KEY REFERENCES patients (patient_id),
+    patient_id TEXT PRIMARY KEY,
     payer TEXT NOT NULL,
     member_id TEXT NOT NULL,
     group_number TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE verified_patients (
-    patient_id TEXT PRIMARY KEY REFERENCES patients (patient_id)
+    patient_id TEXT PRIMARY KEY
 );
 
 CREATE TABLE messages (
     message_id TEXT PRIMARY KEY,
-    patient_id TEXT NOT NULL REFERENCES patients (patient_id),
+    patient_id TEXT NOT NULL,
     kind TEXT NOT NULL,
-    channel TEXT NOT NULL CHECK (channel IN ('sms', 'email')),
+    channel TEXT NOT NULL,
     destination TEXT NOT NULL
 );
 
 CREATE TABLE escalations (
     escalation_id TEXT PRIMARY KEY,
-    team TEXT NOT NULL CHECK (team IN ('front_desk', 'nurse')),
+    team TEXT NOT NULL,
     reason TEXT NOT NULL,
-    patient_id TEXT REFERENCES patients (patient_id)
+    patient_id TEXT
 );
 
 INSERT INTO clock (now) VALUES ('2026-03-02T09:00:00');

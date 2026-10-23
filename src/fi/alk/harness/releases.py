@@ -18,6 +18,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -182,6 +183,14 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
             continue
         if clashes := sorted(set(server.tool_names()) & native):
             problems.append(f"{server.id}: tool names clash with {clashes}")
+        # The agent sees `<id>__<tool>` as a tool name; one it cannot be offered as fails only
+        # when a world starts, far from the release that listed it.
+        if invalid := sorted(
+            name for name in server.tool_names() if not re.fullmatch(_TOOL_NAME_PATTERN, name)
+        ):
+            problems.append(f"{server.id}: not valid tool names: {invalid}")
+        if repeated := sorted(name for name, count in Counter(server.tools).items() if count > 1):
+            problems.append(f"{server.id}: tools listed twice: {repeated}")
         reader = server.attach.database_reader
         if reader is not None:
             if DATABASE_READER not in registered.attach:
@@ -756,17 +765,33 @@ def _check_environment_contents(
             "environment_world_invalid",
             f"runtime-owned tools cannot be proved: {world['runtime_tools']}",
         )
-    bound_to_source = any(
-        entry.mode is HandlerMode.CUSTOMER_SOURCE for entry in handlers.values()
-    )
-    if world.get("source_root") and not bound_to_source:
+    # Replacing a prebuilt tool with the customer's own code (contract §2.2) is not built: nothing
+    # composes or runs such a handler differently, so a release claiming one would run the copy.
+    if unsupported := sorted(
+        name for name, entry in handlers.items() if entry.mode is not HandlerMode.ENVIRONMENT
+    ):
         raise ReleaseError(
-            "environment_world_invalid", "only customer_source handlers import source"
+            "environment_handler_unsupported",
+            f"only environment handlers are supported: {unsupported}",
         )
-    if (Path(root) / WORLD / "state.json").exists() and not bound_to_source:
+    if world.get("source_root"):
+        raise ReleaseError(
+            "environment_world_invalid", "an environment world does not import source"
+        )
+    if (Path(root) / WORLD / "state.json").exists():
         raise ReleaseError(
             "environment_world_invalid",
             "environment handlers keep their state in the store, not in state.json",
+        )
+    handler_files = {
+        path.relative_to(Path(root) / WORLD / "handlers").as_posix()
+        for path in (Path(root) / WORLD / "handlers").rglob("*")
+        if path.is_file() and not _is_stray(path.relative_to(Path(root)))
+    }
+    if strays := sorted(handler_files - {f"{name}.py" for name in names}):
+        raise ReleaseError(
+            "environment_handlers_mismatch",
+            f"handler files for no tool: {strays}",
         )
     problems: list[str] = []
     for name, entry in handlers.items():
@@ -818,6 +843,15 @@ def _table_rows(database: Path, table: str) -> list[tuple[Any, ...]]:
         connection.close()
 
 
+def _attached_files(root: Path) -> dict[str, bytes]:
+    folder = Path(root) / ATTACHED
+    return {
+        path.relative_to(folder).as_posix(): path.read_bytes()
+        for path in sorted(folder.rglob("*"))
+        if path.is_file() and not _is_stray(path.relative_to(Path(root)))
+    }
+
+
 def _check_extension(
     root: Path, parent_root: Path, parent: EnvironmentReleaseV1
 ) -> None:
@@ -841,6 +875,8 @@ def _check_extension(
             problems.append(f"rule {rule.id} removed or changed")
     if load_servers(root) != load_servers(parent_root):
         problems.append(f"{SERVERS} changed; attached servers belong to the base release")
+    if _attached_files(root) != _attached_files(parent_root):
+        problems.append(f"{ATTACHED}/ changed; attached folders belong to the base release")
     parent_db = parent_root / WORLD / "world.sqlite"
     child_db = root / WORLD / "world.sqlite"
     if parent_db.is_file():
@@ -859,34 +895,59 @@ def _check_extension(
         raise ReleaseError("environment_extension_invalid", "; ".join(problems))
 
 
+def _lineage(document: Mapping[str, Any]) -> dict[str, Any]:
+    """What a sealed manifest derives from: the release it extends or the suite it was derived
+    from, and each scenario's origin and source."""
+    return {
+        "extends": document.get("extends"),
+        "parent": document.get("parent"),
+        "scenarios": sorted(
+            (str(entry.get("key")), str(entry.get("origin")), str(entry.get("derived_from")))
+            for entry in document.get("scenarios") or []
+        ),
+    }
+
+
+def _unchanged_lineage(manifest: Path, now: Mapping[str, Any]) -> None:
+    """Resealing a sealed root must keep what it derives from: sealing again with the defaults
+    would quietly turn an extension into a root, or a derived suite into a base one."""
+    if not manifest.is_file():
+        return
+    try:
+        before = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    old, new = _lineage(before), _lineage(now)
+    if changed := [name for name in old if old[name] != new[name]]:
+        raise ReleaseError(
+            "release_lineage_changed",
+            f"{manifest.name} was sealed with a different {', '.join(changed)}; seal into a "
+            "fresh directory, or pass the same parent and scenario origins",
+        )
+
+
 def seal_environment_release(
     root: str | Path,
     *,
     name: str,
-    handler_modes: Mapping[str, HandlerMode | str] | None = None,
     parent_root: str | Path | None = None,
-    source_digest: str | None = None,
     derived_from: str | None = None,
     metadata: Mapping[str, JsonValue] | None = None,
 ) -> EnvironmentReleaseV1:
     """Check an environment directory against the contract and write its `release.json`."""
     root = Path(root)
-    tool_names = [tool.name for tool in load_tools(root)]
-    modes = dict(handler_modes or {})
     handlers = {
-        tool: HandlerEntry(mode=HandlerMode(modes.pop(tool, HandlerMode.ENVIRONMENT)))
-        for tool in tool_names
+        tool.name: HandlerEntry(mode=HandlerMode.ENVIRONMENT) for tool in load_tools(root)
     }
-    if modes:
-        raise ReleaseError(
-            "environment_handlers_mismatch", f"modes for unknown tools: {sorted(modes)}"
-        )
     _check_environment_contents(root, handlers)
     extends = None
     if parent_root is not None:
         parent = load_environment_release(parent_root)
         _check_extension(root, Path(parent_root), parent)
         extends = ReleaseRef(digest=parent.digest, name=parent.name)
+    _unchanged_lineage(
+        root / ENVIRONMENT_MANIFEST, {"extends": extends.model_dump() if extends else None}
+    )
     release = _validated(
         EnvironmentReleaseV1,
         {
@@ -897,7 +958,7 @@ def seal_environment_release(
             "handlers": {
                 tool: entry.model_dump(mode="json") for tool, entry in handlers.items()
             },
-            "source": {"digest": source_digest} if source_digest else None,
+            "source": None,
             "files": [
                 record.model_dump() for record in list_files(root, ENVIRONMENT_MANIFEST)
             ],
@@ -1167,6 +1228,8 @@ class Attempt:
     checks: list[tuple[str, Any]]
     # Each played call's `BoundResult`, in order.
     outcomes: list[Any]
+    # The calls the checks were graded on.
+    played: list[Any]
 
     @property
     def failed(self) -> list[str]:
@@ -1267,9 +1330,14 @@ class PostgresProof:
         scenario: Any,
         calls: Sequence[tuple[str, Any]],
         binding: AgentBindingV1 | None = None,
+        *,
+        crashed: Sequence[Any] | None = None,
     ) -> Attempt:
-        """`calls` are `(tool, arguments)` in `binding`'s vocabulary, played in order."""
+        """`calls` are `(tool, arguments)` in `binding`'s vocabulary, played in order. With
+        `crashed`, nothing is played: the checks see an untouched world and those calls, each
+        failed with no result, the way an execution failure leaves them."""
         import random
+        from dataclasses import replace
 
         from .checks import run_check
         from .folder import apply_setup, check_ready
@@ -1300,7 +1368,7 @@ class PostgresProof:
         faults: list[str] = []
         outcomes: list[Any] = []
         try:
-            for tool, arguments in calls if ready.ok else ():
+            for tool, arguments in calls if ready.ok and crashed is None else ():
                 outcome = tools.call(tool, arguments)
                 outcomes.append(outcome)
                 if outcome.status == "fault":
@@ -1331,6 +1399,11 @@ class PostgresProof:
                     )
         finally:
             tools.close()
+        if ready.ok and crashed is not None:
+            played = [
+                replace(call, ok=False, result=None, error="execution failed", refused=False)
+                for call in crashed
+            ]
         return Attempt(
             ready,
             faults,
@@ -1341,6 +1414,7 @@ class PostgresProof:
             if ready.ok
             else [],
             outcomes,
+            played,
         )
 
 
@@ -1352,7 +1426,7 @@ def _prove_on_postgres(
     admin_dsn: str,
 ) -> dict[str, Any]:
     """Every scenario again, on PostgreSQL (`PostgresProof`), canonically: it must hold with its
-    reference solution and fail when nothing is done."""
+    reference solution, and fail when nothing is done and when every call it made crashed."""
     results: dict[str, Any] = {}
     failures: list[str] = []
     with PostgresProof(root, environment_root, profile, admin_dsn) as proof:
@@ -1363,7 +1437,14 @@ def _prove_on_postgres(
             )
             untouched = proof.attempt(scenario, [])
             weak = [name for name, outcome in untouched.checks if outcome.held]
-            holds = solved.holds and not weak
+            # As on SQLite: a check that credits an attempted call without its effect.
+            crashed = proof.attempt(scenario, [], crashed=solved.played) if solved.played else None
+            credited = [
+                name
+                for name, outcome in (crashed.checks if crashed else [])
+                if outcome.held and name not in weak
+            ]
+            holds = solved.holds and not weak and not credited
             results[entry.key] = {
                 "holds": holds,
                 "ready": solved.ready.ok,
@@ -1380,6 +1461,7 @@ def _prove_on_postgres(
                             *solved.faults,
                             *solved.failed,
                             *(f"{name} holds untouched" for name in weak),
+                            *(f"{name} holds when every call crashed" for name in credited),
                         ]
                     )
                     or "no deterministic check"
@@ -1458,6 +1540,13 @@ def seal_suite_release(
     parent = None
     if parent_root is not None:
         parent = (Path(parent_root), load_suite_release(parent_root))
+    _unchanged_lineage(
+        root / SUITE_MANIFEST,
+        {
+            "parent": {"digest": parent[1].digest} if parent else None,
+            "scenarios": [entry.model_dump(mode="json") for entry in entries],
+        },
+    )
     loaded = _check_suite_contents(root, entries, parent=parent)
     _check_rule_coverage(root, profile, loaded)
     _check_simulator_prompt(root)
@@ -2065,16 +2154,6 @@ def compose_bundle(
 # --- command line ----------------------------------------------------------------------------------
 
 
-def _parse_modes(values: Sequence[str]) -> dict[str, str]:
-    modes: dict[str, str] = {}
-    for value in values:
-        tool, separator, mode = value.partition("=")
-        if not separator:
-            raise SystemExit(f"--handler-mode expects tool=mode, got {value!r}")
-        modes[tool] = mode
-    return modes
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m fi.alk.harness.releases")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2083,8 +2162,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     environment.add_argument("root")
     environment.add_argument("--name", required=True)
     environment.add_argument("--extends", dest="parent_root")
-    environment.add_argument("--handler-mode", action="append", default=[])
-    environment.add_argument("--source-digest")
     environment.add_argument("--derived-from")
 
     suite = commands.add_parser("seal-suite")
@@ -2121,9 +2198,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sealed: BaseModel = seal_environment_release(
                 args.root,
                 name=args.name,
-                handler_modes=_parse_modes(args.handler_mode),
                 parent_root=args.parent_root,
-                source_digest=args.source_digest,
                 derived_from=args.derived_from,
             )
             print(json.dumps({"digest": sealed.digest}))  # type: ignore[attr-defined]

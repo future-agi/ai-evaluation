@@ -91,6 +91,22 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Suite sealing refuses a simulator prompt without `{{ persona }}` and
   `{{ instruction }}` slots. The clinic's had neither, so in chat runs the
   simulated patient never saw the scenario's task; it now has both.
+- Environment sealing refuses handler files with no tool, handler modes other
+  than `environment` (`customer_source`/`customer_spec` are reserved), attached
+  tool names an agent cannot be offered, and an extension that changes its
+  parent's `attached/` files. Resealing a sealed directory with a different
+  parent or different scenario origins is refused instead of silently turning
+  an extension into a root or a derived suite into a base one.
+- The PostgreSQL proof also replays every reference call as crashed, as the
+  SQLite proof does, so a check that credits an attempted call without its
+  effect is refused on both engines. An attached tool counts as changing state
+  unless its server declares it read-only; the `sql` server does.
+- The clinic's world no longer declares foreign keys, CHECK constraints or a
+  partial index, which PostgreSQL seeds dropped anyway; its handlers enforce
+  those rules, so both engines grade alike. Its release digests changed.
+- Hosted adaptation keeps the scratch PostgreSQL's superuser DSN in
+  `.authoring-credentials/` beside the workspace, which the model's file tools
+  refuse, instead of in `adaptation/inputs.json`.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
