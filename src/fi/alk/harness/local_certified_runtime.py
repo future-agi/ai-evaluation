@@ -30,7 +30,11 @@ from .hosted_entrypoint import (
 )
 from .hosted_scheduler import HostedScheduler, ResultReceipt, WorldPool
 from .job import HarnessJob
-from .process_runtime import ProcessRuntimeProvider, default_user_resolver
+from .process_runtime import (
+    ProcessRuntimeProvider,
+    default_user_resolver,
+    fixed_sandbox_user_resolver,
+)
 from .scenario_source import load_scenarios
 from .secrets import runtime_configuration_value
 
@@ -141,6 +145,7 @@ async def run_local_certified(
         # Runtime children execute as svc-* users and must traverse this controller-owned parent.
         # Per-process trees are chowned by the provider; the credential handoff stays mode 0600.
         work.chmod(0o755)
+        (work / "job.json").write_text(job.model_dump_json(), encoding="utf-8")
         secrets = work / "secrets.json"
         secrets.write_text(json.dumps(values), encoding="utf-8")
         secrets.chmod(0o600)
@@ -172,7 +177,11 @@ async def run_local_certified(
         provider = ProcessRuntimeProvider(
             secrets_path=secrets,
             secret_purpose_map=purposes,
-            user_resolver=default_user_resolver,
+            user_resolver=(
+                fixed_sandbox_user_resolver
+                if os.environ.get("ALK_FIXED_SANDBOX_USER") == "1"
+                else default_user_resolver
+            ),
             require_declared_user=False,
             generic_artifact_root=authoring / "generic-harness",
         )
@@ -187,9 +196,9 @@ async def run_local_certified(
             instances=job.runtime.parallelism,
             outbound=sink,
         )
-        await pool.start()
         call_runner = None
         try:
+            await pool.start()
             scenarios = load_scenarios(bundle_dir)
             context = CallRunnerContext(
                 job=job,

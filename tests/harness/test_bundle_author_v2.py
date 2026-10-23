@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,7 +15,10 @@ from fi.alk.harness.bundle_author_v2 import (
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
+    _docker_python,
+    _source_schema_artifacts,
     _sqlite_sql,
+    _uv_sync_build_command,
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
@@ -634,6 +639,7 @@ def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manife
             "--no-cache",
             "--python",
             "python3.14",
+            "--no-dev",
         ]
         assert any("download-files" in command for command in agent.build_commands)
     else:
@@ -1464,6 +1470,169 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
     with sqlite3.connect(output / "seed" / "world.sqlite") as copied:
         assert copied.execute("SELECT tags FROM users").fetchone() == ('["priority"]',)
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
+
+
+def test_documented_readme_schema_is_adopted_without_setup_or_fixture_sql(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE DATABASE ticketsdb;
+\\c ticketsdb
+CREATE TABLE tickets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT
+);
+INSERT INTO tickets (title, description) VALUES ('Broken login', 'Fixture');
+```
+
+```sql
+CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].relative_path == "README.md#sql-1"
+    assert "CREATE TABLE tickets" in artifacts[0].sql
+    assert "title TEXT NOT NULL" in artifacts[0].sql
+    assert "CREATE DATABASE" not in artifacts[0].sql
+    assert "INSERT INTO" not in artifacts[0].sql
+    assert "embedding" not in artifacts[0].sql
+
+
+def test_documented_readme_schema_keeps_dependencies_across_sql_fences(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE ride_status AS ENUM ('requested', 'accepted');
+CREATE SEQUENCE ride_number_seq;
+CREATE TABLE rides (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status ride_status NOT NULL,
+    ride_number BIGINT DEFAULT nextval('ride_number_seq')
+);
+```
+
+```postgresql
+CREATE TABLE riders (id UUID PRIMARY KEY);
+ALTER TABLE rides ADD COLUMN rider_id UUID REFERENCES riders(id);
+CREATE INDEX rides_rider_id_idx ON rides (rider_id);
+INSERT INTO riders VALUES (gen_random_uuid());
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-2",
+    ]
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert "CREATE EXTENSION" in sql
+    assert "CREATE TYPE ride_status" in sql
+    assert "CREATE SEQUENCE ride_number_seq" in sql
+    assert "CREATE TABLE rides" in sql
+    assert "CREATE TABLE riders" in sql
+    assert "ALTER TABLE rides" in sql
+    assert "CREATE INDEX rides_rider_id_idx" in sql
+    assert "INSERT INTO" not in sql
+
+
+def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        "FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.10,<3.13'\n",
+        encoding="utf-8",
+    )
+
+    assert _docker_python(tmp_path) == "python3.12"
+
+
+def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'case " $* " in\n'
+        '  *" --locked "*) echo "The lockfile at uv.lock needs to be updated" >&2; exit 2;;\n'
+        "  *) exit 0;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(tmp_path, "python3.12"),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    attempts = calls.read_text(encoding="utf-8").splitlines()
+    assert len(attempts) == 2
+    assert "--locked" in attempts[0]
+    assert "--locked" not in attempts[1]
+    assert "--no-dev" in attempts[0]
+    assert "--no-dev" in attempts[1]
+
+
+def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'echo "Could not connect to package registry" >&2\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(tmp_path, "python3.12"),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 7
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
@@ -2562,6 +2731,422 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
+    tmp_path: Path,
+) -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "gpt_researcher_compose.yml"
+    shutil.copyfile(fixture, tmp_path / "docker-compose.yml")
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12\nCMD uvicorn main:app --port 8000\n"
+    )
+    (tmp_path / "main.py").write_text("print('server')\n")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+        },
+    )
+    assert plan.control_service == "gpt-researcher"
+    assert [process.name for process in plan.processes] == [
+        "world-db",
+        "gpt-researcher",
+    ]
+    agent = plan.processes[1]
+    assert agent.run_command == ["python", "main.py"]
+    assert agent.fixed_port == 8000
+    assert plan.capabilities["target_http"].container_port == 8000
+    assert (
+        next(
+            probe for probe in plan.readiness if probe.capability == "target_http"
+        ).path
+        == "/"
+    )
+
+
+@pytest.mark.parametrize("command", [[], ["python", "agent.py", "start"]])
+def test_voice_runtime_with_http_health_interface_keeps_worker_entrypoint(
+    tmp_path: Path, command: list[str]
+) -> None:
+    (tmp_path / "agent.py").write_text("print('worker')\n")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="livekit"),
+        contract_modality="voice",
+        contract_interface_kind="http",
+        contract_runtime={
+            "workdir": ".",
+            "command": command,
+            "interface": {"kind": "http", "port": 8081},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert "agent.py" in agent.run_command
+    assert agent.started_check.log_marker == "registered worker"
+
+
+def test_http_workspace_requires_native_command_before_selecting_internal_agent(
+    tmp_path: Path,
+) -> None:
+    backend = tmp_path / "backend"
+    harness = backend / "packages" / "harness"
+    extension = backend / "packages" / "extension-api"
+    harness.mkdir(parents=True)
+    extension.mkdir()
+    (backend / "pyproject.toml").write_text(
+        "[project]\nname='gateway'\nversion='1'\n"
+        "[tool.uv.workspace]\nmembers=['packages/harness', 'packages/extension-api']\n"
+    )
+    (backend / "uv.lock").write_text("version = 1\n")
+    (harness / "pyproject.toml").write_text("[project]\nname='harness'\nversion='1'\n")
+    (extension / "pyproject.toml").write_text(
+        "[project]\nname='extension-api'\nversion='1'\n"
+    )
+    (harness / "agent.py").write_text("agent = object()\n")
+    runtime = {
+        "workdir": "backend",
+        "command": [],
+        "interface": {"kind": "http", "port": 8001, "health_path": "/health"},
+    }
+    with pytest.raises(BundleAuthorError, match="runtime_http_command_missing"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime=runtime,
+        )
+
+    runtime["command"] = ["uv", "run", "--no-sync", "uvicorn", "app.gateway.app:app"]
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "backend"
+    assert agent.run_command == runtime["command"]
+    assert "--locked" in agent.build_commands[0][-1]
+    assert (
+        tmp_path / agent.working_directory / "packages/harness/pyproject.toml"
+    ).is_file()
+    assert (
+        tmp_path / agent.working_directory / "packages/extension-api/pyproject.toml"
+    ).is_file()
+
+
+def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: [{target: 8000, published: 8000}]\n"
+        "    depends_on: {cache: {condition: service_started}}\n"
+        "  cache:\n    image: redis:7\n    depends_on: [postgres]\n"
+        "  postgres:\n    image: postgres:16\n"
+        "  unrelated:\n    image: unsupported:latest\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+    assert next(
+        process for process in plan.processes if process.name == "backend"
+    ).depends_on == ["cache"]
+
+
+@pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
+def test_declared_compose_runtime_rejects_ambiguous_or_missing_match(
+    tmp_path: Path, ports: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        f"  first:\n    build: .\n    ports: ['{ports}']\n"
+        f"  second:\n    build: .\n    ports: ['{ports}']\n"
+    )
+    with pytest.raises(BundleAuthorError, match="control_service_ambiguous"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("dependency", "error"),
+    [
+        ("depends_on: [missing]", "compose_dependency_missing"),
+        ("depends_on: worker", "compose_dependency_invalid"),
+        ("depends_on: [{worker: {}}]", "compose_dependency_invalid"),
+        ("links: [worker]", "compose_dependency_unsupported"),
+        ("volumes_from: [worker]", "compose_dependency_unsupported"),
+        ("network_mode: service:worker", "compose_dependency_unsupported"),
+        ("ipc: service:worker", "compose_dependency_unsupported"),
+        ("pid: service:worker", "compose_dependency_unsupported"),
+        (
+            "environment: {CACHE_URL: 'redis://worker:6379'}",
+            "compose_dependency_undeclared",
+        ),
+        ("environment: [CACHE_HOST=worker]", "compose_dependency_undeclared"),
+    ],
+)
+def test_declared_compose_runtime_does_not_drop_dependency_references(
+    tmp_path: Path, dependency: str, error: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        f"    {dependency}\n"
+        "  worker:\n    build: ./worker\n"
+    )
+    with pytest.raises(BundleAuthorError, match=error):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+def test_declared_compose_http_runtime_ignores_udp_port_match(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  tcp:\n    build: .\n    ports: ['8000:8000/tcp']\n"
+        "  udp:\n    build: .\n    ports: [{target: 8000, protocol: udp}]\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert plan.control_service == "tcp"
+    assert [process.name for process in plan.processes] == ["world-db", "tcp"]
+
+
+def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "software_bug_assistant"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='software-bug-assistant'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv",
+        "run",
+        "adk",
+        "web",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+    ]
+    _write_chat_contract(authoring, command=command)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.run_command[:2] == ["sh", "-c"]
+    assert "adk web" in agent.run_command[-1]
+    assert "$PORT" in agent.run_command[-1]
+    assert agent.fixed_port_consumable is True
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
+    assert "ThreadingHTTPServer" not in agent.run_command[-1]
+    assert agent.fixed_port == 8080
+    readiness = next(
+        item for item in manifest.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/docs"
+
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["kind"] == "http"
+    assert interface["protocol"] == "json_template"
+    assert interface["path"] == "/run_sse"
+    assert interface["request_template"]["app_name"] == "software_bug_assistant"
+    assert interface["setup_requests"][0]["path"] == (
+        "/apps/software_bug_assistant/users/{{thread_id}}/sessions"
+    )
+
+
+def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    tools = source / "deployment" / "mcp-toolbox"
+    app.mkdir(parents=True)
+    tools.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (app / "tools.py").write_text(
+        "from toolbox_core import ToolboxSyncClient\n"
+        "tools = ToolboxSyncClient('http://127.0.0.1:5000').load_toolset('tickets')\n",
+        encoding="utf-8",
+    )
+    (tools / "tools.yaml").write_text(
+        "sources:\n"
+        "  db:\n"
+        "    kind: postgres\n"
+        "tools:\n"
+        "  get-ticket:\n"
+        "    kind: postgres-sql\n"
+        "    source: db\n"
+        "    description: Get one ticket.\n"
+        "    parameters:\n"
+        "      - name: ticket_id\n"
+        "        type: string\n"
+        "    statement: SELECT * FROM tickets WHERE ticket_id = $1;\n"
+        "toolsets:\n"
+        "  tickets:\n"
+        "    - get-ticket\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=[
+            "uv",
+            "run",
+            "adk",
+            "web",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+        ],
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE tickets (ticket_id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    adapter = next(
+        process for process in manifest.processes if process.name == "mcp-toolbox"
+    )
+    assert adapter.depends_on == ["world-db"]
+    assert adapter.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "mcp-toolbox" in agent.depends_on
+    assert agent.environment["MCP_TOOLBOX_URL"] == "{{MCP_TOOLBOX_URL}}"
+    assert (output / "generated" / "mcp-toolbox" / "server.py").is_file()
+    definition = json.loads(
+        (output / "generated" / "mcp-toolbox" / "toolbox.json").read_text()
+    )
+    assert definition["tools"]["get-ticket"]["statement"].endswith("$1;")
+
+
+def test_non_server_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["uv", "run", "adk", "run", "app"])
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    assert "ALK_SUBPROCESS_COMMAND" in agent.environment
+
+
+def test_adk_web_command_repairs_incomplete_http_interface(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={"kind": "http", "port": 9090},
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.fixed_port == 9090
+    assert agent.fixed_port_consumable is True
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["path"] == "/run_sse"
+    assert interface["health_path"] == "/docs"
+    assert interface["request_template"]["app_name"] == "bug_agent"
 
 
 @pytest.mark.parametrize(

@@ -20,12 +20,15 @@ import sqlite3
 from contextlib import closing
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import Version
 
 from .bundle import CapabilityProtocol
 from .catalogue import CATALOGUE
@@ -680,6 +683,99 @@ def _schema_like(path: Path) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _SourceSchemaArtifact:
+    """Executable DDL plus its immutable repository evidence location."""
+
+    relative_path: str
+    sql: str
+
+
+_DOCUMENTED_DDL = re.compile(
+    r"^(?:CREATE\s+(?:UNIQUE\s+)?(?:EXTENSION|INDEX|SEQUENCE|TABLE|TYPE)|ALTER\s+TABLE)\b",
+    re.IGNORECASE,
+)
+_CREATED_TABLE = re.compile(
+    r"^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"(?:(?:\"?[A-Za-z_]\w*\"?)\.)?(\"?[A-Za-z_]\w*\"?)\b",
+    re.IGNORECASE,
+)
+
+
+def _documented_ddl_statements(sql: str) -> list[str]:
+    """Extract source schema DDL from a documented SQL block.
+
+    The hosted world owns its database and rows. README setup blocks may define schema objects,
+    but database creation, psql commands, and fixture mutations stay out of the adopted schema.
+    """
+
+    cleaned = "\n".join(
+        line for line in re.sub(r"--[^\n]*", "", sql).splitlines() if not line.lstrip().startswith("\\")
+    )
+    statements: list[str] = []
+    start = 0
+    quote: str | None = None
+    index = 0
+    while index < len(cleaned):
+        char = cleaned[index]
+        if quote is not None:
+            if char == quote:
+                if index + 1 < len(cleaned) and cleaned[index + 1] == quote:
+                    index += 1
+                else:
+                    quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == ";":
+            statement = cleaned[start : index + 1].strip()
+            if _DOCUMENTED_DDL.match(statement):
+                statements.append(statement + "\n")
+            start = index + 1
+        index += 1
+    tail = cleaned[start:].strip()
+    if tail and _DOCUMENTED_DDL.match(tail):
+        statements.append(tail + ";\n")
+    return statements
+
+
+def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
+    """Use the first README's SQL fences without adopting duplicate alternatives.
+
+    This is source-owned executable evidence, not model-authored schema.  Taking the first
+    The first declaration of each table wins. This supports one fence per table without combining
+    alternative local and cloud recipes that redeclare the same table.
+    """
+
+    for readme in sorted(source.glob("README*.md")):
+        text = readme.read_text(encoding="utf-8", errors="replace")
+        artifacts: list[_SourceSchemaArtifact] = []
+        declared_tables: set[str] = set()
+        for number, match in enumerate(
+            re.finditer(r"```(?:sql|postgres(?:ql)?)\s*\n(.*?)```", text, re.I | re.S),
+            start=1,
+        ):
+            statements = _documented_ddl_statements(match.group(1))
+            accepted: list[str] = []
+            for statement in statements:
+                table_match = _CREATED_TABLE.match(statement)
+                if table_match:
+                    table = table_match.group(1).strip('"').lower()
+                    if table in declared_tables:
+                        continue
+                    declared_tables.add(table)
+                accepted.append(statement)
+            if accepted:
+                artifacts.append(
+                    _SourceSchemaArtifact(
+                        relative_path=f"{readme.relative_to(source).as_posix()}#sql-{number}",
+                        sql="\n".join(accepted),
+                    )
+                )
+        if artifacts:
+            return artifacts
+    return []
+
+
 def _compose_source_schema_paths(source: Path) -> list[Path]:
     """Discover repository-owned DDL mounted into a database init directory.
 
@@ -763,6 +859,21 @@ def _source_schema_paths(
     return [unique[key] for key in sorted(unique)]
 
 
+def _source_schema_artifacts(
+    source: Path, *, contract: dict[str, Any] | None = None
+) -> list[_SourceSchemaArtifact]:
+    paths = _source_schema_paths(source, contract=contract)
+    if paths:
+        return [
+            _SourceSchemaArtifact(
+                relative_path=path.relative_to(source.resolve()).as_posix(),
+                sql=path.read_text(encoding="utf-8"),
+            )
+            for path in paths
+        ]
+    return _documented_source_schemas(source)
+
+
 def _adopted_seed_sql(
     authoring: Path,
     *,
@@ -770,16 +881,13 @@ def _adopted_seed_sql(
     contract: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     source_schemas = (
-        _source_schema_paths(source, contract=contract) if source is not None else []
+        _source_schema_artifacts(source, contract=contract)
+        if source is not None
+        else []
     )
     if source_schemas:
-        schema_sql = "\n".join(
-            path.read_text(encoding="utf-8") for path in source_schemas
-        )
-        adopted = [
-            f"source/{path.relative_to(source.resolve()).as_posix()}"
-            for path in source_schemas
-        ]
+        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
+        adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas]
         store = authoring / "store.json"
         if store.is_file():
             return (
@@ -832,7 +940,7 @@ def _generic_postgres_seed_artifacts(
 ) -> tuple[list[str], list[str], list[str]]:
     """Package source schema and semantic rows separately for runtime catalogue inspection."""
 
-    source_schemas = _source_schema_paths(source, contract=contract)
+    source_schemas = _source_schema_artifacts(source, contract=contract)
     canonical_world = authoring / "generic-harness" / "world-ir.json"
     legacy_world = authoring / "world.sqlite"
     data_store = contract.get("data_store")
@@ -871,9 +979,7 @@ def _generic_postgres_seed_artifacts(
     seed = staging / "seed"
     schema_path = seed / "source-schema.sql"
     if source_schemas:
-        schema_sql = "\n".join(
-            path.read_text(encoding="utf-8") for path in source_schemas
-        )
+        schema_sql = "\n".join(artifact.sql for artifact in source_schemas)
     else:
         # A data-free/in-process source has no repository-owned database schema to adopt.
         # During the compatibility window SQLite may carry that harness-owned schema. Canonical
@@ -912,10 +1018,10 @@ def _generic_postgres_seed_artifacts(
             contracts.mkdir(exist_ok=True)
             shutil.copy2(schema, contracts / name)
             adopted_contracts.append(f"generic-harness/{name}")
-    adopted = [
-        f"source/{path.relative_to(source.resolve()).as_posix()}"
-        for path in source_schemas
-    ] + [adopted_world, *adopted_contracts]
+    adopted = [f"source/{artifact.relative_path}" for artifact in source_schemas] + [
+        adopted_world,
+        *adopted_contracts,
+    ]
     return ["seed/source-schema.sql"], [f"seed/{world_path.name}"], adopted
 
 
@@ -936,6 +1042,92 @@ def _load_compose(path: Path) -> dict[str, Any]:
     if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
         raise BundleAuthorError("compose_invalid: services must be an object")
     return body
+
+
+def _runtime_compose_services(
+    root: Path, services: dict[str, Any], workdir: str, port: int
+) -> tuple[str, dict[str, Any]]:
+    """Select a declared HTTP runtime and retain its submitted dependency graph."""
+    component = _runtime_component(root, workdir)
+    matches = []
+    for name, service in services.items():
+        if not isinstance(service, dict) or not service.get("build"):
+            continue
+        build = service["build"]
+        context = build.get("context", ".") if isinstance(build, dict) else build
+        if (root / str(context)).resolve() != component:
+            continue
+        ports = service.get("ports") or []
+        targets = [
+            str(value.get("target", ""))
+            if isinstance(value, dict)
+            else str(value).split("/")[0].rsplit(":", 1)[-1]
+            for value in ports
+            if (
+                value.get("protocol", "tcp") == "tcp"
+                if isinstance(value, dict)
+                else "/" not in str(value) or str(value).endswith("/tcp")
+            )
+        ]
+        if str(port) in targets:
+            matches.append(name)
+    if len(matches) != 1:
+        raise BundleAuthorError(
+            "control_service_ambiguous: declared runtime must match exactly one "
+            f"Compose build context and container port; found {matches}"
+        )
+    control = matches[0]
+    selected: set[str] = set()
+    pending = [control]
+    while pending:
+        name = pending.pop()
+        if name in selected:
+            continue
+        service = services.get(name)
+        if not isinstance(service, dict):
+            raise BundleAuthorError(f"compose_dependency_missing: {name}")
+        unsupported = [
+            key
+            for key in ("links", "volumes_from", "network_mode", "ipc", "pid")
+            if service.get(key)
+            and (
+                key in {"links", "volumes_from"}
+                or str(service[key]).startswith("service:")
+            )
+        ]
+        if unsupported:
+            raise BundleAuthorError(
+                f"compose_dependency_unsupported: {name} uses {', '.join(unsupported)}"
+            )
+        dependencies = service.get("depends_on") or []
+        if not isinstance(dependencies, (list, dict)) or not all(
+            isinstance(dependency, str) for dependency in dependencies
+        ):
+            raise BundleAuthorError(f"compose_dependency_invalid: {name}")
+        selected.add(name)
+        pending.extend(dependencies)
+    omitted = set(services) - selected
+    for name in selected:
+        environment = services[name].get("environment") or {}
+        values = (
+            environment.values()
+            if isinstance(environment, dict)
+            else (str(item).partition("=")[2] for item in environment)
+        )
+        for value in values:
+            value = str(value or "")
+            try:
+                hostname = urlsplit(value if "://" in value else "//" + value).hostname
+            except ValueError:
+                continue
+            if hostname in omitted:
+                raise BundleAuthorError(
+                    f"compose_dependency_undeclared: {name} environment references {hostname}; "
+                    "declare it in depends_on"
+                )
+    return control, {
+        name: service for name, service in services.items() if name in selected
+    }
 
 
 _RUNTIME_ENVIRONMENT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
@@ -1054,9 +1246,7 @@ def _plan_python(
     )
     python = _docker_python(root)
     if (root / "pyproject.toml").is_file():
-        commands = [["uv", "sync", "--no-cache", "--python", python]]
-        if (root / "uv.lock").is_file():
-            commands[0].append("--locked")
+        commands = [_uv_sync_build_command(root, python)]
         if livekit_download:
             commands.append(
                 [
@@ -1091,16 +1281,76 @@ def _plan_python(
     )
 
 
+def _uv_sync_build_command(root: Path, python: str) -> list[str]:
+    """Install runtime dependencies while preserving valid source lockfiles.
+
+    Submitted source is copied into a writable build tree before this runs. A valid lock remains
+    mandatory and reproducible. If uv specifically reports that the repository's own lock is
+    stale relative to ``pyproject.toml``, resolve only the runtime dependencies in that isolated
+    copy; never mutate the submitted checkout and never reinterpret unrelated install failures as
+    a stale lock.
+    """
+
+    base = ["uv", "sync", "--no-cache", "--python", python, "--no-dev"]
+    if not (root / "uv.lock").is_file():
+        return base
+    locked = shlex.join([*base, "--locked"])
+    unlocked = shlex.join(base)
+    script = "\n".join(
+        [
+            "set -u",
+            'log="$(mktemp)"',
+            "set +e",
+            f'{locked} >"$log" 2>&1',
+            "status=$?",
+            "set -e",
+            'cat "$log" >&2',
+            'if [ "$status" -eq 0 ]; then rm -f "$log"; exit 0; fi',
+            'if grep -Fq "needs to be updated" "$log"; then',
+            '  rm -f "$log"',
+            f"  exec {unlocked}",
+            "fi",
+            'rm -f "$log"',
+            'exit "$status"',
+        ]
+    )
+    return ["sh", "-c", script]
+
+
 def _docker_python(root: Path) -> str:
     dockerfile = root / "Dockerfile"
-    if not dockerfile.is_file():
-        return "python3.12"
-    text = dockerfile.read_text(encoding="utf-8", errors="replace")
-    argument = re.search(r"(?mi)^ARG\s+PYTHON_VERSION\s*=\s*([0-9]+\.[0-9]+)\s*$", text)
-    if argument:
-        return f"python{argument.group(1)}"
-    direct = re.search(r"(?mi)^FROM\s+(?:[^/\s]+/)*python:([0-9]+\.[0-9]+)", text)
-    return f"python{direct.group(1)}" if direct else "python3.12"
+    candidate = "3.12"
+    if dockerfile.is_file():
+        text = dockerfile.read_text(encoding="utf-8", errors="replace")
+        argument = re.search(
+            r"(?mi)^ARG\s+PYTHON_VERSION\s*=\s*([0-9]+\.[0-9]+)\s*$", text
+        )
+        direct = re.search(
+            r"(?mi)^FROM\s+(?:[^/\s]+/)*(?:uv:)?python([0-9]+\.[0-9]+)(?:[-:]|$)",
+            text,
+        ) or re.search(r"(?mi)^FROM\s+(?:[^/\s]+/)*python:([0-9]+\.[0-9]+)", text)
+        if argument:
+            candidate = argument.group(1)
+        elif direct:
+            candidate = direct.group(1)
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            body = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            requires = str((body.get("project") or {}).get("requires-python") or "")
+            specifier = SpecifierSet(requires) if requires else None
+        except (OSError, ValueError, InvalidSpecifier, tomllib.TOMLDecodeError):
+            specifier = None
+        if specifier is not None and Version(candidate) not in specifier:
+            compatible = [
+                version
+                for version in ("3.13", "3.12", "3.11")
+                if Version(version) in specifier
+            ]
+            if compatible:
+                candidate = compatible[0]
+    return f"python{candidate}"
 
 
 def _dockerfile_run(root: Path) -> list[str] | None:
@@ -1308,6 +1558,102 @@ def _runtime_component(root: Path, configured_workdir: str) -> Path:
     return component
 
 
+def _is_adk_web_command(command: list[str]) -> bool:
+    """Return whether argv starts Google ADK's source-owned HTTP development server."""
+
+    normalized = [str(item).strip() for item in command]
+    return any(
+        normalized[index : index + 2] == ["adk", "web"]
+        for index in range(max(0, len(normalized) - 1))
+    )
+
+
+def _command_port(command: list[str], *, default: int) -> int:
+    """Read a conventional ``--port`` option without interpreting arbitrary shell text."""
+
+    for index, token in enumerate(command):
+        if token == "--port" and index + 1 < len(command):
+            try:
+                port = int(command[index + 1])
+            except (TypeError, ValueError):
+                return default
+            return port if 1 <= port <= 65535 else default
+        if token.startswith("--port="):
+            try:
+                port = int(token.partition("=")[2])
+            except ValueError:
+                return default
+            return port if 1 <= port <= 65535 else default
+    return default
+
+
+def _adk_app_name(root: Path, configured_workdir: str) -> str | None:
+    """Discover the unique ADK app package exposed by ``adk web``.
+
+    ADK discovers applications as immediate Python packages below its working directory. Keep
+    this source-derived and deterministic: when a checkout contains more than one possible app,
+    authoring must describe the desired HTTP boundary instead of the compiler guessing.
+    """
+
+    configured = configured_workdir.strip()
+    workdir = (
+        (root / configured).resolve()
+        if configured not in {"", ".", "/"}
+        else root.resolve()
+    )
+    if not workdir.is_relative_to(root.resolve()) or not workdir.is_dir():
+        return None
+    candidates = sorted(
+        path.name
+        for path in workdir.iterdir()
+        if path.is_dir()
+        and path.name not in _IGNORED_ARTIFACT_PARTS
+        and (path / "__init__.py").is_file()
+        and (path / "agent.py").is_file()
+    )
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _adk_web_interface(root: Path, runtime: dict[str, Any]) -> dict[str, Any] | None:
+    """Compile ADK's documented web API into the generic JSON HTTP interface."""
+
+    command = [str(item) for item in (runtime.get("command") or [])]
+    if not _is_adk_web_command(command):
+        return None
+    app_name = _adk_app_name(root, str(runtime.get("workdir") or ""))
+    if app_name is None:
+        return None
+    port = _command_port(command, default=8000)
+    return {
+        "kind": "http",
+        "protocol": "json_template",
+        "port": port,
+        "path": "/run_sse",
+        "health_path": "/docs",
+        "include_tools": False,
+        "setup_requests": [
+            {
+                "method": "POST",
+                "path": f"/apps/{app_name}/users/{{{{thread_id}}}}/sessions",
+                "body_template": {},
+                "accepted_statuses": [200],
+                "capture": {"session_id": "id"},
+            }
+        ],
+        "request_template": {
+            "user_id": "{{thread_id}}",
+            "app_name": app_name,
+            "streaming": True,
+            "session_id": "{{session_id}}",
+            "new_message": {
+                "role": "user",
+                "parts": [{"text": "{{new_message_content}}"}],
+            },
+        },
+        "response_path": "content.parts.0.text",
+    }
+
+
 def _submitted_command(process: SourceProcess, command: list[str]) -> list[str]:
     """Run a contract argv inside the dependency environment selected for the source."""
 
@@ -1348,6 +1694,66 @@ def _tool_proxy_process() -> SourceProcess:
         started_check=StartedCheck(port=True, timeout_seconds=180),
         user=ProcessUser.SVC_TOOLS,
         depends_on=["tools-api", "world-db"],
+    )
+
+
+def _mcp_toolbox_definition(root: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Find one source-owned MCP Toolbox SQL configuration.
+
+    ``ToolboxSyncClient`` loads its tools over HTTP at import time. A repository may ship the
+    declarative ``tools.yaml`` without the large Toolbox executable. Preserve that declaration
+    and host it against the harness-owned world database instead of silently starting the agent
+    with an empty tool list.
+    """
+
+    source_mentions_toolbox = any(
+        "ToolboxSyncClient" in path.read_text(encoding="utf-8", errors="ignore")
+        for path in root.rglob("*.py")
+        if not any(
+            part in _IGNORED_ARTIFACT_PARTS for part in path.relative_to(root).parts
+        )
+    )
+    if not source_mentions_toolbox:
+        return None
+    candidates: list[tuple[Path, dict[str, Any]]] = []
+    for path in root.rglob("tools.y*ml"):
+        if any(
+            part in _IGNORED_ARTIFACT_PARTS for part in path.relative_to(root).parts
+        ):
+            continue
+        try:
+            body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(body, dict):
+            continue
+        tools = body.get("tools")
+        toolsets = body.get("toolsets")
+        if not isinstance(tools, dict) or not isinstance(toolsets, dict):
+            continue
+        if not any(
+            isinstance(spec, dict) and str(spec.get("kind") or "").endswith("-sql")
+            for spec in tools.values()
+        ):
+            continue
+        candidates.append((path, body))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _mcp_toolbox_process() -> SourceProcess:
+    return SourceProcess(
+        name="mcp-toolbox",
+        working_directory="generated/mcp-toolbox",
+        source_origin="bundle",
+        run_command=[sys.executable, "server.py"],
+        environment={
+            "PORT": "{{PORT_mcp-toolbox}}",
+            "DATABASE_URL": "{{WORLD_DATABASE_URL}}",
+            "HARNESS_TOOL_TRACE": "{{WORLD_DIR}}/agent-tool-calls.jsonl",
+        },
+        started_check=StartedCheck(port=True, timeout_seconds=180),
+        user=ProcessUser.SVC_TOOLS,
+        depends_on=["world-db"],
     )
 
 
@@ -1577,6 +1983,11 @@ def resolve_environment_plan(
     if compose is not None:
         body = _load_compose(compose)
         services = body["services"]
+        declared_control = None
+        if runtime_command and interface.get("kind") == "http" and interface_port:
+            declared_control, services = _runtime_compose_services(
+                root, services, runtime_workdir, int(interface_port)
+            )
         # Compile the submitted topology.  Supported managed services become snapshot engines;
         # source services remain source processes.  Unknown image-only dependencies are rejected
         # explicitly instead of being silently emulated.
@@ -1617,7 +2028,7 @@ def resolve_environment_plan(
                 )
 
         source_services = [name for name in services if name not in managed_names]
-        control_name = (
+        control_name = declared_control or (
             "agent"
             if "agent" in source_services
             else (
@@ -1690,6 +2101,9 @@ def resolve_environment_plan(
                 or (service_name == control_name and not is_livekit)
                 else None
             )
+            declared_runtime = service_name == declared_control
+            if declared_runtime:
+                port = int(interface_port)
             process = _plan_python(
                 root,
                 name=service_name,
@@ -1701,7 +2115,9 @@ def resolve_environment_plan(
                 environment=environment,
                 depends_on=[item for item in depends if item != "postgres"],
                 livekit_download=is_livekit and service_name == control_name,
-                run_override=_dockerfile_run(service_root),
+                run_override=runtime_command
+                if declared_runtime
+                else _dockerfile_run(service_root),
             )
             if (
                 port
@@ -1788,7 +2204,9 @@ def resolve_environment_plan(
                 )
                 readiness.append(
                     ReadinessProbeV2(
-                        capability=slug, path="/health", timeout_seconds=180
+                        capability=slug,
+                        path=interface_health_path if declared_runtime else "/health",
+                        timeout_seconds=180,
                     )
                 )
         if "tools-api" in source_services:
@@ -1863,6 +2281,18 @@ def resolve_environment_plan(
                     if item.endswith(".py") and (component / item).is_file()
                 ),
                 "agent.py",
+            )
+        elif (
+            not is_callback
+            and not is_livekit
+            and not runtime_command
+            and contract_interface_kind == "http"
+            and runtime_workdir.strip()
+        ):
+            raise BundleAuthorError(
+                "runtime_http_command_missing: set runtime.command to the source-declared "
+                "native HTTP server command and runtime.workdir to its working directory; "
+                "an internal agent.py is not evidence of an HTTP server"
             )
         elif not is_callback and not (root / entry).is_file():
             # A submitted checkout may contain a developer's virtualenv or dependency tree.
@@ -1975,6 +2405,12 @@ def resolve_environment_plan(
                     "started_check": StartedCheck(port=True, timeout_seconds=180),
                 }
             )
+        if is_http_runtime and _is_adk_web_command(runtime_command):
+            # ADK exposes a normal ``--port`` seam. Wire it to the world's allocated port so a
+            # multi-world chat run does not collapse to serial execution or collide on 8080.
+            process = _consumable_source_process(
+                process, "PORT", f"{{{{PORT_{control_name}}}}}"
+            )
         if is_livekit:
             update: dict[str, Any] = {
                 "started_check": StartedCheck(
@@ -2013,6 +2449,38 @@ def resolve_environment_plan(
             )
         packaging = (
             "dockerfile" if (root / "Dockerfile").is_file() else "generated_python"
+        )
+
+    toolbox = _mcp_toolbox_definition(root)
+    if toolbox is not None and control_name:
+        processes.append(_mcp_toolbox_process())
+        rewritten: list[ManagedProcess | SourceProcess] = []
+        for candidate in processes:
+            if isinstance(candidate, SourceProcess) and candidate.name == control_name:
+                dependencies = [*candidate.depends_on]
+                if "mcp-toolbox" not in dependencies:
+                    dependencies.append("mcp-toolbox")
+                candidate = candidate.model_copy(
+                    update={
+                        "depends_on": dependencies,
+                        "environment": {
+                            **candidate.environment,
+                            "MCP_TOOLBOX_URL": "{{MCP_TOOLBOX_URL}}",
+                        },
+                    }
+                )
+            rewritten.append(candidate)
+        processes = rewritten
+        capabilities["mcp_toolbox"] = CapabilityV2(
+            protocol=CapabilityProtocol.HTTP,
+            service="mcp-toolbox",
+            container_port=5000,
+            configuration_name="MCP_TOOLBOX_URL",
+        )
+        readiness.append(
+            ReadinessProbeV2(
+                capability="mcp_toolbox", path="/health", timeout_seconds=180
+            )
         )
 
     return EnvironmentPlanV2(
@@ -2210,6 +2678,19 @@ def author_bundle_v2(
         interface = runtime.get("interface") if isinstance(runtime, dict) else None
         if isinstance(interface, dict):
             contract_interface_kind = str(interface.get("kind") or "").strip().lower()
+            adk_interface = _adk_web_interface(source_root, runtime)
+            if (
+                contract_modality == "chat"
+                and adk_interface is not None
+                and contract_interface_kind in {"", "http"}
+                and not str(interface.get("path") or "").strip()
+            ):
+                # Repair an incomplete model-authored HTTP declaration from deterministic source
+                # evidence. A complete source interface always wins and is never overwritten.
+                runtime = dict(runtime)
+                runtime["interface"] = adk_interface
+                contract_body = {**contract_body, "runtime": runtime}
+                contract_interface_kind = "http"
         elif (
             contract_modality == "chat"
             and _discover_callback_entrypoint(source_root) is not None
@@ -2249,20 +2730,28 @@ def author_bundle_v2(
             and not isinstance(interface, dict)
             and runtime.get("command")
         ):
-            # A runnable one-shot command is a real source-owned execution boundary even when it
-            # is not a server. Compile the generic stdin/environment subprocess bridge below and
-            # expose that bridge to the chat runner as the standard callable protocol.
             runtime = dict(runtime)
-            runtime["interface"] = {
-                "kind": "command",
-                "protocol": "fi.alk",
-                "path": "",
-                "health_path": "",
-                "include_tools": False,
-            }
+            adk_interface = _adk_web_interface(source_root, runtime)
+            if adk_interface is not None:
+                # ``adk web`` is a persistent source-owned HTTP server, not a one-shot command.
+                # Launch it directly and describe its existing API rather than nesting it inside
+                # the subprocess bridge (which would make both processes bind the same port).
+                runtime["interface"] = adk_interface
+                contract_interface_kind = "http"
+            else:
+                # A runnable one-shot command is a real source-owned execution boundary even when
+                # it is not a server. Compile the generic stdin/environment subprocess bridge
+                # below and expose that bridge to the chat runner as the callable protocol.
+                runtime["interface"] = {
+                    "kind": "command",
+                    "protocol": "fi.alk",
+                    "path": "",
+                    "health_path": "",
+                    "include_tools": False,
+                }
+                contract_interface_kind = "command"
+                command_adapter_contract = True
             contract_body = {**contract_body, "runtime": runtime}
-            contract_interface_kind = "command"
-            command_adapter_contract = True
         if (
             contract_modality == "chat"
             and contract_interface_kind == "callable"
@@ -2390,6 +2879,21 @@ def author_bundle_v2(
             shutil.copy2(
                 Path(__file__).with_name("tool_trace_proxy.py"),
                 generated / "proxy.py",
+            )
+        if any(process.name == "mcp-toolbox" for process in plan.processes):
+            toolbox = _mcp_toolbox_definition(source_root)
+            if toolbox is None:
+                raise BundleAuthorError("mcp_toolbox_definition_missing")
+            _, definition = toolbox
+            generated = temporary / "generated" / "mcp-toolbox"
+            generated.mkdir(parents=True)
+            shutil.copy2(
+                Path(__file__).with_name("mcp_toolbox_adapter.py"),
+                generated / "server.py",
+            )
+            (generated / "toolbox.json").write_text(
+                json.dumps(definition, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
             )
         seed_dir = temporary / "seed"
         seed_dir.mkdir()

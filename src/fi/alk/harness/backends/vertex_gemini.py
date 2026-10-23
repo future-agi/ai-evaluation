@@ -23,6 +23,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import date
 from typing import Any
 
@@ -593,7 +594,6 @@ class VertexGeminiSession:
 
     async def replies(self) -> AsyncIterator[Any]:
         from google.adk.agents.run_config import RunConfig, StreamingMode
-
         # google.adk.sessions does not re-export it in the locked ADK (2.7.1).
         from google.adk.sessions.base_session_service import GetSessionConfig
         from google.genai import types
@@ -650,78 +650,81 @@ class VertexGeminiSession:
             ),
         )
         try:
-            async for event in self._runner.run_async(
-                user_id=self._user_id,
-                session_id=self.session_id,
-                new_message=message,
-                invocation_id=resume_invocation_id,
-                run_config=run_config,
-            ):
-                usage = getattr(event, "usage_metadata", None)
-                if usage is not None:
-                    tokens_in += usage.prompt_token_count or 0
-                    tokens_out += usage.candidates_token_count or 0
-                    tokens_cached += (
-                        getattr(usage, "cached_content_token_count", 0) or 0
-                    )
-                parts: list[Any] = []
-                returned: list[ToolReturned] = []
-                for part in (event.content.parts if event.content else []) or []:
-                    if getattr(part, "text", None):
-                        parts.append(
-                            Say(
-                                text=part.text,
-                                partial=bool(getattr(event, "partial", False)),
-                                event_id=str(getattr(event, "id", "") or ""),
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
-                                author=str(getattr(event, "author", "") or ""),
+            async with aclosing(
+                self._runner.run_async(
+                    user_id=self._user_id,
+                    session_id=self.session_id,
+                    new_message=message,
+                    invocation_id=resume_invocation_id,
+                    run_config=run_config,
+                )
+            ) as events:
+                async for event in events:
+                    usage = getattr(event, "usage_metadata", None)
+                    if usage is not None:
+                        tokens_in += usage.prompt_token_count or 0
+                        tokens_out += usage.candidates_token_count or 0
+                        tokens_cached += (
+                            getattr(usage, "cached_content_token_count", 0) or 0
+                        )
+                    parts: list[Any] = []
+                    returned: list[ToolReturned] = []
+                    for part in (event.content.parts if event.content else []) or []:
+                        if getattr(part, "text", None):
+                            parts.append(
+                                Say(
+                                    text=part.text,
+                                    partial=bool(getattr(event, "partial", False)),
+                                    event_id=str(getattr(event, "id", "") or ""),
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                    author=str(getattr(event, "author", "") or ""),
+                                )
                             )
-                        )
-                    if getattr(part, "function_call", None):
-                        parts.append(
-                            Call(
-                                id=getattr(part.function_call, "id", None)
-                                or f"call-{uuid.uuid4().hex[:8]}",
-                                name=part.function_call.name or "",
-                                arguments=dict(part.function_call.args or {}),
-                                by=getattr(event, "author", "") or "",
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
+                        if getattr(part, "function_call", None):
+                            parts.append(
+                                Call(
+                                    id=getattr(part.function_call, "id", None)
+                                    or f"call-{uuid.uuid4().hex[:8]}",
+                                    name=part.function_call.name or "",
+                                    arguments=dict(part.function_call.args or {}),
+                                    by=getattr(event, "author", "") or "",
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                )
                             )
-                        )
-                    if getattr(part, "function_response", None):
-                        response = part.function_response.response
-                        response_name = part.function_response.name or ""
-                        terminal_save_succeeded = terminal_save_succeeded or (
-                            _successful_terminal_save(response_name, response)
-                        )
-                        returned.append(
-                            ToolReturned(
-                                id=getattr(part.function_response, "id", None) or "",
-                                text=_flattened(response),
-                                is_error=bool(
-                                    isinstance(response, dict)
-                                    and response.get("is_error")
-                                ),
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
+                        if getattr(part, "function_response", None):
+                            response = part.function_response.response
+                            response_name = part.function_response.name or ""
+                            terminal_save_succeeded = terminal_save_succeeded or (
+                                _successful_terminal_save(response_name, response)
                             )
-                        )
-                if parts:
-                    if not getattr(event, "partial", False):
-                        turns += 1
-                    yield ModelReply(parts=parts, model=self._model)
-                for outcome in returned:
-                    yield outcome
-                if terminal_save_succeeded:
-                    settled = True
-                    break
-                if event.is_final_response():
-                    settled = True
+                            returned.append(
+                                ToolReturned(
+                                    id=getattr(part.function_response, "id", None) or "",
+                                    text=_flattened(response),
+                                    is_error=bool(
+                                        isinstance(response, dict)
+                                        and response.get("is_error")
+                                    ),
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                )
+                            )
+                    if parts:
+                        if not getattr(event, "partial", False):
+                            turns += 1
+                        yield ModelReply(parts=parts, model=self._model)
+                    for outcome in returned:
+                        yield outcome
+                    if terminal_save_succeeded:
+                        settled = True
+                        break
+                    if event.is_final_response():
+                        settled = True
         except Exception as exc:
             yield StageDone(
                 outcome="failed",

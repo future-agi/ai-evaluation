@@ -275,6 +275,38 @@ def _dotted_name(node: ast.AST) -> str:
     return ""
 
 
+def _python_environment_reads(content: str) -> list[tuple[str, bool]]:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # A newer Python syntax must not hide strict reads from an older scanner.
+        return [(match.group(1), False) for match in _PYTHON_REQUIRED.finditer(content)]
+    nodes = list(ast.walk(tree))
+    augmented_targets = {node.target for node in nodes if isinstance(node, ast.AugAssign)}
+    nullable_reads = {
+        (node.lineno, node.args[0].value)
+        for node in nodes
+        if isinstance(node, ast.Call)
+        and _dotted_name(node.func) in {"os.getenv", "os.environ.get"}
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    found = []
+    for node in nodes:
+        if (
+            isinstance(node, ast.Subscript)
+            and (isinstance(node.ctx, ast.Load) or node in augmented_targets)
+            and _dotted_name(node.value) == "os.environ"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+            and re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", node.slice.value)
+        ):
+            name = node.slice.value
+            found.append((name, (node.lineno, name) in nullable_reads))
+    return found
+
+
 def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
     """Discover credentials consumed internally by constructors in submitted Python.
 
@@ -482,21 +514,10 @@ def discover_credentials(
                     required=required,
                     declared_default=bool(fallback) and operator not in {"?", ":?"},
                 )
-        for match in _PYTHON_REQUIRED.finditer(content):
-            # ``os.environ[NAME] if os.environ.get(NAME) else default`` is a common guarded
-            # access idiom. The indexed read alone looks mandatory, but the same-line guard
-            # proves the application has a fallback and should not block job submission.
-            line_start = content.rfind("\n", 0, match.start()) + 1
-            line_end = content.find("\n", match.end())
-            line = content[line_start : line_end if line_end >= 0 else len(content)]
-            name = match.group(1)
-            guarded = bool(
-                re.search(
-                    rf"(?:os\.getenv|os\.environ\.get)\s*\(\s*['\"]{re.escape(name)}['\"]",
-                    line,
-                )
-            )
-            record(name, required=not guarded, declared_default=guarded)
+        if path.suffix.lower() == ".py":
+            for name, guarded in _python_environment_reads(content):
+                # Preserve nullable same-line reads such as ``env[NAME] if env.get(NAME) else default``.
+                record(name, required=not guarded, declared_default=guarded)
         for match in _PYTHON_GETENV.finditer(content):
             default = (match.group(2) or "").strip()
             record(
