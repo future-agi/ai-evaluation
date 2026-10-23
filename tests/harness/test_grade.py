@@ -380,8 +380,8 @@ def test_a_proof_says_which_steps_it_could_not_run():
     assert proof.assumed == ["book_ride", "verify_otp"]
 
 
-def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
-    """The judged-only path is for a target we cannot see into, not a way around writing a check."""
+def test_a_world_with_state_keeps_a_scenario_whose_sub_goals_are_judged(tmp_path):
+    """A scenario whose sub-goals are all judged is kept once ready."""
     from fi.alk.harness.catalogue import Catalogue, SubGoal
     from fi.alk.harness.prove import prove
 
@@ -407,9 +407,8 @@ def test_a_world_with_state_still_demands_a_check_in_code(tmp_path):
         name="asks_politely", instruction="Ask for it.", sub_goals=["polite"]
     )
     proof = prove(one, judged_only, tmp_path)
-    assert proof.holds is False
-    assert "settle what happened by reading it" in proof.broken[0]
-    assert proof.judged_only is False
+    assert proof.holds is True
+    assert proof.judged_only is True
 
 
 def test_a_sealed_world_says_which_commit_its_tools_came_from(tmp_path, monkeypatch):
@@ -440,7 +439,7 @@ def test_a_sealed_world_says_which_commit_its_tools_came_from(tmp_path, monkeypa
     assert source_provenance("") == {}
 
 
-def test_a_judged_reason_that_describes_a_check_is_refused():
+def test_a_judged_reason_needs_its_labelled_criteria():
     from fi.alk.harness.catalogue import SubGoal, validate_sub_goal
 
     describing_a_check = SubGoal(
@@ -452,7 +451,7 @@ def test_a_judged_reason_that_describes_a_check_is_refused():
         ),
     )
     said = validate_sub_goal(describing_a_check)
-    assert said and "tool call" in said[0]
+    assert said and "labelled lines" in said[0]
 
     about_words = SubGoal(
         name="refusal_explained",
@@ -557,3 +556,13 @@ def test_world_snapshot_accepts_scalar_source_owned_state(tmp_path):
 
     tables = json.loads((tmp_path / MANIFEST).read_text())["tables"]
     assert tables == {"attempts": 1, "enabled": 1, "note": 5}
+
+
+def test_a_scenario_with_one_sub_goal_is_kept():
+    """A rule that tells the agent to act at once leaves one thing to check, so one sub-goal is enough."""
+    from fi.alk.harness.catalogue import Catalogue, SubGoal
+    from fi.alk.harness.scenario import validate_scenario
+
+    catalogue = Catalogue(sub_goals=[SubGoal(name="change_made_as_asked", what="the change", judged="j")])
+    one = Scenario(name="makes_a_change", instruction="Ask for a change.", sub_goals=["change_made_as_asked"])
+    assert not any("sub-goal" in line for line in validate_scenario(one, catalogue, {}))

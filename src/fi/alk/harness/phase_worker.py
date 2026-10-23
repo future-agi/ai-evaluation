@@ -54,6 +54,8 @@ async def main() -> None:
         args = [handle]
         if "calls" in payload:
             args.append(tuple(Call(**call) for call in payload["calls"]))
+        if "reference" in payload:
+            args.append(payload["reference"])
         value = namespace[payload["entry"]](*args)
         if inspect.isawaitable(value):
             value = await value

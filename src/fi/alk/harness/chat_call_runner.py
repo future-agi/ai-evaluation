@@ -309,6 +309,7 @@ class _HostedChatTarget:
         self._scenario_key = scenario_key
         self._scenario_id = scenario_id
         self._messages: list[dict[str, Any]] = []
+        self._tool_call_ids: set[str] = set()
         self._turn = 0
 
     async def open(self) -> None:
@@ -344,7 +345,11 @@ class _HostedChatTarget:
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
             )
-            returned = list(response.tool_calls or [])
+            returned = [
+                call
+                for call in (response.tool_calls or [])
+                if not call.get("id") or str(call["id"]) not in self._tool_call_ids
+            ]
             if not returned:
                 answer = response.content.strip()
                 if conversation_ended:
@@ -370,6 +375,8 @@ class _HostedChatTarget:
             for index, call in enumerate(returned, start=1):
                 name, arguments, call_id = _tool_call(call, index)
                 returned_ids.add(call_id)
+                if call.get("id"):
+                    self._tool_call_ids.add(call_id)
                 provided = response_by_id.get(call_id)
                 if provided is not None:
                     _record_completed_tool_call(
