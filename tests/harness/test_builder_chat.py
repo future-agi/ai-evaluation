@@ -270,9 +270,7 @@ def test_world_change_is_all_or_nothing_and_reports_counts(tmp_path):
     assert "a: 2, b: 1" in world_change(tmp_path, "UPDATE b SET id = '2'")
 
 
-def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(
-    tmp_path, monkeypatch
-):
+def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tmp_path, monkeypatch):
     from fi.alk.harness.backends import ToolSpec
     from fi.alk.harness.hosted_chat_entrypoint import _CONFIRM
 
@@ -288,9 +286,7 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(
             }
         )
     )
-    (tmp_path / "sub_goals.json").write_text(
-        json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]})
-    )
+    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
     calls, asked, answers = [], [], []
 
     async def handler(args):
@@ -306,23 +302,10 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(
     drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
     goal = runtime._confirmed(ToolSpec("add_sub_goal", "", {}, handler))
 
-    surface = {
-        "name": "one",
-        "instruction": "ask for a refund",
-        "persona": {"name": "Ana", "accent": "Indian"},
-    }
-    meaning = {
-        "name": "one",
-        "instruction": "ask for a cancellation",
-        "persona": {"name": "Ana"},
-    }
+    surface = {"name": "one", "instruction": "ask for a refund", "persona": {"name": "Ana", "accent": "Indian"}}
+    meaning = {"name": "one", "instruction": "ask for a cancellation", "persona": {"name": "Ana"}}
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
-    assert (
-        asyncio.run(submit.handler({"name": "two", "instruction": "anything"})).get(
-            "is_error"
-        )
-        is None
-    )
+    assert asyncio.run(submit.handler({"name": "two", "instruction": "anything"})).get("is_error") is None
     assert asyncio.run(goal.handler({"name": "new-goal"})).get("is_error") is None
     assert (
         asyncio.run(
