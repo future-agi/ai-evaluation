@@ -107,6 +107,20 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Hosted adaptation keeps the scratch PostgreSQL's superuser DSN in
   `.authoring-credentials/` beside the workspace, which the model's file tools
   refuse, instead of in `adaptation/inputs.json`.
+- Suite proofs gain a fourth gate on both engines: the untouched world is graded
+  against the solution's calls with every successful state-changing call still
+  `ok` but without its result (`mutates_state` in `tools.json`). A check that
+  holds credits the call rather than its effect, and the scenario is refused.
+  The clinic's suite passes unchanged.
+- Design workspace (`fi.alk.harness.design`), the first part of the environment
+  builder: `open_design` unpacks a root template (environment and suite) into a
+  flat workspace, `release_view` materializes the release roots through an
+  allow-list, and `seal_design` derives the policy rows, re-saves the world as an
+  environment's, refuses schema PostgreSQL seeds would drop or rewrite (foreign
+  keys, CHECK, partial and plain indexes, views, triggers, generated columns,
+  expression defaults, other types; a template's are listed as inherited), and
+  refuses check files that differ from the catalogue, before sealing both
+  releases on PostgreSQL.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

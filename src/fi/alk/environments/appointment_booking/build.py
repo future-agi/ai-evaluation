@@ -26,9 +26,9 @@ from fi.alk.harness.releases import (
     WORLD,
     WORLD_IMPLEMENTATION,
     ReleaseError,
-    load_tools,
     seal_environment_release,
     seal_suite_release,
+    world_tool_specs,
 )
 from fi.alk.harness.world.runtime import GeneratedWorld
 from fi.alk.harness.world.snapshot import save
@@ -37,7 +37,6 @@ from . import suite
 
 NAME = "appointment_booking"
 HERE = Path(__file__).parent
-_WORLD_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
 
 SIMULATOR_PROMPT = """You are a patient contacting Riverside Family Clinic by chat. The clinic has
 primary care (Dr. Alicia Nguyen, Dr. Rohan Patel), pediatrics (Dr. Hannah Lee) and dermatology
@@ -52,27 +51,6 @@ What you are here to do:
 Use only the facts your task gives you; if you are asked for something it does not say, say you
 don't know.
 """
-
-
-def _world_tool_specs(root: Path) -> list[dict]:
-    """The world's own description of each tool, derived from the canonical definitions."""
-    specs = []
-    for tool in load_tools(root):
-        properties = tool.parameters.get("properties") or {}
-        specs.append(
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": {
-                    argument: {
-                        "type": _WORLD_TYPES.get(str(schema.get("type")), "str"),
-                        "values": schema.get("enum"),
-                    }
-                    for argument, schema in properties.items()
-                },
-            }
-        )
-    return specs
 
 
 def build_environment(destination: Path) -> str:
@@ -90,7 +68,7 @@ def build_environment(destination: Path) -> str:
         path.stem: path.read_text(encoding="utf-8")
         for path in sorted((HERE / "handlers").glob("*.py"))
     }
-    world.tools = _world_tool_specs(destination)
+    world.tools = world_tool_specs(destination)
     save(
         world,
         destination / WORLD,
