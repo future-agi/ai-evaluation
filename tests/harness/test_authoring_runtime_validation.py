@@ -1017,15 +1017,119 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
         runtime={"isolation": "dedicated_vm"},
     )
 
-    from fi.alk.harness import authoring_runtime_validation
-
-    asked = []
-    monkeypatch.setattr(authoring_runtime_validation, "_database_lanes", lambda: asked.append(1) or 3)
     assert (
         asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 4
     )
     assert calls == ["provision", "reset", "close"]
-    assert asked
+
+
+def test_database_clone_checks_use_the_lane_count(tmp_path, monkeypatch):
+    from fi.alk.harness import (
+        action_certification,
+        authoring_runtime_validation,
+        bundle_author_v2,
+        certification,
+        contract,
+        hosted_entrypoint,
+        outbound,
+        process_preflight,
+        process_runtime,
+        scenario_source,
+        source_data_invariants,
+        tool_certification,
+    )
+
+    original = tmp_path / "execution-secrets.json"
+    original.write_text("{}")
+    authoring = tmp_path / "authoring"
+    (authoring / "generic-harness").mkdir(parents=True)
+    (authoring / "contract.json").write_text("{}")
+    clones = []
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def provision(self, *args, work_directory, **kwargs):
+            (work_directory / "artifacts").mkdir()
+            (work_directory / "artifacts" / "build.json").write_text("{}")
+            return [SimpleNamespace(endpoints={})]
+
+        async def clone_world_database(self, runtime, name):
+            clones.append(name)
+            return runtime
+
+        async def reset(self, *args, **kwargs):
+            pass
+
+        async def close(self, **kwargs):
+            pass
+
+    class World:
+        def read_only(self):
+            return self
+
+    class Factory:
+        def __init__(self, work):
+            pass
+
+        async def create(self, *args, **kwargs):
+            return World()
+
+    class Store:
+        RUNTIME_EVIDENCE = CERTIFICATION = "unused"
+
+        def __init__(self, root):
+            pass
+
+        def read_source_model(self):
+            return SimpleNamespace(actions=[])
+
+        def write_action_certification(self, report):
+            pass
+
+    async def no_invariants(*args, **kwargs):
+        return []
+
+    for module, name, value in (
+        (authoring_runtime_validation, "_database_lanes", lambda: 3),
+        (authoring_runtime_validation, "_world_isolation_status", lambda output: None),
+        (authoring_runtime_validation, "_world_state_digest", lambda world: "baseline"),
+        (authoring_runtime_validation, "_GeneratedWorldActionAdapter", lambda world: None),
+        (authoring_runtime_validation, "_setup_check_keys", lambda *args: [str(i) for i in range(10)]),
+        (authoring_runtime_validation, "_write_runtime_evidence", lambda **kwargs: None),
+        (authoring_runtime_validation, "_freeze_certified_bundle", lambda *args: None),
+        (process_runtime, "ProcessRuntimeProvider", Provider),
+        (hosted_entrypoint, "ProcessWorldFactory", Factory),
+        (certification, "GenericHarnessArtifactStore", Store),
+        (contract, "AgentContract", SimpleNamespace(model_validate_json=lambda text: None)),
+        (tool_certification, "certify_tool_inventory", lambda *args, **kwargs: SimpleNamespace(tools=[])),
+        (action_certification, "certify_actions", lambda *args, **kwargs: SimpleNamespace(actions=[])),
+        (bundle_author_v2, "author_bundle_v2", lambda **kwargs: object()),
+        (process_preflight, "preflight_bundle", lambda *args, **kwargs: None),
+        (outbound, "load_capabilities", lambda *, unlink: SimpleNamespace(attempt_id="test", expires_at=None)),
+        (source_data_invariants, "author_invariants", no_invariants),
+        (source_data_invariants, "check_invariants", no_invariants),
+        (
+            scenario_source,
+            "load_scenarios",
+            lambda bundle: [
+                SimpleNamespace(scenario_key=str(i), setup=lambda world: None, ready=lambda world: True)
+                for i in range(10)
+            ],
+        ),
+    ):
+        monkeypatch.setattr(module, name, value)
+    job = SimpleNamespace(
+        agent=SimpleNamespace(secret_refs={}),
+        scenario_count=10,
+        seed=0,
+        runtime=SimpleNamespace(cpu_units=4, memory_mb=8192),
+        metadata={"generic_harness_v1": True},
+    )
+
+    assert asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 10
+    assert sorted(set(clones)) == ["lane0", "lane1", "lane2"]
 
 
 def test_local_runtime_validation_does_not_require_hosted_capabilities(
