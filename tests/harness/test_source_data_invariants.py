@@ -72,11 +72,13 @@ def test_data_free_review_is_explicit_and_bound_to_source_and_contract(tmp_path)
         json.dumps({"agent": "starter", "tools": [], "real_use_cases": ["Chat"]})
     )
     from fi.alk.harness.world.handle import ReadOnlyWorld
+    from fi.alk.harness.world.observation import ObservationWorld
 
     world = ReadOnlyWorld(
         SimpleNamespace(
             world_index=0,
             rng=None,
+            _http_client=ObservationWorld(0, None),
             state=lambda table=None: {
                 "harness_seed_sentinel": [{"id": "ready"}],
                 "_alk_tool_trace": [],

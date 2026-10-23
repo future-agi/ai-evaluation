@@ -128,6 +128,40 @@ def test_runtime_patch_rejects_model_authored_shell_commands(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["bun", "x", "tsx", "app.ts"],
+        ["npm", "exec", "tsx", "--", "app.ts"],
+        ["npx", "tsx", "app.ts"],
+        ["pnpm", "dlx", "tsx", "app.ts"],
+        ["pnpm", "exec", "tsx", "app.ts"],
+        ["yarn", "dlx", "tsx", "app.ts"],
+    ],
+)
+def test_runtime_patch_rejects_registry_package_execution(tmp_path, command) -> None:
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "package.json").write_text('{"scripts":{"start":"node app.js"}}')
+    (service / "app.ts").write_text("console.log('agent')")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="javascript"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="javascript", workdir="service", command=command),
+        evidence_paths=("service/package.json", "service/app.ts"),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the TypeScript service.",
+    )
+
+    with pytest.raises(ValueError, match="registry_package_execution_forbidden"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
 def test_compose_repair_path_is_relative_to_repository_not_workdir(tmp_path):
     (tmp_path / "service").mkdir()
     (tmp_path / "deployment").mkdir()
@@ -410,3 +444,59 @@ def test_compose_repair_uses_same_native_selection_policy(
                 tmp_path, contract, patch,
                 allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
             )
+
+
+@pytest.mark.parametrize("entry", ["server.ts", "server.tsx"])
+def test_bun_repair_validates_child_workdir_entrypoint(tmp_path, entry):
+    source = tmp_path / "source"
+    child = source / "packages" / "chat"
+    child.mkdir(parents=True)
+    (source / "package.json").write_text('{"name":"chat"}')
+    (child / entry).write_text("export const ready = true")
+    contract = AgentContract(agent="chat", runtime=Runtime(language="bun"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(
+            language="bun", command=["bun", "run", "--cwd", "packages/chat", entry]
+        ),
+        evidence_paths=("package.json",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the native TypeScript source.",
+    )
+    validate_runtime_plan_patch(
+        source,
+        contract,
+        patch,
+        allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+    )
+    (child / entry).unlink()
+    with pytest.raises(ValueError, match="entrypoint_missing"):
+        validate_runtime_plan_patch(
+            source,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [["--cwd", "../escape", "app.ts"], ["--cwd=../escape", "app.ts"], ["--cwd"]],
+)
+def test_bun_repair_rejects_unsafe_child_workdir(tmp_path, arguments):
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    contract = AgentContract(agent="chat", runtime=Runtime(language="bun"))
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract),
+        runtime=Runtime(language="bun", command=["bun", "run", *arguments]),
+        evidence_paths=("package.json",),
+        diagnostic_codes=("generated_runtime_plan_invalid",),
+        summary="Run the native TypeScript source.",
+    )
+    with pytest.raises(ValueError, match="workdir"):
+        validate_runtime_plan_patch(
+            tmp_path,
+            contract,
+            patch,
+            allowed_diagnostic_codes={"generated_runtime_plan_invalid"},
+        )

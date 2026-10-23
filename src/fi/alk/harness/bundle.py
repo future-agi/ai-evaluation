@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 BUNDLE_SCHEMA_VERSION = "futureagi.environment-bundle.v1"
 BUNDLE_MANIFEST = "manifest.json"
@@ -182,23 +182,20 @@ def _iter_files(root: Path) -> list[Path]:
     return files
 
 
-def _inspect_file(root: Path, path: Path) -> BundleFile:
+def _inspect_file(root: Path, path: Path, *, admissions=(), fixture=None) -> BundleFile:
     relative = path.relative_to(root).as_posix()
     _safe_relative(relative)
-    if path.name in _SECRET_FILES or (
+    if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
         path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
         and not is_public_pem(path)
+        and not (path.suffix.lower() == ".key" and fixture is not None)
     ):
         raise BundleError(f"bundle_secret_file_forbidden: {relative}")
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            size += len(chunk)
-            digest.update(chunk)
-            if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                raise BundleError(f"bundle_secret_material_detected: {relative}")
-    return BundleFile(path=relative, sha256=digest.hexdigest(), size=size)
+    try:
+        digest, size = inspect_public_file(path, admissions, fixture=fixture)
+    except ValueError as exc:
+        raise BundleError(f"bundle_secret_material_detected: {relative}: {exc}") from exc
+    return BundleFile(path=relative, sha256=digest, size=size)
 
 
 def _bundle_digest(manifest: dict[str, Any], files: list[BundleFile]) -> str:
@@ -403,7 +400,7 @@ def export_session_bundle(
             if any(part in _COPY_IGNORED for part in relative.parts):
                 continue
             if (
-                path.name in _SECRET_FILES
+                (path.name in _SECRET_FILES and not is_public_npm_config(path))
                 or path.name.startswith(".env.")
                 and path.name != ".env.example"
             ):

@@ -12,7 +12,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg git gnupg iptables libcap2-bin \
+      build-essential ca-certificates curl ffmpeg git gnupg iptables libcap2-bin \
       postgresql-16 procps python3-pip python3.12 python3.12-venv \
       redis-server slirp4netns socat uidmap xz-utils \
     && rm -rf /var/lib/apt/lists/*

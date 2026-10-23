@@ -113,7 +113,7 @@ def test_snapshot_catalog_matches_engine_contract():
         "python": ["3.11", "3.12", "3.13"],
         "node": ["20", "22"],
     }
-    assert catalog["binaries"] == ["git", "ffmpeg"]
+    assert catalog["binaries"] == ["git", "ffmpeg", "make", "gcc", "g++"]
     assert {engine: data["version"] for engine, data in catalog["engines"].items()} == {
         "postgres": "16",
         "redis": "7",

@@ -79,7 +79,9 @@ def select_runtime(
 
         try:
             body = merge_compose(
-                root, [compose, *(root / name for name in runtime.compose_overrides)]
+                root,
+                [compose, *(root / name for name in runtime.compose_overrides)],
+                public_environment=public_environment,
             )
         except ValueError as exc:
             raise RuntimeSelectionError(str(exc)) from None
@@ -119,6 +121,7 @@ def select_runtime(
         name: {
             key: _interpolate_structure(value, public_environment or {})
             if key in {"build", "image", "ports", "depends_on", "deploy", "volumes"}
+            and not (runtime.compose_overrides and key == "volumes")
             else value
             for key, value in service.items()
         }

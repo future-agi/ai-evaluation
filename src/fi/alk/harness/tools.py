@@ -25,6 +25,7 @@ from .contract import (
     Runtime,
     RuntimeSecretFile,
     RuntimeConfigFile,
+    HttpObservation,
     RuntimeHttpFailureRule,
     known_modalities,
     validate_contract,
@@ -225,6 +226,11 @@ def contract_tools(
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
     """
+    observation_schema = HttpObservation.model_json_schema()
+    observation_schema["properties"]["parameters"]["additionalProperties"] = (
+        observation_schema.pop("$defs")["ObservationParameter"]
+    )
+
     # Name to modality, empty or "any" for all. Refused here too, where it is still free to fix.
     offered_modality = {
         str(one.get("name") or "").strip(): str(one.get("modality") or "")
@@ -687,7 +693,10 @@ def contract_tools(
                     "type": "object",
                     "description": "What it takes to run the agent's code.",
                     "properties": {
-                        "language": {"type": "string"},
+                        "language": {
+                            "type": "string",
+                            "description": Runtime.model_fields["language"].description,
+                        },
                         "version": {"type": "string"},
                         "install": {
                             "type": "string",
@@ -704,6 +713,11 @@ def contract_tools(
                             "description": Runtime.model_fields[
                                 "requirements_files"
                             ].description,
+                        },
+                        "observations": {
+                            "type": "object",
+                            "maxProperties": 32,
+                            "additionalProperties": observation_schema,
                         },
                         "workspaces": {
                             "type": "object",

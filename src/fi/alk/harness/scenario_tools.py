@@ -2366,7 +2366,9 @@ def world_summary(world_root: Path) -> str:
             "capture_headers=[name] to read selected response headers via response['headers']. "
             "No session credentials enter public world state or artifacts. "
             "ready(world) must read and verify the exact fixture. Checks may read GET/HEAD "
-            "responses and actual calls. Local proof is DEFERRED until live validation. "
+            "responses and actual calls. For source-reviewed POST read operations already declared in "
+            "runtime.observations, use world.observe(name, parameters); the fixed request cannot "
+            "be overridden. Local proof is DEFERRED until live validation. "
             "Do not invent login credentials or fixture IDs; declare fixed values the native "
             "API accepts and verify them. Setup cannot change simulator fixture slots. "
             "Existing sub-goals: " + ", ".join(sorted(load_catalogue(world_root).names()))

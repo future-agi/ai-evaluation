@@ -19,10 +19,45 @@ from .http_session import (
 )
 
 
+class HttpObservationHandle:
+    """Forward declared HTTP operations to the handle's scoped observation client."""
+
+    _http_client: ObservationWorld
+
+    @property
+    def capabilities(self):
+        return self._http_client.capabilities
+
+    def request(self, capability, method, path, **kwargs):
+        return self._http_client.request(capability, method, path, **kwargs)
+
+    def observe(self, name, parameters=None):
+        return self._http_client.observe(name, parameters)
+
+    def set_headers(self, capability, headers):
+        return self._http_client.set_headers(capability, headers)
+
+
 class ObservationWorld:
     def __init__(
-        self, world_index: int, rng: random.Random, endpoints=None, *, read_only=False
+        self,
+        world_index: int,
+        rng: random.Random,
+        endpoints=None,
+        *,
+        read_only=False,
+        observations=None,
     ):
+        from ..contract import Runtime
+
+        self._observations = Runtime.model_validate_json(
+            Runtime(observations=observations or {}).model_dump_json()
+        ).observations
+        if any(
+            spec.capability not in (endpoints or {})
+            for spec in self._observations.values()
+        ):
+            raise WorldUsageError("native_http_observation_capability_unavailable")
         self.world_index = world_index
         self.rng = rng
         self.calls = []
@@ -38,7 +73,11 @@ class ObservationWorld:
 
     def read_only(self):
         world = ObservationWorld(
-            self.world_index, self.rng, self._endpoints, read_only=True
+            self.world_index,
+            self.rng,
+            self._endpoints,
+            read_only=True,
+            observations=self._observations,
         )
         world._sessions = restore_sessions(self._private_http_state(), self._endpoints)
         world._http_events = self._http_events
@@ -113,6 +152,38 @@ class ObservationWorld:
             raise WorldUsageError("native_http_method_unsupported")
         if self._read_only and method not in {"GET", "HEAD"}:
             raise WorldUsageError("native_http_read_only")
+        return self._request(
+            capability,
+            method,
+            path,
+            json=json,
+            form=form,
+            headers=headers,
+            capture_headers=capture_headers,
+        )
+
+    def observe(self, name: str, parameters=None):
+        """Invoke a sealed read operation; callers cannot replace its request shape."""
+        if not isinstance(name, str) or name not in self._observations:
+            raise WorldUsageError("native_http_observation_unknown")
+        spec = self._observations[name]
+        try:
+            body = spec.render({} if parameters is None else parameters)
+        except ValueError as exc:
+            raise WorldUsageError(str(exc)) from None
+        return self._request(spec.capability, "POST", spec.path, json=body)
+
+    def _request(
+        self,
+        capability,
+        method,
+        path,
+        *,
+        json=None,
+        form=None,
+        headers=None,
+        capture_headers=(),
+    ):
         base = urlsplit(self._endpoints.get(capability, ""))
         relative = urlsplit(path)
         if (
@@ -235,6 +306,10 @@ class ObservationWorld:
             "rng": self.rng.getstate(),
             "read_only": self._read_only,
             "endpoints": self._endpoints,
+            "observations": {
+                name: spec.model_dump(mode="json")
+                for name, spec in self._observations.items()
+            },
         }
 
     def _unsupported(self, *args, **kwargs):
@@ -265,6 +340,25 @@ def http_endpoints(runtime):
     }
 
 
+def load_observations(bundle_dir):
+    from ..contract import AgentContract
+
+    if bundle_dir is None:
+        return {}
+    runtime = AgentContract.model_validate_json(
+        (bundle_dir / "contract.json").read_text()
+    ).runtime
+    return runtime.observations if runtime else {}
+
+
 class ObservationWorldFactory:
+    def __init__(self, bundle_dir=None):
+        self._observations = load_observations(bundle_dir)
+
     async def create(self, runtime, *, rng):
-        return ObservationWorld(runtime.world_index, rng, http_endpoints(runtime))
+        return ObservationWorld(
+            runtime.world_index,
+            rng,
+            http_endpoints(runtime),
+            observations=self._observations,
+        )

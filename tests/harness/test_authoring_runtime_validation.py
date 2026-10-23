@@ -445,7 +445,10 @@ def test_generic_validation_retries_infrastructure_without_reauthoring(
 
 
 @pytest.mark.parametrize("changing_evidence", [False, True])
-def test_initial_materialization_does_not_grant_extra_infrastructure_retries(tmp_path, changing_evidence):
+@pytest.mark.parametrize("code", ["external_service_unavailable", "chat_ingress_timeout"])
+def test_initial_materialization_does_not_grant_extra_infrastructure_retries(
+    tmp_path, changing_evidence, code,
+):
     source, authoring = tmp_path / "source", tmp_path / "authoring"
     source.mkdir()
     authoring.mkdir()
@@ -459,7 +462,12 @@ def test_initial_materialization_does_not_grant_extra_infrastructure_retries(tmp
             (generated / name).write_text(json.dumps({
                 "fingerprint": len(calls) if changing_evidence else "stable",
             }))
-        raise RuntimeValidationError("infrastructure", "temporary outage")
+        raise RuntimeValidationError("environment", "temporary outage", diagnostics=[
+            HarnessDiagnostic.create(
+                stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress",
+                code=code, message="temporary outage",
+            ),
+        ])
 
     async def repair(*args):
         pytest.fail("Infrastructure retries must not rewrite the candidate")
@@ -735,7 +743,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
             )
             assert actual_provider._run_admission(1, kwargs["work_directory"]) == 1
             calls.append("provision")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *args, **kwargs):
             calls.append("reset")
@@ -748,7 +756,7 @@ def test_runtime_gate_resets_each_scenario_and_preserves_execution_secrets(
             return self
 
     class Factory:
-        def __init__(self, work):
+        def __init__(self, work, bundle):
             pass
 
         async def create(self, *args, **kwargs):
@@ -864,7 +872,7 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
 
         async def provision(self, *_args, **_kwargs):
             calls.append("provision")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *_args, **_kwargs):
             calls.append("reset")
@@ -877,7 +885,7 @@ def test_connect_only_provider_validation_does_not_invent_source_data_review(
             return self
 
     class Factory:
-        def __init__(self, _work):
+        def __init__(self, _work, _bundle):
             pass
 
         async def create(self, *_args, **_kwargs):
@@ -996,7 +1004,7 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
 
         async def provision(self, *_args, **_kwargs):
             calls.append("provision")
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *_args, **_kwargs):
             calls.append("reset")
@@ -1009,7 +1017,7 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
             return self
 
     class Factory:
-        def __init__(self, _work):
+        def __init__(self, _work, _bundle):
             pass
 
         async def create(self, *_args, **_kwargs):
@@ -1108,7 +1116,7 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
             assert kwargs["provider_expires_at"] is None
 
         async def provision(self, *_args, **_kwargs):
-            return [SimpleNamespace(endpoints={})]
+            return [SimpleNamespace(endpoints={}, world_index=0)]
 
         async def reset(self, *_args, **_kwargs):
             return None
@@ -1121,7 +1129,7 @@ def test_local_runtime_validation_does_not_require_hosted_capabilities(
             return self
 
     class Factory:
-        def __init__(self, _work):
+        def __init__(self, _work, _bundle):
             pass
 
         async def create(self, *_args, **_kwargs):

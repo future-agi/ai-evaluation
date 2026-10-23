@@ -1158,6 +1158,8 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "fixed_port_duplicate",
         "fixed_port_consumable_unwired",
         "agent_name_not_world_unique",
+        "public_material_admission_requires_native_compose",
+        "public_material_admission_source_changed",
     }
 )
 _SECTION_2E_MECHANICAL_CODES = frozenset(

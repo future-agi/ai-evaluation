@@ -168,7 +168,11 @@ def test_lifecycle_two_worlds_reset_and_cleanup(tmp_path, monkeypatch):
         path.mkdir()
     (source / "fixture.txt").write_text("baseline")
     (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -337,7 +341,11 @@ http.server.ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         "volumes": {"data": {}},
     }
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "c" * 64,
@@ -437,7 +445,11 @@ def test_mutable_source_env_file_cannot_change_control_or_cleanup(
     document = topology()
     document["services"]["chat"].update(env_file="config.env", volumes=["./:/app"])
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -555,7 +567,11 @@ def test_real_compose_resolved_env_values_are_redacted(
     (source / "config.env").write_text(assignment)
     document = {"services": {"chat": {"image": "busybox", "env_file": "config.env"}}}
     (bundle_dir / "compose.json").write_text(json.dumps(document))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -630,7 +646,11 @@ def test_failed_resolution_never_collects_unredacted_service_logs(
     for path in (source, bundle_dir, work):
         path.mkdir()
     (bundle_dir / "compose.json").write_text(json.dumps(topology()))
+    from fi.alk.harness.bundle_v2 import BundleProvenanceV2
+    from fi.alk.harness.provision import source_fingerprint
+
     bundle = SimpleNamespace(
+        provenance=BundleProvenanceV2(source_kind="local", source_digest=source_fingerprint(source)),
         runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
         seed=None,
         digest="sha256:" + "a" * 64,
@@ -654,3 +674,65 @@ def test_failed_resolution_never_collects_unredacted_service_logs(
         )
     assert commands == ["config"]
     assert list(work.iterdir()) == []
+
+
+@pytest.mark.parametrize('create_host_path', [True, False])
+def test_bind_creation_policy_is_preserved_for_existing_source(tmp_path, create_host_path):
+    (tmp_path / 'config.txt').write_text('public')
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.txt', 'target': '/app/config.txt',
+        'bind': {'create_host_path': create_host_path},
+    }]
+    result = normalize_compose(document, tmp_path, capabilities=capabilities())
+    mount = result['services']['chat']['volumes'][0]
+    assert mount['source'] == str(tmp_path / 'config.txt')
+    assert mount['bind'] == {'create_host_path': create_host_path}
+
+
+def test_bind_no_create_rejects_missing_source_even_if_declared(tmp_path):
+    document = topology()
+    document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.env', 'target': '/app/config.env',
+        'bind': {'create_host_path': False},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='missing'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+def test_bind_create_allows_only_declared_missing_resource(tmp_path):
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.env', 'target': '/app/config.env',
+        'bind': {'create_host_path': True},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='missing'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+    document['x-alk-config-files'] = {'config.env': {'values': {'MODE': 'public'}}}
+    mount = normalize_compose(document, tmp_path, capabilities=capabilities())['services']['chat']['volumes'][0]
+    assert mount.get('read_only', False) is False
+    assert mount['source'] == str(tmp_path / 'config.env')
+    assert mount['bind'] == {'create_host_path': True}
+
+
+@pytest.mark.parametrize('options', [None, True, [], {'propagation': 'rshared'}, {'recursive': True}, {'create_host_path': 'true'}, {'create_host_path': 1}])
+def test_bind_options_do_not_enable_unsafe_mount_semantics(tmp_path, options):
+    (tmp_path / 'config.txt').write_text('public')
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': './config.txt', 'target': '/app/config.txt', 'bind': options,
+    }]
+    with pytest.raises(ComposeRuntimeError, match='bind_options'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())
+
+
+@pytest.mark.parametrize('origin', ['/etc/passwd', '../escape', '~/private'])
+def test_bind_create_cannot_escape_source(tmp_path, origin):
+    document = topology()
+    document['services']['chat']['volumes'] = [{
+        'type': 'bind', 'source': origin, 'target': '/app/config.txt',
+        'bind': {'create_host_path': True},
+    }]
+    with pytest.raises(ComposeRuntimeError, match='host_bind|outside_source'):
+        normalize_compose(document, tmp_path, capabilities=capabilities())

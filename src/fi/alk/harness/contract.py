@@ -23,6 +23,8 @@ from fi.simulate.agent.wrappers.http_events import (
     CompletedToolRows,
 )
 
+from .observations import HttpObservation
+
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
@@ -684,7 +686,12 @@ class Runtime(BaseModel):
 
     # Empty means detect from the submitted dependency manifest. Defaulting this to Python makes
     # an otherwise unambiguous Node repository fail the generated-runtime admission path.
-    language: str = ""
+    language: str = Field(
+        default="",
+        description="Source language. Native process supports Python or Bun with a "
+        "source-declared exact packageManager version and one root bun.lock or bun.lockb. "
+        "Bun requires a matching image toolchain and HTTP command.",
+    )
     version: str = ""
     install: str = Field(
         default="",
@@ -699,6 +706,11 @@ class Runtime(BaseModel):
     requirements_files: list[str] = Field(
         default_factory=list,
         description="Additional source-declared Python requirements files relative to workdir, installed alongside project dependencies and extras. Select files required by install evidence; never invent dependencies.",
+    )
+    observations: dict[str, HttpObservation] = Field(
+        default_factory=dict,
+        max_length=32,
+        description="Source-reviewed fixed HTTP read operations with bounded scalar parameters. Server read-only semantics require source evidence.",
     )
     workspaces: dict[str, str] = Field(
         default_factory=dict,
@@ -737,6 +749,11 @@ class Runtime(BaseModel):
     def _validate_selection(self) -> "Runtime":
         from .world.files import validate_bindings
 
+        if any(
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", name)
+            for name in self.observations
+        ):
+            raise ValueError("runtime_observation_name_invalid")
         validate_bindings(self.workspaces)
         validate_runtime_resource_paths(self.config_files, self.directories)
         if self.compose_overrides:

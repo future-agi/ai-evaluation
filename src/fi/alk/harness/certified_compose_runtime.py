@@ -347,19 +347,36 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                 "source",
                 "target",
                 "read_only",
+                "bind",
             }:
                 raise ComposeRuntimeError("compose_mount_fields_forbidden")
+            if "read_only" in mount and type(mount["read_only"]) is not bool:
+                raise ComposeRuntimeError("compose_mount_read_only_invalid")
+            if "bind" in mount:
+                options = mount["bind"]
+                if (
+                    mount.get("type") != "bind"
+                    or not isinstance(options, dict)
+                    or set(options) - {"create_host_path"}
+                    or (
+                        "create_host_path" in options
+                        and type(options["create_host_path"]) is not bool
+                    )
+                ):
+                    raise ComposeRuntimeError("compose_bind_options_forbidden")
             target = _mount_destination(mount.get("target", ""))
             if mount.get("type") == "bind":
                 origin = mount.get("source", "")
                 if Path(origin).is_absolute() or origin.startswith("~"):
                     raise ComposeRuntimeError("compose_host_bind_forbidden")
-                path = _within(source, origin, exists=False)
+                path = _within(
+                    source,
+                    origin,
+                    exists=mount.get("bind", {}).get("create_host_path") is False,
+                )
                 resource = path.relative_to(source.resolve()).as_posix()
                 if resource in declared:
                     consumed.add(resource)
-                    if resource in resources:
-                        mount["read_only"] = True
                 else:
                     path = _within(source, origin)
                 if path.is_socket() or path.is_block_device() or path.is_char_device():
@@ -661,6 +678,13 @@ class CertifiedComposeRuntimeProvider:
         )
 
     def _provision(self, bundle, source, bundle_dir, work_directory, instances):
+        from .compose_integration import validate_source
+
+        validate_source(
+            source, bundle.provenance.public_material_admissions,
+            fixtures=bundle.provenance.public_test_fixture_admissions,
+            source_digest=bundle.provenance.source_digest,
+        )
         self._check_socket()
         if bundle.runtime.kind is not RuntimeKindV2.COMPOSE:
             raise ComposeRuntimeError("compose_bundle_required")
@@ -706,6 +730,14 @@ class CertifiedComposeRuntimeProvider:
         return [entry[0] for entry in self._worlds.values()]
 
     def _start(self, runtime, directory, bundle):
+        if bundle.provenance.public_material_admissions or bundle.provenance.public_test_fixture_admissions:
+            from .compose_integration import validate_source
+
+            validate_source(
+                self._source, bundle.provenance.public_material_admissions,
+                fixtures=bundle.provenance.public_test_fixture_admissions,
+                source_digest=bundle.provenance.source_digest,
+            )
         _copy_source(self._source, directory / "source")
         document = normalize_compose(
             self._document, directory / "source", capabilities=bundle.capabilities
@@ -779,6 +811,7 @@ class CertifiedComposeRuntimeProvider:
                         {
                             "destination": mount["target"],
                             "content": resource_bind_values[relative],
+                            "read_only": mount.get("read_only", False),
                         }
                     )
                 else:
@@ -1001,7 +1034,9 @@ class CertifiedComposeRuntimeProvider:
                         "type": "bind",
                         "source": str(path),
                         "target": item["destination"],
-                        "read_only": True,
+                        "read_only": (
+                            item.get("read_only", True) if "content" in item else True
+                        ),
                     }
                 )
                 if item.get("environment_variable"):

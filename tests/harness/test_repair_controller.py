@@ -251,3 +251,12 @@ def test_chat_investigation_cannot_exceed_already_consumed_environment_budget():
     assert controller.decide(_observation("first", "generated_runtime_plan_invalid")).action is RepairAction.PATCH_ENVIRONMENT
     diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application error")
     assert controller.decide(CandidateObservation(candidate_hash="second", phase=RepairPhase.ENVIRONMENT, diagnostics=(diagnostic,))).action is RepairAction.REJECT
+
+
+@pytest.mark.parametrize("code", ["external_service_unavailable", "chat_ingress_timeout"])
+def test_ingress_failure_retry_budget_is_stable_and_does_not_reauthor(code):
+    controller = RepairController(RepairBudgets(infrastructure_retries_per_candidate=2))
+    actions = [controller.decide(_observation("same-candidate", code)).action for _ in range(4)]
+    assert actions == [RepairAction.RETRY_INFRASTRUCTURE, RepairAction.RETRY_INFRASTRUCTURE,
+                       RepairAction.REJECT, RepairAction.REJECT]
+    assert controller.decide(_observation("changed-candidate", code)).action is RepairAction.RETRY_INFRASTRUCTURE

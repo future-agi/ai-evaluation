@@ -169,3 +169,55 @@ def test_generated_copy_keeps_credential_name_policy_for_public_symlink(
     _copy_sanitized_context(source, copied)
     assert (copied / "public.pem").read_bytes() == pem_material["public"]
     assert not (copied / name).exists()
+
+
+@pytest.mark.parametrize('boundary', BOUNDARIES)
+def test_token_crossing_chunk_boundary_is_rejected(tmp_path, boundary):
+    from fi.alk.harness.generated_runtime import GeneratedRuntimeError
+    source = tmp_path / 'source'
+    source.mkdir()
+    path = source / 'sample.txt'
+    path.write_bytes(b' ' * (1024 * 1024 - 12) + b'sk-unreviewedPublicLookingValue123456789')
+    with pytest.raises((BundleError, ArtifactIntegrityError, PreflightError, GeneratedRuntimeError)):
+        assert_boundary(source, path, boundary, allowed=True)
+
+
+@pytest.mark.parametrize('boundary', BOUNDARIES)
+@pytest.mark.parametrize('directory', ['frontend', 'services/chat'])
+def test_public_npm_release_policy_survives_all_boundaries(tmp_path, boundary, directory):
+    source = tmp_path / directory
+    source.mkdir(parents=True)
+    path = source / '.npmrc'
+    path.write_text('# public dependency cooldown\nmin-release-age=7\nmin-release-age-exclude[]=@vendor/tool-*\n')
+    assert_boundary(source, path, boundary, allowed=True)
+
+
+@pytest.mark.parametrize('boundary', BOUNDARIES)
+@pytest.mark.parametrize('content', [
+    b'//registry.npmjs.org/:_authToken=ordinary-private-value\n',
+    b'_auth=YXV0aA==\n', b'password=plain-private-password\n',
+    b'registry=https://user:password@example.org/\n',
+    b'min-release-age=${PRIVATE_VALUE}\n', b'min-release-age=7\nmin-release-age=8\n',
+    b'min-release-age-exclude[]=https://example.org/tool\n',
+    b'min-release-age=-1\n', b'min-release-age=7\x00\n', b'\xff\xfe',
+    b'# -----BEGIN PRIVATE KEY-----\nmin-release-age=7\n',
+    b'# sk-unreviewedSecretValue1234567890\nmin-release-age=7\n',
+])
+def test_npm_credentials_and_ambiguous_configs_remain_blocked(tmp_path, boundary, content):
+    source = tmp_path / 'source'
+    source.mkdir()
+    path = source / '.npmrc'
+    path.write_bytes(content)
+    assert_boundary(source, path, boundary, allowed=False)
+
+
+def test_npm_config_limit_and_symlink_are_not_public(tmp_path):
+    from fi.alk.harness.public_material import is_public_npm_config
+    path = tmp_path / '.npmrc'
+    path.write_bytes(b'#' + b'a' * (64 * 1024))
+    assert not is_public_npm_config(path)
+    path.unlink()
+    target = tmp_path / 'public-config'
+    target.write_text('min-release-age=7\n')
+    path.symlink_to(target)
+    assert not is_public_npm_config(path)

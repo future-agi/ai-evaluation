@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, SecretRef
 
+from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .github import parse_github_location
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
@@ -271,6 +272,12 @@ class HarnessJob(BaseModel):
     scenario_count: int = Field(default=10, ge=1, le=MAX_HOSTED_SCENARIO_COUNT)
     seed: int | None = None
     guidance: list[str] = Field(default_factory=list)
+    public_material_admissions: list[PublicMaterialAdmission] = Field(
+        default_factory=list, max_length=512
+    )
+    public_test_fixture_admissions: list[PublicTestFixtureAdmission] = Field(
+        default_factory=list, max_length=128
+    )
     require_tool_workflow: bool = Field(
         default=False,
         description="Require a declared executable tool seam and observed tool calls in every scenario.",
@@ -295,6 +302,11 @@ class HarnessJob(BaseModel):
 
     @model_validator(mode="after")
     def _validate_job(self) -> HarnessJob:
+        if (
+            (self.public_material_admissions or self.public_test_fixture_admissions)
+            and self.execution is not ExecutionMode.LOCAL
+        ):
+            raise ValueError("public_material_admission_local_operator_required")
         if self.schema_version != HARNESS_JOB_SCHEMA_VERSION:
             raise ValueError(f"harness_job_version_unsupported: {self.schema_version}")
         execution_manifest = self.metadata.get("execution_manifest")

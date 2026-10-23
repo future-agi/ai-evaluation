@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field, model_validator
 
-from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 ARTIFACT_MANIFEST_VERSION = "futureagi.harness-artifacts.v1"
 ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
@@ -263,22 +263,16 @@ def _scenario_evidence(root: Path) -> list[ScenarioEvidence]:
 
 
 def _hash_file(path: Path, relative: str) -> tuple[str, int]:
-    if path.name in _SECRET_FILES or (
+    if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
         path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
         and not is_public_pem(path)
     ):
         raise ArtifactIntegrityError(f"artifact_secret_file_forbidden: {relative}")
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            size += len(chunk)
-            digest.update(chunk)
-            if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                raise ArtifactIntegrityError(
-                    f"artifact_secret_material_detected: {relative}"
-                )
-    return digest.hexdigest(), size
+    try:
+        return inspect_public_file(path)
+    except ValueError as exc:
+        raise ArtifactIntegrityError(f"artifact_secret_material_detected: {relative}") from exc
+
 
 
 def _kind(path: Path) -> str:
