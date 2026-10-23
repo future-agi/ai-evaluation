@@ -1509,13 +1509,13 @@ def build_process_tree(
                     process=process.name,
                     domain=FailureDomain.AGENT,
                 ) from exc
+            if result.returncode == 0:
+                break
             evidence = _build_step_evidence(
                 result.stdout, result.stderr, step=step, process=process.name,
                 attempt=network_attempt, directory=build_root.parent,
                 secret_values=secret_values, retain_log=retain_process_log,
             )
-            if result.returncode == 0:
-                break
             if network_attempt < max(
                 0, build_step_network_retries
             ) and _is_transient_build_network_failure(result):

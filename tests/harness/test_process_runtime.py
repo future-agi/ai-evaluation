@@ -10144,7 +10144,7 @@ def test_build_pipeline_preserves_logs_after_workspace_cleanup(tmp_path: Path) -
     assert secret not in text and "<redacted>" in text
 
 
-def test_build_retries_retain_each_attempt_and_success(tmp_path: Path) -> None:
+def test_build_retries_retain_only_failed_attempts(tmp_path: Path) -> None:
     (tmp_path / "source").mkdir()
     retained = []
     results = iter(
@@ -10166,9 +10166,8 @@ def test_build_retries_retain_each_attempt_and_success(tmp_path: Path) -> None:
         secret_values={},
         retain_process_log=lambda path: retained.append(path.read_text()),
     )
-    assert len(retained) == 2
+    assert len(retained) == 1
     assert "Temporary failure" in retained[0] and "attempt 1" in retained[0]
-    assert "built successfully" in retained[1] and "attempt 2" in retained[1]
 
 
 def test_build_evidence_omits_unknown_credential_context(tmp_path: Path) -> None:
