@@ -1473,11 +1473,6 @@ def scenario_tools(
                     "It becomes this scenario's folder name. It says what this scenario tests and "
                     "carries, without a counter or an invented code, PIN or reference.",
                 },
-                "scenario_key": {
-                    "type": "string",
-                    "description": "Only when editing a scenario already kept: its scenario_key, read "
-                    "from it. With a new name this renames it, keeping its number and its history.",
-                },
                 "use_case": {
                     "type": "string",
                     "description": "Which of the agent's use cases this belongs to.",
@@ -2299,6 +2294,36 @@ def scenario_tools(
             )
         return _ok(said)
 
+    edit_schema = {
+        **submit_scenario.input_schema,
+        "properties": {
+            **submit_scenario.input_schema["properties"],
+            "scenario_key": {
+                "type": "string",
+                "description": "The scenario's key, read from it.",
+            },
+        },
+        "required": ["scenario_key"],
+    }
+
+    @tool(
+        "edit_scenario",
+        "Change a kept scenario: give its `scenario_key` and only the fields that change, such as a new "
+        "`name`. Every other field keeps its saved value, and the scenario keeps its key, number and "
+        "history. The result is checked exactly like `submit_scenario`.",
+        edit_schema,
+    )
+    async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        key = str(args.get("scenario_key") or "").strip()
+        held = next((one for one in kept if one.scenario_key == key), None)
+        if held is None:
+            return _err(
+                f"Not changed: no scenario in this suite has the scenario_key {key!r}."
+            )
+        return await submit_scenario.handler(
+            {**held.model_dump(exclude_none=True), **args}
+        )
+
     server = tool_server(
         name=SCENARIO_SERVER,
         version="0.1.0",
@@ -2309,6 +2334,7 @@ def scenario_tools(
             try_check,
             add_sub_goal,
             submit_scenario,
+            edit_scenario,
             amend_contract,
             add_rule_tool,
             drop_rule_tool,
@@ -2330,6 +2356,7 @@ _ALWAYS = (
     "try_check",
     "add_sub_goal",
     "submit_scenario",
+    "edit_scenario",
     "amend_contract",
     "add_rule",
     "drop_rule",

@@ -60,6 +60,7 @@ _LEDGER_NOTES = 40
 _NEEDS_CONFIRMATION = frozenset(
     {
         "submit_scenario",
+        "edit_scenario",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -71,6 +72,7 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_sub_goal",
     }
 )
+_SUBMITS = ("submit_scenario", "edit_scenario")
 _CONFIRM = "Yes, make this change"
 _RUN_FINISHED = frozenset({"completed", "failed", "canceled"})
 _RUN_POLL_SECONDS = 20.0
@@ -89,6 +91,7 @@ _PUBLISHED_PARTS = (
 _WRITING_TOOLS = frozenset(
     {
         "submit_scenario",
+        "edit_scenario",
         "drop_scenario",
         "drop_scenarios",
         "save_scenarios",
@@ -461,7 +464,7 @@ class HostedChatRuntime:
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
                 if spec.name in ("drop_scenarios", "drop_scenario") or (
-                    spec.name == "submit_scenario" and self._changes_situation(args)
+                    spec.name in _SUBMITS and self._changes_situation(args)
                 ):
                     return {
                         "content": [
@@ -476,7 +479,7 @@ class HostedChatRuntime:
                         "is_error": True,
                     }
                 return await handler(args)
-            if spec.name == "submit_scenario" and not self._changes_meaning(args):
+            if spec.name in _SUBMITS and not self._changes_meaning(args):
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
