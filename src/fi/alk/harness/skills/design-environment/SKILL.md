@@ -46,9 +46,11 @@ to design: a product list or a schedule becomes a world table with `import_rows`
 each value to the column's type, so create the table first with the columns the data needs; a
 policy, guide or FAQ the agent should answer from goes under `attached/` with `attach_document`,
 then `attach_server` a filesystem server over that folder. Ground scenarios in what the documents
-say. If a document holds real people's personal details (names, emails, phone numbers,
-addresses), ask the person, before you import or attach it, whether to replace them with made-up
-ones; if they agree, pass `replacements` (each exact detail and its made-up stand-in).
+say. Both tools take `personal_details`. If a document holds any real person's name, email,
+phone number or address (a customer, a member of staff, a contact), ask the person first whether
+to replace them with made-up ones: if they agree, pass `replaced` with `replacements` (each exact
+detail and its made-up stand-in); if they want them kept, pass `kept`. Pass `none` only when it
+holds no one's details.
 
 **Scope.** The environment's tools act only on its own world: its tables, through handlers you
 write. A capability that needs anything outside it (a real payment provider, a third-party API, a

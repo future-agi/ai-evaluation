@@ -117,7 +117,10 @@ class Provenance(BaseModel):
     part: str = ""
     sha256: str
     rows: int | None = None
-    # Personal details replaced with made-up ones, at the person's word.
+    # What was done about real people's details in it: none held, replaced with made-up ones,
+    # or kept because the person said so.
+    personal_details: Literal["none", "replaced", "kept"] = "none"
+    # How many replacements were made.
     replaced: int = 0
 
 

@@ -514,8 +514,10 @@ class VertexGeminiSession:
             os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
             os.environ["GOOGLE_CLOUD_PROJECT"] = _project()
             os.environ["GOOGLE_CLOUD_LOCATION"] = _location()
+        # ADK requires a Python identifier; a conversation id may start with a digit.
+        name = re.sub(r"[^0-9A-Za-z_]", "_", self.session_id)
         agent = LlmAgent(
-            name=self.session_id.replace("-", "_"),
+            name=name if name[:1].isalpha() else f"session_{name}",
             model=_llm(self._model),
             static_instruction=types.Content(
                 role="user", parts=[types.Part(text=self._spec.system_prompt)]

@@ -218,6 +218,35 @@ def coerce(value: Any, declared: str) -> Any:
     )
 
 
+_PERSONAL = ("none", "replaced", "kept")
+
+
+def _personal(args: dict[str, Any]) -> tuple[str, dict[str, str], str]:
+    """The decision about real people's details in a document (decision 4), its replacements,
+    and why it is refused ("" when it is not)."""
+    decision = str(args.get("personal_details") or "")
+    replacements = {
+        str(key): str(value)
+        for key, value in (args.get("replacements") or {}).items()
+        if key
+    }
+    if decision not in _PERSONAL:
+        return (
+            decision,
+            replacements,
+            "say what it holds: personal_details `none` (no real person's name, email, phone "
+            "or address in it), `replaced` (with `replacements`, after the person agreed) or "
+            "`kept` (the person said to keep them as they are)",
+        )
+    if (decision == "replaced") != bool(replacements):
+        return (
+            decision,
+            replacements,
+            "`replaced` goes with `replacements`, and only it does",
+        )
+    return decision, replacements, ""
+
+
 def _key(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
@@ -364,9 +393,9 @@ class DocumentTools:
             return _err(
                 f"{len(content['rows'])} rows; at most {MOST_IMPORT_ROWS} are imported"
             )
-        replacements = {
-            str(k): str(v) for k, v in (args.get("replacements") or {}).items()
-        }
+        decision, replacements, refused = _personal(args)
+        if refused:
+            return _err(f"Nothing was imported: {refused}.")
         rows, replaced = [], 0
         for number, row in enumerate(content["rows"], start=2):
             values = []
@@ -404,6 +433,7 @@ class DocumentTools:
                 part=part["name"],
                 sha256=record.sha256,
                 rows=len(rows),
+                personal_details=decision,
                 replaced=replaced,
             )
         )
@@ -424,9 +454,9 @@ class DocumentTools:
             return _err(
                 "folder must be a plain folder name under attached/ (letters, digits, - and _)"
             )
-        replacements = {
-            str(k): str(v) for k, v in (args.get("replacements") or {}).items()
-        }
+        decision, replacements, refused = _personal(args)
+        if refused:
+            return _err(f"Not attached: {refused}.")
         sections = []
         for part in record.parts:
             content = self._part({"document": record.name, "part": part["name"]})[2]
@@ -450,6 +480,7 @@ class DocumentTools:
                 document=record.name,
                 part="",
                 sha256=record.sha256,
+                personal_details=decision,
                 replaced=replaced,
             )
         )
@@ -466,6 +497,12 @@ class DocumentTools:
             "type": "object",
             "description": "exact text in the document -> the made-up text to use instead, "
             "for personal details the person agreed to replace",
+        }
+        personal = {
+            "type": "string",
+            "enum": list(_PERSONAL),
+            "description": "real people's names, emails, phones or addresses in it: none, "
+            "replaced (with replacements, after asking the person) or kept (the person said so)",
         }
         return tool_server(
             name=DOCUMENTS_SERVER,
@@ -494,9 +531,10 @@ class DocumentTools:
                             "document": str,
                             "part": str,
                             "columns": {"type": "object"},
+                            "personal_details": personal,
                             "replacements": replacements,
                         },
-                        ["table", "document"],
+                        ["table", "document", "personal_details"],
                     ),
                 )(_safe(self.import_rows)),
                 tool(
@@ -504,8 +542,13 @@ class DocumentTools:
                     f"Write a document, whole, as markdown under {ATTACHED}/<folder>/, where a "
                     "filesystem server you attach lets the agent read it.",
                     schema(
-                        {"document": str, "folder": str, "replacements": replacements},
-                        ["document", "folder"],
+                        {
+                            "document": str,
+                            "folder": str,
+                            "personal_details": personal,
+                            "replacements": replacements,
+                        },
+                        ["document", "folder", "personal_details"],
                     ),
                 )(_safe(self.attach_document)),
             ],

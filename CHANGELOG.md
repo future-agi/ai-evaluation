@@ -150,9 +150,14 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   tables the builder reads with `list_documents` and `read_document`.
   `import_rows` inserts a table into the world with each value coerced to its
   column's declared type, and `attach_document` writes a document as markdown
-  under `attached/`; both can replace personal details with made-up ones, and
-  both are recorded with their source's sha256 in the sealed environment's
-  `metadata.provenance`. New `documents` extra, installed in the hosted image.
+  under `attached/`. Both require a decision about real people's details in the
+  document (`personal_details`: none, replaced with made-up ones, or kept at
+  the person's word), and both are recorded with it and their source's sha256
+  in the sealed environment's `metadata.provenance`. New `documents` extra,
+  installed in the hosted image.
+- The Gemini backend names its ADK agent with a valid identifier for any
+  session id: a hosted chat whose conversation id began with a digit failed
+  every turn with a ValidationError.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
