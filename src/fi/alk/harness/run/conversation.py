@@ -232,15 +232,15 @@ async def converse(
         # the caller ("orders two burgers and asks for..."), so speaking it verbatim would hand
         # the agent a stage direction instead of a person.
         opening = await customer.say(OPENING)
-        said = opening.text.strip() or scenario.instruction
-        if _answered_as_the_agent(said):
-            # The opening turn is the one with no conversation behind it, and a model asked to
-            # speak into that gap will sometimes take the other part: it offers to look something
-            # up, the agent replies that no question was asked, and the run fails for a reason
-            # that has nothing to do with the agent. The instruction is the fallback, because a
-            # blunt version of the right question tests more than a fluent version of the wrong
-            # one.
-            said = scenario.instruction
+        said = opening.text.strip()
+        if not said or _answered_as_the_agent(said):
+            # A model speaking into an empty conversation sometimes says nothing or takes the
+            # agent's part. Ask once more; the instruction is stage directions, never sent as is.
+            said = (await customer.say(OPENING)).text.strip()
+        if not said or _answered_as_the_agent(said):
+            from ..hosted_scheduler import CallAborted
+
+            raise CallAborted("simulator_no_opening: the caller gave no usable first message", code="simulator_stalled")
         record("customer", said)
         for _turn in range(max(1, scenario.max_turns)):
             try:

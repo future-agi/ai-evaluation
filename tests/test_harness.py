@@ -6340,6 +6340,54 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
     assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
 
 
+def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_instruction(monkeypatch):
+    import asyncio
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.hosted_scheduler import CallAborted
+    from fi.alk.harness.run import conversation
+    from fi.alk.harness.scenario import Scenario
+
+    openings = iter(["", "Sure! Let me look that up for you."])
+    sent = []
+
+    class Customer:
+        spent_usd = 0.0
+        simulator_tokens = (0, 0)
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def say(self, _prompt):
+            return type("Turn", (), {"text": next(openings)})()
+
+    class Target:
+        spent_usd = 0.0
+
+        async def open(self):
+            pass
+
+        async def say(self, text):
+            sent.append(text)
+            return "ok"
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(conversation, "Stage", Customer)
+    scenario = Scenario(name="s", instruction="You contact support. You open by asking about Dune.")
+    with pytest.raises(CallAborted) as aborted:
+        asyncio.run(conversation.converse(Target(), scenario, AgentContract()))
+    assert aborted.value.code == "simulator_stalled"
+    assert sent == []
+
+
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():
     """Where the right behaviour is to decline and touch nothing, every check about the world holds
     with nothing done, and the explanation is the only real evidence.
