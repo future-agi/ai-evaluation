@@ -6381,7 +6381,7 @@ def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_ins
             pass
 
     monkeypatch.setattr(conversation, "Stage", Customer)
-    scenario = Scenario(name="s", instruction="You contact support. You open by asking about Dune.")
+    scenario = Scenario(name="s", instruction="You contact support. You open by asking about your order.")
     with pytest.raises(CallAborted) as aborted:
         asyncio.run(conversation.converse(Target(), scenario, AgentContract()))
     assert aborted.value.code == "simulator_stalled"
