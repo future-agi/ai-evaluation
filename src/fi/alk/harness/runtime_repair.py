@@ -345,6 +345,108 @@ def _repair_progress(event: Event) -> None:
         )
 
 
+_BEHAVIOR_KEYS = frozenset({
+    "model", "provider", "provideroptions", "modeloptions", "agent", "agentid",
+    "profile", "config", "configfile", "cwd", "directory", "project", "prefix",
+    "system", "systemprompt", "instructions", "baseurl", "apibase", "apiurl",
+    "endpoint", "apikey", "accesstoken", "tools", "toolchoice", "temperature",
+    "topp", "maxtokens",
+})
+
+
+def _behavior_key(value: str) -> str:
+    return value.casefold().replace("-", "").replace("_", "")
+
+
+def _request_behavior(value, path=()):
+    result = {}
+    if isinstance(value, dict):
+        if value.get("role") in ("system", "developer", "assistant"):
+            result[path] = value
+        for key, child in value.items():
+            location = (*path, key)
+            if (
+                _behavior_key(key) in _BEHAVIOR_KEYS
+                and location != ("model",)
+                and not (key == "tools" and child == "{{tools}}")
+            ):
+                result[location] = child
+            result.update(_request_behavior(child, location))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            result.update(_request_behavior(child, (*path, index)))
+    return result
+
+
+def _tool_mapping_terms(interface) -> set[str]:
+    mapping = interface.completed_tools or interface.completed_tool_events
+    if mapping is None:
+        return set()
+    paths = [
+        mapping.items_path,
+        mapping.name_path,
+        mapping.arguments_path,
+        mapping.result_path,
+        mapping.error_path,
+        mapping.result_error_path,
+    ]
+    terms = {
+        path.removeprefix("$").strip(".").split(".")[-1]
+        for path in paths
+        if path and not path.removeprefix("$").strip(".").split(".")[-1].isdigit()
+    }
+    if interface.completed_tool_events:
+        events = interface.completed_tool_events
+        terms.update(
+            filter(
+                None,
+                (
+                    events.kind_path.split(".")[-1],
+                    events.action_kind,
+                    events.observation_kind,
+                    events.action_id_path.split(".")[-1],
+                    events.observation_action_id_path.split(".")[-1],
+                    events.status_path.split(".")[-1],
+                    events.completed_status,
+                ),
+            )
+        )
+        for failure in events.failure_events:
+            terms.update(
+                {
+                    failure.kind,
+                    failure.action_id_path.split(".")[-1],
+                    failure.result_path.split(".")[-1],
+                }
+            )
+    return terms
+
+
+def _tool_mapping_has_source_evidence(interface, evidence_files: list[Path]) -> bool:
+    terms = _tool_mapping_terms(interface)
+    if not terms:
+        return True
+    source = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in evidence_files
+        if path.stat().st_size <= 1_000_000
+    )
+    return all(
+        re.search(rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])", source)
+        for term in terms
+    )
+
+
+def _tool_mapping_selectors_changed(before, after) -> bool:
+    if before.completed_tools != after.completed_tools:
+        return True
+    if before.completed_tool_events is None or after.completed_tool_events is None:
+        return before.completed_tool_events != after.completed_tool_events
+    return before.completed_tool_events.model_dump(exclude={"path"}) != (
+        after.completed_tool_events.model_dump(exclude={"path"})
+    )
+
+
 def validate_runtime_plan_patch(
     source_root: Path,
     contract: AgentContract,
@@ -482,6 +584,15 @@ def validate_runtime_plan_patch(
                     "messages", "new_message", "new_message_content",
                 }:
                     raise ValueError("runtime_repair_tool_observation_conversation_required")
+            if _request_behavior(before.request_template) != _request_behavior(
+                after.request_template
+            ):
+                raise ValueError("runtime_repair_tool_observation_behavior_changed")
+        if (
+            _tool_mapping_selectors_changed(before, after)
+            and not _tool_mapping_has_source_evidence(after, evidence_files)
+        ):
+            raise ValueError("runtime_repair_tool_observation_source_mapping_missing")
 
     original_auth = (
         contract.runtime.interface.local_auth

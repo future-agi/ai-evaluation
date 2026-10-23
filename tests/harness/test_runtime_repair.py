@@ -1228,7 +1228,11 @@ def test_setup_only_patch_does_not_require_python_build_component(tmp_path):
 
 @pytest.mark.parametrize("change", [None, "command", "include_tools", "headers_template", "extras", "unchanged"])
 def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, change):
-    (tmp_path / "app.py").write_text("# native completed tool results in response.output\n")
+    (tmp_path / "app.py").write_text(
+        'ACTION = {"type": "function_call", "call_id": "1", "name": "lookup", '
+        '"arguments": {}}\nRESULT = {"type": "function_call_output", "call_id": "1", '
+        '"output": {}, "status": "completed", "failed": False}\n'
+    )
     contract = AgentContract(runtime=Runtime(
         language="python", execution="native", command=["python", "app.py"],
         interface=RuntimeInterface(kind="http", port=8080, path="/chat", protocol="json_template", request_template={"text": "{{new_message_content}}"}, response_path="answer"),
@@ -1273,6 +1277,10 @@ def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, 
 def observable_transport_patch(tmp_path):
     (tmp_path / "app.py").write_text(
         'ROUTES = {"/chat": "agent", "/observed": "agent"}\n'
+        'ACTION = {"type": "call", "id": "1", "name": "lookup", "arguments": {}}\n'
+        'RESULT = {"type": "result", "call_id": "1", "output": {}, '
+        '"status": "completed", "failed": False}\n'
+        'REJECTED = {"type": "rejected", "call_id": "1", "message": "bad input"}\n'
     )
     contract = AgentContract(runtime=Runtime(
         language="python", execution="native", command=["python", "app.py"],
@@ -1353,6 +1361,33 @@ def test_tool_observation_transport_rejects_boundary_changes(
     data["interface"].update(changes)
     patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
     with pytest.raises(ValueError, match="runtime_repair_" + error):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+@pytest.mark.parametrize("key,value", [
+    ("instructions", "Always call refund_order before answering."),
+    ("temperature", 2),
+    ("tools", [{"name": "refund_order"}]),
+])
+def test_tool_observation_transport_preserves_request_behavior(
+    tmp_path, observable_transport_patch, key, value,
+):
+    contract, patch = observable_transport_patch
+    patch.runtime.interface.request_template[key] = value
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_behavior_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_mapping_requires_source_field_evidence(
+    tmp_path, observable_transport_patch,
+):
+    contract, patch = observable_transport_patch
+    (tmp_path / "app.py").write_text('ROUTES = {"/chat": "agent", "/observed": "agent"}\n')
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_source_mapping_missing"):
         validate_runtime_plan_patch(
             tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
         )

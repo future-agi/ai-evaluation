@@ -516,8 +516,13 @@ def test_declared_result_errors_classify_completed_tools(native_app, paired):
                            completed_tool_events={**EVENTS, "error_path": "", "result_error_path": "error"})
     else:
         state["payload"]["tool_calls"] = [
-            {"tool_name": name, "tool_arguments": args, "tool_result": body}
-            for name, args, body in zip(names, arguments, bodies)
+            {
+                "tool_id": str(index),
+                "tool_name": name,
+                "tool_arguments": args,
+                "tool_result": body,
+            }
+            for index, (name, args, body) in enumerate(zip(names, arguments, bodies))
         ]
         config = interface(completed_tools={**ROWS, "result_error_path": "error"}, failure_rule=None)
     target = create_chat_wrapper(config, base, secret_values={})

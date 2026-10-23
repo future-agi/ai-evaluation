@@ -320,6 +320,9 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
             calls.append("reset")
             state["profile"] = False
 
+        async def clone_world_database(self, *_args, **_kwargs):
+            return None
+
         async def close(self, **kwargs):
             from fi.alk.harness.process_diagnostics import retain_process_log
 
@@ -351,9 +354,17 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         assert kwargs["include_scenarios"] is not readiness_only
         target.mkdir(parents=True)
         if not readiness_only:
-            scenario = target / "scenarios/one"
-            scenario.mkdir(parents=True)
-            (scenario / "scenario.json").write_text(json.dumps({"scenario_key": "one"}))
+            keys = (
+                [("00-refusal", "refusal"), ("01-one", "one")]
+                if required_workflow
+                else [("one", "one")]
+            )
+            for folder, key in keys:
+                scenario = target / f"scenarios/{folder}"
+                scenario.mkdir(parents=True)
+                (scenario / "scenario.json").write_text(
+                    json.dumps({"scenario_key": key})
+                )
         return SimpleNamespace(
             digest="bundle", provenance=SimpleNamespace(source_digest="source"),
             runtime=BundleRuntimeV2(kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL),
@@ -926,7 +937,10 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     assert receipt["tool_call_count"] == 1
     assert receipt["turns"] == 2
     transcript = next(receipt_path.parent.glob("transcript-*.json"))
-    assert json.loads(transcript.read_text())["messages"] == [
+    assert [
+        {key: message[key] for key in ("role", "content")}
+        for message in json.loads(transcript.read_text())["messages"]
+    ] == [
         {"role": "user", "content": "Look up account A-1"},
         {"role": "assistant", "content": "The account is active <redacted>"},
     ]
