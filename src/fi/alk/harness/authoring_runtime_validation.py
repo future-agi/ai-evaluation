@@ -159,19 +159,10 @@ def _write_runtime_evidence(
 
 
 def _database_lanes() -> int:
-    """Scenarios checked at once on database clones: one per CPU unless the deployment sets it.
-
-    Each check starts its own Python worker inside the phase budget, so lanes beyond the CPUs
-    only queue those start-ups until a ready check runs out of time before it begins.
-    """
+    """One lane per CPU by default: each check starts a worker inside its time budget."""
     configured = os.environ.get("ALK_VALIDATION_DB_LANES")
-    if configured:
-        return max(1, int(configured))
-    try:
-        cpus = len(os.sched_getaffinity(0))
-    except AttributeError:
-        cpus = os.cpu_count() or 1
-    return max(1, cpus)
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    return max(1, int(configured or cpus or 1))
 
 
 def _world_state_digest(world) -> str:
