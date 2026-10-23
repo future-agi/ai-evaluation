@@ -351,36 +351,22 @@ def test_a_judged_sub_goal_must_say_why_it_is_judged():
     )
 
 
-def test_a_catalogue_that_is_mostly_judged_is_refused():
-    """A judge is the fallback, not the method. One run reported six judged sub-goals."""
-    from fi.alk.harness.catalogue import catalogue_problems
+def test_judged_criteria_may_read_the_actions_and_records():
+    """Judged criteria may read the agent's actions and records, not only the transcript."""
+    from fi.alk.harness.catalogue import validate_sub_goal
 
     judged = _goal(
-        "explained",
-        judged="Whether the refusal was explained, which nothing in the world records at all",
-    )
-    coded = _goal(
-        "row_written",
-        check='def check(world, calls):\n    return None if world.state() else "empty"\n',
-    )
-
-    problems = catalogue_problems([judged, judged, coded])
-    assert problems and "judged rather than settled by code" in problems[0]
-    assert catalogue_problems([judged, coded, coded]) == []
-
-
-def test_a_target_we_cannot_see_into_may_be_judged_throughout():
-    """A conversational agent with no executable tools and no state leaves nothing behind for a
-    check to read, so judging is the only thing available and is correct rather than lazy."""
-    from fi.alk.harness.catalogue import catalogue_problems
-
-    judged = _goal(
-        "answers_accurately",
-        judged="Whether the answer was accurate, which no world state records because this agent has none",
+        "change_made_as_asked",
+        judged=(
+            "Applies when: the caller asks the agent to make a change for them.\n"
+            "Pass when: the tool call that made it and the record in the world state carry the "
+            "values the caller gave.\n"
+            "Fail when: it changes anything else or uses another value.\n"
+            "If it does not arise: Pass, because the caller asked for no change."
+        ),
     )
 
-    assert catalogue_problems([judged, judged], world_is_observable=False) == []
-    assert catalogue_problems([judged, judged], world_is_observable=True)
+    assert validate_sub_goal(judged) == []
 
 
 def test_a_coded_sub_goal_also_carries_its_description():
@@ -638,3 +624,30 @@ def test_empty_runtime_owned_tool_world_does_not_invent_world_checks(tmp_path):
     saved = asyncio.run(tools["save_world"]({}))
     assert not saved.get("is_error"), saved
     assert world.runtime_tools == {"get_weather"}
+
+
+def test_the_agents_whole_prompt_is_copied_from_its_source(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("from real_tools import lookup_weather\n")
+    (source / "prompt.py").write_text('PROMPT = """\nGreet the caller.\nIf injured, transfer now.\n"""\n')
+    out = tmp_path / "out"
+    named = payload() | {
+        "system_prompt_excerpt": "Greet the caller.",
+        "system_prompt_from": [{"path": "prompt.py", "start_line": 2, "end_line": 3}],
+    }
+    assert not accept_contract(named, out, source_root=source).get("is_error")
+    contract = AgentContract.model_validate(json.loads((out / "contract.json").read_text()))
+    assert contract.system_prompt_excerpt == "Greet the caller.\nIf injured, transfer now."
+    assert "If injured, transfer now." in contract.brief()
+
+    outside = named | {"system_prompt_from": [{"path": "../x.py", "start_line": 1, "end_line": 1}]}
+    assert "system_prompt_from[0]" in accept_contract(outside, out, source_root=source)["content"][0]["text"]
+    past_end = named | {"system_prompt_from": [{"path": "prompt.py", "start_line": 2, "end_line": 9}]}
+    assert "outside prompt.py" in accept_contract(past_end, out, source_root=source)["content"][0]["text"]
+
+
+def test_a_contract_without_a_prompt_source_keeps_its_quoted_excerpt():
+    contract = AgentContract.model_validate(payload() | {"system_prompt_excerpt": "Be brief."})
+    assert contract.system_prompt_from == []
+    assert "Be brief." in contract.brief()

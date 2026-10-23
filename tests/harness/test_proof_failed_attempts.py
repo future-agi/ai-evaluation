@@ -51,7 +51,7 @@ def test_proof_requires_outcome_not_just_attempt(
             )
         ]
     )
-    proof = module.prove(SimpleNamespace(sub_goals=["selected"]), catalogue, tmp_path)
+    proof = module.prove(SimpleNamespace(sub_goals=["selected"], solution=()), catalogue, tmp_path)
     assert proof.holds is accepted
     assert bool(proof.failed_attempts) is not accepted
     if not accepted:
