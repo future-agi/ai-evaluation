@@ -209,11 +209,7 @@ def _slug(name: str) -> str:
 
 
 def unused_key(key: str, taken: set[str]) -> str:
-    """``key``, or it with a numbered suffix when another scenario already holds it.
-
-    A renamed scenario keeps the key its first name gave it, so a new scenario under that name would
-    otherwise mint the same one.
-    """
+    """``key``, or it with a numbered suffix when another scenario already holds it."""
     if not key or key not in taken:
         return key
     suffix = 2

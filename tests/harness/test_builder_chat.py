@@ -322,6 +322,14 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
         ).get("is_error")
         is None
     )
+    (tmp_path / "scenarios" / "old").mkdir()
+    (tmp_path / "scenarios" / "old" / "scenario.json").write_text(
+        json.dumps({"name": "old"})
+    )
+    answers.append("No")
+    unreadable = {"name": "old", "instruction": "anything"}
+    assert asyncio.run(submit.handler(unreadable))["is_error"] is True
+    asked.pop()
     resubmitted = {
         **surface,
         "name": "uno",

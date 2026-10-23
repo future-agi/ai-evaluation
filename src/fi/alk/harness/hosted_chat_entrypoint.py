@@ -550,8 +550,8 @@ class HostedChatRuntime:
         try:
             saved_now = Scenario.model_validate(held).model_dump()
             submitted = Scenario.model_validate({**held, **args}).model_dump()
-        except ValueError:  # an unreadable submission is never a safe unattended change
-            return True
+        except ValueError:
+            saved_now, submitted = held, {**held, **args}
         if any(
             field in args and submitted.get(field) != saved_now.get(field)
             for field in fields

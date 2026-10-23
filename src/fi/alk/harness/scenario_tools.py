@@ -1707,7 +1707,7 @@ def scenario_tools(
         key = str(args.get("scenario_key") or "").strip()
         same = next(
             (one.name for one in kept if key and one.scenario_key == key),
-            str(args.get("name") or ""),
+            str(args.get("name") or "").strip(),
         )
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
