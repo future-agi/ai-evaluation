@@ -33,7 +33,7 @@ DONE = dict(kind="completed", action_id="a", result={"bytes": 42}, failed=False)
 
 
 @contextmanager
-def server(*, pages=None, correlation="conversation-1", redirect=False):
+def server(*, pages=None, correlation="conversation-1", redirect=False, event_status=200, malformed=False):
     requests = []
     pages = (
         pages
@@ -64,9 +64,9 @@ def server(*, pages=None, correlation="conversation-1", redirect=False):
                 self.end_headers()
                 return
             index = 1 if "?page=" in self.path else 0
-            self.send_response(200)
+            self.send_response(event_status if self.path.startswith("/events/") else 404)
             self.end_headers()
-            self.wfile.write(json.dumps(pages[min(index, len(pages) - 1)]).encode())
+            self.wfile.write(b"not json" if malformed else json.dumps(pages[min(index, len(pages) - 1)]).encode())
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=http.serve_forever, daemon=True)
@@ -89,6 +89,97 @@ def wrapper(base, spec=None):
 
 def invoke(target):
     return asyncio.run(target.call(AgentInput(thread_id="one", messages=[])))
+
+
+def test_missing_event_route_is_repairable_after_successful_chat(tmp_path):
+    from fi.alk.harness.authoring_runtime_validation import RuntimeValidationError
+    from fi.alk.harness.chat_readiness import probe_chat_ingress
+    from fi.alk.harness.contract import AgentContract, Runtime
+    from fi.alk.harness.runtime_repair import RuntimePlanPatch, _contract_hash, validate_runtime_plan_patch
+
+    (tmp_path / "app.py").write_text('EVENT_ROUTE = "/events/{conversation_id}"\n')
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", port=8080, path="/chat", protocol="openai_chat",
+            completed_tool_events={**SPEC, "path": "/missing/{{correlation_id}}"},
+        ),
+    ))
+    with server() as (base, requests):
+        with pytest.raises(RuntimeValidationError) as error:
+            asyncio.run(probe_chat_ingress(
+                interface=contract.runtime.interface, endpoint=base, authoring=tmp_path,
+                candidate_hash="candidate", bundle_digest="bundle", secret_values={}, redaction_values={},
+            ))
+        diagnostic = error.value.diagnostics[0]
+        assert diagnostic.code == "chat_tool_evidence_unverified"
+        receipt = json.loads(next((tmp_path / "generic-harness/chat-readiness").glob("*.json")).read_text())
+        assert receipt["trace"]["status_code"] == 404
+        assert receipt["trace"]["failure_stage"] == "tool_events"
+        assert requests == [("POST", "/chat"), ("GET", "/missing/conversation-1")]
+        runtime = contract.runtime.model_copy(deep=True)
+        runtime.interface.completed_tool_events.path = SPEC["path"]
+        patch = RuntimePlanPatch(
+            base_contract_hash=_contract_hash(contract), runtime=runtime,
+            evidence_paths=("app.py",), diagnostic_codes=(diagnostic.code,),
+            summary="Correct the source-owned event route.",
+        )
+        repaired = validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={diagnostic.code},
+        )
+        response = invoke(wrapper(base, repaired.runtime.interface.completed_tool_events.model_dump()))
+        assert response.metadata["external_agent"]["success"] is True
+        assert len(response.metadata["native_completed_tools"]) == 1
+        assert response.metadata["native_completed_tools"][0]["result"] == {"bytes": 42}
+
+
+@pytest.mark.parametrize("status,code", [
+    (401, "credential_missing"), (403, "credential_missing"),
+    (429, "external_service_unavailable"), (503, "external_service_unavailable"),
+])
+def test_event_http_failure_retains_status_and_auth_or_transient_classification(status, code):
+    from fi.alk.harness.chat_readiness import _failure_code
+
+    with server(event_status=status) as (base, _):
+        trace = invoke(wrapper(base)).metadata["external_agent"]
+    assert trace["status_code"] == status
+    assert trace["failure_stage"] == "tool_events"
+    assert _failure_code(trace) == code
+    assert trace["response_excerpt"] == ""
+
+
+def test_malformed_event_payload_is_an_observation_failure():
+    from fi.alk.harness.chat_readiness import _failure_code
+
+    with server(malformed=True) as (base, _):
+        trace = invoke(wrapper(base)).metadata["external_agent"]
+    assert trace["status_code"] == 200
+    assert trace["failure_stage"] == "tool_events"
+    assert _failure_code(trace) == "chat_tool_evidence_unverified"
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_event_network_failure_does_not_report_prior_chat_status(monkeypatch, timeout):
+    import urllib.error
+    from fi.alk.harness.chat_readiness import _failure_code
+
+    with server() as (base, requests):
+        target = wrapper(base)
+        open_request = target._opener.open
+
+        def fail_event(request, **kwargs):
+            if request.get_method() == "GET":
+                if timeout:
+                    raise TimeoutError("event deadline")
+                raise urllib.error.URLError("event connection failed")
+            return open_request(request, **kwargs)
+
+        monkeypatch.setattr(target._opener, "open", fail_event)
+        trace = invoke(target).metadata["external_agent"]
+        assert requests == [("POST", "/chat")]
+    assert trace["status_code"] == 0
+    assert trace["failure_stage"] == "tool_events"
+    assert _failure_code(trace) == ("chat_ingress_timeout" if timeout else "external_service_unavailable")
 
 
 def test_native_paginated_tools_recorded_once_without_execution_or_continuation():
@@ -182,6 +273,7 @@ def test_page_budget_fails_instead_of_partial_evidence():
         {"correlation_header": "X-Auth\r\nInjected"},
         {"max_pages": 21},
         {"observation_kind": "action"},
+        {"error_path": "", "result_error_path": "error"},
     ],
 )
 def test_contract_rejects_invalid_observation_config(changes):
@@ -253,3 +345,143 @@ def test_correlation_dot_segment_cannot_change_declared_path():
         result = invoke(wrapper(base))
         assert result.metadata['external_agent']['success'] is True
         assert requests[1] == ('GET', '/events/%2E%2E')
+
+
+def test_native_validation_failure_and_retry_are_recorded_once():
+    spec = {
+        **SPEC,
+        "action_id_path": "tool_call_id",
+        "observation_action_id_path": "tool_call_id",
+        "arguments_path": "tool_call.arguments",
+        "failure_events": [{"kind": "rejected", "action_id_path": "tool_call_id",
+                            "result_path": "message"}],
+    }
+    events = [
+        {"kind": "action", "tool_call_id": "first", "name": "edit",
+         "tool_call": {"arguments": '{"path":"a.py"}'}},
+        {"kind": "completed", "tool_call_id": "first", "result": "read", "failed": False},
+        {"kind": "action", "tool_call_id": "invalid", "name": "edit",
+         "tool_call": {"arguments": '{"path":7}'}},
+        {"kind": "rejected", "tool_call_id": "invalid", "message": "path must be a string"},
+        {"kind": "action", "tool_call_id": "retry", "name": "edit",
+         "tool_call": {"arguments": '{"path":"a.py"}'}},
+        {"kind": "completed", "tool_call_id": "retry", "result": "written", "failed": False},
+    ]
+    with server(pages=[{"items": events, "next": None}]) as (base, requests):
+        world = SimpleNamespace(calls=[])
+        target = _HostedChatTarget(
+            wrapper=wrapper(base, spec),
+            contract=SimpleNamespace(runtime=SimpleNamespace(
+                interface=SimpleNamespace(include_tools=False))),
+            world=world, scenario_key="case", scenario_id="one",
+        )
+        assert asyncio.run(target.say("edit")) == "Edited."
+        assert [(call.arguments, call.result, call.ok) for call in world.calls] == [
+            ({"path": "a.py"}, "read", True),
+            ({"path": 7}, "path must be a string", False),
+            ({"path": "a.py"}, "written", True),
+        ]
+        assert asyncio.run(target.say("thanks")) == "Edited."
+        assert len(world.calls) == 3
+        assert requests == [("POST", "/chat"), ("GET", "/events/conversation-1")] * 2
+
+
+FAILURE = {"kind": "rejected", "action_id_path": "action_id", "result_path": "message"}
+REJECTED = {"kind": "rejected", "action_id": "a", "message": "invalid arguments"}
+
+
+@pytest.mark.parametrize("events", [
+    [REJECTED],
+    [ACTION],
+    [ACTION, REJECTED, REJECTED],
+    [ACTION, DONE, REJECTED],
+    [ACTION, REJECTED, DONE],
+    [ACTION, {"kind": "rejected", "action_id": "a"}],
+    [ACTION, dict(REJECTED, message=None)],
+    [ACTION, dict(REJECTED, message=float("nan"))],
+    [dict(ACTION, arguments="bad json"), REJECTED],
+    [dict(ACTION, arguments="[]"), REJECTED],
+    [dict(ACTION, id="a" * 8193), dict(REJECTED, action_id="a" * 8193)],
+    [ACTION, dict(REJECTED, action_id="")],
+    [ACTION, dict(REJECTED, action_id=7)],
+])
+def test_failure_event_evidence_fails_closed(events):
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        response = invoke(wrapper(base, {**SPEC, "failure_events": [FAILURE]}))
+    assert response.metadata["external_agent"]["success"] is False
+    assert response.metadata["external_agent"]["failure_stage"] == "tool_events"
+    assert not response.metadata.get("native_completed_tools")
+    assert response.metadata["external_agent"]["response_excerpt"] == ""
+
+
+@pytest.mark.parametrize("length", [5887, 8192])
+@pytest.mark.parametrize("failed", [False, True])
+def test_opaque_event_join_keys_accept_bounded_long_values(length, failed):
+    key = "x" * length
+    outcome = REJECTED if failed else DONE
+    events = [dict(ACTION, id=key), dict(outcome, action_id=key)]
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        target = wrapper(base, {**SPEC, "failure_events": [FAILURE]})
+        response = invoke(target)
+        assert response.metadata["external_agent"]["success"] is True
+        assert response.metadata["native_completed_tools"][0]["ok"] is not failed
+        assert invoke(target).metadata["native_completed_tools"] == []
+
+
+def test_undeclared_failure_kind_does_not_infer_completion():
+    with server(pages=[{"items": [ACTION, REJECTED], "next": None}]) as (base, _):
+        response = invoke(wrapper(base))
+    assert response.metadata["external_agent"]["success"] is False
+    assert not response.metadata.get("native_completed_tools")
+
+
+@pytest.mark.parametrize("failures", [
+    [FAILURE, FAILURE],
+    [dict(FAILURE, kind="action")],
+    [dict(FAILURE, kind="completed")],
+    [dict(FAILURE, kind="")],
+    [dict(FAILURE, action_id_path="")],
+    [dict(FAILURE, result_path="")],
+    [dict(FAILURE, ok=True)],
+    [dict(FAILURE, kind=str(index)) for index in range(9)],
+])
+def test_contract_rejects_invalid_failure_event_mapping(failures):
+    with pytest.raises(ValidationError):
+        RuntimeInterface(
+            kind="http", port=8000, path="/chat",
+            completed_tool_events={**SPEC, "failure_events": failures},
+        )
+
+
+def test_distinct_failure_kinds_share_completion_identity_space():
+    events = [ACTION, REJECTED, dict(REJECTED, kind="execution_error")]
+    failures = [FAILURE, dict(FAILURE, kind="execution_error")]
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        response = invoke(wrapper(base, {**SPEC, "failure_events": failures}))
+    assert response.metadata["external_agent"]["success"] is False
+    assert not response.metadata.get("native_completed_tools")
+
+
+def test_long_event_keys_do_not_expand_correlation_or_cursor_limits():
+    for kwargs in (
+        {"correlation": "x" * 1025},
+        {"pages": [{"items": [ACTION, DONE], "next": "x" * 1025}]},
+    ):
+        with server(**kwargs) as (base, _):
+            response = invoke(wrapper(base))
+        assert response.metadata["external_agent"]["success"] is False
+        assert not response.metadata.get("native_completed_tools")
+
+
+def test_multiple_failure_kinds_use_declared_payloads_and_always_fail():
+    failures = [FAILURE, {"kind": "execution_error", "action_id_path": "call", "result_path": "error"}]
+    events = [
+        ACTION, dict(REJECTED, failed=False), dict(ACTION, id="b"),
+        {"kind": "execution_error", "call": "b", "error": {"reason": "tool unavailable"}},
+    ]
+    with server(pages=[{"items": events, "next": None}]) as (base, _):
+        response = invoke(wrapper(base, {**SPEC, "failure_events": failures}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert [(call["result"], call["ok"]) for call in response.metadata["native_completed_tools"]] == [
+        ("invalid arguments", False), ({"reason": "tool unavailable"}, False),
+    ]

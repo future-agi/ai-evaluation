@@ -427,6 +427,56 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
     }
 
 
+def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "tools.py").write_text(
+        "class Editor:\n"
+        "    @classmethod\n"
+        "    def prepare(cls, context):\n"
+        "        return [{'name': 'edit', 'description': 'Edit a file'}]\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/chat", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "edit", "mode": "construct", "module": "tools",
+            "callable": "Editor.prepare", "factory": "Editor()",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from tools import Editor; print(Editor.prepare({}))"],
+        env={
+            **os.environ,
+            **{k: v.replace("{{WORLD_DIR}}", str(tmp_path)) for k, v in process.environment.items()},
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "Edit a file" in result.stdout
+    assert not trace.exists(), "Registering a tool does not prove the agent executed it"
+
+
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
     source = tmp_path / "voice-agent"
     source.mkdir()

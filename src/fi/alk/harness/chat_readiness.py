@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from fi._diagnostics import sanitize_diagnostic
+from fi._diagnostics import _SECRET_FIELD, sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
 
 from .chat_transport import create_chat_wrapper
@@ -22,8 +22,14 @@ def _failure_code(trace):
         return "chat_ingress_configuration_invalid"
     if status in {401, 403}:
         return "credential_missing"
-    if status in {408, 429} or trace.get("network_error"):
+    if (
+        status in {408, 429}
+        or trace.get("network_error")
+        or (stage == "tool_events" and 500 <= status < 600)
+    ):
         return "external_service_unavailable"
+    if stage == "tool_events":
+        return "chat_tool_evidence_unverified"
     return "chat_ingress_failed"
 
 
@@ -184,9 +190,28 @@ class _PrivateWorkflowArtifacts:
     async def upload_artifact(self, data, *, kind, scenario_key=None, deadline=None):
         from .outbound import ArtifactKind
 
-        text = sanitize_diagnostic(
-            data.decode("utf-8"), self.redactions, limit=max(8192, len(data) * 10)
-        )
+        def scrub(value):
+            if isinstance(value, dict):
+                return {
+                    scrub(key): "<redacted>" if _SECRET_FIELD.search(key) else scrub(item)
+                    for key, item in value.items()
+                }
+            if isinstance(value, list):
+                return [scrub(item) for item in value]
+            text = value if isinstance(value, str) else json.dumps(value)
+            redacted = sanitize_diagnostic(text, self.redactions, limit=max(8192, len(data) * 10))
+            if not isinstance(value, str):
+                try:
+                    return json.loads(redacted)
+                except ValueError:
+                    pass
+            return redacted
+
+        # Redact parsed values so replacement quotes and credential literals cannot break JSON.
+        if kind == ArtifactKind.TOOL_TRACE:
+            text = "\n".join(json.dumps(scrub(json.loads(line))) for line in data.splitlines() if line.strip())
+        else:
+            text = json.dumps(scrub(json.loads(data)))
         path = self.folder / f"{kind.value}-{uuid4().hex}.json"
         path.write_text(text, encoding="utf-8")
         path.chmod(0o600)

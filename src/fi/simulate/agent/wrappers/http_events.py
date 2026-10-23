@@ -3,10 +3,33 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _result_error_path(value: str) -> str:
+    if value and (
+        any(character.isspace() or character in "[]" for character in value)
+        or (value.startswith("$") and not value.startswith("$."))
+        or not all(value.removeprefix("$.").split("."))
+    ):
+        raise ValueError("invalid tool result error path")
+    return value
+
+
+ResultErrorPath = Annotated[str, AfterValidator(_result_error_path)]
+
+
+class CompletedToolFailureEvent(BaseModel):
+    """A source-declared failed terminal outcome for a tool action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(min_length=1, max_length=128)
+    action_id_path: str = Field(min_length=1, max_length=256)
+    result_path: str = Field(min_length=1, max_length=256)
 
 
 class CompletedToolEvents(BaseModel):
@@ -32,7 +55,15 @@ class CompletedToolEvents(BaseModel):
     name_path: str = Field(min_length=1, max_length=256)
     arguments_path: str = Field(min_length=1, max_length=256)
     result_path: str = Field(min_length=1, max_length=256)
+    failure_events: list[CompletedToolFailureEvent] = Field(
+        default_factory=list, max_length=8,
+        description="Source-declared failure terminal kinds, paired by the same action identifier as observations. Each emits ok=false and requires a non-null error result.",
+    )
     error_path: str = Field(default="", max_length=256)
+    result_error_path: ResultErrorPath = Field(
+        default="", max_length=256,
+        description="Source-declared nullable boolean/string error field relative to the tool result, decoded once if JSON text. Use dot-separated keys or array indices, optionally prefixed with $. Missing, null, false or empty string means no reported error; true or nonempty string means failure. Other values or invalid traversal reject the evidence. The original result is preserved.",
+    )
     status_path: str = Field(default="", max_length=256)
     completed_status: str = Field(default="", max_length=128)
 
@@ -60,7 +91,8 @@ class CompletedToolEvents(BaseModel):
 
     @model_validator(mode="after")
     def _endpoint(self) -> "CompletedToolEvents":
-        if self.action_kind == self.observation_kind:
+        kinds = [self.action_kind, self.observation_kind, *(event.kind for event in self.failure_events)]
+        if len(kinds) != len(set(kinds)):
             raise ValueError("completed events require distinct event kinds")
         if self.source == "response":
             if (
@@ -78,6 +110,8 @@ class CompletedToolEvents(BaseModel):
                 raise ValueError(
                     "response events require completion status and no endpoint fields"
                 )
+            if not (self.error_path or self.result_error_path or self.failure_events):
+                raise ValueError("response events require a tool outcome mapping")
             return self
         if (
             not all(
@@ -124,4 +158,8 @@ class CompletedToolRows(BaseModel):
     result_path: str = Field(min_length=1, max_length=256)
     id_path: str = Field(default="", max_length=256)
     error_path: str = Field(default="", max_length=256)
+    result_error_path: ResultErrorPath = Field(
+        default="", max_length=256,
+        description="Source-declared nullable boolean/string error field relative to the tool result, decoded once if JSON text. Use dot-separated keys or array indices, optionally prefixed with $. Missing, null, false or empty string means no reported error; true or nonempty string means failure. Other values or invalid traversal reject the evidence. The original result is preserved.",
+    )
     max_items: int = Field(default=128, ge=1, le=2000)

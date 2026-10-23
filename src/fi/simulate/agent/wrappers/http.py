@@ -205,6 +205,7 @@ class HTTPAgentWrapper(AgentWrapper):
         if (
             self.completed_tools
             and not self.completed_tools.error_path
+            and not self.completed_tools.result_error_path
             and not (
                 self.failure_rule
                 and self.failure_rule.get("success_values") is not None
@@ -346,9 +347,12 @@ class HTTPAgentWrapper(AgentWrapper):
                         )
                     )
                 }
-            status_code = getattr(exc, "status", self._response_status or status_code)
+            status_code = getattr(
+                exc, "status",
+                self._response_status if stage == "tool_events" else self._response_status or status_code,
+            )
             failure_stage = (
-                "setup" if stage == "setup" else getattr(exc, "stage", stage)
+                stage if stage in {"setup", "tool_events"} else getattr(exc, "stage", stage)
             )
             if stage == "tool_events":
                 self._response_text = ""
@@ -742,13 +746,14 @@ class HTTPAgentWrapper(AgentWrapper):
                 or type(error) is not bool
             ):
                 raise ValueError("invalid completed tool row")
+            result_error = _tool_result_error(result, spec.result_error_path)
             json.dumps([arguments, result], allow_nan=False)
             completed.append(
                 {
                     "name": name,
                     "arguments": arguments,
                     "result": result,
-                    "ok": not error,
+                    "ok": not (error or result_error),
                 }
             )
         if spec.id_path:
@@ -760,6 +765,7 @@ class HTTPAgentWrapper(AgentWrapper):
 
     def _accumulate_tool_events(self, items, actions, observations):
         spec = self.completed_tool_events
+        failures = {failure.kind: failure for failure in spec.failure_events}
         for event in items:
             if not isinstance(event, Mapping):
                 raise ValueError("completed tool event must be an object")
@@ -770,9 +776,12 @@ class HTTPAgentWrapper(AgentWrapper):
             elif kind == spec.observation_kind:
                 key = _select_response_value(event, spec.observation_action_id_path)
                 target = observations
+            elif isinstance(kind, str) and kind in failures:
+                key = _select_response_value(event, failures[kind].action_id_path)
+                target = observations
             else:
                 continue
-            if not isinstance(key, str) or not key or len(key) > 1024 or key in target:
+            if not isinstance(key, str) or not key or len(key) > 8192 or key in target:
                 raise ValueError("invalid or duplicate tool event identity")
             if (
                 spec.status_path
@@ -840,7 +849,7 @@ class HTTPAgentWrapper(AgentWrapper):
             )
             if not 200 <= status < 300:
                 raise _ResponseFailure(
-                    "tool_events", self._response_status, "event endpoint failed"
+                    "tool_events", status, "event endpoint failed"
                 )
             items = _select_response_value(payload, spec.items_path)
             if not isinstance(items, list):
@@ -879,6 +888,7 @@ class HTTPAgentWrapper(AgentWrapper):
                 self._response_status,
                 "tool events are missing a paired action or completion",
             )
+        failures = {failure.kind: failure for failure in spec.failure_events}
         completed = []
         identities = set()
         for key, action in actions.items():
@@ -889,9 +899,13 @@ class HTTPAgentWrapper(AgentWrapper):
             arguments = _select_response_value(action, spec.arguments_path)
             if isinstance(arguments, str):
                 arguments = json.loads(arguments)
-            result = _select_response_value(observations[key], spec.result_path)
-            error = (
-                _select_response_value(observations[key], spec.error_path)
+            observation = observations[key]
+            failure = failures.get(_select_response_value(observation, spec.kind_path))
+            result = _select_response_value(
+                observation, failure.result_path if failure else spec.result_path
+            )
+            error = True if failure else (
+                _select_response_value(observation, spec.error_path)
                 if spec.error_path
                 else False
             )
@@ -901,17 +915,21 @@ class HTTPAgentWrapper(AgentWrapper):
                 or len(name) > 256
                 or not isinstance(arguments, dict)
                 or type(error) is not bool
+                or (failure is not None and result is None)
             ):
                 raise _ResponseFailure(
                     "tool_events", self._response_status, "invalid completed tool data"
                 )
+            result_error = (
+                False if failure else _tool_result_error(result, spec.result_error_path)
+            )
             json.dumps([arguments, result], allow_nan=False)
             completed.append(
                 {
                     "name": name,
                     "arguments": arguments,
                     "result": result,
-                    "ok": not error,
+                    "ok": not (error or result_error),
                 }
             )
             if correlation is not None:
@@ -1111,6 +1129,31 @@ def _decode_json_or_sse(text: str) -> Any:
         raise ValueError(
             "HTTP target returned neither JSON nor JSON server-sent events"
         )
+
+
+def _tool_result_error(result: Any, path: str) -> bool:
+    if not path:
+        return False
+    current = json.loads(result) if isinstance(result, str) else result
+    json.dumps(current, allow_nan=False)
+    segments = path.removeprefix("$.").split(".")
+    for segment in segments:
+        if isinstance(current, Mapping):
+            if segment not in current:
+                return False
+            current = current[segment]
+        elif isinstance(current, list) and segment.isdecimal():
+            try:
+                current = current[int(segment)]
+            except IndexError as exc:
+                raise ValueError("invalid tool result error path") from exc
+        else:
+            raise ValueError("invalid tool result error path")
+    if current is None:
+        return False
+    if type(current) is bool or isinstance(current, str):
+        return bool(current)
+    raise ValueError("tool result error must be null, boolean or string")
 
 
 def _select_response_value(payload: Any, path: str) -> Any:

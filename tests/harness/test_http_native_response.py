@@ -11,6 +11,8 @@ from fi.alk.harness.chat_call_runner import _HostedChatTarget
 from fi.alk.harness.chat_transport import create_chat_wrapper
 from fi.alk.harness.contract import RuntimeInterface, RuntimeHttpFailureRule
 from fi.simulate.agent.wrapper import AgentInput
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http_events import CompletedToolEvents, CompletedToolRows
 
 
 ROWS = {
@@ -31,6 +33,7 @@ EVENTS = {
     "name_path": "name",
     "arguments_path": "arguments",
     "result_path": "output",
+    "error_path": "failed",
     "status_path": "status",
     "completed_status": "completed",
 }
@@ -61,6 +64,7 @@ PAIR_PAYLOAD = {
             "type": "function_call_output",
             "call_id": "call-1",
             "output": "fixture 84",
+            "failed": False,
             "status": "completed",
         },
         {"type": "message", "content": [{"text": "The fixture contains 84."}]},
@@ -456,3 +460,208 @@ def test_unrecognized_tool_error_message_stays_private(
     )
     assert trace["response_excerpt"] == ""
     assert "unregistered-secret-value" not in json.dumps(response.metadata)
+
+
+@pytest.mark.parametrize("status", ["completed", "in_progress"])
+def test_response_failure_events_preserve_status_and_dedup_guards(native_app, status):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    state["payload"]["output"][1] = {
+        "type": "rejected", "call_id": "call-1", "message": "invalid path", "status": status,
+    }
+    events = {**EVENTS, "error_path": "", "failure_events": [
+        {"kind": "rejected", "action_id_path": "call_id", "result_path": "message"},
+    ]}
+    wrapper = create_chat_wrapper(
+        interface(completed_tools=None, completed_tool_events=events), base, secret_values={},
+    )
+    first = invoke(wrapper)
+    assert first.metadata["external_agent"]["success"] is (status == "completed")
+    if status == "completed":
+        assert first.metadata["native_completed_tools"] == [{
+            "name": "read_document", "arguments": {"path": "fixture.txt"},
+            "result": "invalid path", "ok": False,
+        }]
+        assert invoke(wrapper).metadata["native_completed_tools"] == []
+    else:
+        assert not first.metadata.get("native_completed_tools")
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_declared_result_errors_classify_completed_tools(native_app, paired):
+    base, state = native_app
+    bodies = [
+        json.dumps({"status": "error", "error": "unattended execution blocked"}),
+        json.dumps({"stdout": "42", "exit_code": 0}),
+        {"revision": 2, "todos": [{"title": "calculate", "status": "completed"}], "error": None},
+        json.dumps({"error": "search backend unavailable"}),
+    ]
+    names = ["execute_code", "terminal", "tool_call", "search_files"]
+    arguments = [{"code": "print(42)"}, {"command": "echo 42"},
+                 {"calls": [{"name": "todo_list", "arguments": {"status": "completed"}}]},
+                 {"pattern": "fixture"}]
+    if paired:
+        state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+        state["payload"]["output"] = [
+            event
+            for index, (name, args, body) in enumerate(zip(names, arguments, bodies))
+            for event in [
+                {"type": "function_call", "call_id": str(index), "name": name,
+                 "arguments": json.dumps(args), "status": "completed"},
+                {"type": "function_call_output", "call_id": str(index),
+                 "output": body, "status": "completed"},
+            ]
+        ]
+        config = interface(completed_tools=None,
+                           completed_tool_events={**EVENTS, "error_path": "", "result_error_path": "error"})
+    else:
+        state["payload"]["tool_calls"] = [
+            {
+                "tool_id": str(index),
+                "tool_name": name,
+                "tool_arguments": args,
+                "tool_result": body,
+            }
+            for index, (name, args, body) in enumerate(zip(names, arguments, bodies))
+        ]
+        config = interface(completed_tools={**ROWS, "result_error_path": "error"}, failure_rule=None)
+    target = create_chat_wrapper(config, base, secret_values={})
+    response = invoke(target)
+    assert response.metadata["external_agent"]["success"] is True
+    tools = response.metadata["native_completed_tools"]
+    assert [call["ok"] for call in tools] == [False, True, True, False]
+    assert [call["result"] for call in tools] == bodies
+    assert [call["name"] for call in tools] == names
+    assert [call["arguments"] for call in tools] == arguments
+    if paired:
+        assert invoke(target).metadata["native_completed_tools"] == []
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_result_error_values_and_paths_are_strict(native_app, paired):
+    base, state = native_app
+    for body, expected in [
+        ({"error": None}, True), ({"error": False}, True), ({"error": ""}, True),
+        ({}, True), ({"error": True}, False), ({"error": "blocked"}, False),
+        ({"error": 0}, None), ({"error": 1}, None), ({"error": {}}, None),
+        ({"error": []}, None), ({"error": float("nan")}, None),
+        (None, None), ([], None), ("broken JSON", None),
+        (json.dumps(json.dumps({"error": "blocked"})), None),
+    ]:
+        for result in [body, json.dumps(body)]:
+            payload = copy.deepcopy(PAIR_PAYLOAD if paired else PAYLOAD)
+            if paired:
+                payload["output"][1]["output"] = result
+                config = interface(completed_tools=None, completed_tool_events={
+                    **EVENTS, "error_path": "", "result_error_path": "error"})
+            else:
+                payload["tool_calls"][0]["tool_result"] = result
+                config = interface(completed_tools={**ROWS, "result_error_path": "error"},
+                                   failure_rule=None)
+            state["payload"] = payload
+            response = invoke(create_chat_wrapper(config, base, secret_values={}))
+            assert response.metadata["external_agent"]["success"] is (expected is not None), result
+            if expected is None:
+                assert not response.metadata.get("native_completed_tools")
+                assert response.metadata["external_agent"]["response_excerpt"] == ""
+            else:
+                assert response.metadata["native_completed_tools"][0]["ok"] is expected
+                assert response.metadata["native_completed_tools"][0]["result"] == result
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_result_errors_do_not_weaken_boolean_failure(native_app, paired):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD if paired else PAYLOAD)
+    if paired:
+        state["payload"]["output"][1].update(output='{"error":null}', failed=True)
+        config = interface(completed_tools=None, completed_tool_events={
+            **EVENTS, "error_path": "failed", "result_error_path": "error"})
+    else:
+        state["payload"]["tool_calls"][0].update(tool_result='{"error":null}', failed=True)
+        config = interface(completed_tools={
+            **ROWS, "error_path": "failed", "result_error_path": "error"}, failure_rule=None)
+    response = invoke(create_chat_wrapper(config, base, secret_values={}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+
+
+def test_result_error_paths_do_not_guess_nested_shapes_or_consume_bad_events(native_app):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    target = create_chat_wrapper(interface(completed_tools=None, completed_tool_events={
+        **EVENTS, "error_path": "", "result_error_path": "outcome.error"}), base, secret_values={})
+    for body in [{"outcome": None}, {"outcome": []}, {"outcome": "nested JSON"}]:
+        state["payload"]["output"][1]["output"] = body
+        response = invoke(target)
+        assert response.metadata["external_agent"]["success"] is False
+        assert not response.metadata.get("native_completed_tools")
+    state["payload"]["output"][1]["output"] = {"outcome": {"error": "failed"}}
+    response = invoke(target)
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+    assert invoke(target).metadata["native_completed_tools"] == []
+
+
+def test_terminal_failure_bypasses_different_result_shape(native_app):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD)
+    state["payload"]["output"][1] = {
+        "type": "rejected", "call_id": "call-1", "message": "not JSON", "status": "completed",
+    }
+    config = interface(completed_tools=None, completed_tool_events={
+        **EVENTS, "error_path": "", "result_error_path": "error", "failure_events": [
+            {"kind": "rejected", "action_id_path": "call_id", "result_path": "message"},
+        ],
+    })
+    response = invoke(create_chat_wrapper(config, base, secret_values={}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+    assert response.metadata["native_completed_tools"][0]["result"] == "not JSON"
+
+
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("application_success", [False, True])
+def test_response_event_completion_requires_a_tool_outcome_mapping(direct, application_success):
+    events = {key: value for key, value in EVENTS.items() if key != "error_path"}
+    failure_rule = {"status_path": "error_msg", "success_values": [None]} if application_success else None
+    with pytest.raises(ValueError, match="response events require a tool outcome mapping"):
+        if direct:
+            HTTPAgentWrapper(
+                endpoint="http://localhost:8080/chat", protocol="json_template",
+                request_template={"input": "{{messages}}"},
+                completed_tool_events=events, failure_rule=failure_rule,
+            )
+        else:
+            interface(completed_tools=None, completed_tool_events=events,
+                      failure_rule=failure_rule)
+
+
+@pytest.mark.parametrize("paired", [False, True])
+@pytest.mark.parametrize("path", [
+    " ", " error", "error ", "out come.error", "outcome.\nerror", "outcome[0].error",
+    "$['error']", ".error", "error.", "outcome..error", "$", "$.", "$error",
+])
+def test_malformed_result_error_selectors_rejected_before_chat(paired, path):
+    model, spec = (CompletedToolEvents, EVENTS) if paired else (CompletedToolRows, ROWS)
+    with pytest.raises(ValueError, match="invalid tool result error path"):
+        model.model_validate({**spec, "result_error_path": path})
+
+
+@pytest.mark.parametrize("paired", [False, True])
+@pytest.mark.parametrize("path", ["out-comes.0.érror", "$.out-comes.0.érror"])
+def test_result_error_selector_preserves_keys_and_numeric_indices(native_app, paired, path):
+    base, state = native_app
+    state["payload"] = copy.deepcopy(PAIR_PAYLOAD if paired else PAYLOAD)
+    result = {"out-comes": [{"érror": "blocked"}]}
+    if paired:
+        state["payload"]["output"][1]["output"] = result
+        config = interface(completed_tools=None, completed_tool_events={
+            **EVENTS, "error_path": "", "result_error_path": path})
+    else:
+        state["payload"]["tool_calls"][0]["tool_result"] = result
+        config = interface(completed_tools={**ROWS, "result_error_path": path}, failure_rule=None)
+    response = invoke(create_chat_wrapper(config, base, secret_values={}))
+    assert response.metadata["external_agent"]["success"] is True
+    assert response.metadata["native_completed_tools"][0]["ok"] is False
+    assert response.metadata["native_completed_tools"][0]["result"] == result

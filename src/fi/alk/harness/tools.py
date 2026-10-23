@@ -23,12 +23,15 @@ from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
     Runtime,
+    RuntimeInterface,
     RuntimeSecretFile,
     RuntimeConfigFile,
     HttpObservation,
     RuntimeHttpFailureRule,
+    RuntimeHttpSetupRequest,
     LocalHttpAuth,
     known_modalities,
+    generated_chat_interface_problem,
     validate_contract,
 )
 from .instrumentation_evidence import detect_instrumentation
@@ -165,23 +168,9 @@ def accept_contract(
             "for memory-only state, or none when there is no state store. "
             "Omitting data_store does not declare a stateless agent."
         )
-    if (
-        require_setup_contract
-        and contract.modality == "chat"
-        and (
-            contract.runtime is None
-            or contract.runtime.interface is None
-            or not contract.runtime.interface.kind
-        )
-    ):
-        problems.append(
-            "missing-chat-interface: inspect the source and declare runtime.interface.kind "
-            "for its existing HTTP endpoint or callable callback. Declare command only for "
-            "a proven noninteractive entrypoint that consumes the bridge's JSON stdin, "
-            "ALK_USER_MESSAGE, or ALK_MESSAGES_JSON. An interactive CLI or startup command "
-            "alone is not a chat interface. The declared interface must still pass a real "
-            "chat readiness check."
-        )
+    if require_setup_contract and contract.modality == "chat":
+        if problem := generated_chat_interface_problem(contract.runtime):
+            problems.append(problem)
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -260,6 +249,10 @@ def contract_tools(
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
     """
+    events_schema = CompletedToolEvents.model_json_schema()
+    events_schema["properties"]["failure_events"]["items"] = (
+        events_schema.pop("$defs")["CompletedToolFailureEvent"]
+    )
     observation_schema = HttpObservation.model_json_schema()
     observation_schema["properties"]["parameters"]["additionalProperties"] = (
         observation_schema.pop("$defs")["ObservationParameter"]
@@ -858,16 +851,13 @@ def contract_tools(
                             "properties": {
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["http", "websocket", "callable"],
-                                    "description": "How the simulator reaches the running "
-                                    "agent. HTTP is currently the hosted repository path.",
+                                    "enum": ["http", "websocket", "callable", "command"],
+                                    "description": RuntimeInterface.model_fields["kind"].description,
                                 },
                                 "protocol": {
                                     "type": "string",
                                     "enum": ["fi.alk", "openai_chat", "json_template"],
-                                    "description": "The submitted endpoint's request/response "
-                                    "envelope. Use json_template for any other source-owned JSON "
-                                    "API and describe its exact envelope below.",
+                                    "description": RuntimeInterface.model_fields["protocol"].description,
                                 },
                                 "model": {
                                     "type": "string",
@@ -909,12 +899,10 @@ def contract_tools(
                                 },
                                 "response_path": {
                                     "type": "string",
-                                    "description": "For json_template only: optional dotted path "
-                                    "to assistant text in the JSON response, including numeric "
-                                    "list indexes such as '-1.content.parts.0.text'.",
+                                    "description": RuntimeInterface.model_fields["response_path"].description,
                                 },
                                 "completed_tools": CompletedToolRows.model_json_schema(),
-                                "completed_tool_events": CompletedToolEvents.model_json_schema(),
+                                "completed_tool_events": events_schema,
                                 "local_auth": LocalHttpAuth.model_json_schema(),
                                 "setup_secrets": {
                                     "type": "object",
@@ -973,7 +961,7 @@ def contract_tools(
                                     "type": "object",
                                     "additionalProperties": {"type": "string"},
                                     "maxProperties": 32,
-                                    "description": "Chat request headers using prior setup captures. Session cookies are preserved automatically in an isolated cookie jar.",
+                                    "description": RuntimeInterface.model_fields["headers_template"].description,
                                 },
                                 "setup_requests": {
                                     "type": "array",
@@ -999,6 +987,7 @@ def contract_tools(
                                             },
                                             "headers_template": {
                                                 "type": "object",
+                                                "description": RuntimeHttpSetupRequest.model_fields["headers_template"].description,
                                                 "additionalProperties": {
                                                     "type": "string"
                                                 },

@@ -703,12 +703,36 @@ Every sub-goal, coded or judged:
 
 So you meet these while writing, not after:
 
-- **A check that only matches call names**, such as `any(c.name == "transfer" for c in calls)`. It
-  passes an agent that called the right tool with the wrong arguments.
-- **A judged sub-goal without its four criteria lines**, or whose "If it does not arise" line does
-  not say Pass or Fail.
+- **A check that only matches call names.** `any(c.name == "transfer" for c in calls)` is refused.
+  It passes an agent that called the right tool with the wrong arguments, which is the failure this
+  harness exists to catch: an agent that mishears a name and opens somebody else's account calls
+  exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+  For a dispatcher that wraps subtools, establish success from its source-defined result contract
+  and the returned state. Child names and arguments show intent, not execution. A top-level
+  dispatcher name alone must neither prove nor disprove a subtool's successful effect. Inspect
+  the recorded outcome and verify the relevant returned state or source-declared child outcome. Do not
+  invent separate completed calls by flattening arguments.
+- **A judged sub-goal without its criteria.** `judged` needs the four labelled lines above, and its
+  "If it does not arise" line has to say Pass or Fail. "Was it polite" is not criteria.
 - **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
 - **A check that takes `reference` without a contract** saying where each compared value comes from.
+
+Check the *identity* the agent acted on, not just that it acted. If the caller is Corwin and the
+agent looked up a record, assert whose record it was. An agent that proceeds against the wrong row
+must not pass merely because it called the expected tool.
+
+Reading an argument is not the same as checking it:
+
+```python
+# Weak: any non-empty reason passes.
+reason = xfers[0].arguments.get("reason")
+if not reason or not isinstance(reason, str) or not reason.strip():
+    return f"no reason given: {reason!r}"
+
+# Strong: compare the value with the scenario or world truth.
+if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
+    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
+```
 
 Every scenario's proof then plays the scenario's solution, any other ways its writer declared, an
 agent that gets every fixed value right but chooses everything else itself, and an agent that gets one

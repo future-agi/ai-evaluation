@@ -4,6 +4,26 @@ from pydantic import ValidationError
 from fi.alk.harness.contract import AgentContract, RuntimeInterface, validate_contract
 
 
+def test_response_path_schema_describes_supported_selector_in_authoring_and_repair(tmp_path):
+    from fi.alk.harness.runtime_repair import _RuntimeSubmission
+    from fi.alk.harness.tools import contract_tools
+    from fi.simulate.agent.wrappers.http import _select_response_value
+
+    description = RuntimeInterface.model_json_schema()["properties"]["response_path"]["description"]
+    submit = next(tool for tool in contract_tools(tmp_path).tools if tool.name == "submit_contract")
+    initial = submit.input_schema["properties"]["runtime"]["properties"]["interface"]["properties"]
+    repair = _RuntimeSubmission.model_json_schema()["$defs"]["RuntimeInterface"]["properties"]
+    assert initial["response_path"]["description"] == repair["response_path"]["description"] == description
+    assert "dot-separated" in description
+    assert "Negative indexes" in description
+    assert "Bracket indexing and JSONPath expressions are not supported" in description
+    assert "output.-1.content.0.text" in description
+    payload = {"output": [{"content": [{"text": "earlier"}]}, {"content": [{"text": "answer"}]}]}
+    assert _select_response_value(payload, "output.-1.content.0.text") == "answer"
+    with pytest.raises(ValueError, match="response_path segment not found"):
+        _select_response_value(payload, "output[-1].content[0].text")
+
+
 def test_generic_http_contract_rejects_unbound_or_forward_template_variables():
     with pytest.raises(
         ValidationError, match="runtime_http_setup_unknown_placeholders"
@@ -94,3 +114,22 @@ def test_a_complete_entrypoint_and_an_unreachable_one_both_pass():
     assert not [
         p for p in validate_contract(contract) if "needs-module-and-callable" in p
     ]
+
+
+def test_failure_event_schema_is_available_in_authoring_and_repair(tmp_path):
+    from fi.alk.harness.runtime_repair import _RuntimeSubmission
+    from fi.alk.harness.tools import contract_tools
+    from fi.simulate.agent.wrappers.http_events import CompletedToolFailureEvent
+
+    submit = next(tool for tool in contract_tools(tmp_path).tools if tool.name == "submit_contract")
+    initial = submit.input_schema["properties"]["runtime"]["properties"]["interface"]["properties"]["completed_tool_events"]
+    repair = _RuntimeSubmission.model_json_schema()
+    field = initial["properties"]["failure_events"]
+    assert field["maxItems"] == 8
+    assert field["items"] == CompletedToolFailureEvent.model_json_schema()
+    assert "$defs" not in initial
+    assert repair["$defs"]["CompletedToolEvents"]["properties"]["failure_events"]["items"] == {
+        "$ref": "#/$defs/CompletedToolFailureEvent",
+    }
+    assert repair["$defs"]["CompletedToolFailureEvent"] == field["items"]
+    assert field["items"]["required"] == ["kind", "action_id_path", "result_path"]

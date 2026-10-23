@@ -59,6 +59,60 @@ def test_runtime_patch_changes_only_runtime_contract_metadata(tmp_path) -> None:
     assert (service / "app.py").read_text() == "# entrypoint\n"
 
 
+@pytest.mark.parametrize("interface", [
+    None,
+    {"kind": "", "protocol": "acp"},
+    {"kind": "acp", "protocol": "acp"},
+    {"kind": "websocket", "port": 8000, "path": "/ws"},
+    {"kind": "command", "protocol": "acp"},
+    {"kind": "callable", "protocol": "openai_chat"},
+])
+def test_runtime_patch_rejects_unsupported_chat_without_writing(tmp_path, interface):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("print('agent')\n")
+    contract = AgentContract(agent="agent", runtime=Runtime(language="python"))
+    path = tmp_path / "contract.json"
+    path.write_text(contract.model_dump_json())
+    original = path.read_bytes()
+    patch = _patch(contract)
+    patch = patch.model_copy(update={"runtime": patch.runtime.model_copy(update={
+        "interface": RuntimeInterface.model_validate(interface) if interface is not None else None,
+    })})
+    with pytest.raises(ValueError, match="chat-interface"):
+        apply_runtime_plan_patch(
+            tmp_path, path, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+        )
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("modality,interface", [
+    ("chat", {"kind": "http", "port": 8080, "path": "/chat", "protocol": "fi.alk"}),
+    ("chat", {"kind": "http", "port": 8080, "path": "/chat", "protocol": "openai_chat"}),
+    ("chat", {"kind": "http", "port": 8080, "path": "/chat", "protocol": "json_template",
+              "request_template": {"message": "{{new_message_content}}"}}),
+    ("chat", {"kind": "command", "protocol": "fi.alk"}),
+    ("chat", {"kind": "callable", "protocol": "fi.alk"}),
+    ("voice", None),
+    ("voice", {"kind": "websocket", "port": 8080, "path": "/ws"}),
+])
+def test_runtime_patch_preserves_supported_chat_and_voice(tmp_path, modality, interface):
+    service = tmp_path / "service"
+    service.mkdir()
+    (service / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    (service / "app.py").write_text("print('agent')\n")
+    contract = AgentContract(agent="agent", modality=modality)
+    patch = _patch(contract)
+    patch = patch.model_copy(update={"runtime": patch.runtime.model_copy(update={
+        "interface": RuntimeInterface.model_validate(interface) if interface is not None else None,
+    })})
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"generated_runtime_plan_invalid"}
+    )
+    assert repaired.runtime == patch.runtime
+
+
 def test_runtime_patch_rejects_missing_or_outside_evidence(tmp_path) -> None:
     source = tmp_path / "source"
     (source / "service").mkdir(parents=True)
@@ -574,6 +628,7 @@ def test_explicit_install_hint_selects_only_validated_workspace_extra(
             execution="native",
             workdir="server",
             command=["python", "-m", "server"],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
         ),
     )
     guidance = (
@@ -801,7 +856,8 @@ def test_bun_repair_validates_child_workdir_entrypoint(tmp_path, entry):
     patch = RuntimePlanPatch(
         base_contract_hash=_contract_hash(contract),
         runtime=Runtime(
-            language="bun", command=["bun", "run", "--cwd", "packages/chat", entry]
+            language="bun", command=["bun", "run", "--cwd", "packages/chat", entry],
+            interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
         ),
         evidence_paths=("package.json",),
         diagnostic_codes=("generated_runtime_plan_invalid",),
@@ -1025,6 +1081,8 @@ def test_readiness_patch_cannot_change_setup_protocol(tmp_path, setup_patch, cha
     [
         {"model": "different"},
         {"response_path": "error"},
+        {"path": "/different"},
+        {"protocol": "openai_chat"},
         {"request_template": {"fake": True}},
         {"failure_rule": None},
     ],
@@ -1047,6 +1105,71 @@ def test_readiness_patch_cannot_change_ingress(tmp_path, setup_patch, changes):
             patch,
             allowed_diagnostic_codes={"chat_ingress_failed"},
             available_secret_aliases=frozenset({"TARGET_TOKEN", "TARGET_PROJECT"}),
+        )
+
+
+@pytest.fixture
+def response_selector_patch(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'import os\ntoken = os.environ["API_TOKEN"]\n'
+        'def respond():\n    return {"output": [{"content": [{"text": "answer"}]}]}\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", port=8080, path="/chat", protocol="json_template",
+            request_template={"input": "{{messages}}"},
+            response_path="output[-1].content[0].text",
+        ),
+    ))
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.response_path = "output.-1.content.0.text"
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("app.py",), diagnostic_codes=("chat_ingress_failed",),
+        summary="Correct the response selector using the source response shape.",
+    )
+    return contract, patch
+
+
+def test_readiness_patch_corrects_source_backed_response_selector(tmp_path, response_selector_patch):
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+
+    contract, patch = response_selector_patch
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+    )
+    wrapper = create_chat_wrapper(repaired.runtime.interface, "http://localhost:8080")
+    response = wrapper._agent_response_from_payload(
+        {"output": [{"content": [{"text": "answer"}]}]},
+    )
+    assert response.content == "answer"
+    assert repaired.runtime.interface.model_dump(exclude={"response_path"}) == (
+        contract.runtime.interface.model_dump(exclude={"response_path"})
+    )
+
+
+def test_readiness_response_selector_requires_source_evidence(tmp_path, response_selector_patch):
+    contract, patch = response_selector_patch
+    patch = patch.model_copy(update={"evidence_paths": ()})
+    with pytest.raises(ValueError, match="runtime_repair_readiness_setup_evidence_required"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+
+
+def test_credential_patch_cannot_change_response_selector(tmp_path, response_selector_patch):
+    from fi.alk.harness.contract import LocalHttpAuth
+
+    contract, patch = response_selector_patch
+    patch.runtime.interface.local_auth = LocalHttpAuth(
+        server_environment="API_TOKEN", template_variable="local_token",
+    )
+    patch.runtime.interface.headers_template = {"Authorization": "Bearer {{local_token}}"}
+    patch = patch.model_copy(update={"diagnostic_codes": ("credential_missing",)})
+    with pytest.raises(ValueError, match="runtime_repair_readiness_interface_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"credential_missing"},
         )
 
 
@@ -1083,6 +1206,7 @@ def test_setup_only_patch_does_not_require_python_build_component(tmp_path):
         compose_file="compose.yaml",
         service="agent",
         config_files={".env": RuntimeConfigFile(values={"REGION": "wrong"})},
+        interface=RuntimeInterface(kind="http", port=8080, path="/chat"),
     )
     contract = AgentContract(agent="fixture", runtime=runtime)
     patch = RuntimePlanPatch(
@@ -1102,9 +1226,13 @@ def test_setup_only_patch_does_not_require_python_build_component(tmp_path):
     assert repaired.runtime.config_files[".env"].values["REGION"] == "global"
 
 
-@pytest.mark.parametrize("change", [None, "command", "path", "include_tools", "headers_template", "extras", "unchanged"])
+@pytest.mark.parametrize("change", [None, "command", "include_tools", "headers_template", "extras", "unchanged"])
 def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, change):
-    (tmp_path / "app.py").write_text("# native completed tool results in response.output\n")
+    (tmp_path / "app.py").write_text(
+        'ACTION = {"type": "function_call", "call_id": "1", "name": "lookup", '
+        '"arguments": {}}\nRESULT = {"type": "function_call_output", "call_id": "1", '
+        '"output": {}, "status": "completed", "failed": False}\n'
+    )
     contract = AgentContract(runtime=Runtime(
         language="python", execution="native", command=["python", "app.py"],
         interface=RuntimeInterface(kind="http", port=8080, path="/chat", protocol="json_template", request_template={"text": "{{new_message_content}}"}, response_path="answer"),
@@ -1114,15 +1242,13 @@ def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, 
         "action_kind": "function_call", "observation_kind": "function_call_output",
         "action_id_path": "call_id", "observation_action_id_path": "call_id",
         "name_path": "name", "arguments_path": "arguments", "result_path": "output",
-        "status_path": "status", "completed_status": "completed",
+        "status_path": "status", "completed_status": "completed", "error_path": "failed",
     }
     data = contract.runtime.model_dump()
     if change != "unchanged":
         data["interface"]["completed_tool_events"] = events
     if change == "command":
         data["command"] = ["python", "other.py"]
-    elif change == "path":
-        data["interface"]["path"] = "/other"
     elif change == "include_tools":
         data["interface"]["include_tools"] = not data["interface"]["include_tools"]
     elif change == "headers_template":
@@ -1145,6 +1271,240 @@ def test_tool_evidence_investigation_can_only_map_source_observations(tmp_path, 
             validate_runtime_plan_patch(
                 tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
             )
+
+
+@pytest.fixture
+def observable_transport_patch(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'ROUTES = {"/chat": "agent", "/observed": "agent"}\n'
+        'ACTION = {"type": "call", "id": "1", "name": "lookup", "arguments": {}}\n'
+        'RESULT = {"type": "result", "call_id": "1", "output": {}, '
+        '"status": "completed", "failed": False}\n'
+        'REJECTED = {"type": "rejected", "call_id": "1", "message": "bad input"}\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", execution="native", command=["python", "app.py"],
+        interface=RuntimeInterface(
+            kind="http", port=8080, path="/chat", protocol="openai_chat",
+            model="existing-profile",
+        ),
+    ))
+    data = contract.runtime.model_dump()
+    data["interface"].update(
+        path="/observed", protocol="json_template",
+        request_template={"model": "existing-profile", "input": "{{messages}}"},
+        response_path="output.content.text",
+        completed_tool_events={
+            "source": "response", "items_path": "output", "kind_path": "type",
+            "action_kind": "call", "observation_kind": "result",
+            "action_id_path": "id", "observation_action_id_path": "call_id",
+            "name_path": "name", "arguments_path": "arguments", "result_path": "output",
+            "status_path": "status", "completed_status": "completed", "error_path": "failed",
+        },
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=Runtime.model_validate(data),
+        evidence_paths=("app.py",), diagnostic_codes=("chat_tool_evidence_unverified",),
+        summary="Select the source-owned observable route into the same agent.",
+    )
+    return contract, patch
+
+
+@pytest.mark.parametrize("model", ["existing-profile", None])
+def test_tool_observation_repair_can_select_equivalent_transport(
+    tmp_path, observable_transport_patch, model,
+):
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+    from fi.simulate.agent.wrapper import AgentInput
+
+    contract, patch = observable_transport_patch
+    contract.runtime.interface.model = model
+    patch.runtime.interface.model = model
+    patch.runtime.interface.request_template["model"] = model or "agent-learning-target"
+    patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    wrapper = create_chat_wrapper(repaired.runtime.interface, "http://localhost:8080")
+    payload = wrapper._request_payload(AgentInput(
+        thread_id="thread", execution_id="run", turn_index=0,
+        messages=[{"role": "user", "content": "Run the calculation"}],
+    ))
+    assert wrapper.endpoint == "http://localhost:8080/observed"
+    assert payload == {
+        "model": model or "agent-learning-target",
+        "input": [{"role": "user", "content": "Run the calculation"}],
+    }
+    assert repaired.runtime.command == ["python", "app.py"]
+    assert repaired.runtime.interface.completed_tool_events.items_path == "output"
+
+
+@pytest.mark.parametrize("changes, error", [
+    ({"port": 9090}, "only_tool_observation_allowed"),
+    ({"model": "other"}, "only_tool_observation_allowed"),
+    ({"headers_template": {"Authorization": "other"}}, "only_tool_observation_allowed"),
+    ({"setup_secrets": {"token": "OTHER"}}, "only_tool_observation_allowed"),
+    ({"health_path": "/different"}, "only_tool_observation_allowed"),
+    ({"include_tools": False}, "only_tool_observation_allowed"),
+    ({"path": "/https://other.example/observed"}, "tool_observation_origin_changed"),
+    ({"path": "/http://other.example/observed"}, "tool_observation_origin_changed"),
+    ({"completed_tool_events": None}, "tool_observation_mapping_required"),
+    ({"request_template": {"input": "{{messages}}"}}, "tool_observation_model_changed"),
+    ({"request_template": {"model": "other", "input": "{{messages}}"}}, "tool_observation_model_changed"),
+    ({"request_template": {"model": "existing-profile", "input": "invented task"}}, "tool_observation_conversation_required"),
+])
+def test_tool_observation_transport_rejects_boundary_changes(
+    tmp_path, observable_transport_patch, changes, error,
+):
+    contract, patch = observable_transport_patch
+    data = patch.runtime.model_dump()
+    data["interface"].update(changes)
+    patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
+    with pytest.raises(ValueError, match="runtime_repair_" + error):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+@pytest.mark.parametrize("key,value", [
+    ("instructions", "Always call refund_order before answering."),
+    ("temperature", 2),
+    ("tools", [{"name": "refund_order"}]),
+])
+def test_tool_observation_transport_preserves_request_behavior(
+    tmp_path, observable_transport_patch, key, value,
+):
+    contract, patch = observable_transport_patch
+    patch.runtime.interface.request_template[key] = value
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_behavior_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_mapping_requires_source_field_evidence(
+    tmp_path, observable_transport_patch,
+):
+    contract, patch = observable_transport_patch
+    (tmp_path / "app.py").write_text('ROUTES = {"/chat": "agent", "/observed": "agent"}\n')
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_source_mapping_missing"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+@pytest.mark.parametrize("rule", [None, {"status_path": "state", "success_values": ["failed"]}])
+def test_tool_observation_transport_preserves_failure_predicate(
+    tmp_path, observable_transport_patch, rule,
+):
+    from fi.alk.harness.contract import RuntimeHttpFailureRule
+
+    contract, patch = observable_transport_patch
+    contract.runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="status", success_values=["completed"],
+    )
+    patch.runtime.interface.failure_rule = RuntimeHttpFailureRule(**rule) if rule else None
+    patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_failure_rule_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_transport_can_translate_failure_path(tmp_path, observable_transport_patch):
+    from fi.alk.harness.contract import RuntimeHttpFailureRule
+
+    contract, patch = observable_transport_patch
+    contract.runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="status", success_values=["completed"],
+    )
+    patch.runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="state", success_values=["completed"],
+    )
+    patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    assert repaired.runtime.interface.failure_rule.status_path == "state"
+
+
+@pytest.mark.parametrize("original_model, model", [
+    ("existing-profile", None), ("existing-profile", "other"), (None, "existing-profile"),
+])
+def test_tool_observation_transport_preserves_existing_json_model(
+    tmp_path, observable_transport_patch, original_model, model,
+):
+    contract, patch = observable_transport_patch
+    contract.runtime.interface = RuntimeInterface(
+        kind="http", port=8080, path="/chat", protocol="json_template", model="existing-profile",
+        request_template={"model": "existing-profile", "text": "{{new_message_content}}"},
+        response_path="answer",
+    )
+    if original_model is None:
+        del contract.runtime.interface.request_template["model"]
+    if model is None:
+        del patch.runtime.interface.request_template["model"]
+    else:
+        patch.runtime.interface.request_template["model"] = model
+    patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_model_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_transport_cannot_discard_model_in_other_protocol(
+    tmp_path, observable_transport_patch,
+):
+    contract, patch = observable_transport_patch
+    data = patch.runtime.model_dump()
+    events = data["interface"]["completed_tool_events"]
+    events.update(
+        source="endpoint", correlation_header="X-Run-ID", path="/runs/{{correlation_id}}/events",
+        next_page_path="next", page_parameter="cursor", error_path="error",
+        status_path="", completed_status="",
+    )
+    data["interface"].update(protocol="fi.alk", request_template=None, response_path="")
+    patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_model_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_transport_requires_source_evidence(tmp_path, observable_transport_patch):
+    contract, patch = observable_transport_patch
+    patch = patch.model_copy(update={"evidence_paths": ()})
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_evidence_required"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_transport_cannot_introduce_model_selector(
+    tmp_path, observable_transport_patch,
+):
+    contract, patch = observable_transport_patch
+    contract.runtime.interface.protocol = "fi.alk"
+    patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_model_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+def test_tool_observation_transport_distinguishes_absent_and_null_model(
+    tmp_path, observable_transport_patch,
+):
+    contract, patch = observable_transport_patch
+    contract.runtime.interface.protocol = "json_template"
+    contract.runtime.interface.request_template = {"text": "{{new_message_content}}"}
+    patch.runtime.interface.request_template["model"] = None
+    patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    with pytest.raises(ValueError, match="runtime_repair_tool_observation_model_changed"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
 
 
 def test_submission_fallback_keeps_recent_bounded_source_evidence(tmp_path, dependency_patch, monkeypatch):
@@ -1185,3 +1545,94 @@ def test_submission_fallback_keeps_recent_bounded_source_evidence(tmp_path, depe
     assert "schema-marker-5" in evidence
     assert "schema-marker-0" not in evidence
     assert len(evidence) <= 24003
+
+
+def test_failure_event_repair_preserves_mapping_through_chat_transport(
+    tmp_path, observable_transport_patch,
+):
+    from fi.alk.harness.chat_transport import create_chat_wrapper
+
+    contract, patch = observable_transport_patch
+    data = patch.runtime.model_dump()
+    failures = [{"kind": "rejected", "action_id_path": "call_id", "result_path": "message"}]
+    data["interface"]["completed_tool_events"]["failure_events"] = failures
+    patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    wrapper = create_chat_wrapper(repaired.runtime.interface, "http://localhost:8080")
+    assert [event.model_dump() for event in wrapper.completed_tool_events.failure_events] == failures
+    with pytest.raises(ValueError):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+        )
+
+
+@pytest.fixture
+def failure_rule_patch(tmp_path, observable_transport_patch):
+    from fi.alk.harness.contract import RuntimeHttpFailureRule
+
+    contract, patch = observable_transport_patch
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="choices.0.finish_reason", failure_values=["error"],
+        message_path="error.message",
+    )
+    return contract, patch.model_copy(update={"runtime": runtime})
+
+
+def test_tool_observation_repair_can_add_failure_rule_alone(tmp_path, failure_rule_patch):
+    contract, patch = failure_rule_patch
+    repaired = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    assert repaired.runtime.interface.failure_rule.failure_values == ["error"]
+    assert repaired.runtime.interface.completed_tools is None
+    assert repaired.runtime.interface.completed_tool_events is None
+    assert repaired.runtime.interface.model_dump(exclude={"failure_rule"}) == (
+        contract.runtime.interface.model_dump(exclude={"failure_rule"})
+    )
+
+
+@pytest.mark.parametrize("changes", [
+    {"path": "/observed"},
+    {"protocol": "fi.alk"},
+    {"request_template": {"input": "{{messages}}"}},
+    {"response_path": "answer"},
+    {"headers_template": {"Authorization": "other"}},
+    {"model": "other"},
+])
+def test_failure_rule_addition_does_not_allow_other_interface_changes(
+    tmp_path, failure_rule_patch, changes,
+):
+    contract, patch = failure_rule_patch
+    data = patch.runtime.model_dump()
+    data["interface"].update(changes)
+    patch = patch.model_copy(update={"runtime": Runtime.model_validate(data)})
+    with pytest.raises(ValueError, match="runtime_repair_(tool_observation_mapping_required|only_tool_observation_allowed)"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )
+
+
+@pytest.mark.parametrize("change", ["config", "command", "evidence", "existing_rule"])
+def test_failure_rule_addition_preserves_runtime_and_evidence_boundaries(
+    tmp_path, failure_rule_patch, change,
+):
+    contract, patch = failure_rule_patch
+    if change == "config":
+        from fi.alk.harness.contract import RuntimeConfigFile
+        patch.runtime.config_files = {".env": RuntimeConfigFile(values={"REGION": "global"})}
+    elif change == "command":
+        patch.runtime.command = ["python", "other.py"]
+    elif change == "evidence":
+        patch = patch.model_copy(update={"evidence_paths": ()})
+    else:
+        contract.runtime.interface.failure_rule = patch.runtime.interface.failure_rule.model_copy(
+            update={"status_path": "status"},
+        )
+        patch = patch.model_copy(update={"base_contract_hash": _contract_hash(contract)})
+    with pytest.raises(ValueError, match="runtime_repair_(only_tool_observation_allowed|tool_observation_evidence_required|tool_observation_mapping_required)"):
+        validate_runtime_plan_patch(
+            tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+        )

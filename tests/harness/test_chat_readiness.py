@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 
 from fi.alk.harness.bundle_v2 import BundleRuntimeV2, EvidenceSeam, RuntimeKindV2
@@ -319,6 +320,9 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
             calls.append("reset")
             state["profile"] = False
 
+        async def clone_world_database(self, *_args, **_kwargs):
+            return None
+
         async def close(self, **kwargs):
             from fi.alk.harness.process_diagnostics import retain_process_log
 
@@ -350,9 +354,17 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         assert kwargs["include_scenarios"] is not readiness_only
         target.mkdir(parents=True)
         if not readiness_only:
-            scenario = target / "scenarios/one"
-            scenario.mkdir(parents=True)
-            (scenario / "scenario.json").write_text(json.dumps({"scenario_key": "one"}))
+            keys = (
+                [("00-refusal", "refusal"), ("01-one", "one")]
+                if required_workflow
+                else [("one", "one")]
+            )
+            for folder, key in keys:
+                scenario = target / f"scenarios/{folder}"
+                scenario.mkdir(parents=True)
+                (scenario / "scenario.json").write_text(
+                    json.dumps({"scenario_key": key})
+                )
         return SimpleNamespace(
             digest="bundle", provenance=SimpleNamespace(source_digest="source"),
             runtime=BundleRuntimeV2(kind=RuntimeKindV2.PROCESS, evidence_seam=EvidenceSeam.HTTP_TOOL),
@@ -744,6 +756,53 @@ def workflow_receipt(tmp_path):
     return paths[0], json.loads(paths[0].read_text())
 
 
+@pytest.mark.parametrize("credential", ["known-value", '{"enabled": true}'])
+def test_private_tool_artifacts_preserve_json_lines_during_redaction(tmp_path, credential):
+    from fi.alk.harness.chat_readiness import _PrivateWorkflowArtifacts
+    from fi.alk.harness.outbound import ArtifactKind
+
+    rows = [
+        {"name": "lookup", "result": {"detail": "Client(api_key='unlisted-key', value='known-value')",
+                                     "password": "unlisted-password", "active": True}},
+        {"name": "finish", "arguments": ["known-value", {"access_token": "unlisted-token"}],
+         "result": False},
+    ]
+    artifacts = _PrivateWorkflowArtifacts(tmp_path, {"credential": credential})
+    path = asyncio.run(artifacts.upload_artifact(
+        "\n".join(json.dumps(row) for row in rows).encode(), kind=ArtifactKind.TOOL_TRACE,
+    ))
+    text = Path(path).read_text()
+    saved = [json.loads(line) for line in text.splitlines()]
+    assert [row["name"] for row in saved] == ["lookup", "finish"]
+    assert saved[0]["result"]["active"] == ("<redacted>" if "enabled" in credential else True)
+    assert saved[1]["result"] is False
+    assert saved[0]["result"]["password"] == "<redacted>"
+    assert saved[1]["arguments"][1]["access_token"] == "<redacted>"
+    assert all(value not in text for value in ("unlisted-key", "unlisted-password", "unlisted-token"))
+    if credential == "known-value":
+        assert "known-value" not in text
+    assert Path(path).stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("kind", ["trace", "transcript"])
+@pytest.mark.parametrize("redactions", [None, {"credential": "x" * (1024 * 1024 + 1)}])
+def test_private_json_artifacts_fail_closed_without_safe_credential_context(tmp_path, kind, redactions):
+    from fi.alk.harness.chat_readiness import _PrivateWorkflowArtifacts
+    from fi.alk.harness.outbound import ArtifactKind
+
+    artifacts = _PrivateWorkflowArtifacts(tmp_path, redactions)
+    path = asyncio.run(artifacts.upload_artifact(
+        json.dumps({"messages": [{"content": "unknown-secret", "credential": "other-secret"}],
+                    "success": True}, indent=2).encode(),
+        kind=ArtifactKind(kind),
+    ))
+    text = Path(path).read_text()
+    json.loads(text)
+    assert "unknown-secret" not in text
+    assert "other-secret" not in text
+    assert "credential context" in text
+
+
 @pytest.mark.parametrize("completed", [False, True])
 def test_private_workflow_checks_executed_tools_after_clarification(
     tmp_path, profile_app, monkeypatch, completed
@@ -878,7 +937,10 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     assert receipt["tool_call_count"] == 1
     assert receipt["turns"] == 2
     transcript = next(receipt_path.parent.glob("transcript-*.json"))
-    assert json.loads(transcript.read_text())["messages"] == [
+    assert [
+        {key: message[key] for key in ("role", "content")}
+        for message in json.loads(transcript.read_text())["messages"]
+    ] == [
         {"role": "user", "content": "Look up account A-1"},
         {"role": "assistant", "content": "The account is active <redacted>"},
     ]
@@ -888,3 +950,58 @@ def test_private_workflow_deadline_and_cancellation_keep_completed_evidence(tmp_
     assert call["arguments"] == {"account_id": "A-1"}
     assert call["result"]["active"] is True
     assert all("secret123" not in path.read_text() for path in receipt_path.parent.iterdir())
+
+
+def test_native_http_200_failure_rule_unlocks_existing_setup_repair(tmp_path, profile_app):
+    from fi.alk.harness.contract import RuntimeConfigFile, RuntimeHttpFailureRule
+    from fi.alk.harness.runtime_repair import validate_runtime_plan_patch
+
+    url, state = profile_app
+    state.update(profile=True, body={
+        "choices": [{"message": {"role": "assistant", "content": "Configuration failed"},
+                     "finish_reason": "error"}],
+        "error": {"message": "Wrong region secret123"},
+    })
+    (tmp_path / "app.py").write_text(
+        'REGION = "global"\n'
+        'FAILED_RESPONSE = {"choices": [{"finish_reason": "error"}], '
+        '"error": {"message": "Wrong region"}}\n'
+    )
+    contract = AgentContract(runtime=Runtime(
+        language="python", command=["python", "app.py"],
+        config_files={".env": RuntimeConfigFile(values={"REGION": "wrong"})},
+        interface=interface(protocol="openai_chat", model="existing-profile"),
+    ))
+    asyncio.run(probe(tmp_path, url, interface=contract.runtime.interface))
+    runtime = contract.runtime.model_copy(deep=True)
+    runtime.interface.failure_rule = RuntimeHttpFailureRule(
+        status_path="choices.0.finish_reason", failure_values=["error"],
+        message_path="error.message",
+    )
+    patch = RuntimePlanPatch(
+        base_contract_hash=_contract_hash(contract), runtime=runtime,
+        evidence_paths=("app.py",), diagnostic_codes=("chat_tool_evidence_unverified",),
+        summary="Recognize the source-defined failure response before repairing setup.",
+    )
+    observed = validate_runtime_plan_patch(
+        tmp_path, contract, patch, allowed_diagnostic_codes={"chat_tool_evidence_unverified"},
+    )
+    with pytest.raises(RuntimeValidationError) as error:
+        asyncio.run(probe(tmp_path, url, interface=observed.runtime.interface))
+    assert error.value.diagnostics[0].code == "chat_ingress_failed"
+    assert state["calls"][0][1] == state["calls"][1][1]
+    runtime = observed.runtime.model_copy(deep=True)
+    runtime.config_files[".env"].values["REGION"] = "global"
+    patch = patch.model_copy(update={
+        "base_contract_hash": _contract_hash(observed), "runtime": runtime,
+        "diagnostic_codes": (error.value.diagnostics[0].code,),
+        "summary": "Correct the source-defined region without changing the agent.",
+    })
+    repaired = validate_runtime_plan_patch(
+        tmp_path, observed, patch, allowed_diagnostic_codes={"chat_ingress_failed"},
+    )
+    assert repaired.runtime.config_files[".env"].values == {"REGION": "global"}
+    assert repaired.runtime.interface == observed.runtime.interface
+    assert repaired.runtime.command == contract.runtime.command
+    assert "secret123" not in json.dumps(receipts(tmp_path))
+    assert sorted(item["status"] for item in receipts(tmp_path)) == ["failed", "passed"]

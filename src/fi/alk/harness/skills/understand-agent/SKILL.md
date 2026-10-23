@@ -133,12 +133,32 @@ Find, in roughly this order:
    Never declare token values, disable authentication, override supplied credentials, or use this
    for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
 
+   Inspect the selected chat route's response producers for structured application failures,
+   including errors returned with HTTP 200. Declare `runtime.interface.failure_rule` using the
+   source-defined status field, failure or success values, and error message path. A readable
+   assistant message does not prove successful execution. Do not infer failure from prose alone.
+
    Inspect whether the selected chat route returns pending tool requests for its caller to execute,
    or executes tools internally before replying. For internal execution, inspect the source response
    schema or correlated event API and declare `runtime.interface.completed_tools` or
    `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
-   actions and observations using source identifiers and preserve conversation correlation. Tool
-   declarations and assistant text are not execution evidence. Never fabricate events or replay
+   actions and observations using source identifiers and preserve conversation correlation. Inspect
+   success, error and rejection event producers, including native tool result wrappers. Completion
+   status means execution ended, not that it succeeded. When source defines a nullable boolean or
+   string error field inside the result, declare `result_error_path` relative to `result_path`.
+   ALK decodes a JSON-text result once for classification and preserves the original result.
+   Missing, null, false or empty string reports no error; true or nonempty string reports failure.
+   Other values and incompatible traversal invalidate the evidence. Declare this convention only
+   when supported by the source, and retain any existing boolean `error_path`.
+   Declare distinct failed terminal kinds with
+   `completed_tool_events.failure_events`, each containing `kind`, `action_id_path` and `result_path`.
+   Verify that all terminal kinds join the same action identifier; chronological parents are not
+   necessarily action references. Failure events always record `ok=false` and require an error
+   result. Select arguments present even when native validation fails, such as the raw tool-call
+   arguments JSON rather than a parsed action created only after validation. Tool
+   declarations, registration/factory calls, and assistant text are not execution evidence.
+   Importable tool bindings do not replace a completed-result observation mapping for internal
+   execution. Never fabricate events or replay
    completed tools. If the source offers equivalent chat routes, prefer one that exposes completed
    tool results over a text-only compatibility route. If no supported observation seam exists,
    record that limitation.
