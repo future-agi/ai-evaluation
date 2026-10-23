@@ -156,6 +156,7 @@ class CompletedToolRows(BaseModel):
     name_path: str = Field(min_length=1, max_length=256)
     arguments_path: str = Field(min_length=1, max_length=256)
     result_path: str = Field(min_length=1, max_length=256)
+    id_path: str = Field(default="", max_length=256)
     error_path: str = Field(default="", max_length=256)
     result_error_path: ResultErrorPath = Field(
         default="", max_length=256,

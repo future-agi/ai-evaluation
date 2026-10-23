@@ -81,6 +81,7 @@ class CatalogueConnection:
                 "has_default": False,
                 "default_expression": None,
                 "generated": False,
+                "identity": False,
                 "type_kind": "b",
                 "element_udt_name": None,
             }
@@ -196,6 +197,41 @@ def test_postgres_inspection_is_stable() -> None:
     second = inspect_postgres(CatalogueConnection(), source_digest=SOURCE_DIGEST)
 
     assert first == second
+
+
+def test_postgres_inspection_marks_identity_columns() -> None:
+    class IdentityCatalogue(CatalogueConnection):
+        def execute(self, statement: str, params: tuple[Any, ...]) -> Cursor:
+            if "attr.attnum AS ordinal_position" in statement:
+                return Cursor(
+                    [
+                        {
+                            "table_name": "rides",
+                            "column_name": "id",
+                            "ordinal_position": 1,
+                            "native_type": "bigint",
+                            "nullable": False,
+                            "has_default": False,
+                            "default_expression": None,
+                            "generated": False,
+                            "identity": True,
+                            "type_kind": "b",
+                            "udt_name": "int8",
+                            "element_udt_name": None,
+                        }
+                    ]
+                )
+            if "pg_catalog.pg_enum" in statement:
+                return Cursor([])
+            if "pg_catalog.pg_index index" in statement:
+                return Cursor([])
+            if "pg_catalog.pg_constraint con" in statement:
+                return Cursor([])
+            raise AssertionError("unexpected catalogue query")
+
+    model = inspect_postgres(IdentityCatalogue(), source_digest=SOURCE_DIGEST)
+
+    assert model.tables[0].columns[0].identity is True
 
 
 @pytest.mark.parametrize("udt_name", ("time", "timetz", "bit", "varbit"))

@@ -77,6 +77,8 @@ def _walk(root: Path):
         except OSError:
             continue
         for entry in entries:
+            if entry.is_symlink():
+                continue
             if entry.is_dir():
                 if entry.name not in _SKIP_DIRS:
                     stack.append(entry)

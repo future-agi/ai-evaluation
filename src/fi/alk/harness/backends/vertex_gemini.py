@@ -38,31 +38,15 @@ from .base import (
     SessionOpened,
     SessionSpec,
     StageDone,
+    TERMINAL_SAVE_TOOLS,
     ToolReturned,
     ToolSpec,
     qualified,
+    tool_input_schema,
 )
 from .files import file_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
-
-_TERMINAL_SAVE_TOOLS = frozenset(
-    {
-        "mcp__world__save_world",
-        "mcp__provision__save_environment",
-        "mcp__scenarios__save_scenarios",
-        # Source-data review is another persisted authoring boundary.  Its handler only
-        # succeeds after every scenario was reviewed and at least one executable invariant
-        # was declared.  Letting ADK take another turn after that success can burn the entire
-        # call budget and turn a completed review into a spurious validation failure.
-        "mcp__source_data__finish_review",
-        # A validated repair patch is itself the complete output of the repair stage.  Stop
-        # immediately after accepting it instead of spending the remaining agent budget on
-        # another model turn that can only restate or replace an already-valid patch.
-        "mcp__repair__submit_world_ir_patch",
-        "mcp__runtime_repair__submit_runtime_plan_patch",
-    }
-)
 
 # Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
 # the platform's litellm model table). An unknown or stale model reports no cost rather than a
@@ -91,35 +75,8 @@ PRICES_PER_MILLION = {
     "gemini-3-flash-preview": (0.5, 3, "2026-12-31"),
 }
 
-_PYTHON_TYPES = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-    dict: "object",
-}
-
 def _json_schema(schema: Any) -> dict[str, Any]:
-    """Preserve JSON Schema; expand the shorthand used by small internal tools."""
-    if isinstance(schema, dict) and (
-        any(key in schema for key in ("type", "properties", "$ref", "$defs", "anyOf", "oneOf"))
-    ):
-        return schema
-    if isinstance(schema, dict):
-        return {
-            "type": "object",
-            "properties": {
-                name: (
-                    {"type": "array", "items": {"type": "object"}}
-                    if kind is list
-                    else {"type": _PYTHON_TYPES.get(kind, "string")}
-                )
-                for name, kind in schema.items()
-            },
-            "required": list(schema),
-        }
-    return {"type": "object", "properties": {}}
+    return tool_input_schema(schema)
 
 
 def _project() -> str:
@@ -187,7 +144,7 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     stage budget; the persisted artifact is the stage's actual completion boundary.
     """
     return bool(
-        name in _TERMINAL_SAVE_TOOLS
+        name in TERMINAL_SAVE_TOOLS
         and isinstance(response, dict)
         and not response.get("is_error")
     )

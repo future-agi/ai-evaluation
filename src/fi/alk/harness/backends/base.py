@@ -30,6 +30,78 @@ from typing import Any, Protocol, runtime_checkable
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
+_PYTHON_SCHEMA_TYPES = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def tool_input_schema(schema: Any) -> dict[str, Any]:
+    """Return one provider-safe JSON Schema with local references inlined."""
+    if isinstance(schema, dict) and any(
+        key in schema
+        for key in ("type", "properties", "$ref", "$defs", "anyOf", "oneOf")
+    ):
+        root = schema
+    elif isinstance(schema, dict):
+        root = {
+            "type": "object",
+            "properties": {
+                name: (
+                    {"type": "array", "items": {"type": "object"}}
+                    if kind is list
+                    else {"type": _PYTHON_SCHEMA_TYPES.get(kind, "string")}
+                )
+                for name, kind in schema.items()
+            },
+            "required": list(schema),
+        }
+    else:
+        root = {"type": "object", "properties": {}}
+
+    def target(ref: str) -> Any:
+        if not ref.startswith("#/"):
+            raise ValueError("tool_schema_external_reference_unsupported")
+        value: Any = root
+        for raw in ref[2:].split("/"):
+            key = raw.replace("~1", "/").replace("~0", "~")
+            if not isinstance(value, dict) or key not in value:
+                raise ValueError("tool_schema_reference_missing")
+            value = value[key]
+        return value
+
+    def normalize(value: Any, resolving: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, list):
+            return [normalize(item, resolving) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            ref = value["$ref"]
+            if not isinstance(ref, str):
+                raise ValueError("tool_schema_reference_invalid")
+            if ref in resolving:
+                raise ValueError("tool_schema_recursive_reference_unsupported")
+            resolved = normalize(target(ref), (*resolving, ref))
+            if not isinstance(resolved, dict):
+                raise ValueError("tool_schema_reference_invalid")
+            siblings = {
+                key: normalize(item, resolving)
+                for key, item in value.items()
+                if key != "$ref"
+            }
+            return {**resolved, **siblings}
+        return {
+            key: normalize(item, resolving)
+            for key, item in value.items()
+            if key not in {"$defs", "definitions"}
+        }
+
+    return normalize(root)
+
 
 def qualified(server: str, tool_name: str) -> str:
     """The fully qualified name a session grants and a model calls.
@@ -103,6 +175,17 @@ KNOWN_BUILTINS = (*FILE_TOOLS, ASK_TOOL, DELEGATE_TOOL, *OPERATOR_TOOLS)
 
 # Ceiling on workers in flight at once.
 MOST_WORKERS_AT_ONCE = int(os.environ.get("ALK_HARNESS_WORKERS_AT_ONCE", "48") or 48)
+
+TERMINAL_SAVE_TOOLS = frozenset(
+    {
+        "mcp__world__save_world",
+        "mcp__provision__save_environment",
+        "mcp__scenarios__save_scenarios",
+        "mcp__source_data__finish_review",
+        "mcp__repair__submit_world_ir_patch",
+        "mcp__runtime_repair__submit_runtime_plan_patch",
+    }
+)
 
 
 @dataclass

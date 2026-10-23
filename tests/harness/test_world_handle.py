@@ -614,6 +614,20 @@ def test_read_only_still_reads() -> None:
     assert view.query('SELECT * FROM "orders"') == [{"id": 1}]
 
 
+def test_read_only_observation_reverts_and_rejects_state_changes(monkeypatch) -> None:
+    world = _world({"orders": [{"id": 1}]})
+    view = world.read_only()
+
+    def mutating_observation(*_args):
+        world._store.add("orders", {"id": 2})
+        return {"status": 200}
+
+    monkeypatch.setattr(view._http_client, "observe", mutating_observation)
+    with pytest.raises(WorldReadOnly, match="observation changed the world"):
+        view.observe("history")
+    assert world.state("orders") == {"orders": [{"id": 1}]}
+
+
 @pytest.mark.parametrize(
     "act",
     [
