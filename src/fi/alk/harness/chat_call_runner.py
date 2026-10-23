@@ -578,7 +578,7 @@ class HostedChatCallRunner:
                 code=(
                     "call_failed"
                     if isinstance(status, int)
-                    and (status in {408, 429} or 500 <= status < 600)
+                    and status in {408, 429, 502, 503, 504}
                     else "target_agent_failed"
                 ),
             )

@@ -450,7 +450,7 @@ def _provider_values(runtime: Runtime) -> tuple[str, ...]:
         for value in runtime.extras
         if canonical(value) in namespace_key or namespace_key in canonical(value)
     ]
-    providers.extend((namespace, namespace_key, re.sub(r"-?ai$", "", namespace_key)))
+    providers.extend((namespace, namespace_key, namespace_key.removesuffix("-ai")))
     return tuple(dict.fromkeys(value for value in providers if value))
 
 

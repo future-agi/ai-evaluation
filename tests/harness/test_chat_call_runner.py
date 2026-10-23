@@ -880,7 +880,7 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
         (408, "call_failed"),
         (409, "target_agent_failed"),
         (429, "call_failed"),
-        (500, "call_failed"),
+        (500, "target_agent_failed"),
         (502, "call_failed"),
         (503, "call_failed"),
         (504, "call_failed"),

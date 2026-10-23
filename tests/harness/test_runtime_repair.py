@@ -865,6 +865,18 @@ def test_provider_selector_requires_explicit_failure_and_unambiguous_source(tmp_
     ) is None
 
 
+def test_openai_provider_namespace_does_not_invent_open_alias():
+    from fi.alk.harness.runtime_repair import _provider_values
+
+    runtime = Runtime(
+        interface=RuntimeInterface(
+            kind="http", model="openai/gpt-4o", port=8080, path="/chat"
+        )
+    )
+
+    assert _provider_values(runtime) == ("openai",)
+
+
 def test_missing_compose_secret_file_alias_uses_unique_supplied_file_alias(
     tmp_path, monkeypatch
 ):
