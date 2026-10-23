@@ -72,6 +72,15 @@ def test_uploaded_runtime_values_cannot_replace_runner_model_credentials():
     )
 
 
+def test_google_adk_approval_reaches_harness_worker_but_cannot_be_uploaded():
+    child = worker_environment(
+        {"ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "customer-value"},
+        host_environment={"ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "1"},
+    )
+
+    assert child["ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER"] == "1"
+
+
 def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it():
     child = worker_environment(
         {

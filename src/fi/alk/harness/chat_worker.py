@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .call_runner import ArtifactUploader, CallRunnerContext
 from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .isolated_process import run_json_worker, run_worker
@@ -29,6 +30,7 @@ _CHAT_ENV = frozenset(
         "ALK_CLAUDE_GATEWAY_API_KEY",
         "ALK_CLAUDE_GATEWAY_URL",
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "ALK_VERTEX_LOCATION",

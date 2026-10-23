@@ -37,6 +37,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 from . import observability
 from . import outbound as ob
+from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
@@ -189,6 +190,7 @@ _SIMULATOR_SECRET_ALIASES = frozenset(
         "ALK_BACKGROUND_NOISE",
         "ALK_BACKGROUND_NOISE_CATALOG",
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_VOICEMAIL_SCENARIOS",
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",

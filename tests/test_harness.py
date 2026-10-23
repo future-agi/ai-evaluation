@@ -6625,6 +6625,7 @@ def test_a_target_refuses_a_model_it_cannot_drive(monkeypatch):
     from fi.alk.harness.run.targets import _drivable
 
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     _drivable(None)
     _drivable("gemini-3.7-flash")
 
