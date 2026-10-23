@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -35,32 +36,24 @@ class _RejectingWorld(_World):
         raise RuntimeError("relation sqlite_master does not exist")
 
 
+def _call(name: str, args: dict, index: int = 0) -> dict:
+    return {"id": f"c{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+
+
 def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
     """Run the judge with the model replaced by a scripted decide() call."""
     world = world or _World()
 
-    class _Stage:
-        def __init__(self, spec, name="", overheard=True):
-            self.spec, self.name, self.overheard = spec, name, overheard
+    def _complete(conversation, tools, forced):
+        if raises:
+            raise RuntimeError("provider exploded")
+        calls = []
+        if decision.get("look"):
+            calls += [_call("inspect_world", {"table": "contacts"}, 1), _call("query_world", {"sql": "select 1"}, 2)]
+        return {"role": "assistant", "tool_calls": calls + [_call("decide", {"evidence": "the records", **decision})]}
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_exc):
-            return None
-
-        async def say(self, _prompt):
-            if raises:
-                raise RuntimeError("provider exploded")
-            tools = {t.name: t for t in self.spec.servers["world"].tools}
-            if decision.get("look"):
-                await tools["inspect_world"].handler({"table": "contacts"})
-                await tools["query_world"].handler({"sql": "select 1"})
-            await tools["decide"].handler(decision)
-            return None
-
-    monkeypatch.setattr(judge_module, "Stage", _Stage)
-    return asyncio.run(judge_module.judge(_Goal(), world, [])), world
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    return asyncio.run(judge_module.judge_sub_goal(_Goal(), world, [])), world
 
 
 def test_a_judged_sub_goal_can_fail(monkeypatch):
@@ -168,27 +161,49 @@ def test_the_judge_is_given_what_was_said_not_only_what_was_done():
     rendered = judge_module._transcript(said)
     assert "Customer: one large fries" in rendered
     assert "Agent: your order is one large fries" in rendered
-    assert "your order is one large fries" in rendered
-    assert len(rendered) <= judge_module._TRANSCRIPT_LIMIT + 8
+    assert rendered.count("Customer: one large fries") == 400
 
 
-def test_a_judging_stage_is_not_overheard_in_the_chat() -> None:
-    from pathlib import Path as _P
+def test_the_judge_turn_goes_to_the_gateways_chat_completions(monkeypatch):
+    monkeypatch.setattr(
+        judge_module,
+        "provider_env",
+        lambda _model: {
+            "ANTHROPIC_BASE_URL": "https://gateway.test",
+            "ANTHROPIC_AUTH_TOKEN": "key",
+            "ANTHROPIC_MODEL": "gemini-3.7-flash",
+        },
+    )
+    sent = {}
 
-    source = _P("src/fi/alk/harness/judge.py").read_text(encoding="utf-8")
-    assert 'name="judge-sub-goals", overheard=False' in source
+    class _Response:
+        def raise_for_status(self):
+            return None
 
-    session = _P("src/fi/alk/harness/session.py").read_text(encoding="utf-8")
-    assert "if self._overheard:" in session
-    assert "self.channel.waiting() if self._overheard else []" in session
+        def json(self):
+            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}}
+
+    def _post(url, *, headers, json, timeout):
+        sent.update(url=url, headers=headers, body=json)
+        return _Response()
+
+    monkeypatch.setattr(judge_module.requests, "post", _post)
+    decide = judge_module.tool("decide", "Commit.", {"passed": bool})(None)
+    reply = judge_module._complete([{"role": "user", "content": "judge"}], [decide], True)
+    assert reply == {"role": "assistant", "content": "ok"}
+    assert sent["url"] == "https://gateway.test/v1/chat/completions"
+    assert sent["headers"] == {"Authorization": "Bearer key"}
+    assert sent["body"]["model"] == "gemini-3.7-flash"
+    assert sent["body"]["tools"][0]["function"]["name"] == "decide"
+    assert sent["body"]["tool_choice"] == {"type": "function", "function": {"name": "decide"}}
 
 
-def test_the_retry_carries_the_evidence_and_can_settle_the_claim(monkeypatch):
-    prompts: list[str] = []
+def test_with_no_gateway_the_judge_still_decides_through_the_harness_session(monkeypatch):
+    monkeypatch.setattr(judge_module, "provider_env", lambda _model: {})
 
     class _Stage:
         def __init__(self, spec, name="", overheard=True):
-            self.spec = spec
+            self.tools = {t.name: t for t in spec.servers["world"].tools}
 
         async def __aenter__(self):
             return self
@@ -196,53 +211,182 @@ def test_the_retry_carries_the_evidence_and_can_settle_the_claim(monkeypatch):
         async def __aexit__(self, *_exc):
             return None
 
-        async def say(self, prompt):
-            prompts.append(prompt)
-            if len(prompts) == 2:
-                tools = {t.name: t for t in self.spec.servers["world"].tools}
-                await tools["decide"].handler(
-                    {"passed": True, "explanation": "the agent confirmed the booking"}
-                )
+        async def say(self, _prompt):
+            await self.tools["decide"].handler({"verdict": "fail", "explanation": "not recorded", "evidence": "rows"})
+
+    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    held, why = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording="call.wav"))
+    assert held is False and why == "not recorded"
+
+
+def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, tmp_path):
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    offered: list[list[str]] = []
+    heard: list[dict] = []
+
+    def _complete(conversation, tools, forced):
+        offered.append(sorted(t.name for t in tools))
+        audio = [m for m in conversation if isinstance(m.get("content"), list)]
+        if "listen" in offered[-1] and not audio:
+            return {"role": "assistant", "tool_calls": [_call("listen", {})]}
+        heard.extend(audio)
+        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": False, "explanation": "it cancelled without a yes"})]}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (False, "it cancelled without a yes")
+    assert "listen" not in offered[-1]
+    verdict = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording)))
+    assert verdict == (False, "it cancelled without a yes")
+    assert "listen" in offered[-1]
+    assert heard[0]["content"][1] == {
+        "type": "input_audio",
+        "input_audio": {"data": "UklGRi1hdWRpbw==", "format": "wav"},
+    }
+
+
+def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transcript(monkeypatch, tmp_path):
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    said: list[str] = []
+    turns = iter(
+        [
+            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"})],
+            [_call("listen", {})],
+            RuntimeError("413 request too large"),
+            [_call("read_transcript", {})],
+            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
+        ]
+    )
+
+    audio: list[bool] = []
+
+    def _complete(conversation, tools, forced):
+        if conversation[-1]["role"] == "tool":
+            said.append(conversation[-1]["content"])
+        audio.append(any(isinstance(m.get("content"), list) for m in conversation))
+        turn = next(turns)
+        if isinstance(turn, Exception):
+            raise turn
+        return {"role": "assistant", "tool_calls": turn}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "assistant", "content": "your order is confirmed"}]
+    verdict = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
+    )
+    assert verdict == (True, "it confirmed the order")
+    assert said[0] == "listen to the call recording before deciding"
+    assert audio == [False, False, True, False, False]
+
+
+def test_evidence_asked_for_in_the_same_turn_as_a_verdict_is_read_before_the_verdict_counts(monkeypatch, tmp_path):
+    """A verdict batched with the evidence it rests on was made before that evidence reached the model."""
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    seen: list[tuple[bool, bool]] = []
+    decide = _call("decide", {"verdict": "pass", "evidence": "what was said", "explanation": "consent obtained"}, 3)
+    turns = iter([[_call("listen", {}, 1), _call("read_transcript", {}, 2), decide], [decide]])
+
+    def _complete(conversation, tools, forced):
+        heard = any(isinstance(m.get("content"), list) for m in conversation)
+        read = any(m.get("role") == "tool" and "NO consent" in str(m.get("content")) for m in conversation)
+        seen.append((heard, read))
+        return {"role": "assistant", "tool_calls": next(turns)}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "user", "content": "NO consent"}]
+    verdict = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
+    )
+    assert verdict == (True, "consent obtained")
+    assert seen == [(False, False), (True, True)]
+
+
+def test_the_last_request_plays_the_recording_it_counts_as_heard(monkeypatch, tmp_path):
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    finals: list[list[dict]] = []
+
+    def _complete(conversation, tools, forced):
+        if [t.name for t in tools] == ["decide"]:
+            finals.append(conversation)
+            return {"role": "assistant", "tool_calls": [_call("decide", {"verdict": "fail", "evidence": "the recording", "explanation": "it kept the number"})]}
+        return {"role": "assistant", "tool_calls": [_call("inspect_world", {})]}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    held = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording)))
+    assert held == (False, "it kept the number")
+    assert any(isinstance(m.get("content"), list) for m in finals[0])
+
+
+def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypatch):
+    prompts: list[str] = []
+
+    def _complete(conversation, tools, forced):
+        prompts.append(conversation[-1]["content"])
+        if len(prompts) == 1:
+            return {"role": "assistant", "content": "I think it passed."}
+        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "the agent confirmed the booking"})]}
 
     class _Scenario:
         instruction = "the caller books a ride to the airport"
         tests = "the agent confirms before booking"
 
-    monkeypatch.setattr(judge_module, "Stage", _Stage)
+    monkeypatch.setattr(judge_module, "_complete", _complete)
     said = [{"role": "assistant", "content": "shall I book it?"}]
     calls = [type("C", (), {"name": f"step_{i}", "arguments": {}, "result": None})() for i in range(30)]
     held, why = asyncio.run(
-        judge_module.judge(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
+        judge_module.judge_sub_goal(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
     )
     assert (held, why) == (True, "the agent confirmed the booking")
     assert "books a ride to the airport" in prompts[0]
     assert "step_29" in prompts[0]
+    assert "No verdict yet for sub-goal 'removal_honoured'" in prompts[1]
     assert "shall I book it?" in prompts[1]
+
+
+def test_a_judge_that_never_decides_is_forced_to_then_left_undecided(monkeypatch):
+    forced_turns: list[bool] = []
+
+    def _complete(conversation, tools, forced):
+        forced_turns.append(forced)
+        return {"role": "assistant", "tool_calls": [_call("inspect_world", {}, len(forced_turns))]}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (None, "")
+    assert forced_turns == [False] * (judge_module._STEPS - 1) + [True, True]
+
+
+def test_a_judge_out_of_steps_gets_one_last_request_with_everything_it_found(monkeypatch):
+    finals: list[tuple[list[str], str]] = []
+
+    def _complete(conversation, tools, forced):
+        if len(conversation) == 2 and "What was found while looking" in conversation[1]["content"]:
+            finals.append(([t.name for t in tools], conversation[1]["content"]))
+            return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "the contacts table", "passed": False, "explanation": "it kept the number"})]}
+        return {"role": "assistant", "tool_calls": [_call("inspect_world", {"table": "contacts"})]}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "assistant", "content": "I have removed your number"}]
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages)) == (False, "it kept the number")
+    tools, final = finals[0]
+    assert tools == ["decide"]
+    assert "I have removed your number" in final and 'inspect_world({"table": "contacts"})' in final
 
 
 def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monkeypatch):
     prompts: list[str] = []
 
-    class _Stage:
-        def __init__(self, spec, name="", overheard=True):
-            self.spec = spec
+    def _complete(conversation, tools, forced):
+        prompts.append(conversation[1]["content"])
+        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it read the fee first"})]}
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_exc):
-            return None
-
-        async def say(self, prompt):
-            prompts.append(prompt)
-            tools = {t.name: t for t in self.spec.servers["world"].tools}
-            await tools["decide"].handler({"passed": True, "explanation": "it read the fee first"})
-
-    monkeypatch.setattr(judge_module, "Stage", _Stage)
-    asyncio.run(judge_module.judge(_Goal(), _World(rows=[]), []))
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(rows=[]), []))
     assert "only the conversation is observable" in prompts[0]
     call = type("C", (), {"name": "lookup", "arguments": {}, "result": None})()
-    asyncio.run(judge_module.judge(_Goal(), _World(), [call]))
+    asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [call]))
     assert "only the conversation is observable" not in prompts[1]
 
 
@@ -404,3 +548,75 @@ def test_the_contract_records_the_agents_languages_and_older_contracts_still_loa
         "English",
         "Hindi",
     ]
+
+
+def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_transcript(monkeypatch, tmp_path):
+    said: list[str] = []
+    turns = iter(
+        [
+            [_call("listen", {})],
+            [_call("inspect_world", {}), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
+            [_call("read_transcript", {}, 2)],
+            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 3)],
+        ]
+    )
+
+    class _Broken(_World):
+        def state(self, table=None):
+            raise RuntimeError("world is gone")
+
+    def _complete(conversation, tools, forced):
+        said.extend(str(m["content"]) for m in conversation[2:] if m["role"] in ("tool", "user"))
+        return {"role": "assistant", "tool_calls": next(turns)}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    messages = [{"role": "assistant", "content": "your order is confirmed"}]
+    verdict = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _Broken(), [], messages=messages, recording=str(tmp_path / "gone.wav"))
+    )
+    assert verdict == (True, "it confirmed the order")
+    assert judge_module._UNPLAYABLE in said
+    assert any(line.startswith("inspect_world failed: RuntimeError") for line in said)
+    assert "read the transcript and check it before deciding" in said
+
+
+
+def test_the_judge_is_shown_the_reference_solution_as_one_correct_way():
+    """Whether a value was the right one is read against the scenario's solution, not demanded verbatim."""
+    from types import SimpleNamespace
+
+    scenario = SimpleNamespace(
+        instruction="Book a ride home.",
+        tests="",
+        solution=[{"tool": "book_ride", "arguments": {"pickup": "12 Elm St", "dropoff": "Airport"}}],
+    )
+    said = judge_module.describe_call("Book rides.", scenario, [], None)
+    assert 'book_ride({"pickup": "12 Elm St", "dropoff": "Airport"})' in said
+    assert "not a script" in said
+    assert "corrected before it took effect is still right" in said
+    assert "One correct way" not in judge_module.describe_call("Book rides.", SimpleNamespace(), [], None)
+
+
+def test_a_verdict_reads_as_held_with_not_applicable_said_and_inconclusive_undecided():
+    from fi.alk.harness.judge import verdict_of
+
+    assert verdict_of({"verdict": "pass", "explanation": "ok"}) == (True, "ok")
+    assert verdict_of({"verdict": "fail", "explanation": "no"}) == (False, "no")
+    assert verdict_of({"verdict": "not_applicable", "explanation": "never came up"}) == (True, "Not applicable: never came up")
+    assert verdict_of({"verdict": "inconclusive", "explanation": "inaudible"}) == (None, "Inconclusive: inaudible")
+    assert verdict_of({"passed": False, "explanation": "legacy"}) == (False, "legacy")
+
+
+def test_with_no_transcript_the_judge_is_pointed_at_the_recording(monkeypatch, tmp_path):
+    recording = tmp_path / "call.wav"
+    recording.write_bytes(b"RIFF-audio")
+    said: list[str] = []
+    turns = iter([[_call("read_transcript", {})], [_call("listen", {}, 1)], [_call("decide", {"verdict": "pass", "evidence": "the recording", "explanation": "it confirmed"}, 2)]])
+
+    def _complete(conversation, tools, forced):
+        said.extend(str(m["content"]) for m in conversation if m["role"] == "tool")
+        return {"role": "assistant", "tool_calls": next(turns)}
+
+    monkeypatch.setattr(judge_module, "_complete", _complete)
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))) == (True, "it confirmed")
+    assert "Decide from the recording, the actions and the records." in said[0]
