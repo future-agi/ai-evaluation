@@ -161,6 +161,7 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
     monkeypatch.setenv("AGENTCC_BASE_URL", "https://gateway.example")
     monkeypatch.setenv("ALK_CLAUDE_GATEWAY_API_KEY", "simulator-claude-key")
     monkeypatch.setenv("ALK_CLAUDE_GATEWAY_URL", "https://claude.example")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     original = dict(os.environ)
     payloads = []
 
@@ -173,6 +174,7 @@ def test_parallel_chat_workers_keep_routing_private_and_upload_in_parent(
             assert environ["AGENTCC_BASE_URL"] == "https://gateway.example"
             assert environ["ALK_CLAUDE_GATEWAY_API_KEY"] == "simulator-claude-key"
             assert environ["ALK_CLAUDE_GATEWAY_URL"] == "https://claude.example"
+            assert environ["ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER"] == "1"
             index = payload["runtime"]["world_index"]
             assert payload["local_auth_values"] == {
                 "API_SERVER_KEY": f"private-world-{index}"

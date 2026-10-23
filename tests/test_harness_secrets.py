@@ -101,6 +101,15 @@ def test_uploaded_runtime_values_cannot_replace_runner_model_credentials():
     )
 
 
+def test_google_adk_approval_reaches_harness_worker_but_cannot_be_uploaded():
+    child = worker_environment(
+        {"ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "customer-value"},
+        host_environment={"ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER": "1"},
+    )
+
+    assert child["ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER"] == "1"
+
+
 def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it():
     child = worker_environment(
         {
@@ -125,9 +134,12 @@ def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it()
     assert child["HARNESS_RUNTIME_WEBHOOK_URL"] == "http://runner.internal:8787"
 
 
-def test_worker_never_inherits_host_voice_provider_credentials():
+def test_worker_inherits_only_the_runner_owned_caller_voice_credential():
     child = worker_environment(
-        {"LIVEKIT_API_KEY": "job-livekit"},
+        {
+            "LIVEKIT_API_KEY": "job-livekit",
+            "CARTESIA_API_KEY": "job-cartesia",
+        },
         host_environment={
             "PATH": "/bin",
             "LIVEKIT_API_KEY": "runner-livekit",
@@ -140,7 +152,7 @@ def test_worker_never_inherits_host_voice_provider_credentials():
     assert child["LIVEKIT_API_KEY"] == "job-livekit"
     assert "LIVEKIT_API_SECRET" not in child
     assert "DEEPGRAM_API_KEY" not in child
-    assert "CARTESIA_API_KEY" not in child
+    assert child["CARTESIA_API_KEY"] == "runner-cartesia"
 
 
 def test_worker_inherits_runner_model_roles_but_jobs_cannot_replace_them():

@@ -7,6 +7,8 @@ from collections.abc import Iterable, Mapping
 
 from fi.simulate.runtime.spec import SecretRef
 
+from .backends import GOOGLE_ADK_APPROVAL_ENV
+
 
 class SecretResolutionError(RuntimeError):
     pass
@@ -124,6 +126,7 @@ def worker_environment(
         # The backend choice travels with the model it names: without it the worker
         # falls back to the default backend and hands it a model it cannot drive.
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "AGENTCC_API_KEY",
@@ -153,6 +156,7 @@ def worker_environment(
     child = {name: value for name, value in host.items() if name in allowed}
     reserved = {
         "ALK_HARNESS",
+        GOOGLE_ADK_APPROVAL_ENV,
         "ALK_HARNESS_MODEL",
         "ALK_HARNESS_THINKING",
         "AGENTCC_API_KEY",

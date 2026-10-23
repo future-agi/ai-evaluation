@@ -330,6 +330,7 @@ def test_runtime_reuses_warm_state_and_does_not_reexecute_cold_replays(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     policy_path = tmp_path / "policy.yaml"
     policy_path.write_text(
         """schema_version: 1

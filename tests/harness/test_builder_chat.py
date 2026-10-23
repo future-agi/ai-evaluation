@@ -105,6 +105,7 @@ class EditingConversation(BuilderConversation):
 
 def _runtime(tmp_path: Path, client: BuilderClient, monkeypatch) -> HostedChatRuntime:
     monkeypatch.setenv("ALK_HARNESS", "vertex-gemini")
+    monkeypatch.setenv("ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER", "1")
     (tmp_path / "scenarios" / "one").mkdir(parents=True)
     (tmp_path / "scenarios" / "one" / "scenario.json").write_text("{}")
     policy = tmp_path / "policy.yaml"

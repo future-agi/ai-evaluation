@@ -1,8 +1,8 @@
 """Harness backends, selected by name.
 
 ``ALK_HARNESS`` picks the backend the way ``ALK_HARNESS_MODEL`` already picks the model. With
-nothing set the choice is ``claude``; ``ALK_HARNESS=vertex-gemini`` selects Google ADK against
-Vertex without changing the stages, tools, or hosted conversation protocol.
+nothing set the choice is ``claude``. ``ALK_HARNESS=vertex-gemini`` selects Google ADK against
+Vertex only when ``ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER=1`` confirms user approval.
 
 Backends load lazily: choosing one never imports the other's SDK, so a deployment installs only
 the provider it uses. A new backend is a module implementing ``HarnessBackend`` plus one
@@ -47,6 +47,7 @@ __all__ = [
     "OPERATOR_TOOLS",
     "Call",
     "ConversationSession",
+    "GOOGLE_ADK_APPROVAL_ENV",
     "HarnessBackend",
     "HarnessSession",
     "ModelReply",
@@ -70,6 +71,7 @@ __all__ = [
 ]
 
 DEFAULT_BACKEND = "claude"
+GOOGLE_ADK_APPROVAL_ENV = "ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER"
 
 _LOADERS: dict[str, Callable[[], HarnessBackend]] = {}
 _ALIASES = {
@@ -122,6 +124,14 @@ def resolve(name: str | None = None) -> HarnessBackend:
         raise ValueError(
             f"no harness backend named {asked!r}; installed backends: "
             f"{', '.join(backend_names())}"
+        )
+    if (
+        asked == "vertex-gemini"
+        and os.environ.get(GOOGLE_ADK_APPROVAL_ENV, "").strip() != "1"
+    ):
+        raise ValueError(
+            "the Google ADK harness backend requires explicit user approval; "
+            f"set {GOOGLE_ADK_APPROVAL_ENV}=1 only after the user approves this run"
         )
     if asked not in _LIVE:
         _LIVE[asked] = _LOADERS[asked]()

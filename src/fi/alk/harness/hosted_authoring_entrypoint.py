@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import observability
 from .authoring_entrypoint import main as authoring_main
+from .backends import GOOGLE_ADK_APPROVAL_ENV
 from .poc_guest_booking import PIN_ENV, TARGET_PHONE_ENV
 
 _SECRETS_PATH = Path("/run/futureagi/secrets.json")
@@ -25,6 +26,7 @@ _TARGET_CREDENTIAL_NAMES = {"RETELL_API_KEY", "VAPI_API_KEY"}
 _PASSTHROUGH = {
     "AGENTCC_API_KEY",
     "AGENTCC_BASE_URL",
+    GOOGLE_ADK_APPROVAL_ENV,
     # Not a credential: authoring writes the scenarios, so the switch has to reach it.
     "ALK_VOICEMAIL_SCENARIOS",
     "ALK_BACKGROUND_NOISE",
@@ -165,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             for name in (
                 "AGENTCC_API_KEY",
                 "AGENTCC_BASE_URL",
+                GOOGLE_ADK_APPROVAL_ENV,
                 "ALK_BACKGROUND_NOISE",
                 "ALK_BACKGROUND_NOISE_CATALOG",
                 TARGET_PHONE_ENV,

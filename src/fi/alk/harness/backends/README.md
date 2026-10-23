@@ -6,11 +6,17 @@ that feeds tool results back until the model stops. A backend is whoever runs th
 ```
 ALK_HARNESS=claude          # default; Claude Code loop, exactly the pre-seam behaviour
 ALK_HARNESS=vertex-gemini   # Google's ADK against Vertex (location=global)
+ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER=1  # required after the user approves Google ADK
 ALK_HARNESS_MODEL=...       # optional; unset means the backend's own default
 ALK_VERTEX_LOCATION=...     # vertex-gemini only; defaults to global (Gemini 3.x lives there)
 AGENTCC_API_KEY=...         # both backends then reach their models through Agent Command Center
 AGENTCC_BASE_URL=...        # (fi/agentcc.py)
 ```
+
+`vertex-gemini` and its aliases fail closed unless
+`ALK_GOOGLE_ADK_EXPLICITLY_APPROVED_BY_USER=1`. Do not set this value on a user's behalf. The
+user must explicitly approve Google ADK for the run. Claude through Agent Command Center does
+not require this value, even when Agent Command Center routes the Claude loop to a Gemini model.
 
 ## The seam
 
