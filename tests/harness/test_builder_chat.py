@@ -310,6 +310,10 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     answers.append("No")
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
     assert "drop_scenarios" in asked[0] and "add_sub_goal" in asked[2]
+    long_meaning = {**meaning, "setup_code": "def setup(world):\n" + "    pass\n" * 200 + "    world.done()"}
+    answers.append("No")
+    assert asyncio.run(submit.handler(long_meaning))["is_error"] is True
+    assert "world.done()" in asked[-1]
 
     runtime._note_health("one is broken")
     answers.append("No")
@@ -585,3 +589,79 @@ def test_file_tools_on_any_backend_never_return_credentials(tmp_path):
     assert ".env" not in run("Glob", pattern="*", path="..")
     assert "a.json" in run("Glob", pattern="*.json")
     assert "kept out of this session" in run("Grep", pattern="x", path="/")
+
+
+def test_reading_a_run_can_wait_until_it_has_finished(tmp_path, monkeypatch):
+    client = BuilderClient()
+    states = iter(["running", "running", "completed"])
+
+    async def runs(run_id, limit):
+        if run_id == "unknown":
+            return {"error": "no Run with that id belongs to this environment"}
+        return {"run_id": run_id, "state": next(states), "calls": []}
+
+    async def no_sleep(_delay):
+        return None
+
+    client.runs = runs
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    read = next(spec for spec in runtime._builder_platform_server().tools if spec.name == "read_runs").handler
+
+    result = asyncio.run(read({"run_id": "r-1", "wait": True}))
+
+    assert '"completed"' in result["content"][0]["text"]
+    assert "no Run" in asyncio.run(read({"run_id": "unknown", "wait": True}))["content"][0]["text"]
+
+
+def test_waiting_on_a_run_never_outlasts_the_turn_it_waits_in():
+    from fi.alk.harness.hosted_chat_entrypoint import _RUN_POLL_SECONDS, _RUN_WAIT_SECONDS
+    from fi.alk.harness.hosted_conversation import _UNAVAILABLE_BUDGET_SECONDS
+    from fi.alk.harness.session import STAGE_IDLE_TIMEOUT_SECONDS
+
+    assert _RUN_WAIT_SECONDS + _RUN_POLL_SECONDS + _UNAVAILABLE_BUDGET_SECONDS < STAGE_IDLE_TIMEOUT_SECONDS
+
+
+def test_the_build_and_its_check_change_without_asking_and_a_question_gets_no_one(tmp_path, monkeypatch):
+    from fi.alk.harness.backends import ToolSpec
+
+    client = BuilderClient()
+    runtime = _runtime(tmp_path, client, monkeypatch)
+    calls = []
+
+    async def handler(args):
+        calls.append(args)
+        return {"content": [{"type": "text", "text": "kept"}]}
+
+    (tmp_path / "scenarios" / "one").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "scenarios" / "one" / "scenario.json").write_text(
+        json.dumps(
+            {
+                "name": "one",
+                "branch": "the account is on hold",
+                "instruction": "Order one Big Mac. Ask whether it is safe for a peanut allergy first.",
+                "fixture": {"allergy": "peanut"},
+                "persona": {"name": "Asha", "gender": "female", "languages": ["French"]},
+                "solution": [{"tool": "a"}],
+            }
+        )
+    )
+    drop = runtime._confirmed(ToolSpec("drop_scenarios", "", {}, handler))
+    submit = runtime._confirmed(ToolSpec("submit_scenario", "", {}, handler))
+    runtime._from_platform = True
+    person = {"name": "Asha", "gender": "female", "languages": ["French"]}
+    corrected = {"name": "one", "branch": "the account is on hold", "persona": person, "solution": [{"tool": "b"}]}
+    assert asyncio.run(submit.handler(corrected)).get("is_error") is None
+    assert asyncio.run(submit.handler({**corrected, "branch": "a lost item"}))["is_error"] is True
+    for situation in (
+        {"instruction": "Order one Big Mac. Do not ask about allergies."},
+        {"fixture": {"allergy": "none"}},
+        {"persona": {"name": "Ravi", "gender": "male"}},
+        {"persona": {**person, "languages": ["English"]}},
+        {"persona": None},
+    ):
+        assert asyncio.run(submit.handler({**corrected, **situation}))["is_error"] is True
+    assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True
+    answer = asyncio.run(runtime._ask("AskUserQuestion", {"question": "Which?"}, None))
+    assert "Nobody answers" in answer["content"][0]["text"]
+    assert calls == [corrected]

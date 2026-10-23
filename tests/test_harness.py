@@ -2730,6 +2730,21 @@ def test_unbound_runtime_step_says_it_was_assumed_not_executed(caplog):
     assert "lookup_rider_by_phone" in caplog.text
 
 
+def test_a_reference_step_runs_unless_it_belongs_to_the_agent_with_nothing_bound():
+    from fi.alk.harness.prove import executes
+    from fi.alk.harness.world.runtime import GeneratedWorld
+
+    world = GeneratedWorld()
+    world.runtime_tools = {"book_ride", "lookup_rider_by_phone"}
+    world.endpoint_for = {"book_ride": "bookings"}
+    try:
+        assert executes(world, "book_ride")
+        assert not executes(world, "lookup_rider_by_phone")
+        assert executes(world, "add_item")
+    finally:
+        world.close()
+
+
 def test_source_reference_step_separates_agent_arguments_from_dependency_payload():
     """Proof may drive the real backend, but must only credit what the agent could call."""
     from fi.alk.harness.prove import play_reference_step
@@ -8022,3 +8037,188 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
     assert not by_name[0] and "nothing is saved yet" in by_name[1]
     assert not everything[0] and "nothing is saved yet" in everything[1]
     assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
+
+
+def test_prove_hands_a_reference_check_the_solution_and_it_fails_when_nothing_is_done(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="added-what-was-asked",
+            what="the item the caller asked for was added",
+            check=(
+                "def check(world, calls, reference):\n"
+                "    wanted = next((s['arguments'] for s in reference if s['tool'] == 'add'), None)\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    if wanted and not made:\n"
+                "        return 'not done: nothing was added'\n"
+                "    if wanted and not any(c.arguments.get('item_id') == wanted['item_id'] for c in made):\n"
+                "        return 'done wrong: item_id'\n"
+                "    return None\n"
+            ),
+        )
+    )
+    save_catalogue(catalogue, root)
+    proof = prove(Scenario(**_delta(sub_goals=["item-added", "added-what-was-asked"])), catalogue, root)
+    held = {one.name: one.held for one in proof.with_solution}
+    assert held["added-what-was-asked"] is True
+    assert {one.name: one.held for one in proof.with_nothing}["added-what-was-asked"] is False
+    assert proof.holds
+
+
+def test_prove_refuses_a_check_that_fails_another_way_the_instructions_allow(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals.append(
+        SubGoal(
+            name="listed-first",
+            what="the menu was read before adding",
+            check="def check(world, calls, reference):\n    return None if any(c.name == 'lst' and c.ok for c in calls) else 'not done: no listing'\n",
+        )
+    )
+    save_catalogue(catalogue, root)
+    plain = Scenario(**_delta(sub_goals=["item-added", "listed-first"]))
+    assert prove(plain, catalogue, root).holds
+    other_way = [{"tool": "add", "arguments": {"item_id": "big_mac"}}]
+    proof = prove(plain.model_copy(update={"alternatives": [[*map(type(plain.solution[0]).model_validate, other_way)]]}), catalogue, root)
+    assert not proof.holds and any(one.startswith("listed-first") for one in proof.too_strict)
+
+
+def test_prove_refuses_a_fixed_value_no_check_notices_when_wrong(tmp_path):
+    from fi.alk.harness.catalogue import SubGoal, save_catalogue
+    from fi.alk.harness.prove import prove
+    from fi.alk.harness.scenario import Scenario
+
+    root, _contract, catalogue = _built_environment(tmp_path)
+    catalogue.sub_goals = [
+        SubGoal(
+            name="listed-first",
+            what="the menu was read",
+            check="def check(world, calls, reference):\n    return None if any(c.name == 'lst' and c.ok for c in calls) else 'not done: no listing'\n",
+        ),
+        SubGoal(
+            name="added-what-was-asked",
+            what="the item the caller asked for was added",
+            check=(
+                "def check(world, calls, reference):\n"
+                "    wanted = {s['arguments'].get('item_id') for s in reference if s['tool'] == 'add'} - {None}\n"
+                "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+                "    if wanted and not any(c.arguments.get('item_id') in wanted for c in made):\n"
+                "        return 'done wrong: item_id'\n"
+                "    return None if made else 'not done: nothing added'\n"
+            ),
+        ),
+    ]
+    save_catalogue(catalogue, root)
+    base = Scenario(**_delta(sub_goals=["listed-first"]))
+    fixed = base.model_copy(update={"solution": [base.solution[0], base.solution[1].model_copy(update={"fixed": {"item_id": "caller: big_mac"}})]})
+    for step in fixed.solution:
+        if step.fixed is None:
+            step.fixed = {}
+    assert prove(fixed, catalogue, root).unchecked == ["add.item_id"]
+    compared = fixed.model_copy(update={"sub_goals": ["listed-first", "added-what-was-asked"]})
+    assert prove(compared, catalogue, root).unchecked == []
+
+
+def test_try_check_runs_a_check_against_calls_the_harness_writes(tmp_path):
+    import asyncio
+
+    from fi.alk.harness.world import tools as world_tools
+
+    root, contract = _saved_world(tmp_path)
+    server, _world = world_tools.world_tools(contract, root)
+    run = next(spec for spec in server.tools if spec.name == "try_check").handler
+    check = (
+        "def check(world, calls, reference):\n"
+        "    wanted = {s['arguments'].get('item_id') for s in reference if s['tool'] == 'add'} - {None}\n"
+        "    made = [c for c in calls if c.name == 'add' and c.ok]\n"
+        "    return None if any(c.arguments.get('item_id') in wanted for c in made) else 'done wrong: item_id'\n"
+    )
+    reference = [{"tool": "add", "arguments": {"item_id": "big_mac"}, "fixed": {"item_id": "caller: big_mac"}}]
+    right = asyncio.run(run({"check": check, "calls": [{"name": "add", "arguments": {"item_id": "big_mac"}}], "reference": reference}))
+    wrong = asyncio.run(run({"check": check, "calls": [{"name": "add", "arguments": {"item_id": "fries"}}], "reference": reference}))
+    assert "held" in str(right) and "failed" in str(wrong)
+
+
+def test_the_builder_proves_its_suite_with_the_real_prove(tmp_path):
+    from fi.alk.harness.builder import suite_health
+    from fi.alk.harness.scenario import Scenario
+
+    root, contract, _catalogue = _built_environment(tmp_path)
+    kept = [Scenario(**_delta(sub_goals=["item-added"]))]
+
+    problems = suite_health(contract, root, kept, prove_all=True, sealed=False)
+
+    assert not any("unexpected keyword" in one for one in problems)
+
+
+def test_the_contract_stage_can_brief_read_only_researchers_for_a_repository(tmp_path):
+    from fi.alk.harness.backends import DELEGATE_TOOL
+    from fi.alk.harness.sources import resolve
+    from fi.alk.harness.understand import READER, open_stage
+
+    (tmp_path / "agent.py").write_text("def book(): ...\n")
+    stage, _ = open_stage(resolve("repo", name="demo", root=str(tmp_path)), out=tmp_path / "out")
+    reader = stage.spec.workers[READER]
+
+    assert DELEGATE_TOOL in stage.spec.builtins
+    assert reader.granted(stage.spec) == ["Read", "Glob", "Grep"]
+
+    provider, _ = open_stage(resolve("provider", name="demo", profile={"tools": []}, scratch=str(tmp_path)), out=tmp_path / "p")
+    assert READER not in provider.spec.workers and DELEGATE_TOOL not in provider.spec.builtins
+
+
+def test_a_writer_sees_what_each_tool_refuses_changes_and_takes_from_earlier_calls():
+    from fi.alk.harness.contract import AgentContract
+
+    contract = AgentContract.model_validate(
+        {
+            "agent": "rides",
+            "tools": [
+                {
+                    "name": "book_ride",
+                    "args": ["token"],
+                    "description": "Book the ride.",
+                    "refuses": "returns status rejected for a blocked account",
+                    "effects": "creates one booking; clears the token",
+                    "inputs_from": {"token": "prepare_booking_confirmation"},
+                }
+            ],
+        }
+    )
+
+    brief = contract.brief()
+
+    assert "refuses: returns status rejected for a blocked account" in brief
+    assert "effects: creates one booking; clears the token" in brief
+    assert "token <- prepare_booking_confirmation" in brief
+    assert AgentContract.model_validate({"agent": "old", "tools": [{"name": "t"}]}).tools[0].effects == ""
+
+
+def test_an_old_contract_gains_the_new_tool_fields_through_fix_tool(tmp_path):
+    from fi.alk.harness.amend import fix_tool
+    from fi.alk.harness.contract import AgentContract
+
+    _world, contract = _cart_world()
+    name, before = contract.tools[0].name, contract.tools[0].model_copy()
+
+    done, said = fix_tool(
+        contract,
+        tmp_path,
+        tool_name=name,
+        why="the check showed what it clears",
+        refuses="returns ok false for an unknown item",
+        effects="clears the basket total",
+        inputs_from={before.args[0]: "lst"} if before.args else {},
+    )
+
+    tool = AgentContract.model_validate_json((tmp_path / "contract.json").read_text()).tools[0]
+    assert done, said
+    assert (tool.description, tool.args) == (before.description, before.args)
+    assert tool.effects == "clears the basket total" and tool.refuses == "returns ok false for an unknown item"

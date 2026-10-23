@@ -1512,13 +1512,13 @@ def build_process_tree(
                     process=process.name,
                     domain=FailureDomain.AGENT,
                 ) from exc
+            if result.returncode == 0:
+                break
             evidence = _build_step_evidence(
                 result.stdout, result.stderr, step=step, process=process.name,
                 attempt=network_attempt, directory=build_root.parent,
                 secret_values=secret_values, retain_log=retain_process_log,
             )
-            if result.returncode == 0:
-                break
             if network_attempt < max(
                 0, build_step_network_retries
             ) and _is_transient_build_network_failure(result):
@@ -1874,7 +1874,7 @@ def _dispatch_metadata(
 #
 # §2b fixes the catalog (engine/version/role/db-name/strategies) and the port formula; it does
 # not fix an exact launch invocation for any of the three engines — that is provisioner-internal,
-# same status as `LocalComposeRuntimeProvider`'s own Compose mechanics. The commands below are a
+# same status as the certified Compose provider's lifecycle mechanics. The commands below are a
 # defensible V1 default, kept swappable through `ProcessRunner`/`sync_run` injection; they are
 # never executed in this module's own test lane (§0: assumed on PATH, never required in tests).
 
@@ -4302,8 +4302,7 @@ async def healthy(
     *,
     prober: CapabilityProber = default_capability_prober,
 ) -> bool:
-    """Async wrapper matching §4's `RuntimeProvider.healthy` shape (`runtime.py`'s own
-    `LocalComposeRuntimeProvider.healthy` uses the same `asyncio.to_thread` idiom).
+    """Async wrapper matching §4's `RuntimeProvider.healthy` shape.
 
     §3's `state` transitions are fixed: `preparing->ready`, `ready->unhealthy`, and
     `unhealthy->ready` ONLY via re-provision reconcile (§4 point 1: "a sick world mid-job is

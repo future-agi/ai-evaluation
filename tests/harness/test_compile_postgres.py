@@ -5,7 +5,12 @@ from base64 import b64encode
 
 import pytest
 
-from fi.alk.harness.compile.postgres import apply_postgres, compile_postgres
+from fi.alk.harness.compile.postgres import (
+    PostgresCompileResult,
+    PostgresSequenceReset,
+    apply_postgres,
+    compile_postgres,
+)
 from fi.alk.harness.source_model import (
     ForeignKey,
     LogicalType,
@@ -26,6 +31,7 @@ def _column(
     nullable: bool = False,
     default: str | None = None,
     generated: bool = False,
+    identity: bool = False,
     element_type: LogicalType | None = None,
     enum_values: tuple[str, ...] = (),
 ) -> SourceColumn:
@@ -37,6 +43,7 @@ def _column(
         has_default=default is not None,
         default_expression=default,
         generated=generated,
+        identity=identity,
         element_type=element_type,
         enum_values=enum_values,
     )
@@ -293,6 +300,82 @@ def test_compile_reconciles_serial_sequence_after_explicit_seed_ids() -> None:
     ]
 
 
+def test_compile_reconciles_identity_sequence_after_explicit_seed_ids() -> None:
+    source = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="Tickets",
+                columns=(
+                    _column(
+                        "TicketId",
+                        LogicalType.INTEGER,
+                        "bigint",
+                        identity=True,
+                    ),
+                ),
+                primary_key=("TicketId",),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="Tickets",
+                rows=(
+                    WorldRow(
+                        identity="ticket-10",
+                        values={
+                            "TicketId": WorldValue.present(LogicalType.INTEGER, 10)
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    compiled = compile_postgres(source, world, reconcile_existing=True)
+
+    assert [reset.model_dump() for reset in compiled.sequence_resets] == [
+        {"schema_name": "public", "table": "Tickets", "column": "TicketId"}
+    ]
+
+
+def test_sequence_reset_preserves_quoted_table_name() -> None:
+    compiled = PostgresCompileResult(
+        source_schema_hash=SOURCE_DIGEST,
+        world_ir_hash=SOURCE_DIGEST,
+        operations=(),
+        sequence_resets=(
+            PostgresSequenceReset(
+                schema_name="MixedSchema", table="Tickets", column="TicketId"
+            ),
+        ),
+        decisions=(),
+    )
+    executed: list[tuple[str, tuple[object, ...] | None]] = []
+
+    class Transaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    class Connection:
+        def transaction(self):
+            return Transaction()
+
+        def execute(self, statement, params=None):
+            executed.append((statement, params))
+
+    apply_postgres(Connection(), compiled)
+
+    assert executed[0][1] == ('"MixedSchema"."Tickets"', "TicketId")
+
+
 def test_serial_sequence_advances_past_seeded_ids_in_real_postgres() -> None:
     dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
     if not dsn:
@@ -347,6 +430,66 @@ def test_serial_sequence_advances_past_seeded_ids_in_real_postgres() -> None:
         generated_id = connection.execute(
             "INSERT INTO compiler_sequence.tickets (title) VALUES ('Generated') "
             "RETURNING ticket_id"
+        ).fetchone()[0]
+
+    assert generated_id == 11
+
+
+def test_identity_sequence_advances_for_quoted_names_in_real_postgres() -> None:
+    dsn = os.environ.get("ALK_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("set ALK_TEST_POSTGRES_DSN to run the real compiler test")
+    psycopg = pytest.importorskip("psycopg")
+    source = SourceModel.create(
+        source_digest=SOURCE_DIGEST,
+        engine="postgres",
+        tables=(
+            SourceTable(
+                name="Tickets",
+                columns=(
+                    _column(
+                        "TicketId",
+                        LogicalType.INTEGER,
+                        "bigint",
+                        identity=True,
+                    ),
+                    _column("Title", LogicalType.STRING, "text"),
+                ),
+                primary_key=("TicketId",),
+            ),
+        ),
+    )
+    world = WorldIR.create(
+        source_model_fingerprint=source.fingerprint,
+        tables=(
+            WorldTable(
+                source_name="Tickets",
+                rows=(
+                    WorldRow(
+                        identity="ticket-10",
+                        values={
+                            "TicketId": WorldValue.present(LogicalType.INTEGER, 10),
+                            "Title": WorldValue.present(LogicalType.STRING, "Seeded"),
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+    compiled = compile_postgres(source, world, schema="MixedSchema")
+
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute('DROP SCHEMA IF EXISTS "MixedSchema" CASCADE')
+        connection.execute('CREATE SCHEMA "MixedSchema"')
+        connection.execute(
+            'CREATE TABLE "MixedSchema"."Tickets" ('
+            '"TicketId" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, '
+            '"Title" text NOT NULL)'
+        )
+        apply_postgres(connection, compiled)
+        generated_id = connection.execute(
+            'INSERT INTO "MixedSchema"."Tickets" ("Title") VALUES (\'Generated\') '
+            'RETURNING "TicketId"'
         ).fetchone()[0]
 
     assert generated_id == 11

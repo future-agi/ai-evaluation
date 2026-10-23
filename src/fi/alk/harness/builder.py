@@ -202,9 +202,7 @@ def suite_server(
             if scenario is None:
                 lines.append(f"{name}: not in the suite")
                 continue
-            proof = prove(
-                scenario, catalogue, out, allow_judged_only_with_state=not scenario.solution
-            )
+            proof = prove(scenario, catalogue, out)
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"
@@ -451,7 +449,7 @@ def suite_health(
         from .prove import prove
 
         for scenario in kept:
-            proof = prove(scenario, catalogue, out, allow_judged_only_with_state=not scenario.solution)
+            proof = prove(scenario, catalogue, out)
             if not proof.holds:
                 problems.append(f"{scenario.name}: proof no longer holds. {proof.why()}"[:600])
     return problems
