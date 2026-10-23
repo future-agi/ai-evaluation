@@ -11,11 +11,10 @@ name rather than implemented here.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import os
 import tempfile
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -35,7 +34,6 @@ from claude_agent_sdk import (
 from fi import agentcc
 
 from .base import (
-    ASK_TOOL,
     DELEGATE_TOOL,
     MOST_WORKERS_AT_ONCE,
     Call,
@@ -44,11 +42,11 @@ from .base import (
     SessionOpened,
     SessionSpec,
     StageDone,
+    TERMINAL_SAVE_TOOLS,
     ToolReturned,
     ToolServer,
-    ToolSpec,
     WorkerSpec,
-    qualified,
+    tool_input_schema,
 )
 
 # The loop is Claude Code; the model it bills is not.
@@ -74,29 +72,23 @@ def _can_reach_its_workers(spec: SessionSpec, allowed: list[str]) -> None:
 
 
 def _gateway_compatible_schema(value: Any) -> Any:
-    """Translate JSON-Schema nullable unions to the scalar form Gemini accepts.
+    def normalize(item: Any) -> Any:
+        if isinstance(item, list):
+            return [normalize(entry) for entry in item]
+        if not isinstance(item, dict):
+            return item
+        result = {key: normalize(entry) for key, entry in item.items()}
+        kind = result.get("type")
+        if isinstance(kind, list):
+            concrete = [entry for entry in kind if entry != "null"]
+            if len(concrete) == 1:
+                result["type"] = concrete[0]
+        enum = result.get("enum")
+        if isinstance(enum, list) and None in enum:
+            result["enum"] = [entry for entry in enum if entry is not None]
+        return result
 
-    Claude accepts ``type: [string, null]``. Vertex function declarations use a scalar enum for
-    ``type`` and reject that otherwise-valid JSON Schema before the model can run. Optional
-    properties remain optional because their names are absent from ``required``; only explicit
-    null loses validation support on this provider path.
-    """
-    if isinstance(value, list):
-        return [_gateway_compatible_schema(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    result = {
-        key: _gateway_compatible_schema(item) for key, item in value.items()
-    }
-    kind = result.get("type")
-    if isinstance(kind, list):
-        concrete = [item for item in kind if item != "null"]
-        if len(concrete) == 1:
-            result["type"] = concrete[0]
-    enum = result.get("enum")
-    if isinstance(enum, list) and None in enum:
-        result["enum"] = [item for item in enum if item is not None]
-    return result
+    return normalize(tool_input_schema(value))
 
 
 def _sdk_server(server: ToolServer, *, gateway_compatible: bool = False) -> Any:
@@ -188,6 +180,8 @@ class ClaudeSession:
         self._streaming = streaming
         self._client: ClaudeSDKClient | None = None
         self._mirror_errors: list[str] = []
+        self._tool_names: dict[str, str] = {}
+        self._terminal_save_succeeded = False
 
     async def start(self) -> None:
         self._client = ClaudeSDKClient(options=self._options)
@@ -218,9 +212,16 @@ class ClaudeSession:
     async def replies(self) -> AsyncIterator[Any]:
         if self._client is None:
             raise RuntimeError("session is not open")
+        terminal = False
         async for received in self._client.receive_response():
+            if terminal and not isinstance(received, ResultMessage):
+                continue
             for reply in self._translate(received):
                 yield reply
+            if self._terminal_save_succeeded:
+                self._terminal_save_succeeded = False
+                terminal = True
+                await self._client.interrupt()
 
     def _translate(self, received: Any) -> list[Any]:
         if isinstance(received, StreamEvent):
@@ -259,6 +260,7 @@ class ClaudeSession:
                 if isinstance(block, TextBlock) and not self._streaming:
                     parts.append(Say(text=block.text))
                 elif isinstance(block, ToolUseBlock):
+                    self._tool_names[block.id] = block.name
                     parts.append(
                         Call(id=block.id, name=block.name, arguments=block.input)
                     )
@@ -306,6 +308,11 @@ class ClaudeSession:
             returned = []
             for block in blocks:
                 if isinstance(block, ToolResultBlock):
+                    name = self._tool_names.pop(block.tool_use_id, "")
+                    self._terminal_save_succeeded = bool(
+                        name in TERMINAL_SAVE_TOOLS
+                        and not getattr(block, "is_error", False)
+                    )
                     returned.append(
                         ToolReturned(
                             id=block.tool_use_id,

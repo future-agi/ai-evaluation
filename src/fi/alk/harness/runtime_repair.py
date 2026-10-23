@@ -908,8 +908,6 @@ The private conversation must capture actual completed tool evidence after recom
             try:
                 resolved = path.resolve()
                 unsafe = not resolved.is_relative_to(root)
-                if not unsafe and resolved.is_dir():
-                    unsafe = any(entry.is_symlink() for entry in resolved.rglob("*"))
             except (OSError, RuntimeError, ValueError):
                 unsafe = True
             if unsafe:
