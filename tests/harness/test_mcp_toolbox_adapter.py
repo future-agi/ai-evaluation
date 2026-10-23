@@ -1,10 +1,12 @@
 import json
 import os
+import sys
+from types import ModuleType
 from contextlib import contextmanager
 
 import pytest
 
-from fi.alk.harness.mcp_toolbox_adapter import _execute, _signature
+from fi.alk.harness.mcp_toolbox_adapter import _application, _execute, _signature
 
 
 @pytest.mark.parametrize(
@@ -37,6 +39,52 @@ def test_signature_accepts_source_parameter_names():
         )
         == "assignee: str, limit: int"
     )
+
+
+def test_application_uses_installed_mcp_server_api(tmp_path):
+    application = _application(
+        {"tools": {}},
+        "postgresql://unused",
+        tmp_path / "trace.jsonl",
+    )
+
+    assert callable(application)
+
+
+def test_application_uses_mcp_v2_server_api(monkeypatch, tmp_path):
+    seen = {}
+
+    class MCPServer:
+        def __init__(self, name):
+            seen["name"] = name
+
+        def tool(self, **_kwargs):
+            return lambda function: function
+
+        def streamable_http_app(self, **kwargs):
+            seen["app"] = kwargs
+            return lambda _scope, _receive, _send: None
+
+    module = ModuleType("mcp.server.mcpserver")
+    module.MCPServer = MCPServer
+    monkeypatch.setitem(sys.modules, "mcp.server.mcpserver", module)
+
+    application = _application(
+        {"tools": {}},
+        "postgresql://unused",
+        tmp_path / "trace.jsonl",
+    )
+
+    assert callable(application)
+    assert seen == {
+        "name": "source-mcp-toolbox",
+        "app": {
+            "streamable_http_path": "/mcp/",
+            "json_response": True,
+            "stateless_http": True,
+            "host": "127.0.0.1",
+        },
+    }
 
 
 def test_execute_preserves_native_parameters_without_database(monkeypatch, tmp_path):

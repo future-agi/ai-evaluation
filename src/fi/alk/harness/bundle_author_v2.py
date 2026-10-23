@@ -2070,6 +2070,21 @@ def _rewrite_managed_dependency_environment(
     return rewritten
 
 
+def _compose_environment(service: dict[str, Any]) -> dict[str, str]:
+    raw = service.get("environment") or {}
+    if isinstance(raw, dict):
+        return {str(name): str(value) for name, value in raw.items() if value is not None}
+    if isinstance(raw, list):
+        return {
+            name: value
+            for item in raw
+            if isinstance(item, str)
+            for name, separator, value in [item.partition("=")]
+            if separator
+        }
+    return {}
+
+
 def resolve_environment_plan(
     source: str | Path,
     job: HarnessJob,
@@ -2123,6 +2138,46 @@ def resolve_environment_plan(
             contract_runtime or {},
             public_environment=declared_runtime_environment,
         )
+        if (
+            not isinstance(selected, ComposeSelection)
+            and runtime_model.execution == "native"
+            and (
+                runtime_model.required_environment
+                or any(
+                    dependency.get("kind", "").lower()
+                    in {"datastore", "database", "file", "queue"}
+                    or (dependency.get("reached") or {}).get("database")
+                    for dependency in (runtime_dependencies or [])
+                )
+            )
+        ):
+            topology_runtime = {
+                **(contract_runtime or {}),
+                "execution": "auto",
+                "compose_file": "",
+                "service": "",
+            }
+            try:
+                topology = select_runtime(
+                    root,
+                    topology_runtime,
+                    public_environment=declared_runtime_environment,
+                )
+            except ValueError:
+                topology = None
+            if isinstance(topology, ComposeSelection):
+                required = runtime_model.required_environment
+                requirements_are_wired = all(
+                    all(
+                            name in _compose_environment(
+                                topology.services.get(process, {})
+                            )
+                        for name in names
+                    )
+                    for process, names in required.items()
+                )
+                if requirements_are_wired:
+                    selected = topology
     except ValueError as exc:
         raise BundleAuthorError(str(exc)) from exc
     compose = selected.compose_file if isinstance(selected, ComposeSelection) else None
@@ -2153,7 +2208,11 @@ def resolve_environment_plan(
         raise BundleAuthorError(
             "runtime_language_unsupported: process lane supports Python or pinned Bun source"
         )
-    if compose is None and runtime_dependencies:
+    provider_connect_only = (
+        job.source.kind is SourceKind.PROVIDER
+        and job.agent.mode is ProviderExecutionMode.CONNECT_ONLY
+    )
+    if compose is None and runtime_dependencies and not provider_connect_only:
         for dependency in runtime_dependencies:
             reached = dependency.get("reached") or {}
             if dependency.get("kind", "").lower() in {
@@ -2293,17 +2352,7 @@ def resolve_environment_plan(
             service_root = (compose.parent / context).resolve()
             if not service_root.is_relative_to(root):
                 raise BundleAuthorError(f"build_context_escape: {service_name}")
-            environment: dict[str, str] = {}
-            raw_env = service.get("environment") or {}
-            if isinstance(raw_env, dict):
-                environment = {
-                    str(k): str(v) for k, v in raw_env.items() if v is not None
-                }
-            elif isinstance(raw_env, list):
-                environment = {
-                    str(item).partition("=")[0]: str(item).partition("=")[2]
-                    for item in raw_env
-                }
+            environment = _compose_environment(service)
             depends = (
                 list((service.get("depends_on") or {}).keys())
                 if isinstance(service.get("depends_on"), dict)
@@ -2584,6 +2633,8 @@ def resolve_environment_plan(
             if is_livekit
             else dict(declared_runtime_environment)
         )
+        if port is not None and not is_livekit:
+            environment["PORT"] = f"{{{{PORT_{control_name}}}}}"
         callback_entrypoint = (
             discovered_callback or _callback_entrypoint(root) if is_callback else None
         )
@@ -2900,14 +2951,46 @@ def _package_process_sources(
         declared_component = (component / process.source_component).resolve()
         if not declared_component.is_relative_to(component):
             raise GeneratedRuntimeError("generated_runtime_context_component_mismatch")
-        exclusions = _context_excludes(
-            declared_component,
-            selected_runtime,
-            "requirements.txt",
-            required,
-        )
         prefix = declared_component.relative_to(component)
-        exclusions = tuple((prefix / path).as_posix() for path in exclusions)
+        exclusion_runtime = selected_runtime or Runtime()
+        runtime_excludes = tuple(
+            exclusion_runtime.context_excludes
+        )
+
+        def exists_from(root: Path, path: str) -> bool:
+            matches = root.glob(path) if "*" in path else (root / path,)
+            return any(match.exists() or match.is_symlink() for match in matches)
+
+        workspace_excludes = tuple(
+            path for path in runtime_excludes if exists_from(component, path)
+        )
+        component_excludes = tuple(
+            path for path in runtime_excludes if path not in workspace_excludes
+        )
+        workspace_runtime = exclusion_runtime.model_copy(
+            update={"context_excludes": list(workspace_excludes)}
+        )
+        component_runtime = exclusion_runtime.model_copy(
+            update={"context_excludes": list(component_excludes)}
+        )
+        workspace_required = [
+            (prefix / path).as_posix() for path in map(Path, required)
+        ]
+        exclusions = _context_excludes(
+            component,
+            workspace_runtime,
+            (prefix / "requirements.txt").as_posix(),
+            workspace_required,
+        )
+        exclusions += tuple(
+            (prefix / path).as_posix()
+            for path in _context_excludes(
+                declared_component,
+                component_runtime,
+                "requirements.txt",
+                required,
+            )
+        )
         relative = Path("generated/source") / process.name
         context = staging / relative
         context.mkdir(parents=True)
@@ -3121,10 +3204,9 @@ def author_bundle_v2(
                 contract_modality == "chat"
                 and adk_interface is not None
                 and contract_interface_kind in {"", "http"}
-                and not str(interface.get("path") or "").strip()
             ):
-                # Repair an incomplete model-authored HTTP declaration from deterministic source
-                # evidence. A complete source interface always wins and is never overwritten.
+                # ADK's source-owned web API is deterministic; do not retain stale model-authored
+                # request shapes from older ADK releases.
                 runtime = dict(runtime)
                 runtime["interface"] = adk_interface
                 contract_body = {**contract_body, "runtime": runtime}

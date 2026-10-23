@@ -17,6 +17,12 @@ from fi.alk.harness.process_runtime import (
 )
 
 
+def certified_bundle(authoring):
+    bundle = authoring / "generic-harness" / "certified-bundle"
+    bundle.mkdir(parents=True)
+    (bundle / "contract.json").write_text("{}")
+
+
 @pytest.fixture
 def job(tmp_path):
     return HarnessJob.model_validate({
@@ -32,7 +38,7 @@ def test_local_execution_uses_selected_process_identity(tmp_path, monkeypatch, f
     monkeypatch.setenv("ALK_FIXED_SANDBOX_USER", "1" if fixed_user else "0")
     monkeypatch.delenv("ALK_SANDBOX_UPLOAD_ROOT", raising=False)
     authoring = tmp_path / "authoring"
-    (authoring / "generic-harness" / "certified-bundle").mkdir(parents=True)
+    certified_bundle(authoring)
 
     async def validated(*args, **kwargs):
         return None
@@ -65,7 +71,7 @@ def test_execution_hands_declared_resources_to_admission_and_closes_failed_start
             "runtime": job.runtime.model_copy(update={"cpu_units": 1, "memory_mb": 128})
         })
     authoring = tmp_path / "authoring"
-    (authoring / "generic-harness" / "certified-bundle").mkdir(parents=True)
+    certified_bundle(authoring)
 
     async def validated(*args, **kwargs):
         return None
@@ -111,7 +117,7 @@ def test_local_run_preserves_scenario_errors_and_evidence(
 ):
     monkeypatch.delenv("ALK_SANDBOX_UPLOAD_ROOT", raising=False)
     authoring = tmp_path / "authoring"
-    (authoring / "generic-harness" / "certified-bundle").mkdir(parents=True)
+    certified_bundle(authoring)
     failure = ReceiptFailure(
         domain="simulator", stage="running", code="setup_crashed",
         message="scenario fixture setup crashed",
@@ -190,7 +196,7 @@ def test_compose_execution_receives_only_target_credentials(tmp_path, monkeypatc
     job = HarnessJob.model_validate(raw)
     monkeypatch.setattr(local, "runtime_configuration_value", lambda alias: alias + "-value")
     authoring = tmp_path / "authoring"
-    (authoring / "generic-harness" / "certified-bundle").mkdir(parents=True)
+    certified_bundle(authoring)
 
     async def validated(*args, **kwargs):
         pass

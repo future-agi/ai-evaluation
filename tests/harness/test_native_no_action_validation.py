@@ -62,6 +62,7 @@ def test_live_native_no_action_gate(tmp_path, monkeypatch, native_api, body, err
             }
         )
     )
+    (bundle / "contract.json").write_text((authoring / "contract.json").read_text())
     bodies = body if isinstance(body, list) else [body]
     goals = [f"changed_{index}" for index in range(len(bodies))]
     (scenario / "scenario.json").write_text(

@@ -89,9 +89,29 @@ def _execute(
 
 
 def _application(definitions: dict[str, Any], database_url: str, trace_path: Path):
-    from mcp.server.mcpserver import MCPServer
+    try:
+        from mcp.server.mcpserver import MCPServer
+    except ImportError:
+        from mcp.server.fastmcp import FastMCP
 
-    server = MCPServer("source-mcp-toolbox")
+        server = FastMCP(
+            "source-mcp-toolbox",
+            streamable_http_path="/mcp/",
+            json_response=True,
+            stateless_http=True,
+            host="127.0.0.1",
+        )
+        application_factory = server.streamable_http_app
+    else:
+        server = MCPServer("source-mcp-toolbox")
+
+        def application_factory():
+            return server.streamable_http_app(
+                streamable_http_path="/mcp/",
+                json_response=True,
+                stateless_http=True,
+                host="127.0.0.1",
+            )
     for position, (tool_name, spec) in enumerate(definitions["tools"].items()):
         namespace: dict[str, Any] = {
             "_execute": _execute,
@@ -110,12 +130,7 @@ def _application(definitions: dict[str, Any], database_url: str, trace_path: Pat
             namespace[f"generated_{position}"]
         )
 
-    application = server.streamable_http_app(
-        streamable_http_path="/mcp/",
-        json_response=True,
-        stateless_http=True,
-        host="127.0.0.1",
-    )
+    application = application_factory()
 
     async def toolset_compatible(
         scope: dict[str, Any], receive: Any, send: Any

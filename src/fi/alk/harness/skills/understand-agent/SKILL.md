@@ -6,6 +6,9 @@ description: Reads an AI agent's source or definition and records what is verifi
 # Understand the agent
 
 Record executable capabilities, not commented examples, docstrings or suggested future features.
+For a framework or platform repository, do not inventory its component or integration catalogue.
+Choose one runnable source-owned agent/example that matches the requested target configuration,
+prove its startup and interaction path, and submit the contract once those facts are sufficient.
 An agent can legitimately have no custom tools: submit `tools: []` and `tool_entrypoints: []`.
 Do not invent a tool or database to make a contract look complete. Zero-argument tools are also
 valid when their actual signatures take no arguments. Follow registrations into executable code;
@@ -237,8 +240,15 @@ Find, in roughly this order:
    request, declare a capture from its dotted response path (for example
    `{"session_id": "id"}`) and reference it later as `{{session_id}}`; never substitute an
    unrelated built-in identifier. Use only documented template placeholders and only routes
-   proven in source. In particular, a source field named user ID is not itself a template
-   variable: map it to an available identifier such as `{{thread_id}}` when appropriate.
+   proven in source. If setup imports a graph or workflow, use a runnable source-owned example,
+   bind every required component input, and configure its provider and model through the
+   repository's supported mechanism using the requested target configuration. A starter template
+   with an unselected model is not a runnable agent. If the repository has no example already
+   bound to the requested model and the supported API cannot bind it during setup, do not select
+   that flow and do not rewrite its source. Prefer a source-owned example with no model dependency
+   so the repository's real interaction path can still be proved. In particular, a source field
+   named user ID is not itself a template variable: map it to an available identifier such as
+   `{{thread_id}}` when appropriate.
 
 13. **Its data store, and how the connection is chosen.** Which kind it is, and whether the
     connection comes from an environment variable, a config file, or a constructor argument. Say

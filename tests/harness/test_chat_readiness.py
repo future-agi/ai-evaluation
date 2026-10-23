@@ -213,6 +213,22 @@ def test_healthy_server_requires_profile_then_typed_runtime_patch_passes(
     assert state["calls"][-1][1]["thread_id"] == "one"
 
 
+def test_readiness_supplies_execution_id_without_authored_scenario(
+    tmp_path, profile_app
+):
+    url, state = profile_app
+    runtime = RuntimeInterface(
+        kind="http",
+        port=8080,
+        path="/{{execution_id}}",
+        setup_requests=[{"path": "/profiles", "body_template": {}}],
+    )
+
+    asyncio.run(probe(tmp_path, url, interface=runtime))
+
+    assert [path for path, _ in state["calls"]] == ["/profiles", "/one"]
+
+
 @pytest.mark.parametrize(
     "status,code",
     [
@@ -443,6 +459,7 @@ def test_validation_rejects_healthy_unprovisioned_chat_before_invariants(
         target = kwargs["output"]
         assert kwargs["include_scenarios"] is not readiness_only
         target.mkdir(parents=True)
+        (target / "contract.json").write_text(contract_path.read_text())
         if not readiness_only:
             keys = (
                 [("00-refusal", "refusal"), ("01-one", "one")]
@@ -818,16 +835,18 @@ def workflow_probe(tmp_path, url, **changes):
 
     bundle = tmp_path / "bundle"
     bundle.mkdir(exist_ok=True)
-    (bundle / "contract.json").write_text(AgentContract(
+    contract = changes.pop("contract", AgentContract(
         runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
-    ).model_dump_json())
+    ))
+    (bundle / "contract.json").write_text(contract.model_dump_json())
     scenario_dir = bundle / "scenarios" / "private"
     scenario_dir.mkdir(parents=True, exist_ok=True)
     (scenario_dir / "scenario.json").write_text(json.dumps({
         "scenario_key": "private", "name": "private", "instruction": "Look up the account",
     }))
     args = dict(
-        job=SimpleNamespace(metadata={}), source=tmp_path, bundle=bundle, authoring=tmp_path,
+        job=SimpleNamespace(metadata={}, require_tool_workflow=True), source=tmp_path,
+        bundle=bundle, authoring=tmp_path,
         runtime=SimpleNamespace(
             metadata={"observation_mode": "native"}, world_index=0,
             endpoints={"target_http": SimpleNamespace(address=url, protocol="http")},
@@ -948,6 +967,74 @@ def test_private_workflow_checks_executed_tools_after_clarification(
         assert path.stat().st_mode & 0o777 == 0o600
     assert any("transcript" in name for name in receipt["artifacts"])
     assert not (tmp_path / "results").exists()
+
+
+def test_private_workflow_allows_unobserved_internal_tools_without_strict_requirement(
+    tmp_path, profile_app, monkeypatch
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[
+                Exchange("customer", "Look up account A-1"),
+                Exchange("agent", answer),
+            ],
+            calls=[],
+            ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    asyncio.run(
+        workflow_probe(
+            tmp_path,
+            url,
+            job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+        )
+    )
+
+    _, receipt = workflow_receipt(tmp_path)
+    assert receipt["status"] == "passed"
+    assert receipt["tool_evidence_status"] == "not_observed"
+
+
+def test_private_workflow_requires_evidence_for_executable_contract_tools(
+    tmp_path, profile_app, monkeypatch
+):
+    from fi.alk.harness import chat_call_runner
+    from fi.alk.harness.contract import ToolEntry, ToolSpec
+    from fi.alk.harness.run.conversation import Exchange, Transcript
+
+    url, state = profile_app
+    state.update(profile=True, body={"content": "The account is active"})
+
+    async def conversation(target, *_args):
+        answer = await target.say("Look up account A-1")
+        return Transcript(
+            exchanges=[Exchange("customer", "Look up account A-1"), Exchange("agent", answer)],
+            calls=[], ended="finished",
+        )
+
+    monkeypatch.setattr(chat_call_runner, "_drive_conversation", conversation)
+    contract = AgentContract(
+        tools=[ToolSpec(name="lookup_account")],
+        tool_entrypoints=[ToolEntry(
+            tool="lookup_account", mode="import", module="agent.tools", callable="lookup_account",
+        )],
+        runtime=Runtime(language="python", command=["python", "app.py"], interface=interface()),
+    )
+
+    with pytest.raises(RuntimeValidationError) as failure:
+        asyncio.run(workflow_probe(
+            tmp_path, url, contract=contract,
+            job=SimpleNamespace(metadata={}, require_tool_workflow=False),
+        ))
+    assert failure.value.diagnostics[0].code == "chat_tool_evidence_unverified"
 
 
 @pytest.mark.parametrize("status,code", [(401, "credential_missing"), (422, "chat_ingress_configuration_invalid")])

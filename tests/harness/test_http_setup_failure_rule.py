@@ -175,7 +175,6 @@ def test_setup_rule_survives_contract_serialization():
 
 
 def test_authoring_setup_rule_survives_vertex_schema_conversion(tmp_path):
-    from google.genai import types
     from fi.alk.harness.backends.vertex_gemini import _json_schema
     from fi.alk.harness.tools import contract_tools
 
@@ -184,31 +183,28 @@ def test_authoring_setup_rule_survives_vertex_schema_conversion(tmp_path):
         for tool in contract_tools(tmp_path).tools
         if tool.name == "submit_contract"
     )
-    declaration = types.FunctionDeclaration(
-        name=submit.name, parameters=_json_schema(submit.input_schema)
-    )
-    interface = declaration.parameters.properties["runtime"].properties["interface"]
-    rule = interface.properties["setup_requests"].items.properties["failure_rule"]
-    assert rule.type == types.Type.OBJECT
-    assert "status_path" in rule.required
-    assert rule.properties["status_path"].type == types.Type.STRING
+    schema = _json_schema(submit.input_schema)
+    interface = schema["properties"]["runtime"]["properties"]["interface"]
+    rule = interface["properties"]["setup_requests"]["items"]["properties"][
+        "failure_rule"
+    ]
+    assert set(rule["type"]) == {"object", "null"}
+    assert "status_path" in rule["required"]
+    assert rule["properties"]["status_path"]["type"] == "string"
     for name in ["failure_values", "success_values"]:
-        choices = rule.properties[name].any_of
-        assert {choice.type for choice in choices} == {
-            types.Type.ARRAY,
-            types.Type.NULL,
+        choices = rule["properties"][name]["anyOf"]
+        assert {choice["type"] for choice in choices} == {"array", "null"}
+        values = next(choice for choice in choices if choice["type"] == "array")
+        assert values["minItems"] == 1
+        assert values["maxItems"] == 32
+        assert {choice["type"] for choice in values["items"]["anyOf"]} == {
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "null",
         }
-        values = next(choice for choice in choices if choice.type == types.Type.ARRAY)
-        assert values.min_items == 1
-        assert values.max_items == 32
-        assert {choice.type for choice in values.items.any_of} == {
-            types.Type.STRING,
-            types.Type.INTEGER,
-            types.Type.NUMBER,
-            types.Type.BOOLEAN,
-            types.Type.NULL,
-        }
-    assert rule.properties["message_path"].type == types.Type.STRING
+    assert set(rule["properties"]["message_path"]["type"]) == {"string", "null"}
 
 
 def test_setup_error_redacts_a_previously_captured_token(setup_app):

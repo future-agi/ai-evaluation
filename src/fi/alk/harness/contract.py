@@ -1357,22 +1357,28 @@ def is_data_free_conversation(contract: AgentContract) -> bool:
     )
 
 
-def validate_tool_workflow(contract: AgentContract) -> None:
+def has_executable_tool_workflow(contract: AgentContract) -> bool:
     declared = {tool.name for tool in contract.tools if tool.name.strip()}
     for entry in contract.tool_entrypoints:
         if entry.tool not in declared:
             continue
         if entry.mode == "import" and entry.module.strip() and entry.callable.strip():
-            return
+            return True
         if (
             entry.mode == "construct"
             and entry.module.strip()
             and entry.callable.strip()
             and entry.factory.strip()
         ):
-            return
+            return True
         if entry.mode == "service" and entry.service.strip() and entry.endpoint.strip():
-            return
+            return True
+    return False
+
+
+def validate_tool_workflow(contract: AgentContract) -> None:
+    if has_executable_tool_workflow(contract):
+        return
     raise ValueError(
         "required_tool_workflow_unavailable: no declared tool has an executable entrypoint"
     )

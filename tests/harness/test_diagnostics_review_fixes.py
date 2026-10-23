@@ -69,7 +69,9 @@ def test_local_runs_collect_only_their_own_logs_even_with_same_clock(
 ):
     monkeypatch.delenv("ALK_SANDBOX_UPLOAD_ROOT", raising=False)
     authoring = tmp_path / "authoring"
-    (authoring / "generic-harness" / "certified-bundle").mkdir(parents=True)
+    bundle = authoring / "generic-harness" / "certified-bundle"
+    bundle.mkdir(parents=True)
+    (bundle / "contract.json").write_text("{}")
     prior = authoring / "generic-harness" / "process-logs"
     prior.mkdir()
     (prior / "old.log").write_text("old run evidence")

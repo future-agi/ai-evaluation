@@ -443,6 +443,7 @@ def test_dependency_investigation_shows_sibling_optional_extras_without_manifest
         def __init__(self, spec, **kwargs):
             schema = spec.servers["runtime_repair"].tools[0].input_schema
             assert "runtime_dependencies" not in schema["properties"]
+            assert "changing templates without binding a model" in spec.system_prompt
 
         async def __aenter__(self):
             return self

@@ -19,7 +19,9 @@ def test_repair_decides_from_actual_bounded_source_evidence(
     source.mkdir()
     (source / "app.py").write_text("# padding\n" * 100 + "def main(): pass\n")
     (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
-    contract = AgentContract(agent="test", runtime=Runtime(language="python"))
+    contract = AgentContract(
+        agent="test", modality="voice", runtime=Runtime(language="python")
+    )
     specs = []
     briefings = []
     submissions = []
@@ -93,7 +95,9 @@ def test_repair_decision_rejects_invalid_patch_and_source_escape(tmp_path, monke
     outside.write_text("private-secret-content")
     (source / "link").symlink_to(outside)
     (source / "large.py").write_text("# bounded evidence\n" * 1000)
-    contract = AgentContract(agent="test", runtime=Runtime(language="python"))
+    contract = AgentContract(
+        agent="test", modality="voice", runtime=Runtime(language="python")
+    )
     specs = []
 
     class FakeStage:
