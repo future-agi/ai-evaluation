@@ -2884,6 +2884,50 @@ def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) 
     ).depends_on == ["cache"]
 
 
+@pytest.mark.parametrize(
+    ("postgres_image", "redis_image", "redis_version"),
+    [
+        ("postgres", "redis", "7"),
+        ("registry.example/team/postgres:16", "bitnami/redis:7-alpine", "7"),
+    ],
+)
+def test_declared_compose_runtime_accepts_catalog_images_without_a_tag_or_with_a_namespace(
+    tmp_path: Path,
+    postgres_image: str,
+    redis_image: str,
+    redis_version: str,
+) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        "    depends_on: [cache, postgres]\n"
+        f"  cache:\n    image: {redis_image}\n"
+        f"  postgres:\n    image: {postgres_image}\n"
+    )
+
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+
+    cache = next(process for process in plan.processes if process.name == "cache")
+    assert cache.version == redis_version
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+
+
 @pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
 def test_declared_compose_runtime_rejects_ambiguous_or_missing_match(
     tmp_path: Path, ports: str

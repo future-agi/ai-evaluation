@@ -123,6 +123,12 @@ _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
 
 
+def _catalog_image(image: str) -> tuple[str, str]:
+    repository = image.rsplit("/", 1)[-1].split("@", 1)[0]
+    name, separator, tag = repository.partition(":")
+    return name.lower(), tag if separator else ""
+
+
 def _reuse_certified_bundle(
     *, source: Path, job: HarnessJob, authoring: Path, output: Path
 ) -> EnvironmentBundleV2 | None:
@@ -1977,6 +1983,7 @@ def resolve_environment_plan(
         for service_name, raw in services.items():
             service = raw if isinstance(raw, dict) else {}
             image = str(service.get("image") or "")
+            image_name, image_tag = _catalog_image(image)
             if service.get("entrypoint") is not None:
                 raise BundleAuthorError(
                     f"compose_entrypoint_unsupported: {service_name} declares an entrypoint; "
@@ -1988,21 +1995,19 @@ def resolve_environment_plan(
                 raise BundleAuthorError(f"compose_capability_unsupported: {service_name} uses {', '.join(unsupported)}")
             if not image and not service.get("build"):
                 raise BundleAuthorError(f"source_service_unsupported: {service_name} has no local build context")
-            if image.startswith("postgres:") and not service.get("build"):
+            if image_name == "postgres" and not service.get("build"):
                 if service_name != "postgres":
                     raise BundleAuthorError(
                         f"managed_name_unsupported: postgres service must be named postgres, got {service_name}"
                     )
                 managed_names.add(service_name)
                 continue
-            if image.startswith("redis:") and not service.get("build"):
+            if image_name == "redis" and not service.get("build"):
                 processes.append(
                     ManagedProcess(
                         name=service_name,
                         engine=ManagedEngine.REDIS,
-                        version=image.split(":", 1)[1].split("-", 1)[0]
-                        if ":" in image
-                        else "7",
+                        version=image_tag.split("-", 1)[0] or "7",
                         user=ProcessUser.SVC_DATA,
                     )
                 )
