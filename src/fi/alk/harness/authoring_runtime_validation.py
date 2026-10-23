@@ -158,6 +158,27 @@ def _write_runtime_evidence(
     store.write_action_certification(action_report)
 
 
+def _database_lanes() -> int:
+    """One lane per CPU by default: each check starts a worker inside its time budget."""
+    from .process_runtime import _cgroup_cpu_quota
+
+    configured = os.environ.get("ALK_VALIDATION_DB_LANES")
+    if configured:
+        try:
+            return max(1, int(configured))
+        except ValueError:
+            raise ValueError(
+                f"ALK_VALIDATION_DB_LANES must be a whole number, not {configured!r}"
+            ) from None
+    cpus = (
+        len(os.sched_getaffinity(0))
+        if hasattr(os, "sched_getaffinity")
+        else os.cpu_count() or 1
+    )
+    quota = _cgroup_cpu_quota()
+    return max(1, min(cpus, int(quota)) if quota else cpus)
+
+
 def _world_state_digest(world) -> str:
     """Return a value-level baseline fingerprint without persisting world contents."""
 
@@ -592,7 +613,7 @@ async def validate_once(
         requested_lanes = max(1, int(os.environ.get("ALK_VALIDATION_INSTANCES", "4") or 4))
         # Setup checks touch only the world's database, so a single-database world checks each
         # scenario on its own clone of the sealed baseline instead of a whole agent stack.
-        database_lanes = max(1, int(os.environ.get("ALK_VALIDATION_DB_LANES", "16") or 16))
+        database_lanes = _database_lanes()
         executor = ThreadPoolExecutor(
             max_workers=max(requested_lanes, database_lanes),
             thread_name_prefix="runtime-validation",
