@@ -8,7 +8,9 @@ does the binding through the workbench; this process turns its `result.json` int
 
 Workspace layout (`/work/authoring`): `adaptation/inputs.json` and `adaptation/profile.json` from
 this process; `adaptation/result.json` and the sealed files from the workbench; the builder's
-`.futureagi-build-finished.json` marker when the work ends either way.
+`.futureagi-build-finished.json` marker when the work ends either way. The scratch PostgreSQL's
+superuser DSN sits beside the workspace in `.authoring-credentials/`, which the model's file tools
+refuse and the workspace checkpoint never packs.
 """
 
 from __future__ import annotations
@@ -43,6 +45,11 @@ from .workbench import (
 ADAPTATION_DIRECTORY = "adaptation"
 FINISHED_MARKER = ".futureagi-build-finished.json"
 _INPUTS_WAIT_SECONDS = 300
+_POSTGRES_CREDENTIALS = Path(".authoring-credentials") / "adaptation-postgres.json"
+
+
+def _postgres_credentials(workspace: Path) -> Path:
+    return workspace.parent / _POSTGRES_CREDENTIALS
 
 
 def _values(path: Path) -> dict[str, str]:
@@ -150,6 +157,11 @@ def run_hosted(args: argparse.Namespace) -> int:
                 dsn = stack.enter_context(scratch_cluster())
             except (OSError, RuntimeError, KeyError) as exc:
                 raise AdaptationFailure("postgres_unavailable", str(exc)) from exc
+        credentials_path = _postgres_credentials(output.parent)
+        credentials_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump({"postgres_dsn": dsn}, stream)
         write_json(output / PROFILE, profile.document())
         # Written last: its presence tells the builder everything else is in place.
         write_json(
@@ -157,7 +169,6 @@ def run_hosted(args: argparse.Namespace) -> int:
             {
                 "environments": [str(one) for one in environments],
                 "suite": str(suite_root),
-                "postgres_dsn": dsn,
             },
         )
         return _await_result(output)
@@ -191,7 +202,11 @@ async def load_workbench(workspace: Path) -> Workbench:
         environments=[Path(one) for one in inputs["environments"]],
         suite_root=Path(inputs["suite"]),
         output=output,
-        postgres_dsn=str(inputs["postgres_dsn"]),
+        postgres_dsn=str(
+            json.loads(_postgres_credentials(workspace).read_text(encoding="utf-8"))[
+                "postgres_dsn"
+            ]
+        ),
         profile=profile,
         finished_marker=workspace / FINISHED_MARKER,
     )
