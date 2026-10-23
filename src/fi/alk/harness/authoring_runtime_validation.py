@@ -469,9 +469,9 @@ def _repair_guidance(diagnostics) -> str:
 def _needs_runtime_plan_repair(diagnostics) -> bool:
     """Route execution construction failures away from world-data authoring."""
 
-    from .repair_controller import is_chat_dependency_investigation
+    from .repair_controller import is_chat_setup_investigation
 
-    if is_chat_dependency_investigation(diagnostics):
+    if is_chat_setup_investigation(diagnostics):
         return True
     runtime_codes = {
         "generated_runtime_plan_invalid",
@@ -489,6 +489,7 @@ class RuntimeValidationError(RuntimeError):
         self.phase = phase
         self.diagnostics = tuple(diagnostics)
         self.process_evidence = ""
+        self.target_process_evidence = ""
         super().__init__(detail)
 
 
@@ -526,6 +527,65 @@ class _GeneratedWorldActionAdapter:
         self.world.revert(self.baseline)
 
 
+async def _probe_runtime_readiness(
+    *, job, source, authoring, manifest, contract, provider, runtime, factory,
+    work, values, redactions, compare_baseline=True,
+):
+    from .chat_call_runner import _tools, _chat_target_timeout_seconds
+    from .chat_readiness import probe_chat_ingress
+
+    interface = contract.runtime.interface if contract.runtime else None
+    endpoint = runtime.endpoints.get("target_http")
+    if interface is None or interface.kind not in {"http", "callable", "command"} or endpoint is None:
+        raise RuntimeValidationError(
+            "runtime", "generated_runtime_plan_invalid: unsupported chat ingress"
+        )
+    baseline = await factory.create(runtime, rng=random.Random(job.seed or 0))
+    baseline_digest = _world_state_digest(baseline) if compare_baseline else None
+    receipt = {
+        "status": "failed",
+        "candidate_hash": _generic_candidate_hash(source, authoring),
+        "bundle_digest": manifest.digest,
+        "reset": "failed",
+    }
+    try:
+        try:
+            await probe_chat_ingress(
+                interface=interface,
+                endpoint=endpoint.address,
+                opening_message="Hello",
+                authoring=authoring,
+                candidate_hash=receipt["candidate_hash"],
+                bundle_digest=manifest.digest,
+                secret_values=values,
+                redaction_values=redactions,
+                local_auth_values=getattr(runtime, "_local_auth_values", None),
+                tools=_tools(contract) if interface.include_tools else (),
+                timeout=_chat_target_timeout_seconds(),
+            )
+        finally:
+            try:
+                await provider.reset(runtime, work_directory=work)
+                if compare_baseline:
+                    restored = await factory.create(runtime, rng=random.Random(job.seed or 0))
+                    if _world_state_digest(restored) != baseline_digest:
+                        raise RuntimeValidationError(
+                            "environment", "Readiness reset did not restore the baseline"
+                        )
+            except RuntimeValidationError:
+                raise
+            except Exception as exc:
+                raise RuntimeValidationError(
+                    "environment", f"Readiness reset failed: {exc}"
+                ) from exc
+            receipt["reset"] = "equivalent" if compare_baseline else "restarted"
+        receipt["status"] = "passed"
+    finally:
+        path = authoring / "generic-harness" / "runtime-readiness.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+
+
 async def validate_once(
     job,
     source: Path,
@@ -534,6 +594,7 @@ async def validate_once(
     secrets_path=Path("/run/futureagi/secrets.json"),
     local_runtime: bool = False,
     review=None,
+    readiness_only: bool = False,
 ) -> int:
     from . import outbound
     from .bundle_author_v2 import author_bundle_v2
@@ -577,6 +638,10 @@ async def validate_once(
         isinstance(getattr(job, "metadata", None), dict)
         and job.metadata.get("generic_harness_v1") is True
     )
+    if readiness_only and not generic:
+        raise RuntimeValidationError("runtime", "Early readiness requires the generic runtime")
+    if readiness_only:
+        (authoring / "generic-harness" / "runtime-readiness.json").unlink(missing_ok=True)
     if generic:
         from .certification import CheckStatus, GenericHarnessArtifactStore
 
@@ -634,6 +699,7 @@ async def validate_once(
         process_logs = authoring / "generic-harness" / "process-logs"
         logs_before = set(process_logs.glob("*.log"))
         validation_error = None
+        manifest = None
         from .hosted_entrypoint import peek_target_provider_secret_values
 
         target_secret_values = peek_target_provider_secret_values(
@@ -692,12 +758,13 @@ async def validate_once(
                 job=job,
                 authoring=authoring,
                 output=bundle,
+                include_scenarios=not readiness_only,
             )
             if local_runtime:
                 _make_local_seed_files_readable(bundle)
             validation_parallelism = (
                 1
-                if external_provider or review is not None
+                if external_provider or review is not None or readiness_only
                 else max(requested_lanes, 2 if generic else 1)
             )
             preflight_bundle(
@@ -712,7 +779,7 @@ async def validate_once(
                 from .compose_integration import validate_native
                 return await validate_native(job=job, source=source, authoring=authoring,
                     bundle=bundle, manifest=manifest, work=work, values=target_secret_values,
-                    redactions=redaction_values, executor=executor)
+                    redactions=redaction_values, executor=executor, readiness_only=readiness_only)
 
             runtimes = await provider.provision(
                 manifest,
@@ -793,6 +860,13 @@ async def validate_once(
                 world_isolation = _world_isolation_status(build_output)
             factory = ProcessWorldFactory(work, bundle)
             runtime = runtimes[0]
+            if readiness_only:
+                await _probe_runtime_readiness(
+                    job=job, source=source, authoring=authoring, manifest=manifest,
+                    contract=contract, provider=provider, runtime=runtime, factory=factory,
+                    work=work, values=target_secret_values, redactions=redaction_values,
+                )
+                return 0
             lanes = len(runtimes) or 1
             phase = "scenarios"
             scenarios = await asyncio.to_thread(load_scenarios, bundle)
@@ -957,12 +1031,12 @@ async def validate_once(
                     _tools,
                     _chat_target_timeout_seconds,
                 )
-                from .chat_readiness import probe_chat_ingress
+                from .chat_readiness import probe_chat_ingress, probe_chat_workflow
 
                 chat_ingress = CheckStatus.NOT_APPLICABLE
                 interface = contract.runtime.interface if contract.runtime else None
                 if contract.modality != "voice":
-                    if interface is None or interface.kind not in {"http", "callable"}:
+                    if interface is None or interface.kind not in {"http", "callable", "command"}:
                         raise RuntimeValidationError(
                             "runtime",
                             "generated_runtime_plan_invalid: unsupported chat ingress",
@@ -972,7 +1046,11 @@ async def validate_once(
                             "environment",
                             "Chat readiness requires a representative scenario",
                         )
-                    await check_setup(scenarios[0], [])
+                    representative = next(
+                        (item for item in scenarios if getattr(item, "requires_tool_evidence", False)),
+                        scenarios[0],
+                    )
+                    await check_setup(representative, [])
                     endpoint = runtime.endpoints.get("target_http")
                     if endpoint is None:
                         raise RuntimeValidationError(
@@ -980,26 +1058,37 @@ async def validate_once(
                             "generated_runtime_plan_invalid: target_http is absent",
                         )
                     source_key = (
-                        getattr(scenarios[0], "source_scenario_key", None)
-                        or scenarios[0].scenario_key
+                        getattr(representative, "source_scenario_key", None)
+                        or representative.scenario_key
                     )
                     document = _with_scenario_edits(
                         _scenario_document(bundle, source_key), job.metadata, source_key
                     )
-                    await probe_chat_ingress(
-                        interface=interface,
-                        endpoint=endpoint.address,
-                        document=document,
-                        scenario_key=scenarios[0].scenario_key,
-                        authoring=authoring,
-                        candidate_hash=_generic_candidate_hash(source, authoring),
-                        bundle_digest=manifest.digest,
-                        secret_values=target_secret_values,
-                        redaction_values=redaction_values,
-                        tools=_tools(contract) if interface.include_tools else (),
-                        scenario_id=scenarios[0].scenario_id,
-                        timeout=_chat_target_timeout_seconds(),
-                    )
+                    if getattr(representative, "requires_tool_evidence", False):
+                        await probe_chat_workflow(
+                            job=job, source=source, bundle=bundle, authoring=authoring,
+                            runtime=runtime, scenario=representative,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            bundle_digest=manifest.digest,
+                            secret_values=target_secret_values,
+                            redaction_values=redaction_values,
+                        )
+                    else:
+                        await probe_chat_ingress(
+                            interface=interface,
+                            endpoint=endpoint.address,
+                            document=document,
+                            scenario_key=representative.scenario_key,
+                            authoring=authoring,
+                            candidate_hash=_generic_candidate_hash(source, authoring),
+                            bundle_digest=manifest.digest,
+                            secret_values=target_secret_values,
+                            redaction_values=redaction_values,
+                            local_auth_values=getattr(runtime, "_local_auth_values", None),
+                            tools=_tools(contract) if interface.include_tools else (),
+                            scenario_id=representative.scenario_id,
+                            timeout=_chat_target_timeout_seconds(),
+                        )
                     chat_ingress = CheckStatus.PASSED
             phase = "environment"
             await provider.reset(runtime, work_directory=work)
@@ -1134,13 +1223,14 @@ async def validate_once(
             if "CERTIFICATE_VERIFY_FAILED" in str(exc):
                 # Generated data cannot repair the infrastructure trust store.
                 phase = "infrastructure"
-            raise RuntimeValidationError(
+            validation_error = RuntimeValidationError(
                 phase,
                 outbound.redact_outbound_text(
                     f"{type(exc).__name__}: {exc}", extra_secret_values=secret_values
                 ),
                 diagnostics=tuple(getattr(exc, "diagnostics", ())),
-            ) from None
+            )
+            raise validation_error from None
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
             await provider.close(work_directory=work)
@@ -1151,6 +1241,15 @@ async def validate_once(
                     validation_error.process_evidence = retained_process_evidence(
                         process_logs, logs_before, redaction_values
                     )
+                    control_service = (
+                        getattr(manifest.runtime, "control_service", None)
+                        if manifest is not None else None
+                    )
+                    if control_service:
+                        validation_error.target_process_evidence = retained_process_evidence(
+                            process_logs, logs_before, redaction_values,
+                            process_name=control_service,
+                        )
                 except OSError:
                     pass
 
@@ -1174,10 +1273,11 @@ async def validate_and_repair(
     source: Path,
     authoring: Path,
     *,
-    validate=validate_once,
+    validate=None,
     repair=None,
     controller=None,
     sleeper=asyncio.sleep,
+    readiness_only: bool = False,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
     from .job import HarnessJob
@@ -1185,11 +1285,29 @@ async def validate_and_repair(
     base_guidance = (
         "\n".join(job.authoring_guidance()) if isinstance(job, HarnessJob) else ""
     )
+    available_secret_aliases = (
+        job.available_target_environment_names()
+        if isinstance(job, HarnessJob)
+        else frozenset()
+    )
+    if validate is None:
+        if readiness_only:
+
+            async def validate(job, source, authoring):
+                return await validate_once(job, source, authoring, readiness_only=True)
+        else:
+            validate = validate_once
     generic = bool(
         job is not None
         and isinstance(getattr(job, "metadata", None), dict)
         and job.metadata.get("generic_harness_v1") is True
     )
+    if readiness_only:
+        if not generic:
+            raise RuntimeValidationError(
+                "runtime", "Early readiness requires the generic runtime"
+            )
+        (authoring / "generic-harness" / "runtime-readiness.json").unlink(missing_ok=True)
     if repair is None:
 
         async def repair(phase, guidance):
@@ -1258,7 +1376,11 @@ async def validate_and_repair(
                         (authoring / "contract.json").read_text(encoding="utf-8")
                     )
                     return await request_runtime_plan_patch(
-                        source, contract, _active_repair_diagnostics, guidance=guidance
+                        source,
+                        contract,
+                        _active_repair_diagnostics,
+                        guidance=guidance,
+                        available_secret_aliases=available_secret_aliases,
                     )
                 if generic and all(
                     (artifact_root / name).is_file()
@@ -1322,9 +1444,19 @@ async def validate_and_repair(
 
         repair_controller = controller or RepairController()
         artifacts = GenericHarnessArtifactStore(authoring / "generic-harness")
+
+        def write_history():
+            if readiness_only:
+                path = authoring / "generic-harness" / "readiness-repair-history.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(repair_controller.history.model_dump_json(indent=2) + "\n")
+            else:
+                artifacts.write_repair_history(repair_controller.history)
+
         budgets = repair_controller.budgets
         candidate_repairs = (
             budgets.compiler_candidates
+            + budgets.runtime_patches
             + budgets.environment_patches
             + budgets.scenario_patches
         )
@@ -1341,6 +1473,8 @@ async def validate_and_repair(
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
+                if readiness_only and exc.phase == "scenarios":
+                    raise
                 diagnostics = exc.diagnostics or (
                     _fallback_diagnostic(exc, authoring=authoring),
                 )
@@ -1355,6 +1489,8 @@ async def validate_and_repair(
                 phase = (
                     RepairPhase.SCENARIOS
                     if exc.phase == "scenarios"
+                    else RepairPhase.RUNTIME
+                    if exc.phase == "runtime"
                     else RepairPhase.ENVIRONMENT
                 )
                 decision = repair_controller.decide(
@@ -1364,7 +1500,7 @@ async def validate_and_repair(
                         diagnostics=diagnostics,
                     )
                 )
-                artifacts.write_repair_history(repair_controller.history)
+                write_history()
                 if decision.action is RepairAction.REJECT:
                     raise
                 if decision.action is RepairAction.RETRY_INFRASTRUCTURE:
@@ -1374,7 +1510,7 @@ async def validate_and_repair(
                         after_candidate_hash=candidate_hash,
                         outcome=RepairOutcome.APPLIED,
                     )
-                    artifacts.write_repair_history(repair_controller.history)
+                    write_history()
                     continue
                 if decision.action is RepairAction.RECOMPILE:
                     # Compilation is deterministic. Re-evaluate once; an unchanged fingerprint
@@ -1384,8 +1520,10 @@ async def validate_and_repair(
                         after_candidate_hash=candidate_hash,
                         outcome=RepairOutcome.NO_MATERIAL_CHANGE,
                     )
-                    artifacts.write_repair_history(repair_controller.history)
+                    write_history()
                     continue
+                if readiness_only and decision.action is RepairAction.PATCH_SCENARIOS:
+                    raise
                 repair_phase = (
                     "scenarios"
                     if decision.action is RepairAction.PATCH_SCENARIOS
@@ -1405,6 +1543,12 @@ async def validate_and_repair(
                         + exc.process_evidence
                         + "\n</untrusted_current_attempt_process_logs>"
                     )
+                if exc.target_process_evidence:
+                    guidance += (
+                        "\n<untrusted_current_target_process_logs>\n"
+                        + exc.target_process_evidence
+                        + "\n</untrusted_current_target_process_logs>"
+                    )
                 _active_repair_diagnostics = diagnostics
                 scenarios_before = None
                 if repair_phase == "scenarios":
@@ -1412,7 +1556,20 @@ async def validate_and_repair(
 
                     scenarios_before = load_scenarios(authoring)
                 before_repair_hash = _generic_candidate_hash(source, authoring)
-                repair_result = await repair(repair_phase, guidance)
+                try:
+                    repair_result = await repair(repair_phase, guidance)
+                except Exception as repair_error:
+                    print(
+                        f"runtime validation: repair failed ({type(repair_error).__name__})",
+                        flush=True,
+                    )
+                    repair_controller.record_result(
+                        decision.sequence,
+                        after_candidate_hash=candidate_hash,
+                        outcome=RepairOutcome.FAILED,
+                    )
+                    write_history()
+                    raise exc from None
                 if repair_phase == "environment":
                     from .repair_patch import (
                         WorldIRRepairPatch,
@@ -1423,9 +1580,9 @@ async def validate_and_repair(
                         apply_runtime_plan_patch,
                     )
 
-                    from .repair_controller import is_chat_dependency_investigation
+                    from .repair_controller import is_chat_setup_investigation
 
-                    if is_chat_dependency_investigation(diagnostics) and not isinstance(
+                    if is_chat_setup_investigation(diagnostics) and not isinstance(
                         repair_result, RuntimePlanPatch
                     ):
                         status = 1
@@ -1461,6 +1618,7 @@ async def validate_and_repair(
                             allowed_diagnostic_codes={
                                 item.code for item in diagnostics
                             },
+                            available_secret_aliases=available_secret_aliases,
                         )
                         patch_path = (
                             authoring
@@ -1520,7 +1678,7 @@ async def validate_and_repair(
                     after_candidate_hash=after_hash,
                     outcome=(RepairOutcome.FAILED if status else RepairOutcome.APPLIED),
                 )
-                artifacts.write_repair_history(repair_controller.history)
+                write_history()
                 if status:
                     raise
                 candidate_hash = after_hash
@@ -1535,7 +1693,9 @@ async def validate_and_repair(
                     raise RuntimeValidationError(
                         "environment", "generic pipeline refused passing candidate"
                     )
-                artifacts.write_repair_history(repair_controller.history)
+                write_history()
+                if readiness_only:
+                    return
                 evidence_path = (
                     authoring
                     / "generic-harness"

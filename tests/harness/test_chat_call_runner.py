@@ -1322,3 +1322,80 @@ def test_hosted_chat_prefers_canonical_calls_within_assistant_message(
     )
     if completed:
         assert all(call.result == "OK" and call.ok for call in world.calls)
+
+
+def test_generated_command_bridge_handles_readiness_and_hosted_chat(tmp_path, monkeypatch):
+    import sys
+    import threading
+    from http.server import ThreadingHTTPServer
+    from unittest.mock import AsyncMock
+
+    from fi.alk.harness.authoring_runtime_validation import _probe_runtime_readiness
+    from fi.alk.harness.bundle_author_v2 import _subprocess_adapter_source
+    from fi.alk.harness.chat_readiness import probe_chat_ingress
+    from fi.alk.harness.contract import AgentContract
+
+    command = tmp_path / "target.py"
+    command.write_text(
+        "import json, sys\n"
+        "payload = json.load(sys.stdin)\n"
+        "print('Received: ' + payload['new_message']['content'])\n"
+    )
+    monkeypatch.setenv("ALK_SUBPROCESS_COMMAND", json.dumps([sys.executable, str(command)]))
+    namespace = {"__name__": "compiled_command_bridge"}
+    exec(_subprocess_adapter_source(), namespace)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), namespace["Handler"])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    context = _context(tmp_path)
+    contract_path = context.bundle_dir / "contract.json"
+    body = json.loads(contract_path.read_text())
+    body["runtime"]["interface"] = {
+        "kind": "command", "include_tools": False,
+        "protocol": "openai_chat", "path": "/source-command-path",
+    }
+    body["tools"] = []
+    contract_path.write_text(json.dumps(body))
+    contract = AgentContract.model_validate(body)
+    runtime = EnvironmentRuntime(
+        runtime_id="command-runtime", world_index=0,
+        bundle_digest="sha256:" + "a" * 64, state=RuntimeState.READY,
+        endpoints={"target_http": RuntimeEndpoint(
+            capability="target_http", protocol="http",
+            address=f"http://127.0.0.1:{server.server_port}",
+        )},
+    )
+    provider = SimpleNamespace(reset=AsyncMock())
+    factory = SimpleNamespace(create=AsyncMock(return_value=None))
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+    monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+    adapter = _Adapter()
+    try:
+        asyncio.run(_probe_runtime_readiness(
+            job=context.job, source=tmp_path, authoring=context.bundle_dir,
+            manifest=SimpleNamespace(digest=runtime.bundle_digest), contract=contract,
+            provider=provider, runtime=runtime, factory=factory, work=tmp_path,
+            values={}, redactions={}, compare_baseline=False,
+        ))
+        provider.reset.assert_awaited_once()
+        receipt = json.loads((context.bundle_dir / "generic-harness/runtime-readiness.json").read_text())
+        assert receipt["status"] == "passed"
+        assert receipt["reset"] == "restarted"
+        asyncio.run(probe_chat_ingress(
+            interface=contract.runtime.interface, endpoint=runtime.endpoints["target_http"].address,
+            document={"scenario_key": "one", "persona": {"initial_message": "Scenario hello"}},
+            authoring=context.bundle_dir, candidate_hash="candidate", bundle_digest=runtime.bundle_digest,
+            secret_values={}, redaction_values={},
+        ))
+        outcome = asyncio.run(chat.HostedChatCallRunner(adapter, context).run(
+            SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime,
+        ))
+        assert outcome.transcript_artifact == "transcript-1"
+        assert b"Received: Look up account ACC-2048" in adapter.uploads[0]
+        receipts = [json.loads(p.read_text()) for p in (context.bundle_dir / "generic-harness/chat-readiness").glob("*.json")]
+        assert len(receipts) == 2
+        assert all(item["status"] == "passed" for item in receipts)
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()

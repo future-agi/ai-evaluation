@@ -527,6 +527,25 @@ def _verify_secret_purposes(
             + ", ".join(sorted(export_claimants)),
         )
 
+    from .secrets import process_secret_environment_names
+
+    target_names = process_secret_environment_names(
+        alias for alias, purpose in secret_refs.items() if purpose == "target_provider"
+    )
+    for process in manifest.processes:
+        if not isinstance(process, SourceProcess):
+            continue
+        for resource in process.config_files.values():
+            if any(
+                alias not in target_names
+                or SecretPurpose.TARGET_PROVIDER not in process.secret_purposes
+                for alias in resource.secret_aliases.values()
+            ):
+                raise PreflightError(
+                    "secret_purpose_forbidden",
+                    "runtime config requires declared target-provider aliases",
+                )
+
     ref_has_target_provider = any(
         purpose == SecretPurpose.TARGET_PROVIDER.value
         for purpose in secret_refs.values()

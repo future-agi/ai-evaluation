@@ -182,31 +182,37 @@ def test_repair_result_records_before_after_and_no_op() -> None:
 
 
 @pytest.mark.parametrize("changed", [True, False])
-def test_chat_dependency_hypothesis_is_once_per_run_and_keeps_source_ownership(changed):
+@pytest.mark.parametrize("code", ["chat_ingress_failed", "chat_tool_evidence_unverified"])
+def test_chat_setup_hypotheses_are_bounded_and_keep_source_ownership(changed, code):
     from fi.alk.harness.diagnostics import RepairOwner
 
     diagnostic = HarnessDiagnostic.create(
         stage=HarnessStage.CONNECTING_AGENT,
         component="chat_ingress",
-        code="chat_ingress_failed",
+        code=code,
         message="Application error",
     )
-    controller = RepairController()
-    for index, expected in enumerate(
-        (RepairAction.PATCH_ENVIRONMENT, RepairAction.REJECT)
-    ):
-        assert (
-            controller.decide(
-                CandidateObservation(
-                    candidate_hash=f"candidate-{index if changed else 0}",
-                    phase=RepairPhase.ENVIRONMENT,
-                    diagnostics=(diagnostic,),
-                )
-            ).action
-            is expected
+    controller = RepairController(RepairBudgets(environment_patches=2))
+    expected_actions = (
+        [
+            RepairAction.PATCH_ENVIRONMENT,
+            RepairAction.PATCH_ENVIRONMENT,
+            RepairAction.REJECT,
+        ]
+        if changed
+        else [RepairAction.PATCH_ENVIRONMENT, RepairAction.REJECT, RepairAction.REJECT]
+    )
+    for index, expected in enumerate(expected_actions):
+        decision = controller.decide(
+            CandidateObservation(
+                candidate_hash=f"candidate-{index if changed else 0}",
+                phase=RepairPhase.ENVIRONMENT,
+                diagnostics=(diagnostic,),
+            )
         )
+        assert decision.action is expected
     assert diagnostic.owner is RepairOwner.SOURCE
-    assert controller.history.environment_patches_used == 1
+    assert controller.history.environment_patches_used == (2 if changed else 1)
 
 
 @pytest.mark.parametrize(
@@ -260,3 +266,35 @@ def test_ingress_failure_retry_budget_is_stable_and_does_not_reauthor(code):
     assert actions == [RepairAction.RETRY_INFRASTRUCTURE, RepairAction.RETRY_INFRASTRUCTURE,
                        RepairAction.REJECT, RepairAction.REJECT]
     assert controller.decide(_observation("changed-candidate", code)).action is RepairAction.RETRY_INFRASTRUCTURE
+
+
+@pytest.mark.parametrize("code", ["ready_condition_invalid", "process_dependency_timeout"])
+def test_runtime_budget_is_bounded_and_independent_of_chat_repairs(code):
+    controller = RepairController(RepairBudgets(
+        runtime_patches=1, environment_patches=1,
+        infrastructure_retries_per_candidate=0,
+    ))
+    runtime = _observation("runtime-a", code, phase=RepairPhase.RUNTIME)
+    assert controller.decide(runtime).action is RepairAction.PATCH_ENVIRONMENT
+    assert controller.decide(runtime).action is RepairAction.REJECT
+    assert controller.decide(_observation(
+        "runtime-b", code, phase=RepairPhase.RUNTIME,
+    )).action is RepairAction.REJECT
+    assert controller.decide(_observation("chat-a", code)).action is RepairAction.PATCH_ENVIRONMENT
+    assert controller.decide(_observation("chat-b", code)).action is RepairAction.REJECT
+    assert controller.history.runtime_patches_used == 1
+    assert controller.history.environment_patches_used == 1
+
+
+def test_default_runtime_budget_allows_eight_changed_candidates_but_not_repeats():
+    controller = RepairController()
+    for attempt in range(8):
+        observation = _observation(
+            f"candidate-{attempt}", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
+        )
+        assert controller.decide(observation).action is RepairAction.PATCH_ENVIRONMENT
+        assert controller.decide(observation).action is RepairAction.REJECT
+    assert controller.history.runtime_patches_used == 8
+    assert controller.decide(_observation(
+        "candidate-8", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
+    )).action is RepairAction.REJECT

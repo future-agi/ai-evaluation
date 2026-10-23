@@ -11,6 +11,7 @@ All three are recorded, because how a conversation ended is often the finding.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -267,7 +268,7 @@ async def converse(
             record("customer", said)
         else:
             transcript.ended = RAN_OUT
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         # Preserve simulator usage already consumed before a target/provider failure.  Call
         # runners attach this partial transcript to the failed usage record instead of silently
         # dropping a paid attempt that never reached a normal return.

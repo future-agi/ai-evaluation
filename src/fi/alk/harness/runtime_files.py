@@ -54,3 +54,61 @@ def relocate_runtime_files(build: Path, runtime: Path) -> None:
             data = path.read_bytes()
             if b"\0" not in data and old.encode() in data:
                 path.write_bytes(data.replace(old.encode(), new.encode()))
+
+
+def materialize_config_resources(root, config_files, directories, secrets):
+    """Write declared dotenv files only into a private runtime copy, never a build."""
+    import json
+
+    from .contract import validate_runtime_resource_paths
+
+    validate_runtime_resource_paths(config_files, directories)
+    root = root.resolve()
+    rendered = {}
+    environment = {}
+    for relative in [*directories, *config_files]:
+        path = root / relative
+        if any(
+            parent.is_symlink() for parent in [path, *path.parents] if parent != root
+        ):
+            raise OSError("runtime resource path contains a symlink")
+        if not path.resolve().is_relative_to(root):
+            raise OSError("runtime resource path escapes the runtime tree")
+        if relative in config_files and path.exists():
+            raise OSError("runtime config would overwrite a source file")
+    for relative, resource in config_files.items():
+        values = dict(resource.values)
+        for name, alias in resource.secret_aliases.items():
+            value = secrets.get(alias)
+            if (
+                not value
+                or len(value.encode()) > 65536
+                or any(c in value for c in "\x00\n\r")
+            ):
+                raise OSError("runtime config secret missing or invalid")
+            values[name] = value
+        for name, value in values.items():
+            if "${" in value:
+                raise OSError("runtime config dotenv interpolation forbidden")
+            if name in environment and environment[name] != value:
+                raise OSError("runtime config values conflict")
+            environment[name] = value
+        text = (
+            "\n".join(
+                key + "=" + json.dumps(value, ensure_ascii=False)
+                for key, value in sorted(values.items())
+            )
+            + "\n"
+        )
+        if len(text.encode()) > 65536:
+            raise OSError("runtime config file oversized")
+        rendered[relative] = text
+    for relative in directories:
+        (root / relative).mkdir(parents=True, exist_ok=True)
+    for relative, text in rendered.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(text)
+    return environment

@@ -1618,6 +1618,29 @@ def test_claude_gateway_schema_uses_scalar_types_for_gemini():
     assert source["properties"]["name"]["type"] == ["string", "null"]
 
 
+def test_claude_gateway_schema_inlines_nested_runtime_contracts():
+    from fi.alk.harness.backends.claude import _gateway_compatible_schema
+    from fi.alk.harness.runtime_repair import _RuntimeSubmission
+
+    schema = _gateway_compatible_schema(_RuntimeSubmission.model_json_schema())
+    runtime = schema["properties"]["runtime"]
+    interface = next(
+        item
+        for item in runtime["properties"]["interface"]["anyOf"]
+        if item.get("type") == "object"
+    )
+    events = next(
+        item
+        for item in interface["properties"]["completed_tool_events"]["anyOf"]
+        if item.get("type") == "object"
+    )["properties"]
+
+    assert {"completed_tool_events", "completed_tools"} <= set(interface["properties"])
+    assert {"path", "correlation_header", "action_id_path", "result_path"} <= set(events)
+    assert events["source"]["enum"] == ["endpoint", "response"]
+    assert "$defs" not in schema and "$ref" not in str(schema)
+
+
 def test_a_model_we_cannot_afford_is_refused_before_it_is_ever_reached(monkeypatch):
     import pytest as _pytest
 

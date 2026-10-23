@@ -41,6 +41,7 @@ from pydantic import (
     model_validator,
 )
 
+from .contract import LocalHttpAuth, RuntimeConfigFile, validate_runtime_resource_paths
 from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .bundle import CapabilityProtocol, _reject_secret_values, _safe_relative
 
@@ -178,9 +179,14 @@ class SourceProcess(BaseModel):
     kind: Literal[ProcessKind.SOURCE] = ProcessKind.SOURCE
     working_directory: str
     source_origin: Literal["repository", "bundle"] = "repository"
+    # Compiler-only coordinate for packaging member-relative inputs after workspace promotion.
+    source_component: str = Field(default=".", exclude=True)
     build_commands: list[list[str]] = Field(default_factory=list)
     run_command: list[str] = Field(min_length=1)
     workspaces: dict[str, str] = Field(default_factory=dict)
+    local_auth: LocalHttpAuth | None = None
+    config_files: dict[str, RuntimeConfigFile] = Field(default_factory=dict)
+    directories: list[str] = Field(default_factory=list)
     environment: dict[str, str] = Field(default_factory=dict)
     build_environment: dict[str, str] | None = None
     fixed_port: int | None = Field(default=None, ge=1, le=65535)
@@ -205,8 +211,20 @@ class SourceProcess(BaseModel):
     def _shape(self) -> "SourceProcess":
         from .world.files import validate_bindings
 
+        if self.local_auth:
+            self.local_auth.reject_collisions(
+                set(self.environment) | set(self.build_environment or {})
+            )
+            for resource in self.config_files.values():
+                self.local_auth.reject_collisions(
+                    set(resource.values)
+                    | set(resource.secret_aliases)
+                    | set(resource.secret_aliases.values())
+                )
         validate_bindings(self.workspaces)
+        validate_runtime_resource_paths(self.config_files, self.directories)
         _safe_relative(self.working_directory)
+        _safe_relative(self.source_component)
         for step in self.build_commands:
             if not step:
                 raise ValueError("build_command_step_empty")
@@ -224,6 +242,12 @@ class SourceProcess(BaseModel):
         # reproduces its bytes and digest unchanged. A pydantic v2 `@field_serializer` cannot drop a
         # key (it only rewrites a value), so the omission is done here at the model level.
         data = handler(self)
+        if self.local_auth is None:
+            data.pop("local_auth", None)
+        if not self.config_files:
+            data.pop("config_files", None)
+        if not self.directories:
+            data.pop("directories", None)
         if not self.workspaces:
             data.pop("workspaces", None)
         if not self.fixed_port_consumable:
@@ -471,6 +495,16 @@ class EnvironmentBundleV2(BaseModel):
         ):
             raise ValueError("processes_and_seed_forbidden: kind=external")
 
+        for process in self.processes:
+            if isinstance(process, SourceProcess) and process.local_auth:
+                target = self.capabilities.get("target_http")
+                if (
+                    self.runtime.kind is not RuntimeKindV2.PROCESS
+                    or target is None
+                    or target.service != process.name
+                    or target.protocol is not CapabilityProtocol.HTTP
+                ):
+                    raise ValueError("runtime_local_auth_requires_native_http_target")
         for slug in self.capabilities:
             if not _CAPABILITY_SLUG.fullmatch(slug):
                 raise ValueError(f"capability_slug_invalid: {slug}")
@@ -645,7 +679,15 @@ class EnvironmentBundleV2(BaseModel):
         # identifiers, never values, the same reasoning v1 exempts `secret_refs` under.
         _reject_secret_values(
             self.model_dump(
-                exclude={"digest": True, "processes": {"__all__": {"secret_purposes"}}}
+                exclude={
+                    "digest": True,
+                    "processes": {
+                        "__all__": {
+                            "secret_purposes": True,
+                            "config_files": {"__all__": {"secret_aliases"}},
+                        }
+                    },
+                }
             )
         )
         return self

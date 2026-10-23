@@ -487,9 +487,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind not in {"http", "callable"}:
+        if interface is None or interface.kind not in {"http", "callable", "command"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
+                "chat_interface_unsupported: an HTTP, callable, or command runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
@@ -521,6 +521,7 @@ class HostedChatCallRunner:
             endpoint.address,
             wrapper_type=HTTPAgentWrapper,
             secret_values=self._context.target_provider_secret_values,
+            local_auth_values=getattr(runtime, "_local_auth_values", None),
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
@@ -563,7 +564,11 @@ class HostedChatCallRunner:
             wrapped = CallAborted(
                 f"chat_target_failed: {type(exc).__name__}: "
                 + sanitize_diagnostic(
-                    str(exc), self._context.target_provider_secret_values
+                    str(exc),
+                    {
+                        **self._context.target_provider_secret_values,
+                        **getattr(runtime, "_local_auth_values", {}),
+                    },
                 ),
                 code="target_agent_failed",
             )

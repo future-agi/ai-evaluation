@@ -195,3 +195,23 @@ def test_current_attempt_evidence_excludes_old_symlink_and_large_logs(tmp_path):
     assert "large.log" not in evidence
     assert "link.log" not in evidence
     assert len(evidence) <= 12000
+
+
+def test_target_evidence_excludes_build_sidecar_and_old_target_logs(tmp_path):
+    from fi.alk.harness.process_diagnostics import retained_process_evidence
+
+    token = "a" * 32
+    for name, content in (
+        (f"-{token}.log", "BUILD install buildpkg[extra]"),
+        (f"worlds-w0-db-{token}.log", "SIDECAR install dbpkg[extra]"),
+        (f"worlds-w0-web-{token}.log", "TARGET install webpkg[extra]"),
+        (f"worlds-w1-web-{token}.log", "OLD TARGET"),
+    ):
+        (tmp_path / name).write_text(content)
+    evidence = retained_process_evidence(
+        tmp_path, {tmp_path / f"worlds-w1-web-{token}.log"}, {}, process_name="web"
+    )
+    assert "TARGET install webpkg[extra]" in evidence
+    assert "BUILD" not in evidence
+    assert "SIDECAR" not in evidence
+    assert "OLD TARGET" not in evidence

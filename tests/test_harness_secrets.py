@@ -4,9 +4,38 @@ from fi.alk.harness.secrets import (
     SecretResolutionError,
     resolve_worker_secrets,
     runtime_configuration_value,
+    target_provider_environment,
     worker_environment,
 )
 from fi.simulate.runtime.spec import SecretRef
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["VERTEXAI_LOCATION", "VERTEX_LOCATION", "VERTEXAI_PROJECT", "VERTEX_PROJECT"],
+)
+@pytest.mark.parametrize("explicit", ["", "chosen-value"])
+def test_target_provider_projection_preserves_explicit_aliases(alias, explicit):
+    values = {
+        "GOOGLE_CLOUD_LOCATION": "global",
+        "GOOGLE_CLOUD_PROJECT": "target-project",
+        alias: explicit,
+    }
+    projected = target_provider_environment(values)
+    assert projected[alias] == explicit
+    primary = "VERTEXAI_LOCATION" if "LOCATION" in alias else "VERTEXAI_PROJECT"
+    if alias != primary:
+        assert primary not in projected
+    assert len(values) == 3
+
+
+def test_target_provider_projection_does_not_read_host_configuration(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "host-location")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "host-project")
+    assert target_provider_environment({}) == {}
+    assert target_provider_environment({"GOOGLE_CLOUD_LOCATION": ""}) == {
+        "GOOGLE_CLOUD_LOCATION": ""
+    }
 
 
 def _ref(manager="futureagi", key="secret-livekit"):

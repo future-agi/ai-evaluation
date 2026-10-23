@@ -133,3 +133,19 @@ def test_native_source_escape_rejected_without_reading_target(native_build, tmp_
     (source / "escape").symlink_to("../outside.txt")
     assert asyncio.run(cli._build(args)) == 1
     assert outside.read_text() == "outside"
+
+
+def test_deferred_process_build_reaches_runtime_validation(native_build, tmp_path):
+    source, authoring, args, job = native_build
+    (source / "agent.py").write_text("print('ready')\n")
+    (source / "fixture.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    path = authoring / "contract.json"
+    contract = json.loads(path.read_text())
+    contract["runtime"].update(
+        execution="native", compose_file="", service="", command=["python", "agent.py"]
+    )
+    path.write_text(json.dumps(contract))
+    assert asyncio.run(cli._build(args)) == 0
+    assert not (authoring / "environment-bundle").exists()
+    with pytest.raises(ValueError, match="generated_runtime_secret_material_detected"):
+        compile_native(source, authoring, job, tmp_path / "bundle")

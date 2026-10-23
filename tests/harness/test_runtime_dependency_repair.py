@@ -291,6 +291,10 @@ def test_submission_forwards_dependency_patch(repair_case, monkeypatch):
     class SubmittingStage:
         def __init__(self, spec, **kwargs):
             self.spec = spec
+            assert (
+                "runtime_dependencies"
+                in spec.servers["runtime_repair"].tools[0].input_schema["properties"]
+            )
 
         async def __aenter__(self):
             return self
@@ -298,7 +302,7 @@ def test_submission_forwards_dependency_patch(repair_case, monkeypatch):
         async def __aexit__(self, *_args):
             pass
 
-        async def say(self, briefing):
+        async def say(self, briefing, *, on_event=None):
             submit = self.spec.servers["runtime_repair"].tools[0].handler
             result = await submit(
                 patch.model_dump(

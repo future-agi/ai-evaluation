@@ -1124,3 +1124,20 @@ def test_generated_python_minor_image_allows_source_patch_floor(tmp_path: Path) 
     (tmp_path / "agent.py").write_text("print('agent')\n")
     plan = detect_generated_runtime(tmp_path, Runtime(language="python", version="3.12"))
     assert "FROM python:3.12-slim" in plan.dockerfile
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_workspace_root_does_not_promote_unrelated_or_excluded_member(
+    tmp_path, excluded
+):
+    from fi.alk.harness.generated_runtime import python_workspace_root
+
+    member = tmp_path / "server"
+    member.mkdir()
+    (member / "pyproject.toml").write_text('[project]\nname="server"\nversion="1"\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server"]\nexclude=["server"]\n'
+        if excluded
+        else '[project]\nname="unrelated"\nversion="1"\n'
+    )
+    assert python_workspace_root(tmp_path, member) == member

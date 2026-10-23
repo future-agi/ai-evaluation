@@ -1725,6 +1725,52 @@ def test_a_process_not_claiming_the_purpose_does_not_receive_the_secret(
     assert handle.handle.captured_output() == "SECRET=<none>"
 
 
+@pytest.mark.parametrize("purpose", ["target_provider", "simulator_provider"])
+def test_spawn_source_process_projects_only_target_vertex_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purpose: str
+) -> None:
+    for name in (
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_PROJECT",
+    ):
+        monkeypatch.setenv(name, "controller-value")
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    process = _source_process(
+        run_command=[
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps({k: os.environ.get(k) for k in ['VERTEXAI_LOCATION', 'VERTEXAI_PROJECT']}))",
+        ],
+        secret_purposes=["target_provider"],
+    )
+    handle = pr.spawn_source_process(
+        process,
+        build_dir=build_dir,
+        world_dir=tmp_path / "world",
+        world_index=0,
+        port_plan=_solo_port_plan("svc"),
+        configuration_addresses={},
+        secret_values={
+            "GOOGLE_CLOUD_LOCATION": "global",
+            "GOOGLE_CLOUD_PROJECT": "target-project",
+        },
+        secret_purposes={
+            "GOOGLE_CLOUD_LOCATION": purpose,
+            "GOOGLE_CLOUD_PROJECT": purpose,
+        },
+    )
+    _reap(handle.handle)
+    expected = (
+        {"VERTEXAI_LOCATION": "global", "VERTEXAI_PROJECT": "target-project"}
+        if purpose == "target_provider"
+        else {"VERTEXAI_LOCATION": None, "VERTEXAI_PROJECT": None}
+    )
+    assert json.loads(handle.handle.captured_output()) == expected
+
+
 def test_spawn_source_process_materializes_uploaded_google_credentials(
     tmp_path: Path,
 ) -> None:
@@ -10173,11 +10219,104 @@ def test_build_retries_retain_only_failed_attempts(tmp_path: Path) -> None:
 def test_build_evidence_omits_unknown_credential_context(tmp_path: Path) -> None:
     retained = []
     evidence = pr._build_step_evidence(
-        "unknown-sensitive-stdout", "unknown-sensitive-stderr",
-        step=["installer", "unknown-sensitive-command"], process="agent", attempt=0,
-        directory=tmp_path, secret_values=None,
+        "unknown-sensitive-stdout",
+        "unknown-sensitive-stderr",
+        step=["installer", "unknown-sensitive-command"],
+        process="agent",
+        attempt=0,
+        directory=tmp_path,
+        secret_values=None,
         retain_log=lambda path: retained.append(path.read_text()),
     )
     assert "credential context unavailable" in evidence
     assert "unknown-sensitive" not in evidence
     assert retained == [evidence]
+
+
+def test_native_config_is_private_runtime_file_and_environment_on_every_spawn(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "owned.txt").write_text("source")
+    script = """import json, os, pathlib, stat
+p = pathlib.Path('settings/runtime.env')
+values = {k: json.loads(v) for k, v in (line.split('=', 1) for line in p.read_text().splitlines())}
+assert values == {'MODE': 'testing', 'API_KEY': os.environ['SUPPLIED_KEY']}
+assert os.environ['API_KEY'] == values['API_KEY']
+assert os.environ['MODE'] == 'testing'
+assert stat.S_IMODE(p.stat().st_mode) == 0o600
+assert pathlib.Path('state').is_dir()
+print('configured')
+"""
+    process = _source_process(
+        run_command=["python3", "-c", script],
+        secret_purposes=["target_provider"],
+        config_files={
+            "settings/runtime.env": {
+                "values": {"MODE": "testing"},
+                "secret_aliases": {"API_KEY": "SUPPLIED_KEY"},
+            }
+        },
+        directories=["state"],
+    )
+    assert "private-value" not in process.model_dump_json()
+    for index in (0, 1, 0):
+        spawned = pr.spawn_source_process(
+            process,
+            build_dir=build,
+            world_dir=tmp_path / f"world-{index}",
+            world_index=index,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={"SUPPLIED_KEY": "private-value"},
+            secret_purposes={"SUPPLIED_KEY": "target_provider"},
+        )
+        _reap(spawned.handle)
+        assert spawned.handle.captured_output() == "configured\n"
+    assert not (build / "settings").exists()
+    assert (build / "owned.txt").read_text() == "source"
+
+
+@pytest.mark.parametrize(
+    "problem", ["unknown_alias", "wrong_purpose", "source_file", "symlink"]
+)
+def test_native_config_rejects_unavailable_secret_and_source_overwrite(
+    tmp_path, problem
+):
+    build = tmp_path / "build"
+    build.mkdir()
+    if problem == "source_file":
+        (build / ".env").write_text("source-content")
+    if problem == "symlink":
+        (build / ".env").symlink_to(tmp_path / "outside.env")
+    process = _source_process(
+        secret_purposes=["target_provider"],
+        config_files={".env": {"secret_aliases": {"API_KEY": "KEY"}}},
+    )
+    with pytest.raises(
+        pr.ProcessRuntimeError, match="could not materialize runtime config"
+    ):
+        pr.spawn_source_process(
+            process,
+            build_dir=build,
+            world_dir=tmp_path / "world",
+            world_index=0,
+            port_plan=_solo_port_plan("svc"),
+            configuration_addresses={},
+            secret_values={}
+            if problem == "unknown_alias"
+            else {"KEY": "private-value"},
+            secret_purposes={
+                "KEY": "source_checkout"
+                if problem == "wrong_purpose"
+                else "target_provider"
+            },
+        )
+    assert not (tmp_path / "outside.env").exists()
+    if problem == "source_file":
+        assert (build / ".env").read_text() == "source-content"
+
+
+@pytest.mark.parametrize("path", ["../outside.env", "/tmp/outside.env", ".git/config.env"])
+def test_native_config_resource_path_rejects_escape_at_model_boundary(path):
+    with pytest.raises(ValueError, match="runtime_resource_path_invalid"):
+        _source_process(config_files={path: {"values": {"MODE": "test"}}})

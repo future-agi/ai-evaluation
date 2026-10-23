@@ -261,6 +261,11 @@ async def _understand(args: argparse.Namespace) -> int:
     offered = (
         (getattr(job, "metadata", None) or {}).get("available_evals") if job else None
     )
+    generic = bool(
+        job is not None
+        and isinstance(getattr(job, "metadata", None), dict)
+        and job.metadata.get("generic_harness_v1") is True
+    )
     stage, destination = open_stage(
         source,
         out=Path(args.out) if args.out else None,
@@ -268,6 +273,7 @@ async def _understand(args: argparse.Namespace) -> int:
         # resolve in open_questions rather than blocking on a prompt nobody will see.
         ask=permission_gate(_ask_operator) if args.interactive else None,
         available_evals=offered if isinstance(offered, list) else None,
+        require_setup_contract=generic and not args.interactive,
     )
 
     print(f"agent: {source.name}  ({source.kind})")
@@ -420,6 +426,12 @@ async def _build(args: argparse.Namespace) -> int:
             return 1
         print(f"\nworld: {destination}")
         print("Native bundle sealing follows scenario authoring.")
+        print(f"spent: ${stage.spent_usd:.4f}")
+        return 0
+
+    if deferred_runtime:
+        print(f"\nworld: {destination}")
+        print("Runtime bundle validation follows scenario authoring.")
         print(f"spent: ${stage.spent_usd:.4f}")
         return 0
 
@@ -1016,6 +1028,33 @@ async def _auto(args: argparse.Namespace) -> int:
         )
     )
     authoring_only = bool(getattr(args, "authoring_only", False))
+    readiness = getattr(args, "runtime_readiness", None)
+
+    async def check_runtime_readiness(stage_args):
+        from .contract import AgentContract
+        from .job import SourceKind
+
+        contract = AgentContract.model_validate_json(
+            (destination / "contract.json").read_text(encoding="utf-8")
+        )
+        if contract.modality == "voice" or job.source.kind is SourceKind.PROVIDER:
+            print("internal chat readiness: not applicable to this target", flush=True)
+            return 0
+        from .authoring_runtime_validation import RuntimeValidationError
+
+        try:
+            await readiness(job, source, destination)
+        except RuntimeValidationError as exc:
+            emit(
+                "harness.stage.failed",
+                "runtime_readiness",
+                status=1,
+                code=f"generic_{exc.phase}_validation_failed",
+                detail=str(exc),
+            )
+            raise
+        return 0
+
     stages = [
         (
             "understand",
@@ -1065,6 +1104,11 @@ async def _auto(args: argparse.Namespace) -> int:
             ),
         ),
     ]
+    if readiness is not None and job.metadata.get("generic_harness_v1") is True:
+        stages.insert(
+            2,
+            ("runtime_readiness", check_runtime_readiness, argparse.Namespace()),
+        )
     if not authoring_only:
         stages.append(
             (

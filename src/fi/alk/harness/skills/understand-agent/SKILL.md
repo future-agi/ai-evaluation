@@ -126,6 +126,23 @@ Find, in roughly this order:
    When an agent genuinely ships more than one runtime, take the one its entrypoint starts, and say
    in `notes` which others exist and that you chose by entrypoint. Never leave the field out.
 
+   For a native HTTP server that requires a locally chosen shared token, inspect its auth guard.
+   Declare `runtime.interface.local_auth` with `server_environment` and `template_variable`
+   names, then use `{{template_variable}}` in the source-required `headers_template` header.
+   ALK generates the token privately per world and supplies it to that server and chat client.
+   Never declare token values, disable authentication, override supplied credentials, or use this
+   for external provider/account keys. This facility requires native HTTP, not Compose or CLI.
+
+   Inspect whether the selected chat route returns pending tool requests for its caller to execute,
+   or executes tools internally before replying. For internal execution, inspect the source response
+   schema or correlated event API and declare `runtime.interface.completed_tools` or
+   `runtime.interface.completed_tool_events` to collect completed results, including errors. Pair
+   actions and observations using source identifiers and preserve conversation correlation. Tool
+   declarations and assistant text are not execution evidence. Never fabricate events or replay
+   completed tools. If the source offers equivalent chat routes, prefer one that exposes completed
+   tool results over a text-only compatibility route. If no supported observation seam exists,
+   record that limitation.
+
 8. **Which side places the call.** Voice only, and read from the agent's own instructions rather
    than inferred from its tools. An agent told it **placed** this call ("you placed this call",
    "this is us calling about", greeting a person who was not expecting it) is `outbound`. An agent
@@ -143,6 +160,14 @@ Find, in roughly this order:
    work: a datastore, a service it calls over HTTP, a file it reads, a queue. Record each one,
    what it provides, and which tools cannot work without it. The environment stage builds these,
    so a dependency you do not record is a tool that will have nothing to answer it.
+
+   For tools that read or edit task files, trace the directory they actually use through
+   startup arguments, environment and session creation. Declare a stable private directory in
+   `runtime.workspaces` only when source proves the target uses it. Paths are relative to the
+   target process working directory. The uploaded agent repository is not automatically its
+   task workspace. If the directory is configurable, use the source-supported setting and
+   record the same directory in the binding. If it is remote, per-session or unknown, leave
+   the binding absent and record that existing-file tasks cannot be seeded through ALK.
 
 10. **Whether its tools have code, and how to reach it.** This is the difference between testing
    the agent and testing somebody's reimplementation of it, so it is worth real effort.
@@ -171,7 +196,9 @@ Find, in roughly this order:
 
 12. **What it takes to run.** Its install command from its own lockfile or requirements, the
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
-   Its own Dockerfile is used in preference to anything written for it. For a chat agent, also
+   When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
+   generating one. Otherwise use it as evidence for a supported native startup path; do not
+   select an unsupported container build. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be

@@ -16,7 +16,10 @@ class CompletedToolEvents(BaseModel):
 
     source: Literal["endpoint", "response"] = "endpoint"
     correlation_header: str = Field(default="", max_length=128)
-    path: str = Field(default="", max_length=1024)
+    path: str = Field(
+        default="", max_length=1024,
+        description="Same-server relative event endpoint containing exactly one {{correlation_id}} placeholder, replaced by the correlation_header response value. Empty for source=response.",
+    )
     items_path: str = Field(min_length=1, max_length=256)
     next_page_path: str = Field(default="", max_length=256)
     page_parameter: str = Field(default="", max_length=128)
@@ -104,7 +107,8 @@ class CompletedToolEvents(BaseModel):
             or self.action_kind == self.observation_kind
         ):
             raise ValueError(
-                "completed events require a relative correlated endpoint and distinct event kinds"
+                "completed events path must be a same-server relative endpoint containing "
+                "exactly one {{correlation_id}} placeholder, with no scheme, host, fragment or backslash"
             )
         return self
 

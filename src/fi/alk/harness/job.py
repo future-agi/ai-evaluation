@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import json
 import re
 from typing import Protocol
 
@@ -18,6 +19,7 @@ from fi.simulate.runtime.spec import RuntimeIsolation, RuntimeRequirements, Secr
 
 from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .github import parse_github_location
+from .secrets import process_secret_environment_names
 
 HARNESS_JOB_SCHEMA_VERSION = "futureagi.harness-job.v1"
 MAX_HOSTED_SCENARIO_COUNT = 5000
@@ -289,8 +291,58 @@ class HarnessJob(BaseModel):
     platform_run_id: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
+    def available_target_environment_names(self) -> frozenset[str]:
+        names = {
+            alias
+            for alias, reference in self.agent.secret_refs.items()
+            if reference.purpose == "target_provider"
+        }
+        local_names = self.metadata.get("environment_value_names")
+        if isinstance(local_names, list):
+            names.update(name for name in local_names if isinstance(name, str))
+        names.difference_update(
+            alias
+            for alias, reference in self.agent.secret_refs.items()
+            if reference.purpose != "target_provider"
+        )
+        names = {
+            name for name in names if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+        }
+        return frozenset(process_secret_environment_names(names))
+
     def authoring_guidance(self) -> list[str]:
         instructions = list(self.guidance)
+        if self.metadata.get("generic_harness_v1") is True:
+            instructions.append(
+                "A standalone Dockerfile cannot be built or run in this job's runtime. Inspect it "
+                "as source evidence for dependencies and startup, then select a supported "
+                "native source command when the repository provides one. Do not invent a replacement agent "
+                "when its required runtime is unsupported."
+            )
+        names = self.available_target_environment_names()
+        target_model = self.agent.config.get("target_model")
+        if target_model is not None and (
+            not isinstance(target_model, str) or not target_model.strip()
+        ):
+            raise ValueError("target_model_must_be_nonempty_string")
+        if target_model or names:
+            instructions.append(
+                "Submitted target configuration and available target environment names:\n"
+                + json.dumps(
+                    {
+                        "target_model": target_model,
+                        "available_environment_names": sorted(names),
+                    },
+                    sort_keys=True,
+                )
+                + "\nUse these settings when discovering and repairing the repository's "
+                "runtime. Derive its configuration and initialization requests from source. "
+                "Environment names identify supplied values, not their contents. Reference "
+                "them through runtime secret bindings; never read, copy, or invent secret "
+                "values. Simulator credentials are not target credentials. A requested "
+                "provider/model must be configured through the agent's supported settings, "
+                "then verified with a real chat. Do not substitute a different provider."
+            )
         if self.require_tool_workflow:
             instructions.append(
                 "require_tool_workflow is enabled. Preserve an executable tool seam from "

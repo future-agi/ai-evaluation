@@ -172,3 +172,52 @@ def test_certified_compose_reuse_requires_either_optin(
     else:
         with pytest.raises(PreflightError, match="compose_not_hosted"):
             bundle_author_v2._reuse_certified_bundle(**kwargs)
+
+
+def test_native_readiness_bundle_and_validation_exclude_public_suite(native_bundle, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from fi.alk.harness import scenario_source
+
+    source, authoring, job, _, _ = native_bundle
+    job = job.model_copy(update={"metadata": {"generic_harness_v1": True}})
+
+    def no_reuse(**kwargs):
+        pytest.fail("Readiness must compile fresh runtime inputs")
+
+    monkeypatch.setattr(bundle_author_v2, "_reuse_certified_bundle", no_reuse)
+    shutil.rmtree(authoring / "scenarios")
+    (authoring / "simulator_prompt.md").write_text("public caller only")
+    bundle = tmp_path / "readiness-bundle"
+    manifest = bundle_author_v2.author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=bundle,
+        include_scenarios=False,
+    )
+    assert not (bundle / "scenarios").exists()
+    assert not (bundle / "simulator_prompt.md").exists()
+    calls = []
+
+    class Provider:
+        async def provision(self, *args, **kwargs):
+            calls.append("provision")
+            return [SimpleNamespace()]
+
+        async def close(self, **kwargs):
+            calls.append("close")
+
+    async def probe(**kwargs):
+        assert kwargs["compare_baseline"] is False
+        calls.append("probe_and_reset")
+
+    def forbidden(*args):
+        pytest.fail("Readiness must not load public scenarios")
+
+    monkeypatch.setattr(compose_integration, "provider", lambda *args: Provider())
+    monkeypatch.setattr(authoring_runtime_validation, "_probe_runtime_readiness", probe)
+    monkeypatch.setattr(scenario_source, "load_scenarios", forbidden)
+    assert asyncio.run(compose_integration.validate_native(
+        job=job, source=source, authoring=authoring, bundle=bundle, manifest=manifest,
+        work=tmp_path, values={}, redactions={}, executor=None, readiness_only=True,
+    )) == 0
+    assert calls == ["provision", "probe_and_reset", "close"]
+    assert not (authoring / "generic-harness/runtime-evidence.json").exists()
+    assert not (authoring / "generic-harness/certified-bundle").exists()

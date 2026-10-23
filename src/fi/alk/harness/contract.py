@@ -410,6 +410,18 @@ class RuntimeHttpSetupRequest(BaseModel):
         return normalized
 
 
+class LocalHttpAuth(BaseModel):
+    """Names for a source-owned server token generated privately per world."""
+
+    model_config = {"extra": "forbid"}
+    server_environment: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+    template_variable: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+    def reject_collisions(self, names) -> None:
+        if {self.server_environment, self.template_variable} & set(names):
+            raise ValueError("runtime_local_auth_name_collision")
+
+
 class RuntimeInterface(BaseModel):
     """The submitted runtime's existing conversational ingress.
 
@@ -438,6 +450,12 @@ class RuntimeInterface(BaseModel):
     headers_template: dict[str, str] = Field(default_factory=dict)
     completed_tool_events: CompletedToolEvents | None = None
     completed_tools: CompletedToolRows | None = None
+    local_auth: LocalHttpAuth | None = Field(
+        default=None,
+        description="Native HTTP only: source-declared local server token environment name and "
+        "private header template variable. ALK generates a per-world token. Never use for "
+        "external account/API credentials; never provide token values.",
+    )
     setup_secrets: dict[str, str] = Field(default_factory=dict)
     failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
@@ -493,6 +511,27 @@ class RuntimeInterface(BaseModel):
 
     @model_validator(mode="after")
     def _complete(self) -> "RuntimeInterface":
+        if self.local_auth:
+            if len(self.setup_secrets) >= 16:
+                raise ValueError("runtime_local_auth_setup_secret_limit")
+            if self.kind != "http":
+                raise ValueError("runtime_local_auth_requires_http")
+            self.local_auth.reject_collisions(
+                _RUNTIME_TEMPLATE_INPUTS
+                | set(self.setup_secrets)
+                | set(self.setup_secrets.values())
+            )
+            non_header_templates = [self.path, self.request_template]
+            for setup in self.setup_requests:
+                non_header_templates.extend([setup.path, setup.body_template])
+            if self.local_auth.template_variable in _runtime_template_names(
+                non_header_templates
+            ):
+                raise ValueError("runtime_local_auth_requires_header_only")
+            if self.local_auth.template_variable not in _runtime_template_names(
+                self.headers_template
+            ):
+                raise ValueError("runtime_local_auth_header_binding_required")
         if self.kind in {"http", "websocket"}:
             if self.port is None:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
@@ -533,6 +572,8 @@ class RuntimeInterface(BaseModel):
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
             available = set(_RUNTIME_TEMPLATE_INPUTS)
+            if self.local_auth:
+                available.add(self.local_auth.template_variable)
             for setup in self.setup_requests:
                 unknown = _runtime_template_names(setup.path) - available
                 unknown |= (
@@ -714,7 +755,7 @@ class Runtime(BaseModel):
     )
     workspaces: dict[str, str] = Field(
         default_factory=dict,
-        description="Named native workspace roots relative to the agent process working directory; requires source evidence.",
+        description="Named task workspace roots relative to the agent process working directory. Trace the actual file-tool directory in source/configuration; uploaded source is not automatically the task workspace. These bindings enable private scenario file setup and readback.",
     )
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
@@ -756,6 +797,15 @@ class Runtime(BaseModel):
             raise ValueError("runtime_observation_name_invalid")
         validate_bindings(self.workspaces)
         validate_runtime_resource_paths(self.config_files, self.directories)
+        if self.interface and self.interface.local_auth:
+            if self.execution == "compose" or self.compose_file:
+                raise ValueError("runtime_local_auth_requires_native_process")
+            for resource in self.config_files.values():
+                self.interface.local_auth.reject_collisions(
+                    set(resource.values)
+                    | set(resource.secret_aliases)
+                    | set(resource.secret_aliases.values())
+                )
         if self.compose_overrides:
             if self.execution == "native" or not (self.compose_file and self.service):
                 raise ValueError("runtime_compose_overrides_require_compose_selection")

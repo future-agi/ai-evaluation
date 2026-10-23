@@ -113,6 +113,7 @@ def open_stage(
     ask: Callable[..., Any] | None = None,
     max_turns: int = 70,
     available_evals: list[dict[str, Any]] | None = None,
+    require_setup_contract: bool = False,
 ) -> tuple[Stage, Path]:
     """A live understand-the-agent stage, and where it will write."""
     destination = out or artifact_dir(source.name)
@@ -132,6 +133,8 @@ def open_stage(
                 destination,
                 available_evals,
                 source_root=source.workdir() if source.kind == "repo" else None,
+                require_setup_contract=require_setup_contract
+                and source.kind == "repo",
             ),
         },
         extra_builtins=source.builtin_tools(),
