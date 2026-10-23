@@ -225,6 +225,9 @@ def fix_tool(
     args: list[str] | None = None,
     arg_types: dict[str, str] | None = None,
     description: str = "",
+    refuses: str = "",
+    effects: str = "",
+    inputs_from: dict[str, str] | None = None,
     remove: bool = False,
 ) -> tuple[bool, str]:
     """Correct a tool that was read wrong, or take away one the agent does not have.
@@ -273,8 +276,15 @@ def fix_tool(
     if description:
         spec.description = description
         changed.append("description updated")
+    for field, value in (("refuses", refuses), ("effects", effects), ("inputs_from", inputs_from)):
+        if value:
+            setattr(spec, field, value)
+            changed.append(f"{field} updated")
     if not changed:
-        return False, "nothing to change: give args, arg_types, description, or remove"
+        return False, (
+            "nothing to change: give args, arg_types, description, refuses, effects, inputs_from, "
+            "or remove"
+        )
 
     contract.amendments.append(f"tool corrected — {tool_name}: {why.strip()}")
     problems = validate_contract(contract)

@@ -118,6 +118,9 @@ async def run_json_worker(
         )
         # The worker logs into this process's stream, tagged with the same job id.
         child_env.setdefault("ALK_LOG_JOB_ID", _job_id())
+        # It imports the same harness code as this process, wherever that code was loaded from.
+        if os.environ.get("PYTHONPATH"):
+            child_env.setdefault("PYTHONPATH", os.environ["PYTHONPATH"])
         creation = asyncio.create_task(
             asyncio.create_subprocess_exec(
                 sys.executable,
