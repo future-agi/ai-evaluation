@@ -137,10 +137,11 @@ selection is what "these" and "the selected ones" mean.
 Load `write-scenarios` before you write or rewrite any scenario in this conversation; its rules are
 what the gates check. Then:
 
-- **Edit one**: read it in full first, change only what was asked, carry the change into every
-  field that follows from it (setup, ready check, solution, instruction, sub-goals, labels), and
-  `submit_scenario` it under the same name, keeping every field the change does not touch. That
-  replaces it, keeps its number, and proves it.
+- **Edit or rename one**: read it in full first, change only what was asked, carry the change into
+  every field that follows from it (setup, ready check, solution, instruction, sub-goals, labels),
+  and `edit_scenario` it with its `scenario_key` and only the fields that change. That keeps its
+  number and its run history, and proves it again. Never drop a scenario and submit it again to edit
+  or rename it: it would come back as a new one, without its history.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
   brief `scenario_writer` sub-agents in one message. When the person asks for a level of an axis (no
   background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to

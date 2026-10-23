@@ -60,6 +60,7 @@ _LEDGER_NOTES = 40
 _NEEDS_CONFIRMATION = frozenset(
     {
         "submit_scenario",
+        "edit_scenario",
         "drop_scenario",
         "drop_scenarios",
         "change_world",
@@ -71,6 +72,7 @@ _NEEDS_CONFIRMATION = frozenset(
         "add_sub_goal",
     }
 )
+_SUBMITS = ("submit_scenario", "edit_scenario")
 _CONFIRM = "Yes, make this change"
 _RUN_FINISHED = frozenset({"completed", "failed", "canceled"})
 _RUN_POLL_SECONDS = 20.0
@@ -89,6 +91,7 @@ _PUBLISHED_PARTS = (
 _WRITING_TOOLS = frozenset(
     {
         "submit_scenario",
+        "edit_scenario",
         "drop_scenario",
         "drop_scenarios",
         "save_scenarios",
@@ -461,7 +464,7 @@ class HostedChatRuntime:
         async def guarded(args: dict[str, Any]) -> Any:
             if self._from_platform:
                 if spec.name in ("drop_scenarios", "drop_scenario") or (
-                    spec.name == "submit_scenario" and self._changes_situation(args)
+                    spec.name in _SUBMITS and self._changes_situation(args)
                 ):
                     return {
                         "content": [
@@ -476,7 +479,7 @@ class HostedChatRuntime:
                         "is_error": True,
                     }
                 return await handler(args)
-            if spec.name == "submit_scenario" and not self._changes_meaning(args):
+            if spec.name in _SUBMITS and not self._changes_meaning(args):
                 return await handler(args)
             if spec.name == "add_sub_goal" and not self._replaces_sub_goal(args):
                 return await handler(args)
@@ -528,12 +531,33 @@ class HostedChatRuntime:
         `whole_persona` compares the persona the submission would save, so a changed language or a
         dropped persona counts: a submission replaces the scenario rather than patching it.
         """
-        path = self.workspace / "scenarios" / str(args.get("name") or "") / "scenario.json"
+        from .scenario_tools import edited, load_scenarios
+
+        key = str(args.get("scenario_key") or "")
+        target = next(
+            (one for one in load_scenarios(self.workspace) if key and one.scenario_key == key),
+            None,
+        )
+        name = str(args.get("name") or "") if target is None else target.name
+        sent = args.get("persona") or {}
+        if target is not None:
+            args = edited(target, args)
+        path = self.workspace / "scenarios" / name / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
-        if any(field in args and args.get(field) != held.get(field) for field in fields):
+        from .scenario import Scenario
+
+        try:
+            saved_now = Scenario.model_validate(held).model_dump()
+            submitted = Scenario.model_validate({**held, **args}).model_dump()
+        except ValueError:
+            saved_now, submitted = held, {**held, **args}
+        if any(
+            field in args and submitted.get(field) != saved_now.get(field)
+            for field in fields
+        ):
             return True
         persona, before = args.get("persona") or {}, held.get("persona") or {}
         if whole_persona:
@@ -547,7 +571,7 @@ class HostedChatRuntime:
             except ValueError:  # an unreadable persona is never a safe unattended change
                 return True
         return any(
-            key in persona and persona.get(key) != before.get(key)
+            key in sent and persona.get(key) != before.get(key)
             for key in ("name", "gender", "age_group")
         )
 

@@ -208,6 +208,16 @@ def _slug(name: str) -> str:
     return cleaned or "scenario-" + hashlib.sha256(name.encode()).hexdigest()[:12]
 
 
+def unused_key(key: str, taken: set[str]) -> str:
+    """``key``, or it with a numbered suffix when another scenario already holds it."""
+    if not key or key not in taken:
+        return key
+    suffix = 2
+    while f"{key}-{suffix}" in taken:
+        suffix += 1
+    return f"{key}-{suffix}"
+
+
 class Scenario(BaseModel):
     """One test: what changes, what is asked, what a correct agent does, what must hold."""
 

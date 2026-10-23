@@ -66,6 +66,8 @@ from .scenario import (
     redteam_problems,
     level_name,
     _pinned_identity,
+    _slug,
+    unused_key,
     _QUIET_INTERFACE,
     unpinned_callers,
     crowded_cells,
@@ -872,6 +874,21 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
+    """``held`` with ``change`` applied: a field it names is replaced, and a mapping such as the
+    persona changes only the entries it names."""
+    saved = held.model_dump(exclude_none=True)
+    return {
+        **saved,
+        **{
+            field: {**saved[field], **value}
+            if isinstance(value, dict) and isinstance(saved.get(field), dict)
+            else value
+            for field, value in change.items()
+        },
+    }
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -948,6 +965,25 @@ def accept_scenario(
                 world.close()
         return _err(said)
 
+    # The scenario this one replaces: the one whose key it carries, else the one with its name. It
+    # keeps that key, so a rename is the same scenario under a new name, not a new one.
+    named = str(payload.get("scenario_key") or "").strip()
+    previous = next(
+        (one for one in kept if named and one.scenario_key == named), None
+    ) or next((one for one in kept if one.name == scenario.name), None)
+    if previous is not None and previous.name != scenario.name:
+        if any(one.name == scenario.name for one in kept):
+            return _err(
+                f"Not kept. Another scenario is already named {scenario.name}; choose another name."
+            )
+        kept[:] = [one for one in kept if one is not previous]
+    if previous is not None:
+        scenario.scenario_key = previous.scenario_key
+    else:
+        scenario.scenario_key = unused_key(
+            _slug(scenario.name) if named else scenario.scenario_key,
+            {one.scenario_key for one in kept},
+        )
     replaced = any(one.name == scenario.name for one in kept)
     if replaced and rename_on_collision:
         taken = {one.name for one in kept}
@@ -1424,7 +1460,8 @@ def scenario_tools(
 
     @tool(
         "submit_scenario",
-        "Keep one scenario. It is put through three gates before it is kept, and told which one "
+        "Keep one new scenario. To change one already kept, use `edit_scenario` with only the "
+        "fields that change. It is put through three gates before it is kept, and told which one "
         "failed if any does:\n"
         "  1. ready     — the world is restored, setup_code runs, then ready_code. The world "
         "must end up holding what this scenario presumes.\n"
@@ -1676,6 +1713,13 @@ def scenario_tools(
             if problem:
                 return _refuse(problem)
 
+        # A submission carrying a kept scenario's key replaces that one, under its new name if renamed,
+        # so the checks below never count it against itself.
+        key = str(args.get("scenario_key") or "").strip()
+        same = next(
+            (one.name for one in kept if key and one.scenario_key == key),
+            str(args.get("name") or "").strip(),
+        )
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
         if strayed:
@@ -1685,7 +1729,7 @@ def scenario_tools(
             target.get("axes"),
             kept,
             cap(),
-            str(args.get("name") or ""),
+            same,
             target.get("asked"),
         )
         if crowded_level:
@@ -1695,14 +1739,14 @@ def scenario_tools(
             if short:
                 return _refuse(short)
         twin = _already_in_the_suite(
-            args, kept, _first_names_on_disk(destination, str(args.get("name") or ""))
+            {**args, "name": same}, kept, _first_names_on_disk(destination, same)
         )
         if twin:
             return _refuse(twin)
         if cap() and target.get("people") != "alike":
             # A replacement does not count against itself.
             crowded = crowded_field(
-                [one for one in kept if one.name != str(args.get("name") or "")],
+                [one for one in kept if one.name != same],
                 Scenario.model_validate(args).persona,
                 cap(),
             ) if args.get("persona") else ""
@@ -1718,8 +1762,7 @@ def scenario_tools(
             if stranger:
                 return _refuse(stranger[0])
         if cap():
-            named = str(args.get("name") or "").strip()
-            already = any(one.name == named for one in kept)
+            already = any(one.name == same for one in kept)
             if not already and len(kept) >= cap():
                 return _err(
                     f"This is complete: {len(kept)} of {cap()} written. Do not write another. "
@@ -2267,6 +2310,35 @@ def scenario_tools(
             )
         return _ok(said)
 
+    edit_schema = {
+        **submit_scenario.input_schema,
+        "properties": {
+            **submit_scenario.input_schema["properties"],
+            "scenario_key": {
+                "type": "string",
+                "description": "The scenario's key, read from it.",
+            },
+        },
+        "required": ["scenario_key"],
+    }
+
+    @tool(
+        "edit_scenario",
+        "Change a kept scenario: give its `scenario_key` and only what changes, such as a new "
+        "`name` or the persona fields that change. Everything else keeps its saved value, and the "
+        "scenario keeps its key, number and history. The result is checked exactly like "
+        "`submit_scenario`.",
+        edit_schema,
+    )
+    async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
+        key = str(args.get("scenario_key") or "").strip()
+        held = next((one for one in kept if one.scenario_key == key), None)
+        if held is None:
+            return _err(
+                f"Not changed: no scenario in this suite has the scenario_key {key!r}."
+            )
+        return await submit_scenario.handler(edited(held, args))
+
     server = tool_server(
         name=SCENARIO_SERVER,
         version="0.1.0",
@@ -2277,6 +2349,7 @@ def scenario_tools(
             try_check,
             add_sub_goal,
             submit_scenario,
+            edit_scenario,
             amend_contract,
             add_rule_tool,
             drop_rule_tool,
@@ -2298,6 +2371,7 @@ _ALWAYS = (
     "try_check",
     "add_sub_goal",
     "submit_scenario",
+    "edit_scenario",
     "amend_contract",
     "add_rule",
     "drop_rule",
