@@ -74,6 +74,9 @@ class Proof:
     # The reference solution calls an attached MCP server, which only the PostgreSQL proof runs,
     # so this pass checked setup and readiness and left the other gates to it.
     postgres_only: bool = False
+    # Checks that still hold when every successful state-changing call keeps its `ok` but loses
+    # its effect and its result: they credit the call rather than the world.
+    no_effect: list[str] = field(default_factory=list)
 
     @property
     def holds(self) -> bool:
@@ -88,6 +91,7 @@ class Proof:
             and not self.broken
             and not self.too_strict
             and not self.unchecked
+            and not self.no_effect
         )
 
     def gates(self) -> dict[str, bool]:
@@ -179,6 +183,13 @@ class Proof:
                 + "\n\nMake each check assert the relevant attempt or observation as well as the "
                 "final state. For a refusal, require that the call was attempted and refused; "
                 "an untouched world is not evidence that the agent refused correctly."
+            )
+        if self.no_effect:
+            return (
+                "these checks still hold when every state-changing call succeeds but changes "
+                "nothing and returns nothing, so they credit the call rather than its effect:\n  - "
+                + "\n  - ".join(self.no_effect)
+                + "\n\nRead the world for the change the call should have made."
             )
         return "holds"
 
@@ -331,6 +342,23 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
+def crashed(calls: Sequence[Call]) -> list[Call]:
+    """Each call failed with no result, the way an execution failure leaves it."""
+    return [
+        replace(call, ok=False, result=None, error="execution failed", refused=False)
+        for call in calls
+    ]
+
+
+def without_effect(calls: Sequence[Call], state_changing: frozenset[str]) -> list[Call]:
+    """Each successful state-changing call still `ok` but with no result: graded against an
+    untouched world, what a check sees when it credits the call rather than its effect."""
+    return [
+        replace(call, result=None) if call.ok and call.name in state_changing else call
+        for call in calls
+    ]
+
+
 def _declared_options(world_root: Path) -> set[str]:
     """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
     try:
@@ -410,11 +438,14 @@ def prove(
     world_root: Path,
     *,
     postgres_only: frozenset[str] = frozenset(),
+    state_changing: frozenset[str] = frozenset(),
 ) -> Proof:
-    """Run all three gates and say whether this scenario is worth keeping.
+    """Run the gates and say whether this scenario is worth keeping.
 
     A scenario whose solution calls a tool in `postgres_only` is checked for readiness here and
-    proved in full by the PostgreSQL proof, which runs those tools."""
+    proved in full by the PostgreSQL proof, which runs those tools. With `state_changing`, a
+    fourth gate grades the untouched world against the solution's calls, those tools' calls
+    still successful: each check that held with the solution must then fail."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
     reference = reference_of(scenario.solution)
@@ -517,18 +548,25 @@ def prove(
         # A call-presence check can pass the no-op gate yet credit failed operations.
         # Keep the arguments, remove all results/effects, and inject an execution failure.
         # This is not a business refusal: a timeout does not prove correct refusal either.
-        crashed = [
-            replace(
-                call, ok=False, result=None, error="execution failed", refused=False
-            )
-            for call in calls
-        ]
-        if crashed:
+        if calls:
+            failed = crashed(calls)
             proof.failed_attempts = [
                 name
                 for name, source in checks
                 if not any(one.name == name and one.held for one in proof.with_nothing)
-                and run_check(source, untouched, crashed, name=name, reference=reference).held
+                and run_check(source, untouched, failed, name=name, reference=reference).held
+            ]
+        # Gate 4: the same calls on the untouched world, each successful state-changing one
+        # still `ok` but without its effect or its result. A check that holds credits the call.
+        if any(call.ok and call.name in state_changing for call in calls):
+            withheld = without_effect(calls, state_changing)
+            proof.no_effect = [
+                name
+                for name, source in checks
+                if any(one.name == name and one.held for one in proof.with_solution)
+                and not any(one.name == name and one.held for one in proof.with_nothing)
+                and name not in proof.failed_attempts
+                and run_check(source, untouched, withheld, name=name, reference=reference).held
             ]
     finally:
         untouched.close()

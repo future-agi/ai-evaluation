@@ -1185,6 +1185,9 @@ def _prove_all(
 
     catalogue = load_catalogue(root)
     attached = frozenset(attached_tool_names(environment_root))
+    state_changing = frozenset(
+        tool.name for tool in load_tools(environment_root) if tool.mutates_state
+    )
     results: dict[str, Any] = {}
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="suite-proof-") as scratch:
@@ -1192,7 +1195,13 @@ def _prove_all(
         shutil.copytree(environment_root / WORLD, world_root)
         apply_policy_profile(world_root, policy, profile)
         for entry, scenario in loaded:
-            proof = prove(scenario, catalogue, world_root, postgres_only=attached)
+            proof = prove(
+                scenario,
+                catalogue,
+                world_root,
+                postgres_only=attached,
+                state_changing=state_changing,
+            )
             results[entry.key] = {
                 "holds": proof.holds,
                 "gates": proof.gates(),
@@ -1331,13 +1340,11 @@ class PostgresProof:
         calls: Sequence[tuple[str, Any]],
         binding: AgentBindingV1 | None = None,
         *,
-        crashed: Sequence[Any] | None = None,
+        observed: Sequence[Any] | None = None,
     ) -> Attempt:
         """`calls` are `(tool, arguments)` in `binding`'s vocabulary, played in order. With
-        `crashed`, nothing is played: the checks see an untouched world and those calls, each
-        failed with no result, the way an execution failure leaves them."""
+        `observed`, nothing is played: the checks see an untouched world and those calls."""
         import random
-        from dataclasses import replace
 
         from .checks import run_check
         from .folder import apply_setup, check_ready
@@ -1368,7 +1375,7 @@ class PostgresProof:
         faults: list[str] = []
         outcomes: list[Any] = []
         try:
-            for tool, arguments in calls if ready.ok and crashed is None else ():
+            for tool, arguments in calls if ready.ok and observed is None else ():
                 outcome = tools.call(tool, arguments)
                 outcomes.append(outcome)
                 if outcome.status == "fault":
@@ -1399,11 +1406,8 @@ class PostgresProof:
                     )
         finally:
             tools.close()
-        if ready.ok and crashed is not None:
-            played = [
-                replace(call, ok=False, result=None, error="execution failed", refused=False)
-                for call in crashed
-            ]
+        if ready.ok and observed is not None:
+            played = list(observed)
         return Attempt(
             ready,
             faults,
@@ -1426,10 +1430,16 @@ def _prove_on_postgres(
     admin_dsn: str,
 ) -> dict[str, Any]:
     """Every scenario again, on PostgreSQL (`PostgresProof`), canonically: it must hold with its
-    reference solution, and fail when nothing is done and when every call it made crashed."""
+    reference solution, and fail when nothing is done, when every call it made crashed, and when
+    its state-changing calls succeed without their effect."""
+    from .prove import crashed, without_effect
+
     results: dict[str, Any] = {}
     failures: list[str] = []
     with PostgresProof(root, environment_root, profile, admin_dsn) as proof:
+        state_changing = frozenset(
+            tool.name for tool in proof.environment_tools if tool.mutates_state
+        )
         for entry, scenario in loaded:
             solved = proof.attempt(
                 scenario,
@@ -1437,14 +1447,30 @@ def _prove_on_postgres(
             )
             untouched = proof.attempt(scenario, [])
             weak = [name for name, outcome in untouched.checks if outcome.held]
-            # As on SQLite: a check that credits an attempted call without its effect.
-            crashed = proof.attempt(scenario, [], crashed=solved.played) if solved.played else None
+            # As on SQLite: a check that credits an attempted call without its effect, whether
+            # the call crashed or succeeded.
             credited = [
                 name
-                for name, outcome in (crashed.checks if crashed else [])
+                for name, outcome in (
+                    proof.attempt(scenario, [], observed=crashed(solved.played)).checks
+                    if solved.played
+                    else []
+                )
                 if outcome.held and name not in weak
             ]
-            holds = solved.holds and not weak and not credited
+            trusted = [
+                name
+                for name, outcome in (
+                    proof.attempt(
+                        scenario, [], observed=without_effect(solved.played, state_changing)
+                    ).checks
+                    if solved.holds
+                    and any(call.ok and call.name in state_changing for call in solved.played)
+                    else []
+                )
+                if outcome.held and name not in weak and name not in credited
+            ]
+            holds = solved.holds and not weak and not credited and not trusted
             results[entry.key] = {
                 "holds": holds,
                 "ready": solved.ready.ok,
@@ -1462,6 +1488,10 @@ def _prove_on_postgres(
                             *solved.failed,
                             *(f"{name} holds untouched" for name in weak),
                             *(f"{name} holds when every call crashed" for name in credited),
+                            *(
+                                f"{name} holds when no state-changing call took effect"
+                                for name in trusted
+                            ),
                         ]
                     )
                     or "no deterministic check"
@@ -1846,6 +1876,27 @@ def _require_runtime_proof(suite_root: Path, suite: SuiteReleaseV1) -> None:
             "suite_runtime_unproved",
             f"{suite.name} was not proved on {RUNTIME_ENGINE}; seal it with a postgres DSN",
         )
+
+
+def world_tool_specs(root: str | Path) -> list[dict[str, Any]]:
+    """The world's own description of each tool, derived from an environment's `tools.json`."""
+    specs = []
+    for tool in load_tools(Path(root)):
+        properties = tool.parameters.get("properties") or {}
+        specs.append(
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": {
+                    argument: {
+                        "type": _ARG_TYPES.get(str(schema.get("type")), "str"),
+                        "values": schema.get("enum"),
+                    }
+                    for argument, schema in properties.items()
+                },
+            }
+        )
+    return specs
 
 
 def _contract(name: str, modality: str, tools: Sequence[Any]) -> dict[str, Any]:
