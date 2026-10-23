@@ -6340,7 +6340,16 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
     assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
 
 
-def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_instruction(monkeypatch):
+@pytest.mark.parametrize(
+    "openings, first",
+    [
+        (["", "Sure! Let me look that up for you."], None),
+        (["Sure! Let me look that up for you.", "Hi, where is my order?"], "Hi, where is my order?"),
+    ],
+)
+def test_an_unusable_opening_is_asked_again_once_then_aborts_never_sending_the_instruction(
+    monkeypatch, openings, first
+):
     import asyncio
     from types import SimpleNamespace
 
@@ -6349,7 +6358,7 @@ def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_ins
     from fi.alk.harness.run import conversation
     from fi.alk.harness.scenario import Scenario
 
-    openings = iter(["", "Sure! Let me look that up for you."])
+    openings = iter(openings)
     sent = []
 
     async def noop(*_args):
@@ -6363,13 +6372,18 @@ def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_ins
 
     async def say(text):
         sent.append(text)
+        raise conversation.TargetConversationEnded("Done.")
 
     target = SimpleNamespace(open=noop, say=say, close=noop, spent_usd=0.0)
     scenario = Scenario(name="s", instruction="You contact support. You open by asking about your order.")
-    with pytest.raises(CallAborted) as aborted:
+    if first is None:
+        with pytest.raises(CallAborted) as aborted:
+            asyncio.run(conversation.converse(target, scenario, AgentContract()))
+        assert aborted.value.code == "simulator_stalled"
+        assert sent == []
+    else:
         asyncio.run(conversation.converse(target, scenario, AgentContract()))
-    assert aborted.value.code == "simulator_stalled"
-    assert sent == []
+        assert sent == [first]
 
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():
     """Where the right behaviour is to decline and touch nothing, every check about the world holds
