@@ -7,6 +7,8 @@ All notable release changes for Agent Learning Kit are tracked here.
 Post-rc.1 increments on the release branch. Each one adds gates on top of the
 66 proved at rc.1; the rc.1 entry below is historical and unchanged.
 
+- Runtime validation checks scenarios on one database lane per CPU by default, capped by the
+  sandbox's cgroup CPU quota, instead of a fixed 16; `ALK_VALIDATION_DB_LANES` still overrides it.
 - Docs corpus: the full `docs/` tree (quickstarts, per-track guides, framework
   pages, reference material, and the `docs/llms.txt` machine index) with
   machine-checkable page metadata, enforced by the new `docs_executability`
