@@ -211,7 +211,7 @@ def test_live_overlay_starts_only_selected_two_services(tmp_path, cli):
         compose("down", "--volumes", "--remove-orphans")
 
 
-def test_overlay_compiles_and_seals_through_native_bundle(tmp_path, cli, monkeypatch):
+def test_overlay_compiles_and_seals_through_native_bundle(tmp_path, cli, monkeypatch, resolved_compose_images):
     from fi.alk.harness.bundle_author_v2 import author_bundle_v2
     from fi.alk.harness.job import HarnessJob
     from fi.alk.harness.process_preflight import preflight_bundle
@@ -542,3 +542,21 @@ def test_overlay_expanded_volume_size_is_bounded_before_cli(tmp_path, monkeypatc
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('CLI invoked'))
     with pytest.raises(ValueError, match='interpolation_limit'):
         merge_compose(tmp_path, [base, overlay], public_environment={'DATA_DIR': 'a' * 65537})
+
+
+def test_source_overlay_image_selection(tmp_path, cli):
+    base, overlay = files(tmp_path)
+    base.write_text(base.read_text().replace(
+        "  gateway:\n",
+        "  gateway:\n    build:\n      context: .\n      args: {TOKEN: '${BUILD_TOKEN:?build only}'}\n",
+    ))
+    overlay.write_text(
+        overlay.read_text().replace(
+            "  gateway:\n", "  gateway:\n    image: example/release:2\n"
+        )
+    )
+    before = [path.read_bytes() for path in (base, overlay)]
+    selected = selection(tmp_path, compose_image_services=["gateway"])
+    assert selected.services["gateway"]["image"] == "example/release:2"
+    assert "build" not in selected.services["gateway"]
+    assert [path.read_bytes() for path in (base, overlay)] == before

@@ -584,8 +584,11 @@ def python_workspace_members(root: Path) -> set[Path]:
     excluded: set[Path] = set()
     for key, paths in (("members", members), ("exclude", excluded)):
         for pattern in workspace.get(key, []):
-            if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+            relative = Path(pattern)
+            if relative.is_absolute() or ".." in relative.parts:
                 raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+            if pattern and not relative.parts:
+                continue
             for path in root.glob(pattern):
                 resolved = path.resolve()
                 if not resolved.is_relative_to(root.resolve()):
@@ -725,7 +728,19 @@ def select_python_requirements(
             raise GeneratedRuntimeError("generated_runtime_requirements_limit")
         visited.add(relative)
         active.add(relative)
+        lines = []
+        pending = ""
         for line in target.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("#"):
+                line = " " + line
+            elif line.endswith("\\"):
+                pending += line.rstrip("\\")
+                continue
+            lines.append(pending + line)
+            pending = ""
+        if pending:
+            lines.append(pending)
+        for line in lines:
             line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
             if not line or line.startswith("#"):
                 continue
@@ -735,6 +750,13 @@ def select_python_requirements(
             if include:
                 visit(relative.parent / include.group(1))
                 continue
+            hashed = re.fullmatch(
+                r"(.+?)(?:\s+--hash(?:=|\s+)(?:sha256:[a-fA-F0-9]{64}"
+                r"|sha384:[a-fA-F0-9]{96}|sha512:[a-fA-F0-9]{128}))+",
+                line,
+            )
+            if hashed:
+                line = hashed.group(1)
             try:
                 requirement = Requirement(line)
             except InvalidRequirement as exc:

@@ -4391,6 +4391,7 @@ def test_a_bare_conversational_contract_is_nudged_once_then_accepted(tmp_path):
 
     payload = {
         "agent": "quiet",
+        "data_store": {"kind": "sqlite"},
         "tools": [{"name": "act", "args": ["x"]}],
         "real_use_cases": ["do the thing"],
     }
@@ -4745,10 +4746,8 @@ def test_scenario_skill_forbids_mutually_exclusive_terminal_outcomes():
     assert "split them" in text and "separate scenario" in text
 
 
-def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
-    """The world is built from data_schema and base_environment. Without them the build stage has
-    no schema to create and no rows to seed, so every tool call it makes refuses — and that looks
-    like a strict world rather than an empty one."""
+def test_a_structured_store_contract_without_data_is_nudged_once(tmp_path):
+    """A declared record store must surface missing source schema without inventing rows."""
     import asyncio
 
     from fi.alk.harness.tools import contract_tools
@@ -4768,6 +4767,7 @@ def test_a_contract_with_tools_but_no_data_is_nudged_once(tmp_path):
 
     payload = {
         "agent": "dataless",
+        "data_store": {"kind": "sqlite"},
         "tools": [{"name": "act", "args": ["x"]}],
         "real_use_cases": ["do the thing"],
         "hard_constraints": ["a rule"],
@@ -8060,6 +8060,90 @@ def test_dropping_every_scenario_needs_an_explicit_everything(tmp_path):
     assert not by_name[0] and "nothing is saved yet" in by_name[1]
     assert not everything[0] and "nothing is saved yet" in everything[1]
     assert [one.name for one in module.load_scenarios(root)] == [saved[0].name]
+
+@pytest.mark.parametrize("store", ["filesystem", "none", ""])
+def test_runtime_tools_without_record_store_do_not_require_synthetic_tables(
+    tmp_path, store
+):
+    import asyncio
+    from mcp.types import CallToolRequestParams
+    from fi.alk.harness.tools import contract_tools
+
+    instance = _instance(contract_tools(tmp_path))
+    payload = {
+        "agent": "workspace-assistant",
+        "tools": [{"name": "read_file", "args": ["path"]}],
+        "real_use_cases": ["inspect a file created during the conversation"],
+        "hard_constraints": ["report actual tool results"],
+        "system_prompt_excerpt": "Use the provided workspace tools.",
+        "data_store": {"kind": store},
+        "runtime": {"execution": "native", "command": ["agent", "chat"]},
+    }
+
+    async def submit():
+        return await _request_handler(instance, "tools/call").handler(
+            None, CallToolRequestParams(name="submit_contract", arguments=payload)
+        )
+
+    answer = asyncio.run(submit()).content[0].text
+    assert "Accepted" in answer
+    saved = json.loads((tmp_path / "contract.json").read_text())
+    assert saved["data_schema"] == {}
+    assert saved["base_environment"] == {}
+
+
+def test_deferred_filesystem_authoring_keeps_an_empty_world(tmp_path):
+    import asyncio
+    from mcp.types import CallToolRequestParams
+    from fi.alk.harness.build import open_stage
+
+    contract = AgentContract.model_validate(
+        {
+            "agent": "workspace-assistant",
+            "tools": [{"name": "read_file", "args": ["path"]}],
+            "real_use_cases": ["inspect a file created during the conversation"],
+            "data_store": {"kind": "filesystem"},
+            "runtime": {"execution": "native", "command": ["agent", "chat"]},
+        }
+    )
+    stage, destination = open_stage(contract, out=tmp_path, deferred_runtime=True)
+    from fi.alk.harness.world.tools import WORLD_SERVER
+
+    instance = _instance(stage._spec.servers[WORLD_SERVER])
+
+    async def call(name, arguments):
+        answer = await _request_handler(instance, "tools/call").handler(
+            None, CallToolRequestParams(name=name, arguments=arguments)
+        )
+        return answer.content[0].text
+
+    asyncio.run(
+        call(
+            "write_simulator_prompt",
+            {
+                "prompt": "You are {{ persona }}. Your task is {{ instruction }}. Speak one turn at a time."
+            },
+        )
+    )
+    asyncio.run(
+        call(
+            "add_sub_goal",
+            {
+                "name": "file_read_completed",
+                "what": "A real file read completed",
+                "check": "def check(world, calls):\n    return None if any(c.name == 'read_file' and c.ok and c.result for c in calls) else 'No completed file result'",
+            },
+        )
+    )
+    answer = asyncio.run(call("save_world", {}))
+    assert "saved" in answer.lower() and "Not saved" not in answer
+    from fi.alk.harness.world.snapshot import restore
+
+    assert restore(destination).state() == {}
+    guidance = stage._spec.system_prompt
+    assert "do not create tables" in guidance.lower()
+    assert "never against the fields or wording" not in guidance
+    assert "native tool results" in guidance
 
 
 def test_prove_hands_a_reference_check_the_solution_and_it_fails_when_nothing_is_done(tmp_path):

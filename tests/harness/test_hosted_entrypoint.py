@@ -4983,3 +4983,72 @@ def test_hosted_job_passes_sealed_bundle_to_world_factory() -> None:
         assert observed == [(harness.work, harness.bundle_dir, "/history")]
 
     asyncio.run(scenario())
+
+
+def test_hosted_compose_bootstrap_failure_stops_before_bundle_or_provision(monkeypatch):
+    harness = _build_harness(scenarios=[])
+
+    def reject(job, source):
+        assert source == harness.source
+        raise he.BrokerError("compose_bootstrap_source_changed")
+
+    monkeypatch.setattr(he, "initialize_hosted_compose", reject)
+    assert _run(harness) == he.EXIT_OK
+    assert harness.provisioner.provision_calls == 0
+    terminal = harness.transport.terminal_events()
+    assert len(terminal) == 1
+    assert terminal[0]["payload"]["failure"]["code"] == "compose_bootstrap_failed"
+
+
+def test_unverified_compose_environment_does_not_enable_hosted_execution(monkeypatch):
+    harness = _build_harness(scenarios=[])
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/tmp/untrusted.sock")
+    monkeypatch.setattr(he, "initialize_hosted_compose", lambda job, source: None)
+    original = he.preflight_bundle
+    observed = []
+
+    def preflight(*args, **kwargs):
+        observed.append(kwargs["allow_compose"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(he, "preflight_bundle", preflight)
+    assert _run(harness) == he.EXIT_OK
+    assert observed == [False]
+
+
+def test_hosted_compose_uses_broker_and_observation_world(monkeypatch):
+    harness = _build_harness(scenarios=[])
+    broker_path = Path("/run/alk-compose/broker.sock")
+    monkeypatch.setattr(he, "initialize_hosted_compose", lambda job, source: broker_path)
+    monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", str(broker_path))
+    manifest, directory = harness.deps.bundle_source.load(
+        he.load_job(harness.job_path), source=harness.source, work_directory=harness.work
+    )
+    manifest = manifest.model_copy(update={"runtime": manifest.runtime.model_copy(
+        update={"kind": he.RuntimeKindV2.COMPOSE, "document": "compose.json"}
+    )})
+
+    class BundleSource:
+        def load(self, *args, **kwargs):
+            return manifest, directory
+
+    harness.deps.bundle_source = BundleSource()
+    monkeypatch.setattr(he, "preflight_bundle", lambda *args, **kwargs: None)
+    selected = []
+
+    def broker(path):
+        assert path == broker_path
+        selected.append("broker")
+        return harness.provisioner
+
+    def world(path):
+        assert path == directory
+        selected.append("observation")
+        return FakeWorldFactory()
+
+    monkeypatch.setattr(he, "ComposeBrokerClient", broker)
+    monkeypatch.setattr(he, "ObservationWorldFactory", world)
+    assert _run(harness) == he.EXIT_OK
+    assert selected == ["broker", "observation"]
+    assert harness.provisioner.provision_calls == 1
+    assert harness.provisioner.closed

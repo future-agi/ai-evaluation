@@ -811,6 +811,17 @@ def contract_tools(
                             "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
                         },
+                        "compose_image_services": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": Runtime.model_fields["compose_image_services"].description,
+                        },
                         "compose_overrides": {
                             "type": "array",
                             "maxItems": 8,
@@ -1222,14 +1233,14 @@ def contract_tools(
             (
                 "data",
                 bool(payload.get("tools"))
+                and structured_seed_store
                 and not payload.get("data_schema")
                 and not payload.get("base_environment"),
-                "no data_schema and no base_environment, for an agent that has tools. The world "
-                "every test runs against is built from exactly these two, so without them the "
-                "next stage has no schema to create and no rows to seed, and every tool call it "
-                "makes will refuse. Record the shape of each kind of record the tools read or "
-                "write, and enough real rows to reach every branch those tools have — a "
-                "representative sample for a large dataset, the whole thing for a small one.",
+                "no data_schema and no base_environment, although data_store declares a "
+                "structured database. Record the source-owned schema and any existing records "
+                "the tools require, using real source identifiers and values. An initially "
+                "empty database may be correct; do not invent records or schema to satisfy "
+                "this warning.",
             ),
             (
                 "starting-data",

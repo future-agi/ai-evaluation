@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -61,6 +62,7 @@ class RuntimePlanPatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    mode: Literal["runtime_plan", "chat_ingress"] = "runtime_plan"
     base_contract_hash: str
     runtime: Runtime
     runtime_dependencies: list[Dependency] | None = None
@@ -83,6 +85,7 @@ class RuntimePlanPatch(BaseModel):
 class _RuntimeSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    mode: Literal["runtime_plan", "chat_ingress"] = "runtime_plan"
     runtime: Runtime
     runtime_dependencies: list[Dependency] | None = None
     evidence_paths: tuple[str, ...] = Field(min_length=1, max_length=32)
@@ -109,7 +112,7 @@ def _select_repair_runtime(root: Path, runtime: Runtime):
     )
 
 
-def _dependency_root(root: Path, runtime: Runtime) -> Path:
+def _dependency_root(root: Path, runtime: Runtime) -> Path | None:
     from .bundle_author_v2 import (
         _discover_callback_entrypoint,
         _discovered_python_component,
@@ -133,7 +136,7 @@ def _dependency_root(root: Path, runtime: Runtime) -> Path:
         )
         build = selected.services.get(control, {}).get("build")
         if not build:
-            raise ValueError("runtime_repair_control_build_missing")
+            return None
         context = build.get("context") or "." if isinstance(build, dict) else build
         component = (selected.compose_file.parent / str(context)).resolve()
         if not component.is_relative_to(root):
@@ -348,9 +351,9 @@ def _repair_progress(event: Event) -> None:
 _BEHAVIOR_KEYS = frozenset({
     "model", "provider", "provideroptions", "modeloptions", "agent", "agentid",
     "profile", "config", "configfile", "cwd", "directory", "project", "prefix",
-    "system", "systemprompt", "instructions", "baseurl", "apibase", "apiurl",
-    "endpoint", "apikey", "accesstoken", "tools", "toolchoice", "temperature",
-    "topp", "maxtokens",
+    "system", "systemprompt", "instructions",
+    "baseurl", "apibase", "apiurl", "endpoint", "apikey", "accesstoken",
+    "tools", "toolchoice", "temperature", "topp", "maxtokens",
 })
 
 
@@ -365,17 +368,180 @@ def _request_behavior(value, path=()):
             result[path] = value
         for key, child in value.items():
             location = (*path, key)
-            if (
-                _behavior_key(key) in _BEHAVIOR_KEYS
-                and location != ("model",)
-                and not (key == "tools" and child == "{{tools}}")
-            ):
+            if (_behavior_key(key) in _BEHAVIOR_KEYS and location != ("model",)
+                    and not (key == "tools" and child == "{{tools}}")):
                 result[location] = child
             result.update(_request_behavior(child, location))
     elif isinstance(value, list):
         for index, child in enumerate(value):
             result.update(_request_behavior(child, (*path, index)))
     return result
+
+
+def _command_behavior(command):
+    result = []
+    for index, argument in enumerate(command):
+        if not argument.startswith("-"):
+            continue
+        flag, separator, value = argument.partition("=")
+        if _behavior_key(flag.lstrip("-")) in _BEHAVIOR_KEYS:
+            result.append((_behavior_key(flag.lstrip("-")), value if separator else next(iter(command[index + 1:index + 2]), None)))
+    return result
+
+
+def _validate_ingress_command(root, runtime, evidence_files):
+    import tomllib
+
+    command = list(runtime.command)
+    if not command:
+        raise ValueError("runtime_repair_ingress_entrypoint_evidence_required")
+    if command[0] in {"uv", "poetry"} and command[1:2] == ["run"]:
+        command = command[2:]
+    if not command:
+        raise ValueError("runtime_repair_ingress_entrypoint_evidence_required")
+    launcher = Path(command[0]).name
+    interpreter_options = []
+    for argument in command[1:]:
+        if not argument.startswith("-") or argument == "-m":
+            break
+        interpreter_options.append(argument)
+    if launcher in _SHELL_LAUNCHERS or any(
+        (launcher in {"node", "bun"} and (
+            argument.startswith(("--eval", "--print", "-e", "-p"))
+        )) or (launcher.startswith("python") and argument.startswith("-c"))
+        for argument in interpreter_options
+    ):
+        raise ValueError("runtime_repair_inline_or_shell_command_forbidden")
+    workdir = (root / runtime.workdir).resolve()
+    evidence = set(evidence_files)
+
+    def script(value):
+        path = (workdir / value).resolve()
+        return path.is_relative_to(root) and path.is_file() and path in evidence
+
+    import_roots = {workdir}
+    pyproject = workdir / "pyproject.toml"
+    project = {}
+    if pyproject in evidence and pyproject.stat().st_size <= 1_000_000:
+        project = tomllib.loads(pyproject.read_text())
+        package_dir = project.get("tool", {}).get("setuptools", {}).get("package-dir", {})
+        if isinstance(package_dir, dict) and isinstance(package_dir.get(""), str):
+            candidate = (workdir / package_dir[""]).resolve()
+            if candidate.is_relative_to(root) and candidate.is_dir():
+                import_roots.add(candidate)
+
+    def module(value):
+        name = value.partition(":")[0]
+        if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", name):
+            return False
+        parts = name.split(".")
+        paths = (Path(*parts).with_suffix(".py"), Path(*parts) / "__main__.py",
+                 Path(*parts) / "__init__.py")
+        return any((base / path).resolve() in evidence for base in import_roots for path in paths)
+
+    if launcher.startswith("python"):
+        valid = len(command) >= 3 and command[1] == "-m" and module(command[2])
+        valid = valid or (len(command) >= 2 and not command[1].startswith("-") and script(command[1]))
+    elif launcher in {"node", "bun"}:
+        index = 2 if command[1:2] == ["run"] else 1
+        valid = len(command) > index and script(command[index])
+    else:
+        valid = script(command[0])
+    if valid:
+        return
+    for path in evidence_files:
+        if path.stat().st_size > 1_000_000:
+            continue
+        if path == pyproject:
+            body = project
+            scripts = body.get("project", {}).get("scripts", {})
+            scripts = {**body.get("tool", {}).get("poetry", {}).get("scripts", {}), **scripts}
+            target = scripts.get(launcher)
+            target = target.get("reference") if isinstance(target, dict) else target
+            if isinstance(target, str) and module(target):
+                return
+        elif path.name == "package.json" and path.parent == workdir:
+            body = json.loads(path.read_text())
+            if launcher in {"npm", "pnpm", "yarn", "bun"}:
+                index = 2 if command[1:2] == ["run"] else 1
+                if len(command) > index and command[index] in body.get("scripts", {}):
+                    return
+            bins = body.get("bin", {})
+            if isinstance(bins, str):
+                bins = {body.get("name", ""): bins}
+            if isinstance(bins, dict) and launcher in bins and script(bins[launcher]):
+                return
+    raise ValueError("runtime_repair_ingress_entrypoint_evidence_required")
+
+
+def _validate_ingress_repair(root, contract, runtime, evidence_files):
+    from .contract import _runtime_template_names
+
+    original = contract.runtime
+    if original is None or contract.modality != "chat" or runtime.model_dump(
+        exclude={"command", "workdir", "interface"}
+    ) != original.model_dump(exclude={"command", "workdir", "interface"}):
+        raise ValueError("runtime_repair_ingress_runtime_changed")
+    if (root / runtime.workdir).resolve() != (root / original.workdir).resolve():
+        raise ValueError("runtime_repair_ingress_component_changed")
+    if runtime.command != original.command:
+        _validate_ingress_command(root, runtime, evidence_files)
+    before, after = original.interface, runtime.interface
+    fields = {"kind", "protocol", "port", "path", "health_path", "request_template", "response_path", "model"}
+    if before is None or after is None or before.model_dump(exclude=fields) != after.model_dump(exclude=fields):
+        raise ValueError("runtime_repair_ingress_policy_changed")
+    if runtime.command == original.command and after == before:
+        raise ValueError("runtime_repair_ingress_material_change_required")
+    for path in (after.path, after.health_path):
+        endpoint = urlsplit(urljoin("http://alk-runtime.invalid/", path.lstrip("/")))
+        if (endpoint.scheme != "http" or endpoint.netloc != "alk-runtime.invalid"
+                or endpoint.fragment or "\\" in path or path.startswith("//")):
+            raise ValueError("runtime_repair_ingress_origin_changed")
+    if before.model is not None and before.model != after.model:
+        raise ValueError("runtime_repair_ingress_model_changed")
+
+    missing = object()
+
+    def selector(interface):
+        if interface.protocol == "openai_chat":
+            return interface.model or "agent-learning-target"
+        if interface.protocol == "json_template" and isinstance(interface.request_template, dict):
+            return interface.request_template.get("model", missing)
+        return interface.model if interface.model is not None else missing
+
+    old_model, new_model = selector(before), selector(after)
+    if old_model is not missing and old_model != new_model:
+        raise ValueError("runtime_repair_ingress_model_changed")
+    new_profiles = []
+    if old_model is missing and new_model is not missing:
+        new_profiles.append(new_model)
+    if before.model is None and after.model is not None:
+        new_profiles.append(after.model)
+    for profile in new_profiles:
+        if not isinstance(profile, str) or not profile or "{{" in profile or not any(
+            profile in path.read_text(encoding="utf-8", errors="replace")
+            for path in evidence_files if path.stat().st_size <= 1_000_000
+        ):
+            raise ValueError("runtime_repair_ingress_profile_evidence_required")
+    if (_command_behavior(original.command) != _command_behavior(runtime.command)
+            or _request_behavior(before.request_template) != _request_behavior(after.request_template)):
+        raise ValueError("runtime_repair_ingress_behavior_changed")
+    if after.protocol == "json_template":
+        conversation_names = {"messages", "new_message", "new_message_content"}
+
+        def canonical_values(value):
+            if isinstance(value, dict):
+                return all(canonical_values(item) for item in value.values())
+            if isinstance(value, list):
+                return all(canonical_values(item) for item in value)
+            if isinstance(value, str) and _runtime_template_names(value) & conversation_names:
+                return value in {"{{" + name + "}}" for name in conversation_names}
+            return True
+
+        if (not isinstance(after.request_template, dict)
+                or not _runtime_template_names(after.request_template) & conversation_names
+                or not canonical_values(after.request_template)):
+            raise ValueError("runtime_repair_ingress_conversation_required")
 
 
 def _tool_mapping_terms(interface) -> set[str]:
@@ -454,10 +620,16 @@ def validate_runtime_plan_patch(
     *,
     allowed_diagnostic_codes: set[str],
     available_secret_aliases: frozenset[str] = frozenset(),
+    allow_ingress_repair: bool = False,
 ) -> AgentContract:
     """Validate a proposed plan without executing or changing submitted source."""
 
     root = source_root.resolve()
+    if patch.mode not in {"runtime_plan", "chat_ingress"}:
+        raise ValueError("runtime_repair_mode_invalid")
+    ingress_repair = patch.mode == "chat_ingress"
+    if ingress_repair and (not allow_ingress_repair or allowed_diagnostic_codes != {"chat_ingress_failed"}):
+        raise ValueError("runtime_repair_ingress_repair_not_allowed")
     if patch.base_contract_hash != _contract_hash(contract):
         raise ValueError("runtime_repair_base_contract_hash_mismatch")
     if not set(patch.diagnostic_codes) or not set(patch.diagnostic_codes).issubset(
@@ -475,6 +647,11 @@ def validate_runtime_plan_patch(
             raise ValueError(f"runtime_repair_evidence_missing: {relative}")
         if evidence.is_file():
             evidence_files.append(evidence)
+
+    if ingress_repair:
+        if not evidence_files or len(evidence_files) != len(patch.evidence_paths):
+            raise ValueError("runtime_repair_ingress_source_evidence_required")
+        _validate_ingress_repair(root, contract, patch.runtime, evidence_files)
 
     if patch.runtime_dependencies is not None:
         if allowed_diagnostic_codes != {"generated_runtime_plan_invalid"} or set(
@@ -619,13 +796,12 @@ def validate_runtime_plan_patch(
             exclude={"interface"}
         ):
             raise ValueError("runtime_repair_credential_only_local_auth_allowed")
-    if allowed_diagnostic_codes & {"chat_ingress_failed", "credential_missing"}:
+    if not ingress_repair and allowed_diagnostic_codes & {"chat_ingress_failed", "credential_missing"}:
         from packaging.utils import canonicalize_name
         from .generated_runtime import (
             _context_excludes,
             select_python_extras,
             python_workspace_root,
-            select_python_requirements,
         )
 
         original = contract.runtime
@@ -737,13 +913,8 @@ def validate_runtime_plan_patch(
             raise ValueError("runtime_repair_readiness_requires_material_change")
         if before < after or files_before < files_after:
             dependency_root = _dependency_root(root, runtime)
-            select_python_requirements(
-                dependency_root,
-                runtime.requirements_files,
-                context_excludes=_context_excludes(
-                    dependency_root, runtime, "pyproject.toml", runtime.command
-                ),
-            )
+            if dependency_root is None:
+                raise ValueError("runtime_repair_control_build_missing")
             workspace_root = python_workspace_root(root, dependency_root)
             prefix = dependency_root.relative_to(workspace_root)
             select_python_extras(
@@ -839,9 +1010,20 @@ def validate_runtime_plan_patch(
         _context_excludes,
         local_editable_install_operands,
         local_install_extra_claims,
+        select_python_requirements,
         validate_local_install_extras,
     )
 
+    if runtime.requirements_files:
+        dependency_root = _dependency_root(root, runtime)
+        if dependency_root is not None:
+            select_python_requirements(
+                dependency_root,
+                runtime.requirements_files,
+                context_excludes=_context_excludes(
+                    dependency_root, runtime, "pyproject.toml", runtime.command
+                ),
+            )
     original_claims = ()
     if contract.runtime and local_editable_install_operands(contract.runtime.install):
         from .bundle_author_v2 import BundleAuthorError
@@ -863,18 +1045,20 @@ def validate_runtime_plan_patch(
                 ),
             )
     if original_claims or local_editable_install_operands(runtime.install):
-        validate_local_install_extras(
-            _dependency_root(root, runtime),
-            runtime.install,
-            runtime.extras,
-            original_claims=original_claims,
-            context_excludes=_context_excludes(
-                _dependency_root(root, runtime),
-                runtime,
-                "pyproject.toml",
-                runtime.command,
-            ),
-        )
+        dependency_root = _dependency_root(root, runtime)
+        if dependency_root is not None:
+            validate_local_install_extras(
+                dependency_root,
+                runtime.install,
+                runtime.extras,
+                original_claims=original_claims,
+                context_excludes=_context_excludes(
+                    dependency_root,
+                    runtime,
+                    "pyproject.toml",
+                    runtime.command,
+                ),
+            )
     updates = {"runtime": runtime}
     if patch.runtime_dependencies is not None:
         updates["runtime_dependencies"] = patch.runtime_dependencies
@@ -894,6 +1078,7 @@ def apply_runtime_plan_patch(
     *,
     allowed_diagnostic_codes: set[str],
     available_secret_aliases: frozenset[str] = frozenset(),
+    allow_ingress_repair: bool = False,
 ) -> AgentContract:
     """Atomically apply only a validated runtime metadata replacement."""
 
@@ -906,6 +1091,7 @@ def apply_runtime_plan_patch(
         patch,
         allowed_diagnostic_codes=allowed_diagnostic_codes,
         available_secret_aliases=available_secret_aliases,
+        allow_ingress_repair=allow_ingress_repair,
     )
     contract_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -930,6 +1116,7 @@ async def request_runtime_plan_patch(
     *,
     guidance: str = "",
     available_secret_aliases: frozenset[str] = frozenset(),
+    allow_ingress_repair: bool = False,
 ) -> RuntimePlanPatch | None:
     """Inspect an unfamiliar repository and submit one constrained runtime-plan revision."""
 
@@ -942,6 +1129,8 @@ async def request_runtime_plan_patch(
             return candidate
     captured: list[RuntimePlanPatch] = []
     submission_schema = _RuntimeSubmission.model_json_schema()
+    if not allow_ingress_repair or allowed != {"chat_ingress_failed"}:
+        submission_schema["properties"].pop("mode")
     missing_loader = any(
         dependency.engine
         and not any(
@@ -963,6 +1152,7 @@ async def request_runtime_plan_patch(
         try:
             submission = _RuntimeSubmission.model_validate(arguments)
             patch = RuntimePlanPatch(
+                mode=submission.mode,
                 base_contract_hash=_contract_hash(contract),
                 runtime=submission.runtime,
                 runtime_dependencies=submission.runtime_dependencies,
@@ -976,6 +1166,7 @@ async def request_runtime_plan_patch(
                 patch,
                 allowed_diagnostic_codes=allowed,
                 available_secret_aliases=available_secret_aliases,
+                allow_ingress_repair=allow_ingress_repair,
             )
         except Exception as exc:
             return {
@@ -1004,7 +1195,8 @@ change tools/scenarios, or hide a failure. Your only write capability is
 submit_runtime_plan_patch. The replacement must use paths and commands that exist in the submitted
 repository. runtime.install is evidence only and is never executed. Select required source-declared
 optional dependency groups in runtime.extras and additional requirements manifests in
-runtime.requirements_files (relative to selected workdir). Deleting install evidence cannot repair an omitted
+runtime.requirements_files (relative to the selected installable project root, which may be an
+ancestor of workdir). Deleting install evidence cannot repair an omitted
 group. For packaging diagnostics, inspect the reported files and dependency/entrypoint evidence.
 Use runtime.context_excludes only for paths unnecessary for the selected runtime, relative to its
 component directory. Retain required modules, manifests, assets and tool implementations. Never
@@ -1046,6 +1238,22 @@ Every other runtime and interface field must remain identical, including command
 Preserve requested provider/model intent. Do not invent secrets or bind simulator credentials.
 If source evidence does not justify a correction, stop without submitting a patch.
 The identical chat request and reset must pass after rebuilding before readiness is established."""
+    if allow_ingress_repair and allowed == {"chat_ingress_failed"}:
+        system_prompt += """ Before certification only, you may instead select mode=chat_ingress
+when the generated connection declaration itself is wrong. This is separate from runtime_plan
+setup repair: do not combine the two. Correct only command, interface kind/protocol,
+port/path/health_path, request_template and response_path. Preserve the resolved working directory
+and package/component selection; equivalent workdir spelling is allowed. Cite regular source files containing
+the existing launcher, route handler and shared agent invocation. Do not generate a bridge or
+replace the agent. Preserve execution/deployment/install selection, dependencies, config, auth,
+secret bindings, known model/profile selectors, tools, failure rules and completed-tool mappings.
+A previously absent API profile may be declared only from its source handler/config evidence;
+it is an API selector, never permission to change the backing model/provider or required job intent.
+Do not introduce argv or request overrides for provider, model options, system instructions, tools
+or agent/config selection. Translate the same canonical conversation without fabricated prompts.
+Source evidence does not statically prove semantic equivalence: rebuilding and the identical
+private conversation with real completed-tool evidence must still pass. Use runtime_plan for
+setup corrections; its existing restrictions remain unchanged."""
     if allowed == {"chat_tool_evidence_unverified"}:
         system_prompt += """ A private tool-workflow conversation captured no completed tool
 execution. This does not prove the target used tools: it may have refused or failed its task.

@@ -133,3 +133,50 @@ def test_failure_event_schema_is_available_in_authoring_and_repair(tmp_path):
     }
     assert repair["$defs"]["CompletedToolFailureEvent"] == field["items"]
     assert field["items"]["required"] == ["kind", "action_id_path", "result_path"]
+
+
+@pytest.mark.parametrize("argument", [
+    "{{new_message}}",
+    "{{new_message_content}}",
+    "{{messages}}",
+    "{{ new_message }}",
+    "--query={{new_message_content}}",
+])
+def test_runtime_command_rejects_unexpanded_message_templates(argument):
+    from fi.alk.harness.contract import Runtime
+
+    with pytest.raises(ValueError, match="runtime_command_message_template_unsupported"):
+        Runtime.model_validate({
+            "execution": "native",
+            "command": ["agent", "chat", "--query", argument],
+            "interface": {"kind": "command", "protocol": "fi.alk"},
+        })
+
+
+@pytest.mark.parametrize("argument", [
+    '{"message":"hello", "options":{}}',
+    "{message}",
+    "{{source_template}}",
+    "{{PORT_agent}}",
+    "{1..4}",
+])
+def test_runtime_command_preserves_static_braces(argument):
+    from fi.alk.harness.contract import Runtime
+
+    command = ["agent", "--format", argument]
+    assert Runtime(command=command, interface={"kind": "command", "protocol": "fi.alk"}).command == command
+
+
+def test_runtime_command_rejects_message_template_in_normalized_shell_string():
+    from fi.alk.harness.contract import Runtime
+
+    with pytest.raises(ValueError, match="runtime_command_message_template_unsupported"):
+        Runtime(command="agent chat -q '{{new_message}}'", interface={"kind": "command", "protocol": "fi.alk"})
+
+
+def test_http_server_keeps_source_owned_message_template_argument():
+    from fi.alk.harness.contract import Runtime
+
+    command = ["server", "--chat-template", "{{messages}}"]
+    runtime = Runtime(command=command, interface={"kind": "http", "protocol": "openai_chat", "port": 8080, "path": "/v1/chat/completions"})
+    assert runtime.command == command

@@ -218,7 +218,12 @@ Find, in roughly this order:
    language and version, where imports resolve from, and whether it has a Dockerfile of its own.
    When the selected execution runtime supports Dockerfiles, prefer its own Dockerfile to
    generating one. Otherwise use it as evidence for a supported native startup path; do not
-   select an unsupported container build. For a chat agent, also
+   select an unsupported container build. If source deployment instructions offer a published
+   image for a Compose service, `runtime.compose_image_services` can select that service's
+   existing image instead of its build. Declare the source Compose file and control service;
+   retain the deployment evidence and resolve image variables only from source-owned values.
+   This selection does not add services, invent images, or establish an immutable image identity.
+   It requires a container runtime. For a chat agent, also
    record the conversational ingress the submitted runtime already exposes: HTTP, WebSocket or
    callable; its exact port and path; whether it is OpenAI Chat Completions-compatible; and any
    existing health path. Do not invent an endpoint. Without a real ingress the runtime may be

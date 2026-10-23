@@ -298,7 +298,7 @@ def _sandbox_command(
     return stdout
 
 
-def _base_checks(catalog: dict[str, Any]) -> list[tuple[str, str]]:
+def _base_checks(catalog: dict[str, Any], *, compose_profile: bool = False) -> list[tuple[str, str]]:
     checks: list[tuple[str, str]] = [
         (
             "control-layout",
@@ -395,6 +395,41 @@ PY""",
             raise SystemExit(f"invalid binary catalog entry: {binary!r}")
         version_flag = "-version" if name == "ffmpeg" else "--version"
         checks.append((f"binary-{name}", f"command -v {name} && {name} {version_flag}"))
+    if compose_profile:
+        checks = [(label, command) for label, command in checks if label != "no-container-runtime"]
+        checks.append(("hosted-compose-profile", """python - <<'PY_CHECK'
+import os, socket, stat
+from pathlib import Path
+from fi.alk.harness.hosted_compose_bootstrap import _load_profile
+profile = _load_profile()
+assert profile is not None
+assert os.getuid() == profile.client_uid
+for path in Path("/usr/local").rglob("*"):
+    info = path.lstat()
+    assert info.st_uid == 0, str(path)
+    if not stat.S_ISLNK(info.st_mode):
+        assert not info.st_mode & 0o022, (str(path), oct(stat.S_IMODE(info.st_mode)))
+for raw in (
+    "/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/usr/sbin", "/bin", "/sbin",
+    "/opt/alk-venv/bin/python", "/usr/bin/docker", "/usr/bin/dockerd",
+    "/usr/bin/containerd", "/usr/bin/runc", "/usr/bin/timeout",
+    "/usr/libexec/docker/cli-plugins/docker-compose",
+):
+    lexical = Path(raw)
+    resolved = lexical.resolve(strict=True)
+    for path in {lexical, resolved, *lexical.parents, *resolved.parents}:
+        info = path.stat()
+        assert info.st_uid == 0 and not info.st_mode & 0o022, (str(path), info.st_uid, oct(stat.S_IMODE(info.st_mode)))
+assert stat.S_ISSOCK(Path(profile.initialize_socket).stat().st_mode)
+try:
+    connection = socket.socket(socket.AF_UNIX)
+    connection.connect(profile.docker_socket)
+except PermissionError:
+    pass
+else:
+    raise AssertionError("controller reached private Docker socket")
+assert not Path('/var/run/docker.sock').exists()
+PY_CHECK"""))
     return checks
 
 
@@ -493,6 +528,7 @@ def certify_template(
     api_key: str,
     ttl_seconds: int,
     required_disk_gb: int,
+    compose_profile: bool = False,
 ) -> CertificationResult:
     from e2b import Sandbox
 
@@ -542,7 +578,7 @@ def certify_template(
         )
         checks.append("binary-uv")
 
-        for label, command in _base_checks(catalog):
+        for label, command in _base_checks(catalog, compose_profile=compose_profile):
             _sandbox_command(sandbox, command, label=label)
             checks.append(label)
 

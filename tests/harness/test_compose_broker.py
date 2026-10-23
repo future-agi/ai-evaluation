@@ -569,3 +569,94 @@ def test_fixture_only_policy_requires_trusted_broker_review(broker):
     assert not FakeProvider.instances
     broker.config.public_test_fixture_admissions = [review]
     assert dispatch(broker, payload)['session']
+
+
+def test_image_resolution_checks_source_before_privileged_calls(broker, monkeypatch):
+    source = Path(broker.config.source)
+    (source / "compose.yaml").write_text("services:\n  chat:\n    image: example/chat:1\n")
+    broker.source_digest = source_fingerprint(source)
+    payload = request(source, {"services": {"chat": {"image": "evil/other:1"}}})
+    payload.pop("instances")
+    payload.update(operation="resolve_images", runtime={
+        "execution": "compose", "compose_file": "compose.yaml", "service": "chat",
+    })
+    with pytest.raises(ValueError, match="compose_image_source_selection_mismatch"):
+        dispatch(broker, payload)
+    assert not FakeProvider.instances
+
+
+def test_image_resolution_keeps_target_configuration_out_of_provider(broker, monkeypatch):
+    from fi.alk.harness.compose_image_lock import ResolvedComposeImage
+
+    source = Path(broker.config.source)
+    (source / "compose.yaml").write_text("services:\n  chat:\n    image: example/chat:1\n")
+    broker.source_digest = source_fingerprint(source)
+    payload = request(source)
+    payload.pop("instances")
+    payload.update(operation="resolve_images", runtime={
+        "execution": "compose", "compose_file": "compose.yaml", "service": "chat",
+    })
+    seen = []
+
+    def resolve(self, **kwargs):
+        seen.append(kwargs)
+        return [ResolvedComposeImage(
+            service="chat", declared_reference="example/chat:1",
+            immutable_reference="docker.io/example/chat@sha256:" + "a" * 64,
+            platform="linux/amd64", correspondence="source_revision",
+        )]
+
+    monkeypatch.setattr(FakeProvider, "resolve_images", resolve, raising=False)
+    result = dispatch(broker, payload)
+    assert len(result["images"]) == 1
+    assert "configuration" not in FakeProvider.instances[0].config
+    assert "secret-only-at-server" not in json.dumps(result)
+    assert "secret-only-at-server" not in str(seen)
+    assert not broker.sessions
+
+
+def test_image_resolution_rejects_document_mutation_before_pull(broker):
+    payload = request(Path(broker.config.source))
+    payload.pop("instances")
+    payload.update(operation="resolve_images", runtime={}, document=payload["document"] + " ")
+    with pytest.raises(module.BrokerError, match="compose_broker_document_digest_mismatch"):
+        dispatch(broker, payload)
+    assert not FakeProvider.instances
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_image_resolution_rejects_untrusted_repository_provenance(broker, registered):
+    source = Path(broker.config.source)
+    (source / "compose.yaml").write_text("services:\n  chat:\n    image: example/chat:1\n")
+    broker.source_digest = source_fingerprint(source)
+    if registered:
+        broker.config.source_repository = "team/chat"
+        broker.config.source_revision = "b" * 40
+    payload = request(source)
+    payload.pop("instances")
+    payload.update(operation="resolve_images", runtime={
+        "execution": "compose", "compose_file": "compose.yaml", "service": "chat",
+    })
+    manifest = module.EnvironmentBundleV2.model_validate(payload["manifest"])
+    manifest.provenance.repository = "wrong/repository"
+    manifest.provenance.commit = "c" * 40
+    manifest.digest = seal_bundle_v2(manifest)
+    payload["manifest"] = manifest.model_dump(mode="json")
+    with pytest.raises(module.BrokerError, match="compose_broker_source_provenance_mismatch"):
+        dispatch(broker, payload)
+    assert not FakeProvider.instances
+
+
+def test_image_resolution_budget_is_bounded(broker):
+    source = Path(broker.config.source)
+    (source / "compose.yaml").write_text("services:\n  chat:\n    image: example/chat:1\n")
+    broker.source_digest = source_fingerprint(source)
+    broker.image_resolutions = 32
+    payload = request(source)
+    payload.pop("instances")
+    payload.update(operation="resolve_images", runtime={
+        "execution": "compose", "compose_file": "compose.yaml", "service": "chat",
+    })
+    with pytest.raises(module.BrokerError, match="compose_broker_image_resolution_limit"):
+        dispatch(broker, payload)
+    assert not FakeProvider.instances

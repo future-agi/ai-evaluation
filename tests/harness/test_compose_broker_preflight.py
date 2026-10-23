@@ -25,7 +25,7 @@ from fi.alk.harness.process_preflight import PreflightError
 
 
 @pytest.fixture
-def native_bundle(tmp_path, monkeypatch):
+def native_bundle(tmp_path, monkeypatch, resolved_compose_images):
     monkeypatch.delenv("ALK_TRUSTED_COMPOSE_SOCKET", raising=False)
     monkeypatch.setenv("ALK_COMPOSE_BROKER_SOCKET", "/private/alk/broker.sock")
     source = tmp_path / "source"

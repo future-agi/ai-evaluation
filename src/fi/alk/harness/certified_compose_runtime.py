@@ -34,6 +34,7 @@ class ComposeRuntimeError(RuntimeError):
 
 _SERVICE_KEYS = {
     "image",
+    "platform",
     "build",
     "command",
     "entrypoint",
@@ -220,6 +221,10 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
             raise ComposeRuntimeError(
                 f"compose_service_fields_forbidden: {name}: {','.join(sorted(set(service) - _SERVICE_KEYS))}"
             )
+        if "platform" in service:
+            from .compose_image_lock import validate_image_platform
+
+            validate_image_platform(service["platform"])
         dropped = service.get("cap_drop", [])
         if not isinstance(dropped, list) or any(
             not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", value)
@@ -514,11 +519,6 @@ def validate_source_tree(source: Path) -> None:
             raise ComposeRuntimeError("compose_source_special_file")
 
 
-def _copy_source(source: Path, destination: Path) -> None:
-    validate_source_tree(source)
-    shutil.copytree(source, destination, symlinks=True)
-
-
 def _own_directory(path: Path, uid: int, gid: int) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -622,6 +622,12 @@ class CertifiedComposeRuntimeProvider:
             str(directory / "compose.json"),
             *args,
         ]
+        return self._run_command(
+            command, environment, project, args[0], timeout=timeout,
+            private_output=private_output,
+        )
+
+    def _run_command(self, command, environment, project, operation, *, timeout, private_output):
         timed_out = False
         with tempfile.TemporaryFile() as output:
             process = subprocess.Popen(
@@ -651,17 +657,74 @@ class CertifiedComposeRuntimeProvider:
                     self.artifact_root.mkdir(parents=True, exist_ok=True)
                     with (self.artifact_root / f"{project}.log").open("a") as log:
                         log.write(
-                            f"\ncompose {args[0]} exit={process.returncode} timeout={timed_out}\n{redacted}\n"
+                            f"\ncompose {operation} exit={process.returncode} timeout={timed_out}\n{redacted}\n"
                         )
         if timed_out:
-            raise ComposeRuntimeError(f"compose_command_timeout: {args[0]}")
+            raise ComposeRuntimeError(f"compose_command_timeout: {operation}")
         if process.returncode:
             raise ComposeRuntimeError(
-                f"compose_command_failed: {args[0]} exit={process.returncode}"
+                f"compose_command_failed: {operation} exit={process.returncode}"
             )
         if private_output and size > 2 * 1024 * 1024:
             raise ComposeRuntimeError("compose_configuration_output_too_large")
         return text
+
+    def resolve_images(self, *, manifest, document, runtime, source):
+        from .compose_image_lock import image_identity, selected_images, validate_image_platform
+
+        self._check_socket()
+        images = selected_images(source, runtime, json.loads(document), control_service=manifest.runtime.control_service)
+        from .runtime_selection import select_runtime, ComposeSelection
+
+        try:
+            source_defaults = select_runtime(
+                source, runtime, public_environment={}, validate_environment_dependencies=False,
+            )
+        except ValueError:
+            source_defaults = None
+        result = []
+        deadline = time.monotonic() + 600
+        with tempfile.TemporaryDirectory(prefix="alk-image-resolution-") as scratch:
+            environment = {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "DOCKER_HOST": f"unix://{self.socket_path}",
+                "DOCKER_CONFIG": scratch,
+            }
+
+            def docker(*args):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ComposeRuntimeError("compose_image_resolution_timeout")
+                return self._run_command(
+                    ["docker", *args], environment, "image-resolution", args[0],
+                    timeout=remaining, private_output=True,
+                )
+
+            host = json.loads(docker("info", "--format", "{{json .}}"))
+            architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
+                host.get("Architecture"), host.get("Architecture")
+            )
+            host_platform = validate_image_platform(f"{host.get('OSType')}/{architecture}")
+            for name, service in images.items():
+                platform = service.get("platform") or host_platform
+                if platform.split("/")[:2] != host_platform.split("/")[:2]:
+                    raise ComposeRuntimeError("compose_image_host_platform_mismatch")
+                reference = service["image"]
+                docker("image", "pull", "--platform", platform, reference)
+                inspected = json.loads(docker("image", "inspect", reference))
+                if not isinstance(inspected, list) or len(inspected) != 1 or not isinstance(inspected[0], dict):
+                    raise ComposeRuntimeError("compose_image_inspection_invalid")
+                item = image_identity(
+                    service=name, reference=reference, platform=platform, inspected=inspected[0],
+                    repository=manifest.provenance.repository, revision=manifest.provenance.commit,
+                    application=name == manifest.runtime.control_service,
+                    source_declared_digest=(
+                        isinstance(source_defaults, ComposeSelection)
+                        and source_defaults.services.get(name, {}).get("image") == reference
+                    ),
+                )
+                result.append(item)
+        return result
 
     async def provision(
         self,
@@ -679,11 +742,16 @@ class CertifiedComposeRuntimeProvider:
 
     def _provision(self, bundle, source, bundle_dir, work_directory, instances):
         from .compose_integration import validate_source
+        from .compose_source import source_inputs
 
+        document = yaml.safe_load(
+            _within(bundle_dir, bundle.runtime.document).read_text()
+        )
+        inputs = source_inputs(source, document, capabilities=bundle.capabilities)
         validate_source(
             source, bundle.provenance.public_material_admissions,
             fixtures=bundle.provenance.public_test_fixture_admissions,
-            source_digest=bundle.provenance.source_digest,
+            source_digest=bundle.provenance.source_digest, paths=inputs.files,
         )
         self._check_socket()
         if bundle.runtime.kind is not RuntimeKindV2.COMPOSE:
@@ -706,9 +774,7 @@ class CertifiedComposeRuntimeProvider:
                     self._start(runtime, directory, manifest)
             return [entry[0] for entry in self._worlds.values()]
         self._source = source
-        self._document = yaml.safe_load(
-            _within(bundle_dir, bundle.runtime.document).read_text()
-        )
+        self._document = document
         try:
             for index in range(instances):
                 directory = Path(
@@ -730,15 +796,16 @@ class CertifiedComposeRuntimeProvider:
         return [entry[0] for entry in self._worlds.values()]
 
     def _start(self, runtime, directory, bundle):
-        if bundle.provenance.public_material_admissions or bundle.provenance.public_test_fixture_admissions:
-            from .compose_integration import validate_source
+        from .compose_source import source_inputs
+        from .compose_integration import validate_source
 
-            validate_source(
-                self._source, bundle.provenance.public_material_admissions,
-                fixtures=bundle.provenance.public_test_fixture_admissions,
-                source_digest=bundle.provenance.source_digest,
-            )
-        _copy_source(self._source, directory / "source")
+        inputs = source_inputs(self._source, self._document, capabilities=bundle.capabilities)
+        validate_source(
+            self._source, bundle.provenance.public_material_admissions,
+            fixtures=bundle.provenance.public_test_fixture_admissions,
+            source_digest=bundle.provenance.source_digest, paths=inputs.files,
+        )
+        inputs.copy_to(directory / "source")
         document = normalize_compose(
             self._document, directory / "source", capabilities=bundle.capabilities
         )
