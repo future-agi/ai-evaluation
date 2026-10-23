@@ -1165,6 +1165,51 @@ def test_native_multi_store_contract_uses_source_compose_dependency_topology(
     assert plan.capabilities["cache_redis"].service == "cache"
 
 
+def test_native_multi_store_contract_accepts_compose_list_environment(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    source = tmp_path / "generic_multi_store_chat"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "examples" / "harness" / "generic_multi_store_chat",
+        source,
+    )
+    compose = source / "compose.yml"
+    compose.write_text(compose.read_text().replace(
+        "      DATABASE_URL: postgresql://source:source@postgres:5432/app\n"
+        "      CACHE_URL: redis://cache:6379/2\n"
+        '      PORT: "8080"\n',
+        "      - DATABASE_URL=postgresql://source:source@postgres:5432/app\n"
+        "      - CACHE_URL=redis://cache:6379/2\n"
+        "      - PORT=8080\n",
+    ))
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {"name": "account store", "kind": "datastore", "engine": "postgresql",
+         "reached": {"dsn_env": "DATABASE_URL", "database": "app"}},
+        {"name": "access cache", "kind": "queue", "engine": "redis",
+         "reached": {"dsn_env": "CACHE_URL"}},
+    ]
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+
+
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -1674,6 +1719,52 @@ CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
     assert "CREATE DATABASE" not in artifacts[0].sql
     assert "INSERT INTO" not in artifacts[0].sql
     assert "embedding" not in artifacts[0].sql
+
+
+def test_documented_readme_schema_keeps_dependencies_across_sql_fences(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE ride_status AS ENUM ('requested', 'accepted');
+CREATE SEQUENCE ride_number_seq;
+CREATE TABLE rides (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status ride_status NOT NULL,
+    ride_number BIGINT DEFAULT nextval('ride_number_seq')
+);
+```
+
+```postgresql
+CREATE TABLE riders (id UUID PRIMARY KEY);
+ALTER TABLE rides ADD COLUMN rider_id UUID REFERENCES riders(id);
+CREATE INDEX rides_rider_id_idx ON rides (rider_id);
+INSERT INTO riders VALUES (gen_random_uuid());
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-2",
+    ]
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert "CREATE EXTENSION" in sql
+    assert "CREATE TYPE ride_status" in sql
+    assert "CREATE SEQUENCE ride_number_seq" in sql
+    assert "CREATE TABLE rides" in sql
+    assert "CREATE TABLE riders" in sql
+    assert "ALTER TABLE rides" in sql
+    assert "CREATE INDEX rides_rider_id_idx" in sql
+    assert "INSERT INTO" not in sql
 
 
 def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
@@ -3066,6 +3157,50 @@ def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) 
     assert next(
         process for process in plan.processes if process.name == "backend"
     ).depends_on == ["cache"]
+
+
+@pytest.mark.parametrize(
+    ("postgres_image", "redis_image", "redis_version"),
+    [
+        ("postgres", "redis", "7"),
+        ("registry.example/team/postgres:16", "bitnami/redis:7-alpine", "7"),
+    ],
+)
+def test_declared_compose_runtime_accepts_catalog_images_without_a_tag_or_with_a_namespace(
+    tmp_path: Path,
+    postgres_image: str,
+    redis_image: str,
+    redis_version: str,
+) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        "    depends_on: [cache, postgres]\n"
+        f"  cache:\n    image: {redis_image}\n"
+        f"  postgres:\n    image: {postgres_image}\n"
+    )
+
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+
+    cache = next(process for process in plan.processes if process.name == "cache")
+    assert cache.version == redis_version
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
 
 
 @pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])

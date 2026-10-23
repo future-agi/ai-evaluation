@@ -10,7 +10,7 @@ from urllib.parse import parse_qs
 
 import pytest
 
-from fi.alk.harness.hosted_scheduler import _invoke, _PhaseCrashed, _PhaseMisuse
+from fi.alk.harness.hosted_scheduler import _invoke, _PhaseCrashed
 from fi.alk.harness.scenario_source import _compile_entry
 from fi.alk.harness.world.errors import WorldUsageError
 from fi.alk.harness.world.observation import ObservationWorld
@@ -45,6 +45,15 @@ def application():
                     self.send_header(
                         "Set-Cookie", f"extra{index}=value{index}; Path=/private"
                     )
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if self.path.startswith("/private/rotate"):
+                self.send_response(200)
+                self.send_header("X-Rotating-Token", self.path.rsplit("/", 1)[-1])
+                self.send_header(
+                    "Set-Cookie", "session=read-only-mutation; Path=/private"
+                )
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
@@ -137,17 +146,22 @@ READY = """def ready(world):
 """
 
 
-def test_phase_output_cannot_publish_login_credentials(application, phase, capfd, caplog):
+def test_phase_output_cannot_publish_login_credentials(
+    application, phase, capfd, caplog
+):
     address, secrets, _ = application
     world = ObservationWorld(0, random.Random(1), {"app": address})
     caplog.set_level(logging.INFO, logger="fi.alk.harness.hosted_scheduler")
-    source = SETUP + """    import os, subprocess, sys
+    source = (
+        SETUP
+        + """    import os, subprocess, sys
     print(response, flush=True)
     print(response, file=sys.stderr, flush=True)
     os.write(1, response['json']['token'].encode())
     os.write(2, response['json']['token'].encode())
     subprocess.run([sys.executable, '-c', 'import sys; print(sys.argv[1])', response['json']['token']], check=True)
 """
+    )
     assert phase(source, world) is None
     assert phase(READY, world.read_only(), "ready") is None
     captured = capfd.readouterr()
@@ -161,8 +175,8 @@ def test_real_setup_ready_check_workers_keep_private_auth(application, phase, ca
     address, secrets, requests = application
     world = ObservationWorld(0, random.Random(1), {"app": address, "other": address})
     caplog.set_level(logging.INFO, logger="fi.alk.harness.hosted_scheduler")
-    clone = world.read_only()
     assert phase(SETUP, world) is None
+    clone = world.read_only()
     assert phase(READY, clone, "ready") is None
     assert (
         phase(READY.replace("def ready", "def check"), world.read_only(), "check")
@@ -240,6 +254,43 @@ def test_read_only_auth_mutation_and_body_conflict_rejected(application):
     )
 
 
+def test_read_only_requests_do_not_mutate_writable_cookies(application):
+    address, secrets, _ = application
+    world = ObservationWorld(0, random.Random(1), {"app": address})
+    world.request(
+        "app",
+        "POST",
+        "/login",
+        form={"username": "fixture", "password": "fixture"},
+    )
+    view = world.read_only()
+    assert view.request("app", "GET", "/private/rotate/one")["status"] == 200
+    assert world.request("app", "GET", "/private/ready")["status"] == 401
+    world.set_headers("app", {"Authorization": "Bearer " + secrets["jwt"]})
+    assert world.request("app", "GET", "/private/ready")["status"] == 200
+
+
+def test_rotating_capture_values_are_bounded_and_common_headers_are_not_redacted(
+    application,
+):
+    address, _, _ = application
+    world = ObservationWorld(0, random.Random(1), {"app": address})
+    for index in range(300):
+        world.request(
+            "app",
+            "GET",
+            f"/private/rotate/token-{index}",
+            headers={"Content-Type": "application/json"},
+            capture_headers=["X-Rotating-Token"],
+        )
+    session = world._sessions["app"]
+    assert len(session.redactions) == 256
+    assert "token-44" not in session.redactions
+    assert "token-45" in session.redactions
+    assert session.redactions[-1] == "token-299"
+    assert "application/json" not in session.redactions
+
+
 def test_worker_error_keeps_safe_401_evidence(application, phase, caplog):
     address, _, _ = application
     world = ObservationWorld(0, random.Random(1), {"app": address})
@@ -268,7 +319,7 @@ def test_replaced_auth_is_still_redacted(application, phase):
     assert "<redacted>" in verdict
 
 
-def test_cookie_overflow_cannot_turn_into_credential_verdict(
+def test_read_only_cookie_overflow_cannot_mutate_parent_or_expose_credential(
     application, phase, caplog
 ):
     address, secrets, _ = application
@@ -282,7 +333,7 @@ def test_cookie_overflow_cannot_turn_into_credential_verdict(
     except Exception:
         return old
 """
-    with pytest.raises(_PhaseMisuse):
-        phase(source, world.read_only(), "ready")
-    assert world._private_http_state() == {}
+    verdict = phase(source, world.read_only(), "ready")
+    assert verdict == "<redacted>"
+    assert world._private_http_state()
     assert secrets["jwt"] not in caplog.text

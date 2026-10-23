@@ -847,7 +847,10 @@ async def _review_session(
         "Declare SELECT queries returning violating rows (LIMIT 100); zero rows means valid. "
         "Checks must inspect actual records, not SELECT false or fixed counts. A valid check "
         "that currently fails is valuable: declare it unchanged, so the repair harness repairs "
-        "the generated DATA. You cannot modify source, data, or scenario goals here. "
+        "the generated DATA. Rows the agent ships in its own seed data are not generated: they "
+        "are what the agent really runs with, so run a check with query_world before declaring "
+        "it, and never declare one that the agent's own seed rows violate. "
+        "You cannot modify source, data, or scenario goals here. "
         "Review all data-consuming tool implementations before finish_review. These invariants "
         "do NOT certify tool execution. Scenarios:\n"
         + "\n".join(scenarios)

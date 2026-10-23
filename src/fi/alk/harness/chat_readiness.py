@@ -316,7 +316,12 @@ async def probe_chat_workflow(
             outcome = await runner.run(scenario, runtime)
         receipt["tool_call_count"] = len(outcome.calls)
         receipt["turns"] = outcome.turns
-        if not outcome.calls and getattr(job, "require_tool_workflow", False):
+        from .contract import has_executable_tool_workflow
+
+        requires_tool_evidence = getattr(job, "require_tool_workflow", False) or (
+            has_executable_tool_workflow(runner._contract)
+        )
+        if not outcome.calls and requires_tool_evidence:
             raise failure(
                 "chat_tool_evidence_unverified",
                 "Required tool evidence was not captured. Inspect source-supported "

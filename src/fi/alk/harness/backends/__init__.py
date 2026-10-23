@@ -36,6 +36,7 @@ from .base import (
     ToolSpec,
     qualified,
     tool,
+    tool_input_schema,
     tool_server,
 )
 
@@ -64,6 +65,7 @@ __all__ = [
     "register",
     "resolve",
     "tool",
+    "tool_input_schema",
     "tool_server",
 ]
 

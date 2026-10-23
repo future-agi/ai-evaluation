@@ -340,21 +340,41 @@ def _declaration(schema):
     ))._get_declaration()
 
 
-def test_declaration_preserves_json_schema_on_vertex_wire():
+def _without_references(value):
+    if isinstance(value, list):
+        return all(_without_references(item) for item in value)
+    if not isinstance(value, dict):
+        return True
+    return "$ref" not in value and "$defs" not in value and all(
+        _without_references(item) for item in value.values()
+    )
+
+
+def _object_branch(schema):
+    return next(
+        item
+        for item in schema.get("anyOf", [schema])
+        if isinstance(item, dict) and item.get("type") == "object"
+    )
+
+
+def test_declaration_inlines_json_schema_on_vertex_wire():
     from copy import deepcopy
     from types import SimpleNamespace
     from google.genai import _common
     from google.genai.models import _GenerateContentParameters_to_vertex
     from google.genai.types import _GenerateContentParameters
+    from fi.alk.harness.backends import tool_input_schema
     from fi.alk.harness.runtime_repair import _RuntimeSubmission
     from fi.alk.harness.repair_authoring import _PatchSubmission
 
     for model in (_RuntimeSubmission, _PatchSubmission):
         original = model.model_json_schema()
+        expected = tool_input_schema(original)
         supplied = deepcopy(original)
         declaration = _declaration(supplied)
         assert declaration.parameters is None
-        assert declaration.parameters_json_schema == original
+        assert declaration.parameters_json_schema == expected
         params = _GenerateContentParameters(
             model="gemini-test", contents="test",
             config={"tools": [{"function_declarations": [declaration]}]},
@@ -362,22 +382,24 @@ def test_declaration_preserves_json_schema_on_vertex_wire():
         wire = _GenerateContentParameters_to_vertex(SimpleNamespace(vertexai=True), _common.convert_to_dict(params))
         wire = _common.encode_unserializable_types(_common.convert_to_dict(wire))
         actual = wire["tools"][0]["functionDeclarations"][0]["parameters_json_schema"]
-        assert actual == original
+        assert actual == expected
+        assert _without_references(actual)
         assert supplied == original
-    assert actual["$defs"]["RepairPatchOperation"]["properties"]["op"]["$ref"]
+    assert original["$defs"]["RepairPatchOperation"]["properties"]["op"]["$ref"]
 
 
 def test_runtime_repair_declaration_exposes_nested_observation_schema():
     from fi.alk.harness.runtime_repair import _RuntimeSubmission
 
     schema = _declaration(_RuntimeSubmission.model_json_schema()).parameters_json_schema
-    assert schema["properties"]["runtime"] == {"$ref": "#/$defs/Runtime"}
-    interface = schema["$defs"]["RuntimeInterface"]
+    runtime = schema["properties"]["runtime"]
+    interface = _object_branch(runtime["properties"]["interface"])
     assert {"completed_tool_events", "completed_tools"} <= set(interface["properties"])
-    events = schema["$defs"]["CompletedToolEvents"]["properties"]
+    events = _object_branch(interface["properties"]["completed_tool_events"])["properties"]
     assert {"path", "correlation_header", "action_id_path", "result_path"} <= set(events)
     assert events["source"]["enum"] == ["endpoint", "response"]
     assert events["max_pages"]["maximum"] == 20
+    assert _without_references(schema)
 
 
 def test_submit_contract_schema_preserves_scalar_and_map_constraints(tmp_path):

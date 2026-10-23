@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from .backends import DELEGATE_TOOL, WorkerSpec, tool_server
 from .config import artifact_dir, load_skill, read_only_session
 from .contract import AgentContract
 from .session import Stage
@@ -21,6 +22,23 @@ from .sources import AgentSource
 from .tools import CONTRACT_SERVER, contract_tools
 
 SKILL = "understand-agent"
+READER = "agent_reader"
+_READER_INSTRUCTIONS = (
+    "You trace an agent's tools through its source and report what is true, each fact with its "
+    "file and line. For every tool you are given, follow its implementation through everything it "
+    "calls, down to where its effect lands: helpers and the state they keep, services and their "
+    "handlers, stores and their starting data, files, pages or devices it acts on, and environment "
+    "defaults. Report, per tool: each argument with "
+    "its type, the exact form the code accepts (a prefix, an id shape) and the values it accepts "
+    "only where the code rejects others; an argument whose value must come from an earlier tool's "
+    "output, naming that tool; what must have happened earlier in the call, and which tool does it; "
+    "each refusal that depends on an argument's value, and what it waits for; refusals returned as "
+    "ordinary values rather than errors; what it reads, creates or changes, and what earlier state "
+    "it clears; anything it waits on that cannot happen during the call; and anything that differs "
+    "under a test or harness mode. Report only what you read; write `not found` rather than guess. "
+    "When asked to check a draft, list every place it disagrees with the source. You never write "
+    "the contract."
+)
 PROVIDER_IMPORT_PROFILE_PATH_ENV = "ALK_PROVIDER_IMPORT_PROFILE_PATH"
 
 
@@ -125,6 +143,21 @@ def open_stage(
         extra_builtins=source.builtin_tools(),
         max_turns=max_turns,
     )
+    if source.kind == "repo":
+        # Read-only researchers for the contract: the real rules often sit several calls deep.
+        spec.builtins = (*spec.builtins, DELEGATE_TOOL)
+        spec.workers = {
+            READER: WorkerSpec(
+                description=(
+                    "Traces some of the agent's tools through its source and reports, with file "
+                    "and line, what each accepts, refuses, needs first, changes and clears. Brief "
+                    "it with the tools (names and where each is defined), or with a draft to check."
+                ),
+                instructions=_READER_INSTRUCTIONS,
+                servers={"reader": tool_server(name="reader", version="0.1.0", tools=[])},
+                builtins=("Read", "Glob", "Grep"),
+            )
+        }
     if ask is not None:
         spec.permission_override = ask
     return Stage(spec, name=SKILL), destination

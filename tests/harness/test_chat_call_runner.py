@@ -880,7 +880,7 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
         (408, "call_failed"),
         (409, "target_agent_failed"),
         (429, "call_failed"),
-        (500, "call_failed"),
+        (500, "target_agent_failed"),
         (502, "call_failed"),
         (503, "call_failed"),
         (504, "call_failed"),
@@ -1139,6 +1139,56 @@ def test_hosted_chat_native_tool_message_completion(
             if completion in {"error", "nested-result"}
             else {"status": "active"}
         )
+
+
+def test_hosted_chat_records_a_cumulative_native_tool_call_only_once(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    contract = chat.AgentContract.model_validate_json(
+        (context.bundle_dir / "contract.json").read_text()
+    )
+
+    class Wrapper:
+        calls = 0
+
+        async def call(self, _request: Any) -> AgentResponse:
+            self.calls += 1
+            return AgentResponse(
+                content="First answer." if self.calls == 1 else "Second answer.",
+                tool_calls=[
+                    {
+                        "id": "account-1",
+                        "function": {
+                            "name": "lookup_account",
+                            "arguments": '{"account_id":"ACC-2048"}',
+                        },
+                    }
+                ],
+                tool_responses=[
+                    {
+                        "tool_call_id": "account-1",
+                        "name": "lookup_account",
+                        "result": {"status": "active"},
+                    }
+                ],
+            )
+
+    world = _ToolWorld()
+    target = chat._HostedChatTarget(
+        wrapper=Wrapper(),
+        contract=contract,
+        world=world,
+        scenario_key="account",
+        scenario_id="account-1",
+    )
+
+    async def exercise() -> tuple[str, str]:
+        return await target.say("Look up my account."), await target.say("Anything else?")
+
+    assert asyncio.run(exercise()) == ("First answer.", "Second answer.")
+    assert len(world.calls) == 1
+    assert world.calls[0].arguments == {"account_id": "ACC-2048"}
 
 
 def test_hosted_chat_function_response_payload_cannot_request_tools(

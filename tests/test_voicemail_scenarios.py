@@ -158,18 +158,15 @@ def test_the_simulator_definition_reads_the_mailbox_from_its_lane():
     assert "VOICEMAIL SYSTEM" not in person.instructions
 
 
-def test_a_judged_only_mailbox_is_refused_where_the_world_can_be_read(tmp_path):
-    """The judged-only path in `prove` is for a world with nothing readable. A real world has rows,
-    so a mailbox scenario there still has to name a sub-goal settled in code. Recorded rather than
-    worked around."""
+def test_a_judged_only_mailbox_is_kept_and_marked_judged(tmp_path):
+    """A mailbox scenario graded only on the call is kept; the proof says nothing was settled in code."""
     from fi.alk.harness.prove import prove
 
     root, _contract, catalogue = _built_environment(tmp_path)
 
     judged = _mailbox("judged-mailbox", "You have reached Dana.", sub_goals=["polite"])
     proof = prove(judged, catalogue, root)
-    assert not proof.holds and not proof.judged_only
-    assert "is in code" in " ".join(proof.broken)
+    assert proof.holds and proof.judged_only
 
     settled = _mailbox("settled-mailbox", "You have reached Dana.")
     assert prove(settled, catalogue, root).holds

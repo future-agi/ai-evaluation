@@ -129,12 +129,15 @@ def test_repair_decision_rejects_invalid_patch_and_source_escape(tmp_path, monke
                         },
                     ),
                     ("Glob", {"file_path": "large.py", "path": "..", "pattern": "*"}),
-                    ("Grep", {"pattern": "secret"}),
-                    ("Glob", {"pattern": "*"}),
                 ):
                     result = await readers[name].handler(args)
                     assert result["is_error"]
                     assert "private-secret-content" not in str(result)
+                grep = await readers["Grep"].handler({"pattern": "bounded"})
+                glob = await readers["Glob"].handler({"pattern": "*"})
+                assert not grep.get("is_error") and "large.py" in str(grep)
+                assert not glob.get("is_error") and "large.py" in str(glob)
+                assert "link" not in str(grep) and "link" not in str(glob)
                 for _ in range(12):
                     await readers["Read"].handler({"file_path": "large.py"})
             else:
