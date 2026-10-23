@@ -94,7 +94,13 @@ def test_data_free_review_is_explicit_and_bound_to_source_and_contract(tmp_path)
         asyncio.run(subject.author_invariants(source, out, world))
 
 
-def test_in_process_graph_state_does_not_require_sql_invariants(tmp_path):
+@pytest.mark.parametrize("store_kind", ["in_process", "none", "filesystem"])
+def test_non_relational_state_does_not_require_sql_invariants(tmp_path, monkeypatch, store_kind):
+    def unexpected_review(*args, **kwargs):
+        pytest.fail("SQL authoring invoked for an explicitly non-relational empty world")
+
+    monkeypatch.setattr(subject, "Stage", unexpected_review)
+    monkeypatch.setattr(subject, "chosen_model", lambda: "unused")
     source = tmp_path / "source"
     source.mkdir()
     (source / "graph.py").write_text("graph = object()\n")
@@ -105,7 +111,7 @@ def test_in_process_graph_state_does_not_require_sql_invariants(tmp_path):
             {
                 "agent": "graph",
                 "tools": [{"name": "research"}],
-                "data_store": {"kind": "in_process"},
+                "data_store": {"kind": store_kind},
                 "data_schema": {"AgentState": {"messages": "list"}},
             }
         )
@@ -115,7 +121,12 @@ def test_in_process_graph_state_does_not_require_sql_invariants(tmp_path):
     assert asyncio.run(subject.author_invariants(source, out, world)) == []
     review = json.loads((out / subject.ARTIFACT).read_text())
     assert review["status"] == "not_applicable"
-    assert "in-process" in review["reason"].lower()
+    assert "no runtime SQL business tables" in review["reason"]
+    assert not review["tool_execution_proven"]
+    assert asyncio.run(subject.author_invariants(source, out, world)) == []
+    (source / "graph.py").write_text("graph = changed()\n")
+    with pytest.raises(ValueError, match="changed"):
+        asyncio.run(subject.author_invariants(source, out, world))
 
 
 @pytest.mark.parametrize(
@@ -123,6 +134,10 @@ def test_in_process_graph_state_does_not_require_sql_invariants(tmp_path):
     [
         ({}, ["orders"]),
         ({"data_store": {"kind": "postgres"}}, []),
+        ({"data_store": {"kind": "sqlite"}}, []),
+        ({"data_store": {"kind": "none"}}, ["orders"]),
+        ({"data_store": {"kind": "filesystem"}}, ["orders"]),
+        ({"data_store": {"kind": "in_process"}}, ["orders"]),
         ({"data_schema": {"orders": {}}}, []),
         ({"tools": [{"name": "order"}]}, []),
     ],

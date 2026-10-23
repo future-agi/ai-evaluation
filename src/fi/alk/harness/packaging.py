@@ -51,7 +51,7 @@ class PackagingManifest(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
-_IGNORED = {".git", ".venv", "node_modules", "vendor", "build", "dist", "artifacts"}
+_IGNORED = {".git", ".venv", "node_modules", "vendor"}
 _COMPOSE_NAMES = {
     "compose.yml",
     "compose.yaml",

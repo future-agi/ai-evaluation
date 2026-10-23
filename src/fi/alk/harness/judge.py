@@ -30,6 +30,7 @@ from .catalogue import criteria_text
 from .config import chosen_model, provider_env
 from .session import Stage, record_turn
 from .tools import schema
+from .world.observation import ObservationWorld
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,9 @@ JUDGE_MODEL_ALIAS = "ALK_JUDGE_MODEL"
 _LIMIT = 600
 _STEPS = 20
 _TRANSCRIPT_LIMIT = 200_000
-_UNPLAYABLE = "The recording could not be played. Judge from the transcript and the actions."
+_UNPLAYABLE = (
+    "The recording could not be played. Judge from the transcript and the actions."
+)
 _TURN_TIMEOUT_SECONDS = 300
 
 VERDICTS = ("pass", "fail", "not_applicable", "inconclusive")
@@ -72,8 +75,9 @@ JUDGE_METHOD = """
 How to decide:
 1. Read the criteria.
 2. Read the evidence. Read the conversation for what was said, the actions for what the agent did,
-   and inspect the records when the criteria are about what changed. The records are PostgreSQL;
-   use inspect_world to discover them rather than guessing names. When listen is offered, listen
+   and inspect the records when the criteria are about what changed. Use inspect_world to discover
+   what the environment supports. Only query records when a query tool is available; never invent
+   records or infer unobserved state from capability names. When listen is offered, listen
    to the recording: it is the fullest record of what was said. Use the transcript where it is
    unclear, and judge from the transcript and the actions when it cannot be heard.
 3. Establish whether the sub-goal's situation arose. If it did not, work out why from the evidence:
@@ -172,7 +176,9 @@ class CallEvidence:
     rule that a judge has listened to the recording and read the transcript before it decides.
     """
 
-    def __init__(self, world: Any, messages: Sequence[Any], recording: str | None, label: str) -> None:
+    def __init__(
+        self, world: Any, messages: Sequence[Any], recording: str | None, label: str
+    ) -> None:
         self.world = world
         self.messages = messages
         self.recording = recording
@@ -192,12 +198,29 @@ class CallEvidence:
         (self.fetched if self.batched else self.looked).add(what)
 
     def tools(self) -> list[Any]:
+        native = isinstance(self.world, ObservationWorld)
+
         @tool(
             "inspect_world",
-            "The world's tables: without a name, every table and its row count; with one, its rows.",
-            schema({"table": str}, []),
+            (
+                "The native environment's declared capabilities and evidence limits; no database state."
+                if native
+                else "The world's tables: without a name, every table and its row count; with one, its rows."
+            ),
+            schema({} if native else {"table": str}, []),
         )
         async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+            if native:
+                return _say(
+                    _dump(
+                        {
+                            "kind": "native_observation",
+                            "capabilities": list(self.world.capabilities),
+                            "state_access": "No local database or SQL query is available to the judge. Capability names are not state evidence.",
+                            "evidence": "Use recorded actions and their results, and read_transcript for the captured conversation.",
+                        }
+                    )
+                )
             table = str(args.get("table") or "").strip()
             state = self.world.state(table or None)
             if table:
@@ -234,7 +257,9 @@ class CallEvidence:
             self._fetched("transcript")
             if not self.messages:
                 heard = "the recording, " if self.recording else ""
-                return _say(f"Nothing was transcribed. Decide from {heard}the actions and the records.")
+                return _say(
+                    f"Nothing was transcribed. Decide from {heard}the actions and the records."
+                )
             return _say(_transcript(self.messages))
 
         @tool(
@@ -250,7 +275,8 @@ class CallEvidence:
                 self.audio = "asked"
             return _say("The recording follows.")
 
-        return [inspect_world, query_world, read_transcript] + ([listen] if self.recording else [])
+        world_tools = [inspect_world] if native else [inspect_world, query_world]
+        return [*world_tools, read_transcript] + ([listen] if self.recording else [])
 
     def verdict_problem(self, args: dict[str, Any]) -> str | None:
         """Why this `decide` call cannot be accepted, or None when it is a complete, informed verdict."""
@@ -294,12 +320,19 @@ async def run_judge_conversation(
         except NoGateway:
             raise
         except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
-            logger.warning("judge for %s could not run: %s: %s", evidence.label, type(exc).__name__, exc)
+            logger.warning(
+                "judge for %s could not run: %s: %s",
+                evidence.label,
+                type(exc).__name__,
+                exc,
+            )
             if evidence.audio == "sent":
                 # The recording itself was refused: judge on, from the transcript.
                 evidence.audio = "unplayable"
                 conversation = [
-                    {"role": "user", "content": _UNPLAYABLE} if isinstance(one.get("content"), list) else one
+                    {"role": "user", "content": _UNPLAYABLE}
+                    if isinstance(one.get("content"), list)
+                    else one
                     for one in conversation
                 ]
                 continue
@@ -310,14 +343,20 @@ async def run_judge_conversation(
         conversation.append(reply)
         for call in reply.get("tool_calls") or []:
             conversation.append(
-                {"role": "tool", "tool_call_id": call.get("id"), "content": await _run(tools, call)}
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": await _run(tools, call),
+                }
             )
         if evidence.audio == "asked":
             try:
                 conversation.append(_recording(evidence.recording or ""))
                 evidence.audio = "sent"
             except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
-                logger.warning("judge could not read the recording for %s: %s", evidence.label, exc)
+                logger.warning(
+                    "judge could not read the recording for %s: %s", evidence.label, exc
+                )
                 evidence.audio = "unplayable"
                 conversation.append({"role": "user", "content": _UNPLAYABLE})
         if done():
@@ -346,12 +385,17 @@ async def request_final_verdicts(
         f"{prompt}\n\nWhat was said:\n{said}\n\n"
         f"What was found while looking:\n{found or '(nothing)'}\n\n{ask}"
     )
-    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": final}]
+    messages = [
+        {"role": "system", "content": instructions},
+        {"role": "user", "content": final},
+    ]
     if evidence.recording and evidence.audio != "unplayable":
         try:
             messages.append(_recording(evidence.recording))
         except Exception as exc:  # noqa: BLE001 - an unreadable recording leaves the transcript
-            logger.warning("judge could not read the recording for %s: %s", evidence.label, exc)
+            logger.warning(
+                "judge could not read the recording for %s: %s", evidence.label, exc
+            )
             messages.append({"role": "user", "content": _UNPLAYABLE})
     evidence.fetched.clear()
     evidence.looked.update({"listen", "transcript"})
@@ -369,10 +413,14 @@ async def request_final_verdicts(
         for call in reply.get("tool_calls") or []:
             await _run([decide], call)
     except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
-        logger.warning("judge's final request for %s could not run: %s", evidence.label, exc)
+        logger.warning(
+            "judge's final request for %s could not run: %s", evidence.label, exc
+        )
 
 
-def describe_call(agent_instructions: str, scenario: Any, calls: Sequence[Any], recording: str | None) -> str:
+def describe_call(
+    agent_instructions: str, scenario: Any, calls: Sequence[Any], recording: str | None
+) -> str:
     """What every judging mode tells the judge about the call, after the sub-goals themselves."""
     return (
         f"The agent's own instructions:\n{agent_instructions.strip() or '(not given)'}\n\n"
@@ -432,34 +480,49 @@ async def judge_sub_goal(
 
     def nudge() -> str:
         said = _transcript(messages) if messages else "(nothing captured)"
-        return f"No verdict yet for sub-goal {name!r}.\n\nWhat was said:\n{said}\n\n{ask}"
+        return (
+            f"No verdict yet for sub-goal {name!r}.\n\nWhat was said:\n{said}\n\n{ask}"
+        )
 
     try:
         conversation = await run_judge_conversation(
-            [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": prompt}],
+            [
+                {"role": "system", "content": _INSTRUCTIONS},
+                {"role": "user", "content": prompt},
+            ],
             tools,
             evidence,
             done=lambda: "it" in verdict,
             nudge=nudge,
         )
         if "it" not in verdict:
-            await request_final_verdicts(_INSTRUCTIONS, prompt, conversation, evidence, decide, ask)
+            await request_final_verdicts(
+                _INSTRUCTIONS, prompt, conversation, evidence, decide, ask
+            )
     except NoGateway:
         evidence.batched = False
         evidence.delivered()
         evidence.looked.add("listen")
         spec = SessionSpec(
             system_prompt=_INSTRUCTIONS,
-            servers={"world": tool_server(name="world", tools=[t for t in tools if t.name != "listen"])},
+            servers={
+                "world": tool_server(
+                    name="world", tools=[t for t in tools if t.name != "listen"]
+                )
+            },
             max_turns=12,
             model=judge_model(),
         )
         for text in (prompt, f"{prompt}\n\n{nudge()}"):
             try:
-                async with Stage(spec, name="judge-sub-goals", overheard=False) as stage:
+                async with Stage(
+                    spec, name="judge-sub-goals", overheard=False
+                ) as stage:
                     await stage.say(text)
             except Exception as exc:  # noqa: BLE001 - a judge that could not run is not a failed agent
-                logger.warning("judge for %s could not run: %s: %s", name, type(exc).__name__, exc)
+                logger.warning(
+                    "judge for %s could not run: %s: %s", name, type(exc).__name__, exc
+                )
             if "it" in verdict:
                 break
             evidence.looked.add("transcript")
@@ -478,7 +541,9 @@ def _said(message: dict[str, Any]) -> str:
         f"{(call.get('function') or {}).get('name')}({(call.get('function') or {}).get('arguments') or ''})"
         for call in message.get("tool_calls") or []
     ]
-    return "\n".join(filter(None, [f"{message.get('role')}: {content or ''}".strip(), *calls]))
+    return "\n".join(
+        filter(None, [f"{message.get('role')}: {content or ''}".strip(), *calls])
+    )
 
 
 def _customer_side(scenario: Any) -> str:
@@ -530,7 +595,9 @@ def _transcript(messages: Sequence[Any]) -> str:
         for m in messages
         if isinstance(m, dict)
     )
-    return body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
+    return (
+        body if len(body) <= _TRANSCRIPT_LIMIT else "...\n" + body[-_TRANSCRIPT_LIMIT:]
+    )
 
 
 def _complete(
@@ -549,7 +616,11 @@ def _complete(
         body["tools"] = [
             {
                 "type": "function",
-                "function": {"name": t.name, "description": t.description, "parameters": t.input_schema},
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                },
             }
             for t in tools
         ]

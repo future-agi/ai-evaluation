@@ -18,7 +18,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from fi.simulate.agent.wrappers.http_events import CompletedToolEvents
+from fi.simulate.agent.wrappers.http_events import (
+    CompletedToolEvents,
+    CompletedToolRows,
+)
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
@@ -287,6 +290,45 @@ class Reached(BaseModel):
         )
 
 
+class RuntimeHttpFailureRule(BaseModel):
+    status_path: str = Field(min_length=1, max_length=512)
+    failure_values: list[str | int | float | bool | None] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
+    success_values: list[str | int | float | bool | None] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
+    message_path: str = Field(default="", max_length=512)
+
+    @field_validator("status_path", "message_path")
+    @classmethod
+    def _path(cls, value: str) -> str:
+        if value and not re.fullmatch(r"(?:\$\.)?[^.\s]+(?:\.[^.\s]+)*", value):
+            raise ValueError("runtime_http_failure_path_invalid")
+        return value
+
+    @field_validator("failure_values", "success_values", mode="before")
+    @classmethod
+    def _scalars(cls, values):
+        import math
+
+        if values is None:
+            return values
+        if not isinstance(values, list) or any(
+            type(value) not in (str, int, float, bool, type(None))
+            or (isinstance(value, float) and not math.isfinite(value))
+            for value in values
+        ):
+            raise ValueError("runtime_http_failure_values_must_be_finite_scalars")
+        return values
+
+    @model_validator(mode="after")
+    def _one_predicate(self):
+        if (self.failure_values is None) == (self.success_values is None):
+            raise ValueError("runtime_http_failure_requires_one_predicate")
+        return self
+
+
 class RuntimeHttpSetupRequest(BaseModel):
     """One source-evidenced request required before conversational turns begin."""
 
@@ -297,6 +339,7 @@ class RuntimeHttpSetupRequest(BaseModel):
     headers_template: dict[str, str] = Field(default_factory=dict)
     capture_headers: dict[str, str] = Field(default_factory=dict)
     accepted_statuses: list[int] = Field(default_factory=lambda: [200, 201, 204, 409])
+    failure_rule: RuntimeHttpFailureRule | None = None
     # Captured response values become placeholders for later setup requests and turns. This
     # models generic create-then-use APIs without teaching the harness about a framework.
     capture: dict[str, str] = Field(default_factory=dict)
@@ -365,34 +408,6 @@ class RuntimeHttpSetupRequest(BaseModel):
         return normalized
 
 
-class RuntimeHttpFailureRule(BaseModel):
-    status_path: str = Field(min_length=1, max_length=512)
-    failure_values: list[str | int | float | bool | None] = Field(
-        min_length=1, max_length=32
-    )
-    message_path: str = Field(default="", max_length=512)
-
-    @field_validator("status_path", "message_path")
-    @classmethod
-    def _path(cls, value: str) -> str:
-        if value and not re.fullmatch(r"(?:\$\.)?[^.\s]+(?:\.[^.\s]+)*", value):
-            raise ValueError("runtime_http_failure_path_invalid")
-        return value
-
-    @field_validator("failure_values", mode="before")
-    @classmethod
-    def _scalars(cls, values):
-        import math
-
-        if not isinstance(values, list) or any(
-            type(value) not in (str, int, float, bool, type(None))
-            or (isinstance(value, float) and not math.isfinite(value))
-            for value in values
-        ):
-            raise ValueError("runtime_http_failure_values_must_be_finite_scalars")
-        return values
-
-
 class RuntimeInterface(BaseModel):
     """The submitted runtime's existing conversational ingress.
 
@@ -420,6 +435,8 @@ class RuntimeInterface(BaseModel):
     response_path: str = ""
     headers_template: dict[str, str] = Field(default_factory=dict)
     completed_tool_events: CompletedToolEvents | None = None
+    completed_tools: CompletedToolRows | None = None
+    setup_secrets: dict[str, str] = Field(default_factory=dict)
     failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
         default_factory=list, max_length=8
@@ -431,6 +448,19 @@ class RuntimeInterface(BaseModel):
         from fi.simulate.agent.wrappers.http import validate_http_headers
 
         return validate_http_headers(values)
+
+    @field_validator("setup_secrets")
+    @classmethod
+    def _setup_secret_aliases(cls, values):
+        if len(values) > 16 or any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+            for pair in values.items()
+            for value in pair
+        ):
+            raise ValueError("runtime_http_setup_secret_invalid")
+        if set(values) & _RUNTIME_TEMPLATE_INPUTS:
+            raise ValueError("runtime_http_setup_secret_shadows_input")
+        return values
 
     @field_validator("kind")
     @classmethod
@@ -466,6 +496,30 @@ class RuntimeInterface(BaseModel):
                 raise ValueError(f"runtime_{self.kind}_interface_requires_port")
             if not self.path:
                 raise ValueError(f"runtime_{self.kind}_interface_requires_path")
+        if self.completed_tools and (
+            self.completed_tool_events
+            or self.kind != "http"
+            or self.protocol != "json_template"
+        ):
+            raise ValueError(
+                "completed tool rows require an exclusive JSON template interface"
+            )
+        if (
+            self.completed_tools
+            and not self.completed_tools.error_path
+            and not (self.failure_rule and self.failure_rule.success_values is not None)
+        ):
+            raise ValueError(
+                "completed tool rows without an error flag require a success predicate"
+            )
+        if (
+            self.completed_tool_events
+            and self.completed_tool_events.source == "response"
+            and self.protocol != "json_template"
+        ):
+            raise ValueError("response tool events require a JSON template interface")
+        if self.setup_secrets and self.kind != "http":
+            raise ValueError("runtime_http_setup_secrets_require_http")
         if self.completed_tool_events is not None and self.kind != "http":
             raise ValueError("completed tool events require an HTTP interface")
         if self.kind == "http":
@@ -478,18 +532,18 @@ class RuntimeInterface(BaseModel):
                 raise ValueError("runtime_json_template_requires_request_template")
             available = set(_RUNTIME_TEMPLATE_INPUTS)
             for setup in self.setup_requests:
-                unknown = (
-                    _runtime_template_names(setup.path)
-                    | _runtime_template_names(setup.headers_template)
-                ) - available
-                unknown |= _runtime_template_names(setup.body_template) - available
+                unknown = _runtime_template_names(setup.path) - available
+                unknown |= (
+                    _runtime_template_names(setup.headers_template)
+                    | _runtime_template_names(setup.body_template)
+                ) - (available | set(self.setup_secrets))
                 if unknown:
                     raise ValueError(
                         "runtime_http_setup_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
                 captures = set(setup.capture) | set(setup.capture_headers)
-                duplicate = (captures & available) | (
+                duplicate = (captures & (available | set(self.setup_secrets))) | (
                     set(setup.capture) & set(setup.capture_headers)
                 )
                 if duplicate:
@@ -505,10 +559,10 @@ class RuntimeInterface(BaseModel):
                         "runtime_http_request_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
-            unknown = (
-                _runtime_template_names(self.path)
-                | _runtime_template_names(self.headers_template)
-            ) - available
+            unknown = _runtime_template_names(self.path) - available
+            unknown |= _runtime_template_names(self.headers_template) - (
+                available | set(self.setup_secrets)
+            )
             if unknown:
                 raise ValueError(
                     "runtime_http_request_unknown_placeholders: "
@@ -654,7 +708,9 @@ class Runtime(BaseModel):
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
     execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
+    compose_overrides: list[str] = Field(default_factory=list, max_length=8)
     service: str = ""
+    additional_services: list[str] = Field(default_factory=list, max_length=32)
     required_environment: dict[str, list[str]] = Field(default_factory=dict)
     secret_files: dict[str, list[RuntimeSecretFile]] = Field(default_factory=dict)
     config_files: dict[str, RuntimeConfigFile] = Field(default_factory=dict)
@@ -683,6 +739,38 @@ class Runtime(BaseModel):
 
         validate_bindings(self.workspaces)
         validate_runtime_resource_paths(self.config_files, self.directories)
+        if self.compose_overrides:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError("runtime_compose_overrides_require_compose_selection")
+            if (
+                len(set([self.compose_file, *self.compose_overrides]))
+                != len(self.compose_overrides) + 1
+            ):
+                raise ValueError("runtime_compose_overrides_duplicate")
+            if any(
+                not path
+                or len(path) > 1024
+                or "\\" in path
+                or "$" in path
+                or any(ord(c) < 32 for c in path)
+                for path in self.compose_overrides
+            ):
+                raise ValueError("runtime_compose_overrides_path_invalid")
+        if self.additional_services:
+            if self.execution == "native" or not (self.compose_file and self.service):
+                raise ValueError(
+                    "runtime_additional_services_require_compose_selection"
+                )
+            if (
+                len(set(self.additional_services)) != len(self.additional_services)
+                or self.service in self.additional_services
+                or any(
+                    len(name) > 128
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+                    for name in self.additional_services
+                )
+            ):
+                raise ValueError("runtime_additional_services_invalid")
         if self.execution == "native" and (self.compose_file or self.service):
             raise ValueError("runtime_selection_conflict: native cannot select Compose")
         if self.execution == "native" and not self.command:
@@ -695,7 +783,7 @@ class Runtime(BaseModel):
             )
         if self.service and not self.compose_file:
             raise ValueError("runtime_selection_incomplete: service needs compose_file")
-        for path in (self.compose_file, self.dockerfile):
+        for path in (self.compose_file, self.dockerfile, *self.compose_overrides):
             if path and (path.startswith("/") or ".." in path.split("/")):
                 raise ValueError(
                     "runtime_selection_path_invalid: use a repository-relative path"

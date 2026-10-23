@@ -13,8 +13,9 @@ from fi.alk.harness.world.errors import WorldUsageError
 
 
 @pytest.mark.parametrize("included", [False, True])
+@pytest.mark.parametrize("additional", [False, True])
 def test_native_compiler_keeps_dependency_paths_and_requires_optin(
-    tmp_path, monkeypatch, included
+    tmp_path, monkeypatch, included, additional
 ):
     source = tmp_path / "source"
     (source / "deploy").mkdir(parents=True)
@@ -34,6 +35,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     image: mongo:7
   unrelated:
     image: nginx:alpine
+    profiles: [extra]
 """)
     if included:
         (source / "deploy" / "parts").mkdir()
@@ -66,6 +68,7 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
                     "compose_file": "deploy/compose.yaml",
                     "workdir": ".",
                     "service": "app",
+                    "additional_services": ["unrelated"] if additional else [],
                     "command": ["node", "server.js"],
                     "interface": {
                         "kind": "http",
@@ -96,7 +99,12 @@ def test_native_compiler_keeps_dependency_paths_and_requires_optin(
     assert manifest.seed is None
     assert manifest.runtime.kind.value == "compose"
     document = json.loads((output / "compose.json").read_text())
-    assert set(document["services"]) == {"app", "mongo"}
+    assert set(document["services"]) == (
+        {"app", "mongo", "unrelated"} if additional else {"app", "mongo"}
+    )
+    assert manifest.runtime.control_service == "app"
+    if additional:
+        assert "profiles" not in document["services"]["unrelated"]
     assert document["services"]["app"]["build"]["context"] == "./."
     assert document["services"]["app"]["build"]["args"] == {"LITERAL": "$$HOME"}
     assert document["services"]["app"]["volumes"] == ["./config:/app/config"]

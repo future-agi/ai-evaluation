@@ -1583,3 +1583,49 @@ def test_observability_export_purpose_is_accepted_and_never_claimable(
             secret_refs=TARGET_PROVIDER_REFS,
         )
     assert refused_without_ref.value.code == "secret_purpose_forbidden"
+
+@pytest.mark.parametrize(
+   "purpose", [None, "source_checkout", "simulator_provider", "target_provider"]
+)
+@pytest.mark.parametrize("compose", [False, True])
+def test_setup_secret_purpose_checked_on_sealed_bundle(tmp_path, purpose, compose):
+   contract = {
+       "runtime": {"interface": {"setup_secrets": {"provider_token": "BOOTSTRAP"}}}
+   }
+   extra = {"contract.json": json.dumps(contract).encode()}
+   override = None
+   if compose:
+       extra["compose.json"] = b'{"services":{"agent":{"image":"example/agent"}}}'
+
+       def override(body):
+           body.update(
+               runtime={
+                   "kind": "compose",
+                   "document": "compose.json",
+                   "control_service": "agent",
+                   "evidence_seam": "tool_trace",
+               },
+               processes=[],
+               capabilities={},
+           )
+           return body
+
+   manifest = _build_bundle(
+       tmp_path, extra_files=extra, body_overrides=override, include_seed=not compose
+   )
+   refs = dict(TARGET_PROVIDER_REFS)
+   if purpose is not None:
+       refs["BOOTSTRAP"] = purpose
+   if purpose == "target_provider":
+       preflight_bundle(
+           tmp_path, manifest, parallelism=1, secret_refs=refs, allow_compose=compose
+       )
+   else:
+       with pytest.raises(PreflightError, match="secret_purpose_forbidden"):
+           preflight_bundle(
+               tmp_path,
+               manifest,
+               parallelism=1,
+               secret_refs=refs,
+               allow_compose=compose,
+           )

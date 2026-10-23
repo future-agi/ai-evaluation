@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fi.simulate.agent.wrappers.http_events import CompletedToolEvents
+from fi.simulate.agent.wrappers.http_events import (
+    CompletedToolEvents,
+    CompletedToolRows,
+)
 
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
@@ -22,6 +25,7 @@ from .contract import (
     Runtime,
     RuntimeSecretFile,
     RuntimeConfigFile,
+    RuntimeHttpFailureRule,
     known_modalities,
     validate_contract,
 )
@@ -740,6 +744,17 @@ def contract_tools(
                             "type": "string",
                             "description": "Exact selected Compose service. Its dependency closure is retained.",
                         },
+                        "additional_services": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
                         "required_environment": {
                             "type": "object",
                             "additionalProperties": {
@@ -753,6 +768,13 @@ def contract_tools(
                             "type": "string",
                             "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
+                        },
+                        "compose_overrides": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "maxLength": 1024},
+                            "description": "Ordered repository-relative source Compose overlays applied after compose_file using the native Compose CLI. Requires explicit compose_file and service. Never synthesize overlays or change upstream files.",
                         },
                         "dockerfile": {
                             "type": "string",
@@ -842,10 +864,21 @@ def contract_tools(
                                     "to assistant text in the JSON response, including numeric "
                                     "list indexes such as '-1.content.parts.0.text'.",
                                 },
+                                "completed_tools": CompletedToolRows.model_json_schema(),
                                 "completed_tool_events": CompletedToolEvents.model_json_schema(),
+                                "setup_secrets": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 16,
+                                    "description": "Map private setup placeholder names to declared target-provider secret aliases. Values resolve privately into setup bodies/headers only. Never put credential values in this declaration.",
+                                },
                                 "failure_rule": {
                                     "type": "object",
-                                    "required": ["status_path", "failure_values"],
+                                    "required": ["status_path"],
+                                    "oneOf": [
+                                        {"required": ["failure_values"]},
+                                        {"required": ["success_values"]},
+                                    ],
                                     "description": "Optional source-declared application failure envelope. Never infer failures from an arbitrary error field.",
                                     "properties": {
                                         "status_path": {
@@ -865,6 +898,20 @@ def contract_tools(
                                                     "null",
                                                 ]
                                             },
+                                        },
+                                        "success_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                            "description": "Alternative to failure_values. Any status outside this explicit successful set fails, including missing status fields. Preserve JSON scalar types: [null] for JSON null, [0] for numeric zero, [false] for boolean false. An empty list is invalid.",
                                         },
                                         "message_path": {
                                             "type": "string",
@@ -914,6 +961,14 @@ def contract_tools(
                                                 },
                                                 "maxProperties": 16,
                                                 "description": "Map placeholder names to response header names. Use capture for JSON response fields; cookies are automatic.",
+                                            },
+                                            "failure_rule": {
+                                                **RuntimeHttpFailureRule.model_json_schema(),
+                                                "oneOf": [
+                                                    {"required": ["failure_values"]},
+                                                    {"required": ["success_values"]},
+                                                ],
+                                                "description": "Optional source-declared application status rule for this setup response. Checked after HTTP status and before captures or the next request. Use it when HTTP success can contain application failure.",
                                             },
                                             "accepted_statuses": {
                                                 "type": "array",

@@ -63,6 +63,9 @@ _SERVICE_KEYS = {
     "logging",
     "extra_hosts",
     "container_name",
+    "deploy",
+    "cap_drop",
+    "security_opt",
 }
 _NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
@@ -143,6 +146,15 @@ def _within(root: Path, value: str, *, exists: bool = True) -> Path:
     return candidate
 
 
+def _mount_destination(value) -> PurePosixPath:
+    if not isinstance(value, str):
+        raise ComposeRuntimeError("compose_mount_target_invalid")
+    target = PurePosixPath(value)
+    if not target.is_absolute() or ".." in target.parts:
+        raise ComposeRuntimeError("compose_mount_target_invalid")
+    return target
+
+
 def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> dict:
     """Close the host-control surface before Docker sees any repository configuration."""
     if not isinstance(document, dict) or set(document) - {
@@ -208,6 +220,33 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
             raise ComposeRuntimeError(
                 f"compose_service_fields_forbidden: {name}: {','.join(sorted(set(service) - _SERVICE_KEYS))}"
             )
+        dropped = service.get("cap_drop", [])
+        if not isinstance(dropped, list) or any(
+            not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", value)
+            for value in dropped
+        ):
+            raise ComposeRuntimeError("compose_cap_drop_invalid")
+        security = service.get("security_opt", [])
+        if not isinstance(security, list) or any(
+            value not in ("no-new-privileges:true", "no-new-privileges=true")
+            for value in security
+        ):
+            raise ComposeRuntimeError("compose_service_fields_forbidden: security_opt")
+        if "deploy" in service:
+            deploy = service["deploy"]
+            if not isinstance(deploy, dict) or set(deploy) != {"replicas"}:
+                raise ComposeRuntimeError(
+                    f"compose_deploy_fields_unsupported: {name}: only replicas is supported"
+                )
+            replicas = deploy["replicas"]
+            if not (
+                (type(replicas) is int and replicas == 1)
+                or (isinstance(replicas, str) and replicas == "1")
+            ):
+                raise ComposeRuntimeError(
+                    f"compose_replicas_unsupported: {name}: exactly one replica is supported"
+                )
+            deploy["replicas"] = 1
         scoped_alias = _local_service_options(service)
         if not service.get("image") and not service.get("build"):
             raise ComposeRuntimeError("compose_service_image_or_build_required")
@@ -296,6 +335,13 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                     "target": target,
                     "read_only": len(parts) == 3 and parts[2] == "ro",
                 }
+            # Native Compose expands plain named mounts with an empty options object.
+            if (
+                isinstance(mount, dict)
+                and mount.get("type") == "volume"
+                and mount.get("volume") == {}
+            ):
+                mount = {key: value for key, value in mount.items() if key != "volume"}
             if not isinstance(mount, dict) or set(mount) - {
                 "type",
                 "source",
@@ -303,9 +349,7 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
                 "read_only",
             }:
                 raise ComposeRuntimeError("compose_mount_fields_forbidden")
-            target = PurePosixPath(mount.get("target", ""))
-            if not target.is_absolute() or ".." in target.parts:
-                raise ComposeRuntimeError("compose_mount_target_invalid")
+            target = _mount_destination(mount.get("target", ""))
             if mount.get("type") == "bind":
                 origin = mount.get("source", "")
                 if Path(origin).is_absolute() or origin.startswith("~"):
@@ -334,6 +378,45 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
         if not isinstance(bindings, list) or len(bindings) > 32:
             raise ComposeRuntimeError("compose_secret_files_invalid")
         destinations = [PurePosixPath(item["target"]) for item in mounts]
+        if "tmpfs" in service:
+            entries = service["tmpfs"]
+            entries = [entries] if isinstance(entries, str) else entries
+            if not isinstance(entries, list) or len(entries) > 32:
+                raise ComposeRuntimeError("compose_tmpfs_invalid")
+            for entry in entries:
+                if not isinstance(entry, str) or len(entry) > 4096:
+                    raise ComposeRuntimeError("compose_tmpfs_invalid")
+                path, separator, options = entry.partition(":")
+                target = _mount_destination(path)
+                if (
+                    str(target) != path
+                    or str(target) == "/"
+                    or any(char in path for char in ("$", "\\"))
+                    or any(ord(char) < 32 or ord(char) == 127 for char in path)
+                ):
+                    raise ComposeRuntimeError("compose_tmpfs_path_invalid")
+                if separator:
+                    seen = set()
+                    for option in options.split(","):
+                        key, equals, value = option.partition("=")
+                        valid = (
+                            key == "mode"
+                            and re.fullmatch(r"[0-7]{3,4}", value)
+                            or key == "size"
+                            and re.fullmatch(r"[1-9][0-9]{0,9}[kKmMgG]?", value)
+                        )
+                        if not equals or key in seen or not valid:
+                            raise ComposeRuntimeError(
+                                "compose_tmpfs_options_unsupported"
+                            )
+                        seen.add(key)
+                if any(
+                    target.is_relative_to(old) or old.is_relative_to(target)
+                    for old in destinations
+                ):
+                    raise ComposeRuntimeError("compose_tmpfs_mount_overlap")
+                destinations.append(target)
+            service["tmpfs"] = entries
         environment_names = set(environment)
         for raw in bindings:
             binding = RuntimeSecretFile.model_validate(raw)
@@ -384,10 +467,10 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
         service["ports"] = []
         service["security_opt"] = ["no-new-privileges:true"]
         service["restart"] = "no"
-        if "tmpfs" in service:
-            raise ComposeRuntimeError("compose_tmpfs_options_unsupported")
     if declared - consumed:
-        raise ComposeRuntimeError("compose_resource_unused")
+        raise ComposeRuntimeError(
+            "compose_resource_unused: " + ", ".join(sorted(declared - consumed))
+        )
     for capability in capabilities.values():
         if capability.service not in services or capability.container_port is None:
             raise ComposeRuntimeError("compose_capability_unresolved")
@@ -403,7 +486,7 @@ def normalize_compose(document: dict, source: Path, *, capabilities: dict) -> di
     return result
 
 
-def _copy_source(source: Path, destination: Path) -> None:
+def validate_source_tree(source: Path) -> None:
     for path in source.rglob("*"):
         if path.is_symlink() and (
             path.readlink().is_absolute()
@@ -412,6 +495,10 @@ def _copy_source(source: Path, destination: Path) -> None:
             raise ComposeRuntimeError("compose_source_symlink_escape")
         if not path.is_symlink() and not path.is_file() and not path.is_dir():
             raise ComposeRuntimeError("compose_source_special_file")
+
+
+def _copy_source(source: Path, destination: Path) -> None:
+    validate_source_tree(source)
     shutil.copytree(source, destination, symlinks=True)
 
 
@@ -741,6 +828,7 @@ class CertifiedComposeRuntimeProvider:
         (directory / "configuration.env").write_text(configuration + "\n")
         (directory / "configuration.env").chmod(0o600)
         redactions = set(self._redactions)
+        public_log_values = set(public_values.values())
         env_index = 0
         for service in document["services"].values():
             build = service.get("build", {})
@@ -750,7 +838,9 @@ class CertifiedComposeRuntimeProvider:
             ):
                 raise ComposeRuntimeError("compose_build_configuration_forbidden")
             redactions.update(
-                str(value) for value in service["environment"].values() if value
+                str(value)
+                for value in service["environment"].values()
+                if value and str(value) not in public_log_values
             )
             for entry in service["env_file"]:
                 snapshot = directory / f"service-{env_index}.env"
@@ -778,7 +868,7 @@ class CertifiedComposeRuntimeProvider:
                 redactions.update(
                     str(value)
                     for value in service.get("environment", {}).values()
-                    if value
+                    if value and str(value) not in public_log_values
                 )
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ComposeRuntimeError("compose_configuration_invalid") from None

@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json as json_module
 import random
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 
 from .errors import WorldUsageError
+from .http_session import (
+    HttpSession,
+    capability_name,
+    export_sessions,
+    restore_sessions,
+    headers as validate_headers,
+)
 
 
 class ObservationWorld:
@@ -20,16 +28,86 @@ class ObservationWorld:
         self.calls = []
         self._endpoints = dict(endpoints or {})
         self._read_only = read_only
+        self._sessions = {}
+        self._http_events = []
+
+    @property
+    def capabilities(self):
+        """Declared HTTP capability names, without endpoints or session credentials."""
+        return tuple(sorted(self._endpoints))
 
     def read_only(self):
-        return ObservationWorld(
+        world = ObservationWorld(
             self.world_index, self.rng, self._endpoints, read_only=True
         )
+        world._sessions = restore_sessions(self._private_http_state(), self._endpoints)
+        world._http_events = self._http_events
+        return world
+
+    def set_headers(self, capability: str, headers):
+        if self._read_only:
+            raise WorldUsageError("native_http_read_only")
+        capability_name(capability)
+        if capability not in self._endpoints:
+            raise WorldUsageError("native_http_capability_unavailable")
+        values = validate_headers(headers)
+        session = self._sessions.setdefault(capability, HttpSession())
+        previous = session.headers
+        session.remember(_sensitive_header_values(previous))
+        session.headers = values
+        try:
+            self._private_http_state()
+        except WorldUsageError:
+            session.headers = previous
+            raise
+
+    def _private_http_state(self):
+        return export_sessions(self._sessions, self._endpoints)
+
+    def _restore_private_http_state(self, state):
+        sessions = restore_sessions(state, self._endpoints)
+        self._sessions.clear()
+        self._sessions.update(sessions)
+
+    def _redact_http_text(self, value):
+        from fi._diagnostics import sanitize_diagnostic
+
+        values = [
+            item
+            for session in self._sessions.values()
+            for item in session.headers.values()
+        ]
+        values.extend(
+            value for session in self._sessions.values() for value in session.redactions
+        )
+        values.extend(
+            cookie.value
+            for session in self._sessions.values()
+            for cookie in session.cookies
+            if cookie.value
+        )
+        return sanitize_diagnostic(
+            value, {str(index): item for index, item in enumerate(values)}
+        )
+
+    def _drain_http_events(self):
+        events = self._http_events[:]
+        self._http_events.clear()
+        return events
 
     def request(
-        self, capability: str, method: str, path: str, *, json=None, headers=None
+        self,
+        capability: str,
+        method: str,
+        path: str,
+        *,
+        json=None,
+        form=None,
+        headers=None,
+        capture_headers=(),
     ):
         """Use one declared HTTP capability; return bounded status/text/JSON without redirects."""
+        capability_name(capability)
         method = method.upper()
         if method not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
             raise WorldUsageError("native_http_method_unsupported")
@@ -54,39 +132,72 @@ class ObservationWorld:
             or any(ord(char) < 32 for char in path)
         ):
             raise WorldUsageError("native_http_relative_path_required")
-        headers = dict(headers or {})
-        forbidden = {
-            "host",
-            "content-length",
-            "transfer-encoding",
-            "connection",
-            "proxy-authorization",
+        session = self._sessions.setdefault(capability, HttpSession())
+        override = validate_headers(headers or {})
+        merged = {
+            key: value
+            for key, value in session.headers.items()
+            if key.lower() not in {name.lower() for name in override}
         }
+        headers = validate_headers({**merged, **override})
         if (
-            any(
-                not isinstance(key, str)
-                or not isinstance(value, str)
-                or key.lower() in forbidden
-                or "\r" in key + value
-                or "\n" in key + value
-                for key, value in headers.items()
-            )
-            or sum(len(key) + len(value) for key, value in headers.items()) > 16384
+            not isinstance(capture_headers, (list, tuple))
+            or len(capture_headers) > 16
+            or any(not isinstance(name, str) for name in capture_headers)
         ):
-            raise WorldUsageError("native_http_headers_invalid")
-        body = None if json is None else json_module.dumps(json).encode("utf-8")
+            raise WorldUsageError("native_http_capture_headers_invalid")
+        validate_headers({name: "" for name in capture_headers})
+        if json is not None and form is not None:
+            raise WorldUsageError("native_http_body_encoding_conflict")
+        if form is not None:
+            if not isinstance(form, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in form.items()
+            ):
+                raise WorldUsageError("native_http_form_invalid")
+            body = urlencode(form).encode("utf-8")
+            if not any(name.lower() == "content-type" for name in headers):
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+        else:
+            body = None if json is None else json_module.dumps(json).encode("utf-8")
+            if body is not None:
+                if not any(name.lower() == "content-type" for name in headers):
+                    headers["Content-Type"] = "application/json"
         if body is not None and len(body) > 65536:
             raise WorldUsageError("native_http_request_too_large")
-        if body is not None:
-            headers.setdefault("Content-Type", "application/json")
+        event = {
+            "capability": capability,
+            "method": method,
+            "route_hash": hashlib.sha256(relative.path.encode()).hexdigest(),
+        }
         url = urlunsplit((base.scheme, base.netloc, relative.path, relative.query, ""))
+        session.remember(_sensitive_header_values(headers))
+        session.remember(cookie.value for cookie in session.cookies if cookie.value)
+        self._private_http_state()
         try:
             with httpx.Client(
-                timeout=10, follow_redirects=False, trust_env=False
+                timeout=10,
+                follow_redirects=False,
+                trust_env=False,
+                cookies=session.cookies,
             ) as client:
                 with client.stream(
                     method, url, content=body, headers=headers
                 ) as response:
+                    event["status"] = response.status_code
+                    session.cookies = client.cookies.jar
+                    session.remember(
+                        cookie.value for cookie in session.cookies if cookie.value
+                    )
+                    self._private_http_state()
+                    selected_headers = {
+                        name: response.headers[name]
+                        for name in capture_headers
+                        if name in response.headers
+                    }
+                    validate_headers(selected_headers)
+                    session.remember(selected_headers.values())
+                    self._private_http_state()
                     chunks = []
                     size = 0
                     for chunk in response.iter_bytes():
@@ -103,11 +214,19 @@ class ObservationWorld:
                         "status": response.status_code,
                         "text": text,
                         "json": parsed,
+                        "headers": selected_headers,
                     }
         except (httpx.HTTPError, UnicodeError) as exc:
+            event["error"] = type(exc).__name__
             raise WorldUsageError(
                 f"native_http_request_failed: {type(exc).__name__}"
             ) from None
+        except WorldUsageError as exc:
+            event["error"] = type(exc).__name__
+            raise
+        finally:
+            if len(self._http_events) < 128:
+                self._http_events.append(event)
 
     def _execution_state(self):
         return {
@@ -125,6 +244,17 @@ class ObservationWorld:
 
     state = query = put = change = drop = call = _unsupported
     read_file = write_file = checkpoint = restore = handle_tool_call = _unsupported
+
+
+def _sensitive_header_values(headers):
+    return (
+        value
+        for name, value in headers.items()
+        if any(
+            marker in name.lower()
+            for marker in ("authorization", "cookie", "token", "key")
+        )
+    )
 
 
 def http_endpoints(runtime):

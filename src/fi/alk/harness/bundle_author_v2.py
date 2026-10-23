@@ -186,10 +186,9 @@ def _reuse_certified_bundle(
     # compare. Runtime validation records those checks as not applicable and explains why in the
     # certificate. Keep the tamper checks for every artifact that does exist, without comparing
     # model-authored placeholder state to an intentionally synthetic external-state fingerprint.
-    if certificate.checks.source_invariants is not CheckStatus.NOT_APPLICABLE:
+    if certificate.checks.schema_and_seed is not CheckStatus.NOT_APPLICABLE:
         expected["world"] = store.read_world_ir().fingerprint
         actual["world"] = certificate.authoring.world_ir_hash
-    if certificate.checks.schema_and_seed is not CheckStatus.NOT_APPLICABLE:
         expected["source_schema"] = store.read_source_model().fingerprint
         actual["source_schema"] = certificate.source.schema_hash
     mismatched = sorted(name for name in expected if expected[name] != actual[name])

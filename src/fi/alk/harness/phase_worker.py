@@ -34,10 +34,12 @@ async def main() -> None:
     state = payload["world"]
     rng = random.Random()
     rng.setstate(tuples(state["rng"]))
+    world = None
     try:
         if state.get("kind") == "native_observation":
             from .world.observation import ObservationWorld
             world = ObservationWorld(state["world_index"], rng, state.get("endpoints", {}))
+            world._restore_private_http_state(payload.get("private_http", {}))
         else:
             world = HostedWorld(
                 AttachedPostgresStore(state["dsn"]),
@@ -86,6 +88,19 @@ async def main() -> None:
             ),
             "rng": rng.getstate(),
         }
+    if state.get("kind") == "native_observation" and world is not None:
+        if isinstance(result.get("value"), str):
+            result["value"] = world._redact_http_text(result["value"])
+        try:
+            result["private_http"] = world._private_http_state()
+        except WorldUsageError:
+            result = {
+                "error": "WorldUsageError",
+                "world_error": "WorldUsageError",
+                "rng": rng.getstate(),
+                "private_http": {},
+            }
+        result["http_events"] = world._drain_http_events()
     fd = os.open(Path(sys.argv[1]), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
         json.dump(result, stream)

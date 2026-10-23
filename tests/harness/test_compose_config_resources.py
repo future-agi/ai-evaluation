@@ -40,6 +40,89 @@ def test_missing_resources_normalize_without_writing_original(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+def test_unused_resource_error_identifies_only_unconsumed_paths(tmp_path):
+    doc = document()
+    doc["x-alk-directories"].extend(["unused-b", "unused-a"])
+    with pytest.raises(ComposeRuntimeError) as failure:
+        normalize_compose(doc, tmp_path, capabilities={})
+    assert str(failure.value) == "compose_resource_unused: unused-a, unused-b"
+
+
+@pytest.mark.parametrize("secret", ["private-token", "1"])
+def test_logs_preserve_declared_public_values_but_not_private_collisions(
+    tmp_path, monkeypatch, secret
+):
+    import subprocess
+
+    source, bundle_dir, work = [tmp_path / name for name in ("src", "bundle", "work")]
+    for path in (source, bundle_dir, work):
+        path.mkdir()
+    doc = {
+        "x-alk-config-files": {
+            ".env": {"values": {"HOST": "mysql", "PORT": "3306", "FLAG": "1"}}
+        },
+        "services": {"app": {"image": "example/app", "env_file": [".env"]}},
+    }
+    (bundle_dir / "compose.json").write_text(json.dumps(doc))
+    bundle = SimpleNamespace(
+        runtime=SimpleNamespace(kind=RuntimeKindV2.COMPOSE, document="compose.json"),
+        seed=None,
+        digest="sha256:" + "a" * 64,
+        capabilities={},
+        readiness=[],
+    )
+    owner = CertifiedComposeRuntimeProvider(
+        socket_path=tmp_path / "socket",
+        configuration={"TOKEN": secret},
+        artifact_root=tmp_path / "logs",
+    )
+    monkeypatch.setattr(owner, "_check_socket", lambda: None)
+    real_command = owner._command
+
+    def command(directory, project, *args, **kwargs):
+        if args[0] == "config":
+            return json.dumps(
+                {
+                    "services": {
+                        "app": {
+                            "environment": {
+                                "HOST": "mysql",
+                                "PORT": "3306",
+                                "FLAG": "1",
+                                "UNKNOWN_TOKEN": "unknown-private-token",
+                                "TOKEN": secret,
+                            }
+                        }
+                    }
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(owner, "_command", command)
+
+    async def run():
+        worlds = await owner.provision(
+            bundle, source=source, bundle_dir=bundle_dir, work_directory=work
+        )
+
+        def popen(command, **kwargs):
+            kwargs["stdout"].write(
+                f"mysql:3306 flag=1 token={secret} unknown=unknown-private-token".encode()
+            )
+            return SimpleNamespace(wait=lambda **kwargs: 0, returncode=0)
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        real_command(work, worlds[0].runtime_id, "logs")
+        log = (tmp_path / "logs" / f"{worlds[0].runtime_id}.log").read_text()
+        assert "mysql:3306" in log
+        assert ("flag=[REDACTED]" if secret == "1" else "flag=1") in log
+        assert "token=[REDACTED] unknown=[REDACTED]" in log
+        assert "unknown-private-token" not in log
+        await owner.close(work_directory=work)
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "path", ["../.env", "/.env", "app.py", "Dockerfile", ".git/a.env"]
 )

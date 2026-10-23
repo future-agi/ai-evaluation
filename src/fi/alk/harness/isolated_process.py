@@ -99,6 +99,7 @@ async def run_json_worker(
     *,
     environ: Mapping[str, str],
     work_directory: Path,
+    suppress_output: bool = False,
 ) -> dict[str, Any]:
     """Run a fresh interpreter; cancellation waits for process-group termination."""
     if os.name != "posix":
@@ -128,8 +129,8 @@ async def run_json_worker(
                 module,
                 str(result_path),
                 stdin=asyncio.subprocess.PIPE,
-                stdout=None,
-                stderr=None,
+                stdout=asyncio.subprocess.DEVNULL if suppress_output else None,
+                stderr=asyncio.subprocess.DEVNULL if suppress_output else None,
                 env=child_env,
                 cwd=root,
                 start_new_session=True,

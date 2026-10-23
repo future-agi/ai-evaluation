@@ -1,6 +1,10 @@
 import pytest
 
 from fi.alk.harness.runtime_selection import RuntimeSelectionError, select_runtime
+from fi.alk.harness.certified_compose_runtime import (
+    ComposeRuntimeError,
+    normalize_compose,
+)
 
 
 def select(root, **kwargs):
@@ -164,3 +168,80 @@ def test_included_build_path_and_args_are_interpolated_once(tmp_path):
         "context": "./parts/$data",
         "args": {"LITERAL": "$HOME", "PUBLIC": "$untouched"},
     }
+
+
+@pytest.mark.parametrize("included", [False, True])
+@pytest.mark.parametrize("long_form", [False, True])
+def test_volume_nested_defaults_are_resolved_before_admission(
+    tmp_path, included, long_form, monkeypatch
+):
+    monkeypatch.setenv("DATA_ROOT", "/ambient-private")
+    base = tmp_path / "parts" if included else tmp_path
+    (base / "data").mkdir(parents=True)
+    if included:
+        (tmp_path / "compose.yaml").write_text(
+            "include: [parts/compose.yaml]\nservices: {}\n"
+        )
+    mount = (
+        '{type: bind, source: "${DATA_ROOT:-${PUBLIC_ROOT:-.}/data}", target: /data, read_only: true}'
+        if long_form
+        else '"${DATA_ROOT:-${PUBLIC_ROOT:-.}/data}:/data:ro"'
+    )
+    (base / "compose.yaml").write_text(
+        f"services:\n  app:\n    image: app:1\n    volumes: [{mount}]\n"
+    )
+    result = select(tmp_path)
+    normalized = normalize_compose(
+        {"services": result.services}, tmp_path, capabilities={}
+    )
+    assert normalized["services"]["app"]["volumes"] == [
+        {
+            "type": "bind",
+            "source": str(base / "data"),
+            "target": "/data",
+            "read_only": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "origin,error",
+    [
+        ("/etc", "compose_host_bind_forbidden"),
+        ("../outside", "compose_path_outside_source_or_missing"),
+    ],
+)
+def test_interpolated_volume_cannot_escape_source(tmp_path, origin, error):
+    (tmp_path / "compose.yaml").write_text(
+        'services:\n  app:\n    image: app:1\n    volumes: ["${DATA_ROOT}:/data"]\n'
+    )
+    result = select(tmp_path, public_environment={"DATA_ROOT": origin})
+    with pytest.raises(ComposeRuntimeError, match=error):
+        normalize_compose({"services": result.services}, tmp_path, capabilities={})
+
+
+def test_volume_missing_public_variable_ignores_ambient_environment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DATA_ROOT", "./private")
+    (tmp_path / "compose.yaml").write_text(
+        'services:\n  app:\n    image: app:1\n    volumes: ["${DATA_ROOT}:/data"]\n'
+    )
+    with pytest.raises(
+        RuntimeSelectionError,
+        match="compose_structural_configuration_missing: DATA_ROOT",
+    ):
+        select(tmp_path)
+
+
+@pytest.mark.parametrize("origin", ["./$$data", "${DATA_ROOT}"])
+def test_included_volume_path_is_interpolated_once(tmp_path, origin):
+    (tmp_path / "parts" / "$data").mkdir(parents=True)
+    (tmp_path / "compose.yaml").write_text(
+        "include: [parts/child.yaml]\nservices: {}\n"
+    )
+    (tmp_path / "parts" / "child.yaml").write_text(
+        f'services:\n  app:\n    image: app:1\n    volumes: ["{origin}:/data"]\n'
+    )
+    result = select(tmp_path, public_environment={"DATA_ROOT": "./$data"})
+    assert result.services["app"]["volumes"] == ["./parts/$data:/data"]

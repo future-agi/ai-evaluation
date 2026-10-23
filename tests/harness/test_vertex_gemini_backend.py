@@ -318,3 +318,101 @@ def test_the_gateway_route_never_carries_the_vertex_claude_flag(monkeypatch):
     straight = provider_env("gemini-3.7-flash")
     assert straight["CLAUDE_CODE_USE_VERTEX"] == "1"
     assert "ANTHROPIC_BASE_URL" not in straight
+
+
+def test_schema_preserves_mixed_scalar_union_in_installed_sdk():
+    from google.genai import types
+    from fi.alk.harness.backends.vertex_gemini import _gemini_schema
+
+    converted = _gemini_schema({
+        "type": "object",
+        "properties": {"values": {"type": "array", "items": {
+            "type": ["string", "integer", "number", "boolean", "null"]}}},
+    })
+    schema = types.Schema.model_validate(converted)
+    items = schema.properties["values"].items
+    assert items.type is None
+    assert items.nullable is True
+    assert [branch.type for branch in items.any_of] == [
+        types.Type.STRING, types.Type.INTEGER, types.Type.NUMBER, types.Type.BOOLEAN,
+    ]
+
+
+def test_schema_preserves_existing_nullable_string_shape():
+    from google.genai import types
+    from fi.alk.harness.backends.vertex_gemini import _gemini_schema
+
+    converted = _gemini_schema({"type": ["string", "null"], "description": "value"})
+    assert converted == {"type": "string", "nullable": True, "description": "value"}
+    assert types.Schema.model_validate(converted).type == types.Type.STRING
+
+
+def test_schema_preserves_nonnullable_scalar_union():
+    from google.genai import types
+    from fi.alk.harness.backends.vertex_gemini import _gemini_schema
+
+    converted = _gemini_schema({"type": ["integer", "boolean"]})
+    schema = types.Schema.model_validate(converted)
+    assert schema.nullable is None
+    assert [branch.type for branch in schema.any_of] == [types.Type.INTEGER, types.Type.BOOLEAN]
+
+
+def test_submit_contract_success_values_keep_numeric_and_null_sdk_types(tmp_path):
+    from google.genai import types
+    from fi.alk.harness.backends.vertex_gemini import _json_schema
+    from fi.alk.harness.tools import contract_tools
+
+    submit = next(
+        tool
+        for tool in contract_tools(tmp_path).tools
+        if tool.name == "submit_contract"
+    )
+    declaration = types.FunctionDeclaration(
+        name=submit.name, parameters=_json_schema(submit.input_schema)
+    )
+    interface = declaration.parameters.properties["runtime"].properties["interface"]
+    predicate = interface.properties["failure_rule"].properties["success_values"]
+    assert "[null] for JSON null" in predicate.description
+    assert "[0] for numeric zero" in predicate.description
+    assert "[false] for boolean false" in predicate.description
+    assert "empty list is invalid" in predicate.description
+    items = predicate.items
+    assert items.nullable is True
+    assert [branch.type for branch in items.any_of] == [
+        types.Type.STRING,
+        types.Type.NUMBER,
+        types.Type.BOOLEAN,
+    ]
+
+
+def test_submit_contract_map_shapes_survive_vertex_conversion(tmp_path):
+    from google.genai import types
+    from fi.alk.harness.backends.vertex_gemini import _json_schema
+    from fi.alk.harness.tools import contract_tools
+
+    submit = next(
+        tool
+        for tool in contract_tools(tmp_path).tools
+        if tool.name == "submit_contract"
+    )
+    declaration = types.FunctionDeclaration(
+        name=submit.name, parameters=_json_schema(submit.input_schema)
+    )
+    runtime = declaration.parameters.properties["runtime"]
+    config = types.Schema.model_validate(
+        runtime.properties["config_files"].additional_properties
+    )
+    assert config.type == types.Type.OBJECT
+    assert config.additional_properties is False
+    assert set(config.properties) == {"format", "values", "secret_aliases"}
+    for name in ("values", "secret_aliases"):
+        entry = types.Schema.model_validate(
+            config.properties[name].additional_properties
+        )
+        assert entry.type == types.Type.STRING
+    secrets = types.Schema.model_validate(
+        runtime.properties["secret_files"].additional_properties
+    )
+    assert secrets.type == types.Type.ARRAY
+    assert secrets.items.type == types.Type.OBJECT
+    assert {"alias", "destination"} <= set(secrets.items.required)

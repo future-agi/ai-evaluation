@@ -31,6 +31,7 @@ Decoupling, deliberate:
 from __future__ import annotations
 
 import asyncio
+import json
 import inspect
 import logging
 import os
@@ -695,6 +696,8 @@ async def _invoke(
                 "entry": fn._alk_entry,
                 "world": world._execution_state(),
             }
+            if isinstance(world, ObservationWorld):
+                payload["private_http"] = world._private_http_state()
             if len(args) > 1:
                 payload["calls"] = [asdict(call) for call in args[1]]
             if len(args) > 2:
@@ -704,8 +707,22 @@ async def _invoke(
                 payload,
                 environ=_allowlisted_ambient_env(dict(os.environ)),
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
+                # Authored phases can print private login responses before redaction.
+                suppress_output=True,
             )
             world.rng.setstate(tuples(result["rng"]))
+            if isinstance(world, ObservationWorld):
+                from .world.http_session import validate_events
+
+                world._restore_private_http_state(result.get("private_http", {}))
+                for event in validate_events(
+                    result.get("http_events", []), world._endpoints
+                ):
+                    logger.info(
+                        "native_http phase=%s evidence=%s",
+                        phase,
+                        json.dumps(event, sort_keys=True),
+                    )
             if "error" in result:
                 error_types = {
                     error.__name__: error

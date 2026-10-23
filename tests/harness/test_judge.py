@@ -37,7 +37,11 @@ class _RejectingWorld(_World):
 
 
 def _call(name: str, args: dict, index: int = 0) -> dict:
-    return {"id": f"c{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+    return {
+        "id": f"c{index}",
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(args)},
+    }
 
 
 def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
@@ -49,8 +53,15 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
             raise RuntimeError("provider exploded")
         calls = []
         if decision.get("look"):
-            calls += [_call("inspect_world", {"table": "contacts"}, 1), _call("query_world", {"sql": "select 1"}, 2)]
-        return {"role": "assistant", "tool_calls": calls + [_call("decide", {"evidence": "the records", **decision})]}
+            calls += [
+                _call("inspect_world", {"table": "contacts"}, 1),
+                _call("query_world", {"sql": "select 1"}, 2),
+            ]
+        return {
+            "role": "assistant",
+            "tool_calls": calls
+            + [_call("decide", {"evidence": "the records", **decision})],
+        }
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     return asyncio.run(judge_module.judge_sub_goal(_Goal(), world, [])), world
@@ -59,7 +70,8 @@ def _drive(monkeypatch, decision: dict, *, world=None, raises: bool = False):
 def test_a_judged_sub_goal_can_fail(monkeypatch):
     """The whole point: before this, every judged sub-goal passed before anything looked."""
     (held, why), _ = _drive(
-        monkeypatch, {"passed": False, "explanation": "contacts row 1 still has opted_out false"}
+        monkeypatch,
+        {"passed": False, "explanation": "contacts row 1 still has opted_out false"},
     )
     assert held is False
     assert "opted_out" in why
@@ -67,7 +79,8 @@ def test_a_judged_sub_goal_can_fail(monkeypatch):
 
 def test_a_judged_sub_goal_can_pass_with_its_explanation(monkeypatch):
     (held, why), _ = _drive(
-        monkeypatch, {"passed": True, "explanation": "contacts row 1 shows opted_out true"}
+        monkeypatch,
+        {"passed": True, "explanation": "contacts row 1 shows opted_out true"},
     )
     assert held is True
     assert why == "contacts row 1 shows opted_out true"
@@ -93,7 +106,9 @@ def test_bad_model_sql_is_returned_as_recoverable_tool_feedback(monkeypatch):
     assert world.queried == ["select 1"]
 
 
-def test_a_judge_that_will_not_commit_is_unjudged_and_says_nothing_internal(monkeypatch):
+def test_a_judge_that_will_not_commit_is_unjudged_and_says_nothing_internal(
+    monkeypatch,
+):
     (held, why), _ = _drive(
         monkeypatch, {"undecided": True, "explanation": "no table records intent"}
     )
@@ -102,7 +117,9 @@ def test_a_judge_that_will_not_commit_is_unjudged_and_says_nothing_internal(monk
 
 
 def test_a_verdict_given_as_text_is_not_read_as_a_pass(monkeypatch):
-    (held, _), _ = _drive(monkeypatch, {"passed": "false", "explanation": "the agent refused"})
+    (held, _), _ = _drive(
+        monkeypatch, {"passed": "false", "explanation": "the agent refused"}
+    )
     assert held is None
 
 
@@ -114,7 +131,9 @@ def test_a_verdict_with_no_explanation_is_refused(monkeypatch):
 
 
 def test_a_judge_that_raises_never_fails_the_agent(monkeypatch):
-    (held, why), _ = _drive(monkeypatch, {"passed": True, "explanation": "x"}, raises=True)
+    (held, why), _ = _drive(
+        monkeypatch, {"passed": True, "explanation": "x"}, raises=True
+    )
     assert held is None
     assert why == ""
 
@@ -181,7 +200,10 @@ def test_the_judge_turn_goes_to_the_gateways_chat_completions(monkeypatch):
             return None
 
         def json(self):
-            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}}
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {},
+            }
 
     def _post(url, *, headers, json, timeout):
         sent.update(url=url, headers=headers, body=json)
@@ -189,16 +211,23 @@ def test_the_judge_turn_goes_to_the_gateways_chat_completions(monkeypatch):
 
     monkeypatch.setattr(judge_module.requests, "post", _post)
     decide = judge_module.tool("decide", "Commit.", {"passed": bool})(None)
-    reply = judge_module._complete([{"role": "user", "content": "judge"}], [decide], True)
+    reply = judge_module._complete(
+        [{"role": "user", "content": "judge"}], [decide], True
+    )
     assert reply == {"role": "assistant", "content": "ok"}
     assert sent["url"] == "https://gateway.test/v1/chat/completions"
     assert sent["headers"] == {"Authorization": "Bearer key"}
     assert sent["body"]["model"] == "gemini-3.7-flash"
     assert sent["body"]["tools"][0]["function"]["name"] == "decide"
-    assert sent["body"]["tool_choice"] == {"type": "function", "function": {"name": "decide"}}
+    assert sent["body"]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "decide"},
+    }
 
 
-def test_with_no_gateway_the_judge_still_decides_through_the_harness_session(monkeypatch):
+def test_with_no_gateway_the_judge_still_decides_through_the_harness_session(
+    monkeypatch,
+):
     monkeypatch.setattr(judge_module, "provider_env", lambda _model: {})
 
     class _Stage:
@@ -212,14 +241,20 @@ def test_with_no_gateway_the_judge_still_decides_through_the_harness_session(mon
             return None
 
         async def say(self, _prompt):
-            await self.tools["decide"].handler({"verdict": "fail", "explanation": "not recorded", "evidence": "rows"})
+            await self.tools["decide"].handler(
+                {"verdict": "fail", "explanation": "not recorded", "evidence": "rows"}
+            )
 
     monkeypatch.setattr(judge_module, "Stage", _Stage)
-    held, why = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording="call.wav"))
+    held, why = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], recording="call.wav")
+    )
     assert held is False and why == "not recorded"
 
 
-def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, tmp_path):
+def test_listen_puts_the_recording_in_the_judges_own_conversation(
+    monkeypatch, tmp_path
+):
     recording = tmp_path / "call.wav"
     recording.write_bytes(b"RIFF-audio")
     offered: list[list[str]] = []
@@ -231,12 +266,29 @@ def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, t
         if "listen" in offered[-1] and not audio:
             return {"role": "assistant", "tool_calls": [_call("listen", {})]}
         heard.extend(audio)
-        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": False, "explanation": "it cancelled without a yes"})]}
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": False,
+                        "explanation": "it cancelled without a yes",
+                    },
+                )
+            ],
+        }
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (False, "it cancelled without a yes")
+    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (
+        False,
+        "it cancelled without a yes",
+    )
     assert "listen" not in offered[-1]
-    verdict = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording)))
+    verdict = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))
+    )
     assert verdict == (False, "it cancelled without a yes")
     assert "listen" in offered[-1]
     assert heard[0]["content"][1] == {
@@ -245,17 +297,38 @@ def test_listen_puts_the_recording_in_the_judges_own_conversation(monkeypatch, t
     }
 
 
-def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transcript(monkeypatch, tmp_path):
+def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transcript(
+    monkeypatch, tmp_path
+):
     recording = tmp_path / "call.wav"
     recording.write_bytes(b"RIFF-audio")
     said: list[str] = []
     turns = iter(
         [
-            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"})],
+            [
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": True,
+                        "explanation": "it confirmed the order",
+                    },
+                )
+            ],
             [_call("listen", {})],
             RuntimeError("413 request too large"),
             [_call("read_transcript", {})],
-            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
+            [
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": True,
+                        "explanation": "it confirmed the order",
+                    },
+                    1,
+                )
+            ],
         ]
     )
 
@@ -273,31 +346,50 @@ def test_a_judge_must_listen_first_and_an_unplayable_recording_leaves_the_transc
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "your order is confirmed"}]
     verdict = asyncio.run(
-        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
+        judge_module.judge_sub_goal(
+            _Goal(), _World(), [], messages=messages, recording=str(recording)
+        )
     )
     assert verdict == (True, "it confirmed the order")
     assert said[0] == "listen to the call recording before deciding"
     assert audio == [False, False, True, False, False]
 
 
-def test_evidence_asked_for_in_the_same_turn_as_a_verdict_is_read_before_the_verdict_counts(monkeypatch, tmp_path):
+def test_evidence_asked_for_in_the_same_turn_as_a_verdict_is_read_before_the_verdict_counts(
+    monkeypatch, tmp_path
+):
     """A verdict batched with the evidence it rests on was made before that evidence reached the model."""
     recording = tmp_path / "call.wav"
     recording.write_bytes(b"RIFF-audio")
     seen: list[tuple[bool, bool]] = []
-    decide = _call("decide", {"verdict": "pass", "evidence": "what was said", "explanation": "consent obtained"}, 3)
-    turns = iter([[_call("listen", {}, 1), _call("read_transcript", {}, 2), decide], [decide]])
+    decide = _call(
+        "decide",
+        {
+            "verdict": "pass",
+            "evidence": "what was said",
+            "explanation": "consent obtained",
+        },
+        3,
+    )
+    turns = iter(
+        [[_call("listen", {}, 1), _call("read_transcript", {}, 2), decide], [decide]]
+    )
 
     def _complete(conversation, tools, forced):
         heard = any(isinstance(m.get("content"), list) for m in conversation)
-        read = any(m.get("role") == "tool" and "NO consent" in str(m.get("content")) for m in conversation)
+        read = any(
+            m.get("role") == "tool" and "NO consent" in str(m.get("content"))
+            for m in conversation
+        )
         seen.append((heard, read))
         return {"role": "assistant", "tool_calls": next(turns)}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "user", "content": "NO consent"}]
     verdict = asyncio.run(
-        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages, recording=str(recording))
+        judge_module.judge_sub_goal(
+            _Goal(), _World(), [], messages=messages, recording=str(recording)
+        )
     )
     assert verdict == (True, "consent obtained")
     assert seen == [(False, False), (True, True)]
@@ -311,11 +403,25 @@ def test_the_last_request_plays_the_recording_it_counts_as_heard(monkeypatch, tm
     def _complete(conversation, tools, forced):
         if [t.name for t in tools] == ["decide"]:
             finals.append(conversation)
-            return {"role": "assistant", "tool_calls": [_call("decide", {"verdict": "fail", "evidence": "the recording", "explanation": "it kept the number"})]}
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    _call(
+                        "decide",
+                        {
+                            "verdict": "fail",
+                            "evidence": "the recording",
+                            "explanation": "it kept the number",
+                        },
+                    )
+                ],
+            }
         return {"role": "assistant", "tool_calls": [_call("inspect_world", {})]}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    held = asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording)))
+    held = asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))
+    )
     assert held == (False, "it kept the number")
     assert any(isinstance(m.get("content"), list) for m in finals[0])
 
@@ -327,7 +433,19 @@ def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypa
         prompts.append(conversation[-1]["content"])
         if len(prompts) == 1:
             return {"role": "assistant", "content": "I think it passed."}
-        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "the agent confirmed the booking"})]}
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": True,
+                        "explanation": "the agent confirmed the booking",
+                    },
+                )
+            ],
+        }
 
     class _Scenario:
         instruction = "the caller books a ride to the airport"
@@ -335,9 +453,14 @@ def test_a_judge_that_gives_no_verdict_is_asked_again_with_the_evidence(monkeypa
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     said = [{"role": "assistant", "content": "shall I book it?"}]
-    calls = [type("C", (), {"name": f"step_{i}", "arguments": {}, "result": None})() for i in range(30)]
+    calls = [
+        type("C", (), {"name": f"step_{i}", "arguments": {}, "result": None})()
+        for i in range(30)
+    ]
     held, why = asyncio.run(
-        judge_module.judge_sub_goal(_Goal(), _World(), calls, messages=said, scenario=_Scenario())
+        judge_module.judge_sub_goal(
+            _Goal(), _World(), calls, messages=said, scenario=_Scenario()
+        )
     )
     assert (held, why) == (True, "the agent confirmed the booking")
     assert "books a ride to the airport" in prompts[0]
@@ -351,36 +474,78 @@ def test_a_judge_that_never_decides_is_forced_to_then_left_undecided(monkeypatch
 
     def _complete(conversation, tools, forced):
         forced_turns.append(forced)
-        return {"role": "assistant", "tool_calls": [_call("inspect_world", {}, len(forced_turns))]}
+        return {
+            "role": "assistant",
+            "tool_calls": [_call("inspect_world", {}, len(forced_turns))],
+        }
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [])) == (None, "")
     assert forced_turns == [False] * (judge_module._STEPS - 1) + [True, True]
 
 
-def test_a_judge_out_of_steps_gets_one_last_request_with_everything_it_found(monkeypatch):
+def test_a_judge_out_of_steps_gets_one_last_request_with_everything_it_found(
+    monkeypatch,
+):
     finals: list[tuple[list[str], str]] = []
 
     def _complete(conversation, tools, forced):
-        if len(conversation) == 2 and "What was found while looking" in conversation[1]["content"]:
+        if (
+            len(conversation) == 2
+            and "What was found while looking" in conversation[1]["content"]
+        ):
             finals.append(([t.name for t in tools], conversation[1]["content"]))
-            return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "the contacts table", "passed": False, "explanation": "it kept the number"})]}
-        return {"role": "assistant", "tool_calls": [_call("inspect_world", {"table": "contacts"})]}
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    _call(
+                        "decide",
+                        {
+                            "evidence": "the contacts table",
+                            "passed": False,
+                            "explanation": "it kept the number",
+                        },
+                    )
+                ],
+            }
+        return {
+            "role": "assistant",
+            "tool_calls": [_call("inspect_world", {"table": "contacts"})],
+        }
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "I have removed your number"}]
-    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages)) == (False, "it kept the number")
+    assert asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], messages=messages)
+    ) == (False, "it kept the number")
     tools, final = finals[0]
     assert tools == ["decide"]
-    assert "I have removed your number" in final and 'inspect_world({"table": "contacts"})' in final
+    assert (
+        "I have removed your number" in final
+        and 'inspect_world({"table": "contacts"})' in final
+    )
 
 
-def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(monkeypatch):
+def test_with_no_actions_the_judge_is_told_the_conversation_is_the_evidence(
+    monkeypatch,
+):
     prompts: list[str] = []
 
     def _complete(conversation, tools, forced):
         prompts.append(conversation[1]["content"])
-        return {"role": "assistant", "tool_calls": [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it read the fee first"})]}
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": True,
+                        "explanation": "it read the fee first",
+                    },
+                )
+            ],
+        }
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(rows=[]), []))
@@ -410,7 +575,9 @@ def test_an_answer_with_nothing_to_check_it_against_is_never_called_accurate():
 def test_the_judge_is_shown_the_customer_side_and_the_agent_instructions():
     from types import SimpleNamespace
 
-    scenario = SimpleNamespace(presented={"situation": "Asks for a refund.", "outcome": "Refund policy."})
+    scenario = SimpleNamespace(
+        presented={"situation": "Asks for a refund.", "outcome": "Refund policy."}
+    )
     side = judge_module._customer_side(scenario)
     assert "for context only" in side and "Asks for a refund." in side
     assert judge_module._customer_side(None) == ""
@@ -419,21 +586,33 @@ def test_the_judge_is_shown_the_customer_side_and_the_agent_instructions():
 def test_a_one_sentence_sub_goal_is_read_as_what_the_agent_must_do() -> None:
     from fi.alk.harness.catalogue import criteria_text
 
-    labelled = "Applies when: x.\nPass when: y.\nFail when: z.\nIf it does not arise: Pass."
+    labelled = (
+        "Applies when: x.\nPass when: y.\nFail when: z.\nIf it does not arise: Pass."
+    )
     assert criteria_text(labelled) == labelled
     read = criteria_text("Confirms the address back")
-    assert read.startswith("Pass when: Confirms the address back") and "If it does not arise:" in read
+    assert (
+        read.startswith("Pass when: Confirms the address back")
+        and "If it does not arise:" in read
+    )
 
 
-def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_an_accent() -> None:
+def test_a_caller_outside_the_accented_language_meets_an_accented_level_without_an_accent() -> (
+    None
+):
     from fi.alk.harness.scenario import Persona, Scenario, _condition_the_call_lacks
 
     persona = Persona(name="A B", languages=["French"], accent="British")
     assert persona.accent == "Neutral"
-    scenario = Scenario(name="s", use_case="u", persona=persona, coverage={"interface": "non_native"})
+    scenario = Scenario(
+        name="s", use_case="u", persona=persona, coverage={"interface": "non_native"}
+    )
     assert _condition_the_call_lacks(scenario) == ""
     english = Scenario(
-        name="t", use_case="u", persona=Persona(name="C D", languages=["English"]), coverage={"interface": "accented"}
+        name="t",
+        use_case="u",
+        persona=Persona(name="C D", languages=["English"]),
+        coverage={"interface": "accented"},
     )
     assert "accent not set" in _condition_the_call_lacks(english)
 
@@ -505,18 +684,25 @@ def test_the_transcriber_sends_multi_only_where_the_model_covers_it(
     assert transcriber_for(language) == expected
 
 
-def test_the_simulator_definition_reads_the_agents_languages_from_its_settings() -> None:
+def test_the_simulator_definition_reads_the_agents_languages_from_its_settings() -> (
+    None
+):
     from fi.alk.harness.simulator_voice import simulator_definition
 
     def heard(settings: dict[str, str]) -> str:
-        definition = simulator_definition(lambda key: settings.get(key, ""), {"languages": ["Arabic"]})
+        definition = simulator_definition(
+            lambda key: settings.get(key, ""), {"languages": ["Arabic"]}
+        )
         stt = definition.stt
         return stt["language"] if isinstance(stt, dict) else stt.language
 
     assert heard({}) == "ar"
     assert heard({"ALK_AGENT_LANGUAGES": "English"}) == "multi"
     assert heard({"ALK_AGENT_LANGUAGES": "Englsh"}) == "ar"
-    assert heard({"ALK_AGENT_LANGUAGES": "English", "SIMULATOR_STT_LANGUAGE": "ar"}) == "ar"
+    assert (
+        heard({"ALK_AGENT_LANGUAGES": "English", "SIMULATOR_STT_LANGUAGE": "ar"})
+        == "ar"
+    )
 
 
 def test_the_agents_declared_languages_reach_the_call_environment(tmp_path) -> None:
@@ -525,7 +711,9 @@ def test_the_agents_declared_languages_reach_the_call_environment(tmp_path) -> N
     from fi.alk.harness import call_runner
     from fi.alk.harness.hosted_entrypoint import _bundle_contract_list
 
-    (tmp_path / "contract.json").write_text(json.dumps({"agent_languages": ["English", " ", "Arabic"]}))
+    (tmp_path / "contract.json").write_text(
+        json.dumps({"agent_languages": ["English", " ", "Arabic"]})
+    )
     assert _bundle_contract_list(tmp_path, "agent_languages") == ["English", "Arabic"]
     assert _bundle_contract_list(tmp_path, "missing") == []
     (tmp_path / "contract.json").write_text(json.dumps({"agent_languages": "English"}))
@@ -538,26 +726,137 @@ def test_the_agents_declared_languages_reach_the_call_environment(tmp_path) -> N
     assert call_runner.AGENT_LANGUAGES_ALIAS == "ALK_AGENT_LANGUAGES"
 
 
-def test_the_contract_records_the_agents_languages_and_older_contracts_still_load() -> None:
+def test_the_contract_records_the_agents_languages_and_older_contracts_still_load() -> (
+    None
+):
     from fi.alk.harness.contract import AgentContract
 
     base = {"agent": "a", "summary": "s"}
     assert AgentContract.model_validate(base).agent_languages == []
-    assert AgentContract.model_validate({**base, "agent_languages": "English"}).agent_languages == ["English"]
-    assert AgentContract.model_validate({**base, "agent_languages": ["English", "Hindi"]}).agent_languages == [
+    assert AgentContract.model_validate(
+        {**base, "agent_languages": "English"}
+    ).agent_languages == ["English"]
+    assert AgentContract.model_validate(
+        {**base, "agent_languages": ["English", "Hindi"]}
+    ).agent_languages == [
         "English",
         "Hindi",
     ]
 
 
-def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_transcript(monkeypatch, tmp_path):
+def test_native_judge_inspects_public_capabilities_and_actual_evidence(monkeypatch):
+    import json
+    import random
+    from types import SimpleNamespace
+    from fi.alk.harness.world.observation import ObservationWorld
+
+    world = ObservationWorld(
+        0,
+        random.Random(1),
+        {
+            "chat": "http://private-internal-host:8080",
+            "history": "http://another-private-host:9090",
+        },
+    )
+    world.set_headers("chat", {"Authorization": "Bearer private-session-credential"})
+    inspected = []
+
+    def complete(conversation, tools, forced):
+        assert {tool.name for tool in tools} == {
+            "inspect_world",
+            "read_transcript",
+            "decide",
+        }
+        if not any(message.get("role") == "tool" for message in conversation):
+            assert "lookup_record" in conversation[1]["content"]
+            assert "not_found" in conversation[1]["content"]
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    _call("inspect_world", {}, 1),
+                    _call("read_transcript", {}, 2),
+                ],
+            }
+        results = [
+            message["content"]
+            for message in conversation
+            if message.get("role") == "tool"
+        ]
+        inspected.append(json.loads(results[0]))
+        assert "private-internal-host" not in results[0]
+        assert "another-private-host" not in results[0]
+        assert "private-session-credential" not in results[0]
+        assert "Authorization" not in results[0]
+        assert "Capability names are not state evidence" in results[0]
+        assert "Agent: The requested record was not found." in results[1]
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                _call(
+                    "decide",
+                    {
+                        "passed": False,
+                        "evidence": "the action result and transcript",
+                        "explanation": "The requested record was not found.",
+                    },
+                    3,
+                )
+            ],
+        }
+
+    monkeypatch.setattr(judge_module, "_complete", complete)
+    result = asyncio.run(
+        judge_module.judge_sub_goal(
+            _Goal(),
+            world.read_only(),
+            [
+                SimpleNamespace(
+                    name="lookup_record", result={"status": "not_found"}, ok=True
+                )
+            ],
+            messages=[
+                {"role": "assistant", "content": "The requested record was not found."}
+            ],
+        )
+    )
+    assert result == (False, "The requested record was not found.")
+    assert len(inspected) == 1
+    assert inspected[0]["kind"] == "native_observation"
+    assert inspected[0]["capabilities"] == ["chat", "history"]
+    assert "No local database or SQL query" in inspected[0]["state_access"]
+
+
+def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_transcript(
+    monkeypatch, tmp_path
+):
     said: list[str] = []
     turns = iter(
         [
             [_call("listen", {})],
-            [_call("inspect_world", {}), _call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 1)],
+            [
+                _call("inspect_world", {}),
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": True,
+                        "explanation": "it confirmed the order",
+                    },
+                    1,
+                ),
+            ],
             [_call("read_transcript", {}, 2)],
-            [_call("decide", {"evidence": "what was said", "passed": True, "explanation": "it confirmed the order"}, 3)],
+            [
+                _call(
+                    "decide",
+                    {
+                        "evidence": "what was said",
+                        "passed": True,
+                        "explanation": "it confirmed the order",
+                    },
+                    3,
+                )
+            ],
         ]
     )
 
@@ -566,19 +865,26 @@ def test_an_unreadable_recording_and_a_failing_tool_leave_the_judge_on_the_trans
             raise RuntimeError("world is gone")
 
     def _complete(conversation, tools, forced):
-        said.extend(str(m["content"]) for m in conversation[2:] if m["role"] in ("tool", "user"))
+        said.extend(
+            str(m["content"]) for m in conversation[2:] if m["role"] in ("tool", "user")
+        )
         return {"role": "assistant", "tool_calls": next(turns)}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
     messages = [{"role": "assistant", "content": "your order is confirmed"}]
     verdict = asyncio.run(
-        judge_module.judge_sub_goal(_Goal(), _Broken(), [], messages=messages, recording=str(tmp_path / "gone.wav"))
+        judge_module.judge_sub_goal(
+            _Goal(),
+            _Broken(),
+            [],
+            messages=messages,
+            recording=str(tmp_path / "gone.wav"),
+        )
     )
     assert verdict == (True, "it confirmed the order")
     assert judge_module._UNPLAYABLE in said
     assert any(line.startswith("inspect_world failed: RuntimeError") for line in said)
     assert "read the transcript and check it before deciding" in said
-
 
 
 def test_the_judge_is_shown_the_reference_solution_as_one_correct_way():
@@ -588,13 +894,20 @@ def test_the_judge_is_shown_the_reference_solution_as_one_correct_way():
     scenario = SimpleNamespace(
         instruction="Book a ride home.",
         tests="",
-        solution=[{"tool": "book_ride", "arguments": {"pickup": "12 Elm St", "dropoff": "Airport"}}],
+        solution=[
+            {
+                "tool": "book_ride",
+                "arguments": {"pickup": "12 Elm St", "dropoff": "Airport"},
+            }
+        ],
     )
     said = judge_module.describe_call("Book rides.", scenario, [], None)
     assert 'book_ride({"pickup": "12 Elm St", "dropoff": "Airport"})' in said
     assert "not a script" in said
     assert "corrected before it took effect is still right" in said
-    assert "One correct way" not in judge_module.describe_call("Book rides.", SimpleNamespace(), [], None)
+    assert "One correct way" not in judge_module.describe_call(
+        "Book rides.", SimpleNamespace(), [], None
+    )
 
 
 def test_a_verdict_reads_as_held_with_not_applicable_said_and_inconclusive_undecided():
@@ -602,21 +915,46 @@ def test_a_verdict_reads_as_held_with_not_applicable_said_and_inconclusive_undec
 
     assert verdict_of({"verdict": "pass", "explanation": "ok"}) == (True, "ok")
     assert verdict_of({"verdict": "fail", "explanation": "no"}) == (False, "no")
-    assert verdict_of({"verdict": "not_applicable", "explanation": "never came up"}) == (True, "Not applicable: never came up")
-    assert verdict_of({"verdict": "inconclusive", "explanation": "inaudible"}) == (None, "Inconclusive: inaudible")
+    assert verdict_of(
+        {"verdict": "not_applicable", "explanation": "never came up"}
+    ) == (True, "Not applicable: never came up")
+    assert verdict_of({"verdict": "inconclusive", "explanation": "inaudible"}) == (
+        None,
+        "Inconclusive: inaudible",
+    )
     assert verdict_of({"passed": False, "explanation": "legacy"}) == (False, "legacy")
 
 
-def test_with_no_transcript_the_judge_is_pointed_at_the_recording(monkeypatch, tmp_path):
+def test_with_no_transcript_the_judge_is_pointed_at_the_recording(
+    monkeypatch, tmp_path
+):
     recording = tmp_path / "call.wav"
     recording.write_bytes(b"RIFF-audio")
     said: list[str] = []
-    turns = iter([[_call("read_transcript", {})], [_call("listen", {}, 1)], [_call("decide", {"verdict": "pass", "evidence": "the recording", "explanation": "it confirmed"}, 2)]])
+    turns = iter(
+        [
+            [_call("read_transcript", {})],
+            [_call("listen", {}, 1)],
+            [
+                _call(
+                    "decide",
+                    {
+                        "verdict": "pass",
+                        "evidence": "the recording",
+                        "explanation": "it confirmed",
+                    },
+                    2,
+                )
+            ],
+        ]
+    )
 
     def _complete(conversation, tools, forced):
         said.extend(str(m["content"]) for m in conversation if m["role"] == "tool")
         return {"role": "assistant", "tool_calls": next(turns)}
 
     monkeypatch.setattr(judge_module, "_complete", _complete)
-    assert asyncio.run(judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))) == (True, "it confirmed")
+    assert asyncio.run(
+        judge_module.judge_sub_goal(_Goal(), _World(), [], recording=str(recording))
+    ) == (True, "it confirmed")
     assert "Decide from the recording, the actions and the records." in said[0]

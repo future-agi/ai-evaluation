@@ -20,7 +20,7 @@ from typing import Any
 
 from packaging.utils import canonicalize_name
 
-from .public_material import is_public_pem
+from .public_material import SECRET_CONTENT_PATTERNS as _SECRET_CONTENT, is_public_pem
 
 GENERATED_DOCKERFILE = ".alk-generated.Dockerfile"
 GENERATED_PLAN = "generated-runtime.json"
@@ -37,10 +37,7 @@ _IGNORED_DIRECTORIES = {
     ".tox",
     ".venv",
     "__pycache__",
-    "artifacts",
-    "build",
     "coverage",
-    "dist",
     "node_modules",
     "target",
     "vendor",
@@ -55,12 +52,7 @@ _SECRET_NAMES = {
     "id_ed25519",
 }
 _SECRET_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
+
 _PYTHON_ENTRYPOINTS = ("agent.py", "main.py", "app.py", "bot.py", "server.py")
 _NODE_ENTRYPOINTS = ("agent.js", "index.js", "main.js", "server.js")
 
@@ -200,7 +192,9 @@ def detect_generated_runtime(
             install.append("RUN pip install --no-cache-dir uv==0.8.13")
             install.append(
                 "RUN "
-                + shlex.join(supplemental_requirements_command(interpreter, requirements))
+                + shlex.join(
+                    supplemental_requirements_command(interpreter, requirements)
+                )
             )
             install.append(
                 "RUN "

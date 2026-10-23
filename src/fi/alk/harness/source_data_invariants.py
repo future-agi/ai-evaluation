@@ -24,7 +24,7 @@ from .session import Stage
 ARTIFACT = "source-data-invariants.json"
 BATCHES = "generic-harness/source-data-review-batches.json"
 _SUFFIXES = {".py", ".sql", ".ts", ".js", ".go", ".rs", ".java"}
-_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build"}
+_EXCLUDED = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 
 def source_files(root: Path) -> dict[str, Path]:
@@ -219,18 +219,16 @@ async def author_invariants(
             raise ValueError(f"Duplicate scenario key: {key}")
         scenarios[key] = path
     artifact = authoring / ARTIFACT
-    # Do not manufacture SQL data merely to satisfy a SQL-review gate. A graph may have
-    # rich in-process state and tools yet no relational store for a SELECT invariant to
-    # examine. Require the observed runtime world to be empty as well as the contract's
-    # explicit in-process/no-data declaration; tool execution is certified separately.
+    # A non-relational declaration is insufficient on its own: even empty business
+    # tables require SQL review. Private application state is not certified here.
     contract_path = authoring / "contract.json"
     if contract_path.is_file():
         contract = AgentContract.model_validate_json(contract_path.read_text())
-        in_process_store = bool(
-            contract.data_store
-            and contract.data_store.kind.strip().lower() == "in_process"
+        store_kind = (
+            contract.data_store.kind.strip().lower() if contract.data_store else ""
         )
-        if is_data_free_conversation(contract) or in_process_store:
+        non_relational_store = store_kind in {"in_process", "none", "filesystem"}
+        if is_data_free_conversation(contract) or non_relational_store:
             state = await asyncio.to_thread(world.state)
             business_tables = set(state) - {
                 "harness_seed_sentinel",
@@ -241,7 +239,10 @@ async def author_invariants(
                     "status": "not_applicable",
                     "reason": (
                         "In-process agent state has no runtime SQL business tables"
-                        if in_process_store
+                        if store_kind == "in_process"
+                        else "Declared non-relational store has no runtime SQL business tables; "
+                        "private application state is not certified"
+                        if non_relational_store
                         else "No custom tools, data-store seam, dependencies or runtime business tables"
                     ),
                     "checks": [],
