@@ -231,10 +231,15 @@ def compile_postgres(
                 if (
                     authored is not None
                     and authored.state is ValueState.PRESENT
-                    and column.default_expression is not None
-                    and column.default_expression.lstrip()
-                    .lower()
-                    .startswith("nextval(")
+                    and (
+                        column.identity
+                        or (
+                            column.default_expression is not None
+                            and column.default_expression.lstrip()
+                            .lower()
+                            .startswith("nextval(")
+                        )
+                    )
                 ):
                     sequence_resets.add((schema, table_name, column.name))
     return PostgresCompileResult(
@@ -261,7 +266,7 @@ def apply_postgres(connection: Any, compiled: PostgresCompileResult) -> None:
             connection.execute(
                 "SELECT setval(pg_get_serial_sequence(%s, %s), "
                 f"COALESCE(MAX({column}), 1), MAX({column}) IS NOT NULL) FROM {qualified}",
-                (f"{reset.schema_name}.{reset.table}", reset.column),
+                (qualified, reset.column),
             )
 
 

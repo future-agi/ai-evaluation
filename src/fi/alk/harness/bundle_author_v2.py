@@ -132,6 +132,12 @@ _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
 
 
+def _catalog_image(image: str) -> tuple[str, str]:
+    repository = image.rsplit("/", 1)[-1].split("@", 1)[0]
+    name, separator, tag = repository.partition(":")
+    return name.lower(), tag if separator else ""
+
+
 def _reuse_certified_bundle(
     *, source: Path, job: HarnessJob, authoring: Path, output: Path
 ) -> EnvironmentBundleV2 | None:
@@ -706,73 +712,88 @@ class _SourceSchemaArtifact:
     sql: str
 
 
-def _create_table_statements(sql: str) -> list[str]:
-    """Extract complete CREATE TABLE statements from documented SQL.
+_DOCUMENTED_DDL = re.compile(
+    r"^(?:CREATE\s+(?:UNIQUE\s+)?(?:EXTENSION|INDEX|SEQUENCE|TABLE|TYPE)|ALTER\s+TABLE)\b",
+    re.IGNORECASE,
+)
+_CREATED_TABLE = re.compile(
+    r"^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"(?:(?:\"?[A-Za-z_]\w*\"?)\.)?(\"?[A-Za-z_]\w*\"?)\b",
+    re.IGNORECASE,
+)
 
-    README setup blocks often also contain ``CREATE DATABASE``, psql meta commands and fixture
-    inserts.  The hosted world owns its database and rows, so only the source-authored table DDL
-    is adopted here.  Comment text is removed before balancing parentheses so prose cannot alter
-    statement boundaries.
+
+def _documented_ddl_statements(sql: str) -> list[str]:
+    """Extract source schema DDL from a documented SQL block.
+
+    The hosted world owns its database and rows. README setup blocks may define schema objects,
+    but database creation, psql commands, and fixture mutations stay out of the adopted schema.
     """
 
-    cleaned = re.sub(r"--[^\n]*", "", sql)
-    statements: list[str] = []
-    pattern = re.compile(
-        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
-        r"(?:(?:\"?[A-Za-z_]\w*\"?)\.)?\"?[A-Za-z_]\w*\"?\s*\(",
-        re.IGNORECASE,
+    cleaned = "\n".join(
+        line for line in re.sub(r"--[^\n]*", "", sql).splitlines() if not line.lstrip().startswith("\\")
     )
-    for match in pattern.finditer(cleaned):
-        depth = 1
-        quote: str | None = None
-        index = match.end()
-        while index < len(cleaned) and depth:
-            char = cleaned[index]
-            if quote is not None:
-                if char == quote:
-                    if index + 1 < len(cleaned) and cleaned[index + 1] == quote:
-                        index += 2
-                        continue
+    statements: list[str] = []
+    start = 0
+    quote: str | None = None
+    index = 0
+    while index < len(cleaned):
+        char = cleaned[index]
+        if quote is not None:
+            if char == quote:
+                if index + 1 < len(cleaned) and cleaned[index + 1] == quote:
+                    index += 1
+                else:
                     quote = None
-            elif char in {"'", '"'}:
-                quote = char
-            elif char == "(":
-                depth += 1
-            elif char == ")":
-                depth -= 1
-            index += 1
-        if depth:
-            continue
-        while index < len(cleaned) and cleaned[index].isspace():
-            index += 1
-        if index < len(cleaned) and cleaned[index] == ";":
-            index += 1
-        statements.append(cleaned[match.start() : index].strip() + "\n")
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == ";":
+            statement = cleaned[start : index + 1].strip()
+            if _DOCUMENTED_DDL.match(statement):
+                statements.append(statement + "\n")
+            start = index + 1
+        index += 1
+    tail = cleaned[start:].strip()
+    if tail and _DOCUMENTED_DDL.match(tail):
+        statements.append(tail + ";\n")
     return statements
 
 
 def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
-    """Use the first README SQL fence that explicitly declares a table schema.
+    """Use the first README's SQL fences without adopting duplicate alternatives.
 
     This is source-owned executable evidence, not model-authored schema.  Taking the first
-    qualifying setup block avoids concatenating alternative local/cloud deployment recipes that
-    declare the same tables twice.
+    The first declaration of each table wins. This supports one fence per table without combining
+    alternative local and cloud recipes that redeclare the same table.
     """
 
     for readme in sorted(source.glob("README*.md")):
         text = readme.read_text(encoding="utf-8", errors="replace")
+        artifacts: list[_SourceSchemaArtifact] = []
+        declared_tables: set[str] = set()
         for number, match in enumerate(
             re.finditer(r"```(?:sql|postgres(?:ql)?)\s*\n(.*?)```", text, re.I | re.S),
             start=1,
         ):
-            statements = _create_table_statements(match.group(1))
-            if statements:
-                return [
+            statements = _documented_ddl_statements(match.group(1))
+            accepted: list[str] = []
+            for statement in statements:
+                table_match = _CREATED_TABLE.match(statement)
+                if table_match:
+                    table = table_match.group(1).strip('"').lower()
+                    if table in declared_tables:
+                        continue
+                    declared_tables.add(table)
+                accepted.append(statement)
+            if accepted:
+                artifacts.append(
                     _SourceSchemaArtifact(
                         relative_path=f"{readme.relative_to(source).as_posix()}#sql-{number}",
-                        sql="\n".join(statements),
+                        sql="\n".join(accepted),
                     )
-                ]
+                )
+        if artifacts:
+            return artifacts
     return []
 
 
@@ -2204,6 +2225,7 @@ def resolve_environment_plan(
         for service_name, raw in services.items():
             service = raw if isinstance(raw, dict) else {}
             image = str(service.get("image") or "")
+            image_name, image_tag = _catalog_image(image)
             if service.get("entrypoint") is not None:
                 raise BundleAuthorError(
                     f"compose_entrypoint_unsupported: {service_name} declares an entrypoint; "
@@ -2215,21 +2237,19 @@ def resolve_environment_plan(
                 raise BundleAuthorError(f"compose_capability_unsupported: {service_name} uses {', '.join(unsupported)}")
             if not image and not service.get("build"):
                 raise BundleAuthorError(f"source_service_unsupported: {service_name} has no local build context")
-            if image.startswith("postgres:") and not service.get("build"):
+            if image_name == "postgres" and not service.get("build"):
                 if service_name != "postgres":
                     raise BundleAuthorError(
                         f"managed_name_unsupported: postgres service must be named postgres, got {service_name}"
                     )
                 managed_names.add(service_name)
                 continue
-            if image.startswith("redis:") and not service.get("build"):
+            if image_name == "redis" and not service.get("build"):
                 processes.append(
                     ManagedProcess(
                         name=service_name,
                         engine=ManagedEngine.REDIS,
-                        version=image.split(":", 1)[1].split("-", 1)[0]
-                        if ":" in image
-                        else "7",
+                        version=image_tag.split("-", 1)[0] or "7",
                         user=ProcessUser.SVC_DATA,
                     )
                 )

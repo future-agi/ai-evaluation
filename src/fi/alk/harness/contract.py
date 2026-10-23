@@ -85,6 +85,7 @@ _STRING_FIELDS = (
     "modality",
     "call_direction",
     "system_prompt_excerpt",
+    "caller_identity",
     "notes",
 )
 _LIST_FIELDS = (
@@ -162,6 +163,11 @@ class ToolSpec(BaseModel):
     # during the conversation. Empty means callable first thing. Marking a tool gated when it is not
     # costs every future test of it a preamble it never needed.
     requires: list[str] = Field(default_factory=list)
+    # What a scenario writer cannot see from the signature: refusals by value or by something outside
+    # the agent's control, what a call changes or clears, and arguments taken from an earlier output.
+    refuses: str = ""
+    effects: str = ""
+    inputs_from: dict[str, str] = Field(default_factory=dict)
 
 
 class ToolEntry(BaseModel):
@@ -191,6 +197,14 @@ class ToolEntry(BaseModel):
     endpoint: str = ""
     method: str = "POST"
     notes: str = ""
+
+
+class PromptSource(BaseModel):
+    """Lines of the agent's source that hold part of its prompt."""
+
+    path: str
+    start_line: int
+    end_line: int
 
 
 class DataStore(BaseModel):
@@ -1098,6 +1112,8 @@ class AgentContract(BaseModel):
     agent_languages: list[str] = Field(default_factory=list)
     conversational: bool = True
     system_prompt_excerpt: str = ""
+    # When given, the excerpt is replaced by these lines copied from the source as written.
+    system_prompt_from: list[PromptSource] = Field(default_factory=list)
     hard_constraints: list[str] = Field(default_factory=list)
     tools: list[ToolSpec] = Field(default_factory=list)
     data_schema: dict[str, Any] = Field(default_factory=dict)
@@ -1116,6 +1132,8 @@ class AgentContract(BaseModel):
     data_store: DataStore | None = None
     runtime: Runtime | None = None
     real_use_cases: list[str] = Field(default_factory=list)
+    # How the agent knows who it is talking to, and what it loads from that before any tool runs.
+    caller_identity: str = ""
     # Free-form. The fields above are the fixed core because code consumes them; this is where
     # the reader records whatever else about *this* agent is worth carrying forward — quirks,
     # traps, names that look real but are not — in whatever form fits. It is shown verbatim to
@@ -1157,7 +1175,16 @@ class AgentContract(BaseModel):
             # what a tool refuses until another has run replays the agent's whole flow to reach it.
             needs = f"  [after: {', '.join(tool.requires)}]" if tool.requires else ""
             lines.append(
-                f"  - {tool.name}({signature}){values}{needs} : {tool.description[:140]}"
+                f"  - {tool.name}({signature}){values}{needs} : {tool.description}"
+                + "".join(
+                    f"\n      {label}: {text}"
+                    for label, text in (
+                        ("refuses", tool.refuses),
+                        ("effects", tool.effects),
+                        ("arguments from", ", ".join(f"{arg} <- {source}" for arg, source in tool.inputs_from.items())),
+                    )
+                    if text
+                )
             )
         parts = [
             f"AGENT: {self.agent} - {self.one_liner}",
@@ -1178,10 +1205,20 @@ class AgentContract(BaseModel):
                     else "people dial in to this agent"
                 ),
             )
+        if self.caller_identity.strip():
+            parts.append(
+                "WHO THE AGENT IS TALKING TO (how it identifies them, and what it loads from that "
+                "before any tool runs):\n" + self.caller_identity.strip()
+            )
+        if self.system_prompt_excerpt.strip():
+            parts.append(
+                "THE AGENT'S OWN PROMPT (what it does in each situation, including where a rule "
+                "overrides its usual flow):\n" + self.system_prompt_excerpt.strip()
+            )
         if self.hard_constraints:
             parts.append(
                 "HARD CONSTRAINTS the agent MUST follow (nothing may contradict these):\n  - "
-                + "\n  - ".join(self.hard_constraints[:14])
+                + "\n  - ".join(self.hard_constraints)
             )
         if self.data_schema and full_schema:
             parts.append(

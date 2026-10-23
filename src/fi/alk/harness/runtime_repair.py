@@ -49,6 +49,13 @@ _SAFE_RUNTIME_LAUNCHERS = {
     "yarn",
 }
 _SHELL_LAUNCHERS = {"sh", "bash", "zsh", "dash", "fish", "cmd", "powershell"}
+_PACKAGE_RUNNER_SUBCOMMANDS = {
+    "bun": {"x"},
+    "npm": {"exec"},
+    "pnpm": {"dlx", "exec"},
+    "yarn": {"dlx"},
+}
+_PACKAGE_RUNNERS = {"npx"}
 
 
 def _contract_hash(contract: AgentContract) -> str:
@@ -919,6 +926,75 @@ def _validate_ingress_repair(root, contract, runtime, evidence_files):
             raise ValueError("runtime_repair_ingress_conversation_required")
 
 
+def _tool_mapping_terms(interface) -> set[str]:
+    mapping = interface.completed_tools or interface.completed_tool_events
+    if mapping is None:
+        return set()
+    paths = [
+        mapping.items_path,
+        mapping.name_path,
+        mapping.arguments_path,
+        mapping.result_path,
+        mapping.error_path,
+        mapping.result_error_path,
+    ]
+    terms = {
+        path.removeprefix("$").strip(".").split(".")[-1]
+        for path in paths
+        if path and not path.removeprefix("$").strip(".").split(".")[-1].isdigit()
+    }
+    if interface.completed_tool_events:
+        events = interface.completed_tool_events
+        terms.update(
+            filter(
+                None,
+                (
+                    events.kind_path.split(".")[-1],
+                    events.action_kind,
+                    events.observation_kind,
+                    events.action_id_path.split(".")[-1],
+                    events.observation_action_id_path.split(".")[-1],
+                    events.status_path.split(".")[-1],
+                    events.completed_status,
+                ),
+            )
+        )
+        for failure in events.failure_events:
+            terms.update(
+                {
+                    failure.kind,
+                    failure.action_id_path.split(".")[-1],
+                    failure.result_path.split(".")[-1],
+                }
+            )
+    return terms
+
+
+def _tool_mapping_has_source_evidence(interface, evidence_files: list[Path]) -> bool:
+    terms = _tool_mapping_terms(interface)
+    if not terms:
+        return True
+    source = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in evidence_files
+        if path.stat().st_size <= 1_000_000
+    )
+    return all(
+        re.search(rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])", source)
+        for term in terms
+    )
+
+
+def _tool_mapping_selectors_changed(before, after) -> bool:
+    if before.completed_tools != after.completed_tools:
+        return True
+    if before.completed_tool_events is None or after.completed_tool_events is None:
+        return before.completed_tool_events != after.completed_tool_events
+    return before.completed_tool_events.model_dump(exclude={"path"}) != (
+        after.completed_tool_events.model_dump(exclude={"path"})
+    )
+
+
 def validate_runtime_plan_patch(
     source_root: Path,
     contract: AgentContract,
@@ -1092,6 +1168,15 @@ def validate_runtime_plan_patch(
                     "messages", "new_message", "new_message_content",
                 }:
                     raise ValueError("runtime_repair_tool_observation_conversation_required")
+            if _request_behavior(before.request_template) != _request_behavior(
+                after.request_template
+            ):
+                raise ValueError("runtime_repair_tool_observation_behavior_changed")
+        if (
+            _tool_mapping_selectors_changed(before, after)
+            and not _tool_mapping_has_source_evidence(after, evidence_files)
+        ):
+            raise ValueError("runtime_repair_tool_observation_source_mapping_missing")
 
     original_auth = (
         contract.runtime.interface.local_auth
@@ -1299,6 +1384,15 @@ def validate_runtime_plan_patch(
             if runtime.command[0] not in declared:
                 raise ValueError("runtime_repair_launcher_not_source_evidenced")
         entry_tokens = runtime.command[1:]
+        subcommand = next(
+            (token.casefold() for token in entry_tokens if not token.startswith("-")),
+            "",
+        )
+        if (
+            launcher in _PACKAGE_RUNNERS
+            or subcommand in _PACKAGE_RUNNER_SUBCOMMANDS.get(launcher, set())
+        ):
+            raise ValueError("runtime_repair_registry_package_execution_forbidden")
         if launcher == "bun":
             directories = []
             arguments = iter(entry_tokens)
@@ -1722,8 +1816,6 @@ The private conversation must capture actual completed tool evidence after recom
             try:
                 resolved = path.resolve()
                 unsafe = not resolved.is_relative_to(root)
-                if not unsafe and resolved.is_dir():
-                    unsafe = any(entry.is_symlink() for entry in resolved.rglob("*"))
             except (OSError, RuntimeError, ValueError):
                 unsafe = True
             if unsafe:

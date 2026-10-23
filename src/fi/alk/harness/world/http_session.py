@@ -14,6 +14,8 @@ from fi.simulate.agent.wrappers.http import validate_http_headers
 from .errors import WorldUsageError
 
 MAX_SESSION_BYTES = 65536
+MAX_REDACTIONS = 256
+MAX_REDACTION_BYTES = 32768
 
 
 class _Cookie(BaseModel):
@@ -63,12 +65,24 @@ def capability_name(value):
 class HttpSession:
     headers: dict[str, str] = field(default_factory=dict)
     cookies: http.cookiejar.CookieJar = field(default_factory=http.cookiejar.CookieJar)
-    redactions: set[str] = field(default_factory=set)
+    redactions: list[str] = field(default_factory=list)
+
+    def remember(self, values) -> None:
+        for value in values:
+            if value and value not in self.redactions:
+                self.redactions.append(value)
+        del self.redactions[:-MAX_REDACTIONS]
+        while (
+            self.redactions
+            and sum(len(value.encode()) for value in self.redactions)
+            > MAX_REDACTION_BYTES
+        ):
+            self.redactions.pop(0)
 
     def state(self):
         return {
             "headers": headers(self.headers),
-            "redactions": sorted(self.redactions),
+            "redactions": self.redactions,
             "cookies": [
                 {
                     name: getattr(cookie, "_rest" if name == "rest" else name)
@@ -94,7 +108,7 @@ def restore_sessions(payload, endpoints):
                 raise ValueError
             state = _SessionState.model_validate(raw)
             session = HttpSession(
-                headers=headers(state.headers), redactions=set(state.redactions)
+                headers=headers(state.headers), redactions=state.redactions
             )
             for cookie in state.cookies:
                 if any(
