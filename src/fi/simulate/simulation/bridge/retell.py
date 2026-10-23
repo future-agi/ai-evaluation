@@ -62,7 +62,7 @@ class RetellWebCallConnector(ProviderConnector):
                 agent_id=agent_id,
                 api_url=os.environ.get(
                     "RETELL_API_URL",
-                    "https://api.retellai.com/v2/create-web-call",
+                    "https://api.retellai.com/v3/create-web-call",
                 ),
                 livekit_url=os.environ.get(
                     "RETELL_LIVEKIT_URL",

@@ -235,7 +235,7 @@ class RetellTargetConfig(BaseModel):
     provider: Literal["retell"] = "retell"
     agent_id: str = Field(..., min_length=1)
     api_url: AnyHttpUrl = Field(
-        "https://api.retellai.com/v2/create-web-call",
+        "https://api.retellai.com/v3/create-web-call",
         validate_default=True,
     )
     livekit_url: AnyUrl = Field(

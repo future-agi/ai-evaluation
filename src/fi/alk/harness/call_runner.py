@@ -599,7 +599,7 @@ def _build_spec(
                 "agent_id": provider_target_id,
                 "api_url": str(
                     simulator_config.get("retell_api_url")
-                    or "https://api.retellai.com/v2/create-web-call"
+                    or "https://api.retellai.com/v3/create-web-call"
                 ),
                 "livekit_url": str(
                     simulator_config.get("retell_livekit_url")
