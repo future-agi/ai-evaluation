@@ -113,8 +113,11 @@ def open_stage(
     ask: Callable[..., Any] | None = None,
     max_turns: int = 70,
     available_evals: list[dict[str, Any]] | None = None,
+    require_setup_contract: bool = False,
 ) -> tuple[Stage, Path]:
     """A live understand-the-agent stage, and where it will write."""
+    from .compose_integration import runtime_capability_briefing
+
     destination = out or artifact_dir(source.name)
     spec = read_only_session(
         system_prompt=(
@@ -124,6 +127,7 @@ def open_stage(
             # separately injected profile so the model can reconcile both sources of truth.
             f"{_provider_import_briefing() if source.kind != 'provider' else ''}"
             f"{_eval_catalogue_briefing(available_evals)}"
+            f"{runtime_capability_briefing() if require_setup_contract and source.kind in {'repo', 'github'} else ''}"
         ),
         cwd=source.workdir(),
         servers={
@@ -132,6 +136,8 @@ def open_stage(
                 destination,
                 available_evals,
                 source_root=source.workdir() if source.kind == "repo" else None,
+                require_setup_contract=require_setup_contract
+                and source.kind == "repo",
             ),
         },
         extra_builtins=source.builtin_tools(),

@@ -5,6 +5,30 @@ world is kept in, which is deliberate: the store varies more between agents than
 
 ## Changing it directly
 
+For a native file task, use a named workspace declared in `runtime.workspaces`.
+Each declaration maps a name to a directory relative to the target process's working directory.
+Use declared workspace names and relative paths in setup and ready. Read back every seeded file
+and compare its contents before chat. Local proof is deferred until the live target exists.
+Without a declared binding, give all content in the conversation and ask the agent to create
+files first; do not assume existing project files.
+The directory must come from the target's actual configuration. A database collection called
+`files` does not populate that directory.
+
+```python
+def setup(world):
+    world.write_file("project", "notes.txt", "Review the delivery date.\n")
+
+def ready(world):
+    if world.read_file("project", "notes.txt") != "Review the delivery date.\n":
+        return "The target workspace is missing the expected note."
+```
+
+`read_file` returns UTF-8 text and is available in checks. `write_file` is available only in
+setup. Both require a declared workspace and a relative path inside it. Missing files, links,
+special files and oversized contents raise errors. Reset restores the private runtime copy;
+fixtures never modify the submitted source. Use this surface only when the target reads the
+same configured directory.
+
 Where no tool of the agent's can produce the state you need, change the world's collections and
 records yourself:
 
@@ -90,3 +114,36 @@ def ready(world):
         return f"stock says {widget['quantity']} widgets, this scenario needs exactly 5"
     return None
 ```
+
+
+## Native Compose runtime
+
+A native Compose world has no harness database or local tool replay. Its state lives in the
+submitted services. During authoring, scenario syntax and declarations are checked; readiness,
+reference solvability and no-op proof are **DEFERRED**, never reported as passing locally.
+Runtime validation must execute setup, ready and a real chat request before scenarios run.
+
+Use `world.request(capability, method, path, json=None, headers=None)` to access a declared HTTP
+capability (`target_http` for the native chat service). The result is a dictionary with `status`, `text` and `json` (null for non-JSON).
+Paths start with `/` and stay on that capability's origin. Redirects are returned without being
+followed. Requests are bounded to 64 KiB, responses to 1 MiB, headers to 16 KiB and network inactivity
+to 10 seconds; the scenario phase also has its own deadline. No environment secrets, proxy settings or automatic authentication are exposed.
+A token obtained from the application's own login API may be supplied explicitly in headers.
+Transport-routing headers, including Host and Proxy-Authorization, are rejected.
+
+Setup may POST, PUT, PATCH or DELETE. Ready and outcome checks may only GET or HEAD through `request`.
+For a source-reviewed POST read operation declared in the sealed contract's `runtime.observations`,
+use `world.observe(name, parameters)` instead. It returns the same bounded response shape.
+The declaration fixes the capability, path and JSON body. Parameters replace entire scalar leaves
+only and require explicit string length or integer range bounds. Unknown or missing parameters,
+objects and booleans used as integers fail before network access. Scenarios cannot register new
+operations or override their selectors, paths or headers. Review the native implementation before
+declaring an operation; a POST declaration alone cannot prove that the server is read-only.
+Setup must create source-supported fixtures and ready must verify the same actual records.
+A 2xx status alone is not evidence that the requested data exists. Check exact response values.
+
+Fixture values sent to the simulator must be declared in advance. Setup return values do not
+update simulator slots. APIs that require opaque generated IDs or externally supplied login
+secrets need a supported binding before those fixtures can be used. Do not invent such values,
+seed a shadow store or replace a missing API. Deterministic checks can inspect actual native
+tool calls and API responses. Runtime tool result capture is a separate declared seam.

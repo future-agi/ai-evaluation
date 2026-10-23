@@ -18,6 +18,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from packaging.utils import canonicalize_name
+
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 GENERATED_DOCKERFILE = ".alk-generated.Dockerfile"
 GENERATED_PLAN = "generated-runtime.json"
@@ -34,13 +37,7 @@ _IGNORED_DIRECTORIES = {
     ".tox",
     ".venv",
     "__pycache__",
-    "artifacts",
-    "build",
-    "coverage",
-    "dist",
     "node_modules",
-    "target",
-    "vendor",
 }
 _SECRET_NAMES = {
     ".env",
@@ -52,18 +49,25 @@ _SECRET_NAMES = {
     "id_ed25519",
 }
 _SECRET_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
+
 _PYTHON_ENTRYPOINTS = ("agent.py", "main.py", "app.py", "bot.py", "server.py")
 _NODE_ENTRYPOINTS = ("agent.js", "index.js", "main.js", "server.js")
 
 
 class GeneratedRuntimeError(ValueError):
     """The repository cannot be packaged without unsafe or ambiguous guessing."""
+
+
+@dataclass(frozen=True)
+class PythonExtraSelection:
+    names: tuple[str, ...] = ()
+    all_packages: bool = False
+
+    @property
+    def uv_arguments(self) -> list[str]:
+        return (["--all-packages"] if self.all_packages else []) + [
+            value for name in self.names for value in ("--extra", name)
+        ]
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,15 @@ def detect_generated_runtime(
     source: str | Path, runtime: Any | None = None
 ) -> GeneratedRuntimePlan:
     """Return an auditable runtime plan, or one actionable admission error."""
+    if (
+        getattr(runtime, "execution", "auto") == "compose"
+        or getattr(runtime, "compose_file", "")
+        or getattr(runtime, "service", "")
+        or getattr(runtime, "required_environment", {})
+    ):
+        raise GeneratedRuntimeError(
+            "runtime_selection_unsupported: generated runtime cannot enforce selected Compose services or process obligations"
+        )
     root = Path(source).expanduser().resolve()
     component = _component_root(root, str(getattr(runtime, "workdir", "") or ""))
     language = str(getattr(runtime, "language", "") or "").strip().lower()
@@ -164,6 +177,34 @@ def detect_generated_runtime(
         dependency, strategy, install, extras = _python_install(
             component, runtime, command
         )
+        requirements = select_python_requirements(
+            component,
+            list(getattr(runtime, "requirements_files", None) or []),
+            context_excludes=_context_excludes(component, runtime, dependency, command),
+        )
+        if requirements:
+            interpreter = (
+                "/app/.venv/bin/python" if strategy.startswith("uv-") else "python"
+            )
+            install.append("RUN pip install --no-cache-dir uv==0.8.13")
+            install.append(
+                "RUN "
+                + shlex.join(
+                    supplemental_requirements_command(interpreter, requirements)
+                )
+            )
+            install.append(
+                "RUN "
+                + shlex.join(
+                    [
+                        "uv",
+                        "pip",
+                        "check",
+                        "--python",
+                        interpreter,
+                    ]
+                )
+            )
         dockerfile = _python_dockerfile(version, dependency, strategy, install, command)
     else:
         version = _language_version(str(getattr(runtime, "version", "") or ""), "22")
@@ -236,9 +277,8 @@ def _runtime_override(runtime: Any | None, **values: str) -> Any:
         "workdir": str(getattr(runtime, "workdir", "") or ""),
         "command": list(getattr(runtime, "command", None) or []),
         "extras": list(getattr(runtime, "extras", None) or []),
-        "context_excludes": list(
-            getattr(runtime, "context_excludes", None) or []
-        ),
+        "requirements_files": list(getattr(runtime, "requirements_files", None) or []),
+        "context_excludes": list(getattr(runtime, "context_excludes", None) or []),
     }
     payload.update(values)
     return type("RuntimeHints", (), payload)()
@@ -343,45 +383,79 @@ def _language_version(value: str, default: str) -> str:
     return match.group(1) if match else default
 
 
-def _python_language_version(root: Path, configured: str) -> str:
-    """Choose a concrete image version that satisfies a declared Python range.
+def _python_language_version(
+    root: Path, configured: str, *, interpreter_selector: bool = False
+) -> str:
+    """Choose an image version or a native interpreter constraint.
 
     ``>=3.10`` is a compatibility floor, not an instruction to use 3.10. Selecting the first
     number from it makes otherwise reproducible projects fail as transitive dependencies retire
-    old interpreter wheels. Exact values remain exact; ranges prefer the harness' stable default.
+    old interpreter wheels. Exact patch values remain exact; native minor selectors let uv
+    resolve a compatible patch. Image ranges prefer the harness' stable default.
     """
-    declared = configured.strip()
-    if not declared:
-        requires = (
-            _pyproject_document(root / "pyproject.toml")
-            .get("project", {})
-            .get("requires-python", "")
-        )
-        declared = str(requires or "").strip()
-    if not declared:
-        return "3.12"
-    if not any(marker in declared for marker in "<>=!~,*"):
-        return _language_version(declared, "3.12")
-    try:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
-        from packaging.version import Version
+    from packaging.markers import InvalidMarker, Marker
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    from packaging.version import Version
 
-        specifier = SpecifierSet(declared)
-        for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
-            if Version(candidate) in specifier:
-                return candidate
+    declared = configured.strip()
+    document = _pyproject_document(root / "pyproject.toml")
+    requires = str(document.get("project", {}).get("requires-python", "") or "").strip()
+    environments = document.get("tool", {}).get("uv", {}).get("environments", [])
+    # shortcut: uv validates platform and patch markers until selection models the target environment.
+    python_only = isinstance(environments, list) and all(
+        isinstance(item, str)
+        and set(re.findall(r"[A-Za-z_]\w*", item)) <= {"python_version", "and", "or", "in", "not"}
+        for item in environments
+    )
+    try:
+        markers = [Marker(item) for item in environments] if python_only else []
+    except InvalidMarker:
+        markers = []
+
+    def supported(version: str) -> bool:
+        return not markers or any(
+            marker.evaluate({"python_version": ".".join(version.split(".")[:2])})
+            for marker in markers
+        )
+    try:
+        project = SpecifierSet(requires)
+        if re.fullmatch(r"3\.\d+", declared) and supported(declared):
+            if interpreter_selector:
+                return str(SpecifierSet(f"=={declared}.*,{requires}".rstrip(",")))
+            # Image tags select a moving patch; installation validates Requires-Python.
+            return declared
+        if declared and not any(marker in declared for marker in "<>=!~,*"):
+            if (
+                re.fullmatch(r"3\.\d+(?:\.\d+)?", declared)
+                and Version(declared) in project
+                and supported(declared)
+            ):
+                return declared
+        else:
+            specifier = SpecifierSet(declared)
+            for candidate in ("3.12", "3.13", "3.11", "3.10", "3.14", "3.9"):
+                if Version(candidate) in specifier and Version(candidate) in project and supported(candidate):
+                    return candidate
     except (InvalidSpecifier, ValueError):
         pass
+    source_pin = ""
+    pin_path = root / ".python-version"
+    if pin_path.is_file() and pin_path.resolve().is_relative_to(root.resolve()):
+        pin = pin_path.read_text(encoding="utf-8", errors="replace").strip()
+        if re.fullmatch(r"3\.\d+(?:\.\d+)?", pin):
+            source_pin = f"; source .python-version: {pin}"
     raise GeneratedRuntimeError(
-        f"generated_runtime_python_version_unsupported: {declared}"
+        f"generated_runtime_python_version_unsupported: {declared or requires}"
+        f" (project requires-python: {requires or 'unspecified'}; uv environments: {environments}{source_pin})"
     )
 
 
 def _python_install(
     root: Path, runtime: Any | None, command: list[str]
 ) -> tuple[str, str, list[str], list[str]]:
-    extras = _python_extras(root, runtime, command)
-    uv_extras = [value for extra in extras for value in ("--extra", extra)]
+    selection = _python_extras(root, runtime, command)
+    extras = list(selection.names)
+    uv_extras = selection.uv_arguments
     uv_script_project = _uv_script_project(root / "pyproject.toml")
     if root.joinpath("uv.lock").is_file() and root.joinpath("pyproject.toml").is_file():
         return (
@@ -395,13 +469,32 @@ def _python_install(
             extras,
         )
     if root.joinpath("requirements.txt").is_file():
+        if selection.all_packages:
+            raise GeneratedRuntimeError("generated_runtime_workspace_extras_require_uv")
+        if extras and uv_script_project:
+            raise GeneratedRuntimeError(
+                "generated_runtime_pip_extras_require_installable_project"
+            )
+        target = ".[" + ",".join(extras) + "]" if extras else None
         return (
             "requirements.txt",
             "pip-requirements",
-            ["RUN pip install --no-cache-dir -r requirements.txt"],
-            [],
+            [
+                "RUN "
+                + shlex.join(
+                    [
+                        "pip",
+                        "install",
+                        "--no-cache-dir",
+                        "-r",
+                        "requirements.txt",
+                        *([target] if target else []),
+                    ]
+                )
+            ],
+            extras,
         )
-    if uv_script_project:
+    if uv_script_project or selection.all_packages:
         install = [
             "RUN pip install --no-cache-dir uv==0.8.13",
             "RUN " + shlex.join(["uv", "sync", "--no-cache", *uv_extras]),
@@ -484,35 +577,323 @@ def _needs_livekit_model_download(path: Path) -> bool:
     )
 
 
-def _python_extras(root: Path, runtime: Any | None, command: list[str]) -> list[str]:
-    path = root / "pyproject.toml"
-    if not path.is_file():
-        return []
-    try:
-        import tomllib
+def python_workspace_members(root: Path) -> set[Path]:
+    document = _pyproject_document(root / "pyproject.toml")
+    workspace = document.get("tool", {}).get("uv", {}).get("workspace", {})
+    members: set[Path] = set()
+    excluded: set[Path] = set()
+    for key, paths in (("members", members), ("exclude", excluded)):
+        for pattern in workspace.get(key, []):
+            relative = Path(pattern)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+            if pattern and not relative.parts:
+                continue
+            for path in root.glob(pattern):
+                resolved = path.resolve()
+                if not resolved.is_relative_to(root.resolve()):
+                    raise GeneratedRuntimeError(
+                        "generated_runtime_workspace_path_invalid"
+                    )
+                if resolved != root.resolve():
+                    paths.add(resolved)
+    return members - excluded
 
-        document = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
+
+def python_workspace_root(source: Path, component: Path) -> Path:
+    source, component = source.resolve(), component.resolve()
+    if not component.is_relative_to(source):
+        raise GeneratedRuntimeError("generated_runtime_workspace_path_invalid")
+    for ancestor in component.parents:
+        if not ancestor.is_relative_to(source):
+            break
+        if component in python_workspace_members(ancestor):
+            return ancestor
+    return component
+
+
+def select_python_extras(
+    root: Path,
+    requested: list[str],
+    *,
+    required_owner: Path | None = None,
+    context_excludes: tuple[str, ...] = (),
+) -> PythonExtraSelection:
+    """Resolve explicit extras in the selected project or unambiguous uv workspace members."""
+    if not requested:
+        return PythonExtraSelection()
+    for name in requested:
+        if not re.fullmatch(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*", name):
+            raise GeneratedRuntimeError(f"generated_runtime_extra_invalid: {name}")
+    names = tuple(sorted({canonicalize_name(name) for name in requested}))
+    document = _pyproject_document(root / "pyproject.toml")
+
+    def declared(body: dict[str, Any]) -> set[str]:
+        return {
+            canonicalize_name(name)
+            for name in body.get("project", {}).get("optional-dependencies", {})
+        }
+
+    root_names = declared(document)
+    if required_owner is None and set(names) <= root_names:
+        return PythonExtraSelection(names)
+    owners = {name: [root] if name in root_names else [] for name in names}
+    for member in sorted(python_workspace_members(root)):
+        if _context_path_excluded(
+            member.relative_to(root) / "pyproject.toml", context_excludes
+        ):
+            continue
+        available = declared(_pyproject_document(member / "pyproject.toml"))
+        for name in names:
+            if name in available:
+                owners[name].append(member)
+    unknown = [name for name, projects in owners.items() if not projects]
+    if unknown:
+        raise GeneratedRuntimeError(
+            "generated_runtime_extra_unknown: " + ", ".join(unknown)
+        )
+    ambiguous = [name for name, projects in owners.items() if len(projects) > 1]
+    if ambiguous:
+        raise GeneratedRuntimeError(
+            "generated_runtime_extra_ambiguous: " + ", ".join(ambiguous)
+        )
+    if required_owner is not None and any(
+        projects[0].resolve() != required_owner.resolve()
+        for projects in owners.values()
+    ):
+        raise GeneratedRuntimeError("generated_runtime_extra_owner_mismatch")
+    return PythonExtraSelection(
+        names,
+        all_packages=any(
+            projects[0].resolve() != root.resolve() for projects in owners.values()
+        ),
+    )
+
+
+def supplemental_requirements_command(
+    interpreter: str, requirements: tuple[str, ...]
+) -> list[str]:
+    """Add dependencies without changing the source-selected project resolution."""
+    script = (
+        "import importlib.metadata as m, subprocess, sys, tempfile; "
+        "f = tempfile.NamedTemporaryFile(mode='w', suffix='.txt'); "
+        "f.write(''.join(d.metadata['Name'] + '==' + d.version + '\\n' "
+        "for d in m.distributions())); f.flush(); "
+        "result = subprocess.run(['uv', 'pip', 'install', '--python', sys.executable, "
+        "'--constraint', f.name, *[a for p in sys.argv[1:] for a in ('--requirement', p)]]); "
+        "f.close(); sys.exit(result.returncode)"
+    )
+    return [interpreter, "-c", script, *requirements]
+
+
+def select_python_requirements(
+    root: Path, requested: list[str], *, context_excludes: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """Validate selected manifests and their local include graph before packaging."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    root = root.resolve()
+    visited: set[Path] = set()
+    active: set[Path] = set()
+
+    def visit(relative: Path) -> None:
+        target = root / relative
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or not target.resolve().is_relative_to(root)
+            or not target.is_file()
+            or any(
+                path.is_symlink()
+                for path in (target, *target.parents)
+                if path != root and path.is_relative_to(root)
+            )
+            or any(part in _IGNORED_DIRECTORIES for part in relative.parts)
+            or _context_path_excluded(relative, context_excludes)
+            or _sensitive_file(relative, target)
+        ):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_requirements_path_invalid: {relative}"
+            )
+        relative = target.resolve().relative_to(root)
+        if _context_path_excluded(relative, context_excludes):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_requirements_path_invalid: {relative}"
+            )
+        if relative in active:
+            raise GeneratedRuntimeError("generated_runtime_requirements_cycle")
+        if relative in visited:
+            return
+        if len(visited) >= 100 or target.stat().st_size > 1024 * 1024:
+            raise GeneratedRuntimeError("generated_runtime_requirements_limit")
+        visited.add(relative)
+        active.add(relative)
+        lines = []
+        pending = ""
+        for line in target.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("#"):
+                line = " " + line
+            elif line.endswith("\\"):
+                pending += line.rstrip("\\")
+                continue
+            lines.append(pending + line)
+            pending = ""
+        if pending:
+            lines.append(pending)
+        for line in lines:
+            line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+            if not line or line.startswith("#"):
+                continue
+            include = re.fullmatch(
+                r"(?:-r\s*|--requirement[ =]|-c\s*|--constraint[ =])([^\s]+)", line
+            )
+            if include:
+                visit(relative.parent / include.group(1))
+                continue
+            hashed = re.fullmatch(
+                r"(.+?)(?:\s+--hash(?:=|\s+)(?:sha256:[a-fA-F0-9]{64}"
+                r"|sha384:[a-fA-F0-9]{96}|sha512:[a-fA-F0-9]{128}))+",
+                line,
+            )
+            if hashed:
+                line = hashed.group(1)
+            try:
+                requirement = Requirement(line)
+            except InvalidRequirement as exc:
+                raise GeneratedRuntimeError(
+                    f"generated_runtime_requirements_entry_unsupported: {relative}"
+                ) from exc
+            if requirement.url:
+                raise GeneratedRuntimeError(
+                    f"generated_runtime_requirements_url_unsupported: {relative}"
+                )
+        active.remove(relative)
+
+    names = tuple(dict.fromkeys(requested))
+    for name in names:
+        visit(Path(name))
+    return names
+
+
+def local_editable_install_operands(install: str) -> tuple[tuple[str, list[str]], ...]:
+    """Read only complete local editable pip declarations; never execute install text."""
+    try:
+        tokens = shlex.split(install)
+    except ValueError:
+        return ()
+    if tokens[:2] != ["pip", "install"] or not tokens[2:] or len(tokens[2:]) % 2:
+        return ()
+    operands = []
+    for flag, token in zip(tokens[2::2], tokens[3::2]):
+        if flag not in {"-e", "--editable"} or not re.fullmatch(
+            r"[A-Za-z0-9_./-]+(?:\[[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*\])?", token
+        ):
+            return ()
+        relative, _, groups = token.partition("[")
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            return ()
+        operands.append((relative, groups.rstrip("]").split(",") if groups else []))
+    return tuple(operands)
+
+
+def local_install_extra_claims(
+    root: Path,
+    install: str,
+    *,
+    reject_unselectable: bool = False,
+    context_excludes: tuple[str, ...] = (),
+) -> tuple[tuple[Path, str], ...]:
+    operands = []
+    for relative, groups in local_editable_install_operands(install):
+        owner = (root / relative).resolve()
+        manifest = owner / "pyproject.toml"
+        if (
+            not owner.is_relative_to(root.resolve())
+            or not manifest.resolve().is_relative_to(root.resolve())
+            or not manifest.is_file()
+        ):
+            return ()
+        operands.append((owner, groups))
+    claims = []
+    for owner, groups in operands:
+        declared = (
+            _pyproject_document(owner / "pyproject.toml")
+            .get("project", {})
+            .get("optional-dependencies", {})
+        )
+        for group in groups:
+            if canonicalize_name(group) not in {
+                canonicalize_name(name) for name in declared
+            }:
+                continue
+            try:
+                selection = select_python_extras(
+                    root,
+                    [group],
+                    required_owner=owner,
+                    context_excludes=context_excludes,
+                )
+            except GeneratedRuntimeError as exc:
+                if reject_unselectable and str(exc).startswith(
+                    (
+                        "generated_runtime_extra_unknown",
+                        "generated_runtime_extra_ambiguous",
+                        "generated_runtime_extra_owner_mismatch",
+                    )
+                ):
+                    raise
+                continue
+            claims.append((owner, selection.names[0]))
+    return tuple(claims)
+
+
+def validate_local_install_extras(
+    root: Path,
+    install: str,
+    extras: list[str],
+    *,
+    original_claims: tuple[tuple[Path, str], ...] = (),
+    context_excludes: tuple[str, ...] = (),
+) -> None:
+    selected = {canonicalize_name(name) for name in extras}
+    for owner, name in (
+        *original_claims,
+        *local_install_extra_claims(
+            root, install, reject_unselectable=True, context_excludes=context_excludes
+        ),
+    ):
+        select_python_extras(
+            root, [name], required_owner=owner, context_excludes=context_excludes
+        )
+        if name not in selected:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_extra_omitted: {owner.relative_to(root.resolve()) / 'pyproject.toml'} requires {name} in runtime.extras"
+            )
+
+
+def _python_extras(
+    root: Path, runtime: Any | None, command: list[str]
+) -> PythonExtraSelection:
+    exclusions = _context_excludes(root, runtime, "pyproject.toml", command)
+    requested = [str(item) for item in (getattr(runtime, "extras", None) or [])]
+    if requested:
+        return select_python_extras(root, requested, context_excludes=exclusions)
+    document = _pyproject_document(root / "pyproject.toml")
     declared = document.get("project", {}).get("optional-dependencies", {})
     available = (
         sorted(str(name) for name in declared) if isinstance(declared, dict) else []
     )
-    requested = [str(item) for item in (getattr(runtime, "extras", None) or [])]
-    if requested:
-        unknown = sorted(set(requested) - set(available))
-        if unknown:
-            raise GeneratedRuntimeError(
-                "generated_runtime_extra_unknown: " + ", ".join(unknown)
-            )
-        return sorted(set(requested))
     tokens = re.split(r"[^a-z0-9]+", " ".join(command).lower())
-    return [
-        extra
-        for extra in available
-        if extra.lower() not in {"all", "dev", "test", "tests"}
-        and extra.lower() in tokens
-    ]
+    return select_python_extras(
+        root,
+        [
+            extra
+            for extra in available
+            if extra.lower() not in {"all", "dev", "test", "tests"}
+            and extra.lower() in tokens
+        ],
+        context_excludes=exclusions,
+    )
 
 
 def _python_command(root: Path) -> list[str]:
@@ -671,39 +1052,43 @@ def _context_excludes(
         for name in (dependency, "pyproject.toml", "package.json")
         if name and component.joinpath(name).is_file()
     }
-    required.update(
-        Path(token)
-        for token in command
-        if token
-        and not Path(token).is_absolute()
-        and ".." not in Path(token).parts
-        and component.joinpath(token).is_file()
-    )
+    for token in command:
+        path = Path(token)
+        if not token or path.is_absolute() or ".." in path.parts:
+            continue
+        try:
+            if component.joinpath(path).is_file():
+                required.add(path)
+        except OSError:
+            # Inline interpreter programs are arguments, not filesystem paths.
+            continue
     values: set[str] = set()
     for raw in getattr(runtime, "context_excludes", None) or []:
+        if any(char in str(raw) for char in "?[]"):
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_pattern_unsupported: {raw}"
+            )
         relative = Path(str(raw))
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise GeneratedRuntimeError(
                 f"generated_runtime_context_exclude_invalid: {raw}"
             )
         normalized = relative.as_posix().removeprefix("./")
-        target = (component / normalized).resolve()
-        try:
-            target.relative_to(component.resolve())
-        except ValueError as exc:
-            raise GeneratedRuntimeError(
-                f"generated_runtime_context_exclude_invalid: {raw}"
-            ) from exc
-        if not target.exists():
+        matched = list(component.glob(normalized)) if "*" in normalized else [component / normalized]
+        matched = [target for target in matched if target.exists() or target.is_symlink()]
+        if not matched:
             # Generated/local state files are commonly listed even before the
             # first run creates them. A missing exclusion is already excluded
             # from the immutable build context and is therefore safe to ignore.
             continue
-        excluded_path = Path(normalized)
-        if any(
-            excluded_path == required_path or excluded_path in required_path.parents
-            for required_path in required
-        ):
+        try:
+            for target in matched:
+                target.resolve().relative_to(component.resolve())
+        except ValueError as exc:
+            raise GeneratedRuntimeError(
+                f"generated_runtime_context_exclude_invalid: {raw}"
+            ) from exc
+        if any(_context_path_excluded(path, (normalized,)) for path in required):
             raise GeneratedRuntimeError(
                 f"generated_runtime_context_exclude_required: {normalized}"
             )
@@ -711,20 +1096,31 @@ def _context_excludes(
     return tuple(sorted(values))
 
 
+def _context_path_excluded(relative: Path, exclusions: tuple[str, ...]) -> bool:
+    def matches(value: str) -> bool:
+        return relative.match(value) or (
+            value.startswith("**/") and relative.match(value.removeprefix("**/"))
+        )
+
+    return any(
+        relative == Path(value)
+        or Path(value) in relative.parents
+        or ("*" in value and matches(value))
+        for value in exclusions
+    )
+
+
 def _copy_sanitized_context(
     source: Path, destination: Path, exclusions: tuple[str, ...] = ()
 ) -> None:
     count = 0
     total = 0
+    rejected_files: list[str] = []
     source = source.resolve()
-    excluded = tuple(Path(value) for value in exclusions)
-
-    def is_excluded(relative: Path) -> bool:
-        return any(relative == value or value in relative.parents for value in excluded)
 
     def copy_file(path: Path, relative: Path) -> None:
         nonlocal count, total
-        if _sensitive_file(relative):
+        if _sensitive_file(relative, path):
             return
         info = path.stat()
         if not stat.S_ISREG(info.st_mode):
@@ -739,13 +1135,11 @@ def _copy_sanitized_context(
         total += info.st_size
         if count > _MAX_FILES or total > _MAX_CONTEXT_BYTES:
             raise GeneratedRuntimeError("generated_runtime_context_limit_exceeded")
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                    raise GeneratedRuntimeError(
-                        "generated_runtime_secret_material_detected: "
-                        + relative.as_posix()
-                    )
+        try:
+            inspect_public_file(path)
+        except ValueError:
+            rejected_files.append(relative.as_posix())
+            return
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target, follow_symlinks=True)
@@ -767,7 +1161,7 @@ def _copy_sanitized_context(
         next_ancestors = ancestors | {resolved_directory}
         for path in sorted(directory.iterdir(), key=lambda item: item.name):
             relative = relative_directory / path.name
-            if is_excluded(relative):
+            if _context_path_excluded(relative, exclusions):
                 continue
             if path.name in _IGNORED_DIRECTORIES and path.is_dir():
                 continue
@@ -793,14 +1187,22 @@ def _copy_sanitized_context(
                 )
 
     copy_directory(source, Path(), frozenset())
+    if rejected_files:
+        raise GeneratedRuntimeError(
+            "generated_runtime_secret_material_detected: "
+            + json.dumps({"files": rejected_files[:32], "total": len(rejected_files)})
+        )
 
 
-def _sensitive_file(relative: Path) -> bool:
+def _sensitive_file(relative: Path, source: Path) -> bool:
     name = relative.name.lower()
     return (
-        name in _SECRET_NAMES
+        (name in _SECRET_NAMES and not is_public_npm_config(source))
         or name.startswith(".env.")
-        or relative.suffix.lower() in _SECRET_SUFFIXES
+        or (
+            relative.suffix.lower() in _SECRET_SUFFIXES
+            and not (relative.suffix.lower() == ".pem" and is_public_pem(source))
+        )
     )
 
 

@@ -347,6 +347,49 @@ def test_guarded_indexed_environment_access_is_optional(tmp_path: Path) -> None:
     assert requirement.status is RequirementStatus.OPTIONAL
 
 
+def test_environment_writes_and_quoted_reads_are_not_requirements(tmp_path: Path) -> None:
+    _write(tmp_path, "config.py", '''
+import os
+os.environ["AUTH_JWT_SECRET"] = generated_secret
+os.environ["DEERFLOW_REPLAY_FIXTURE"] = str(fixture)
+os.environ["DEER_FLOW_EXTENSIONS_CONFIG_PATH"] = str(config_path)
+# os.environ["COMMENT_API_KEY"]
+example = 'os.environ["EXAMPLE_API_KEY"]'
+token = os.environ["REQUIRED_RUNTIME_TOKEN"]
+guarded_in_comment = os.environ["COMMENT_GUARD_TOKEN"]  # os.getenv("COMMENT_GUARD_TOKEN")
+optional = os.getenv("OPTIONAL_API_KEY")
+''')
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert set(requirements) == {
+        "REQUIRED_RUNTIME_TOKEN", "COMMENT_GUARD_TOKEN", "OPTIONAL_API_KEY"
+    }
+    assert requirements["REQUIRED_RUNTIME_TOKEN"].required
+    assert requirements["COMMENT_GUARD_TOKEN"].required
+    assert not requirements["OPTIONAL_API_KEY"].required
+
+
+def test_environment_assignment_value_still_requires_its_read(tmp_path: Path) -> None:
+    _write(tmp_path, "config.py", '''
+os.environ["DESTINATION_TOKEN"] = os.environ["SOURCE_TOKEN"]
+os.environ["APPENDED_TOKEN"] += "suffix"
+''')
+
+    requirements = _requirements(discover_credentials(tmp_path))
+
+    assert set(requirements) == {"SOURCE_TOKEN", "APPENDED_TOKEN"}
+    assert all(item.required for item in requirements.values())
+
+
+def test_unparseable_python_keeps_conservative_indexed_requirements(tmp_path: Path) -> None:
+    _write(tmp_path, "agent.py", 'token = os.environ["REQUIRED_TOKEN"]\nif (\n')
+
+    requirement = _requirements(discover_credentials(tmp_path))["REQUIRED_TOKEN"]
+
+    assert requirement.required
+
+
 def test_blank_template_configuration_is_not_a_runtime_requirement(
     tmp_path: Path,
 ) -> None:

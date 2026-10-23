@@ -23,6 +23,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import date
 from typing import Any
 
@@ -37,30 +38,15 @@ from .base import (
     SessionOpened,
     SessionSpec,
     StageDone,
+    TERMINAL_SAVE_TOOLS,
     ToolReturned,
     ToolSpec,
     qualified,
+    tool_input_schema,
 )
 from .files import file_tools
 
 DEFAULT_MODEL = "gemini-3.7-flash"
-
-_TERMINAL_SAVE_TOOLS = frozenset(
-    {
-        "mcp__world__save_world",
-        "mcp__provision__save_environment",
-        "mcp__scenarios__save_scenarios",
-        # Source-data review is another persisted authoring boundary.  Its handler only
-        # succeeds after every scenario was reviewed and at least one executable invariant
-        # was declared.  Letting ADK take another turn after that success can burn the entire
-        # call budget and turn a completed review into a spurious validation failure.
-        "mcp__source_data__finish_review",
-        # A validated repair patch is itself the complete output of the repair stage.  Stop
-        # immediately after accepting it instead of spending the remaining agent budget on
-        # another model turn that can only restate or replace an already-valid patch.
-        "mcp__repair__submit_world_ir_patch",
-    }
-)
 
 # Vertex list pricing per 1M tokens: (input, output, the day this pair was last checked against
 # the platform's litellm model table). An unknown or stale model reports no cost rather than a
@@ -89,98 +75,8 @@ PRICES_PER_MILLION = {
     "gemini-3-flash-preview": (0.5, 3, "2026-12-31"),
 }
 
-_PYTHON_TYPES = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-    dict: "object",
-}
-
-# The keys Vertex's Schema type accepts. JSON Schema carries more; anything else is dropped
-# rather than passed through, because an unknown key fails declaration validation and takes
-# the whole stage down before its first turn.
-_SCHEMA_KEYS = (
-    "description",
-    "enum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "minimum",
-    "minItems",
-    "nullable",
-    "pattern",
-    "properties",
-    "required",
-    "type",
-    "anyOf",
-)
-
-
-def _gemini_schema(schema: Any) -> dict[str, Any]:
-    """A JSON Schema fragment as Vertex's Schema dialect.
-
-    The real difference is nullability: JSON Schema says ``"type": ["string", "null"]``,
-    Vertex says ``"type": "string", "nullable": true``. Everything Vertex does not know is
-    dropped, recursively, so a tool schema written for the loosest backend still declares.
-    """
-    if not isinstance(schema, dict):
-        return {"type": "string"}
-    cleaned: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key not in _SCHEMA_KEYS:
-            continue
-        if key == "type" and isinstance(value, list):
-            bare = [entry for entry in value if entry != "null"]
-            cleaned["type"] = bare[0] if bare else "string"
-            if "null" in value:
-                cleaned["nullable"] = True
-        elif key == "properties" and isinstance(value, dict):
-            cleaned["properties"] = {
-                name: _gemini_schema(inner) for name, inner in value.items()
-            }
-        elif key == "items":
-            cleaned["items"] = _gemini_schema(value)
-        elif key == "anyOf" and isinstance(value, list):
-            cleaned["anyOf"] = [_gemini_schema(inner) for inner in value]
-        elif key == "enum" and isinstance(value, list):
-            # Vertex enums are strings; None inside one is JSON Schema's way of saying
-            # nullable, and everything else is stringified the way the model will echo it.
-            cleaned["enum"] = [str(entry) for entry in value if entry is not None]
-            if None in value:
-                cleaned["nullable"] = True
-        else:
-            cleaned[key] = value
-    # Vertex refuses an array that does not say what it holds. JSON Schema treats items as
-    # optional, and most such arrays here carry row-shaped dicts, so an open object is the
-    # faithful default.
-    if cleaned.get("type") == "array" and "items" not in cleaned:
-        cleaned["items"] = {"type": "object"}
-    return cleaned
-
-
 def _json_schema(schema: Any) -> dict[str, Any]:
-    """The tool's schema as Vertex-safe schema, whichever shorthand it was declared in."""
-    if isinstance(schema, dict) and (
-        "properties" in schema or schema.get("type") == "object"
-    ):
-        return _gemini_schema(schema)
-    if isinstance(schema, dict):
-        return {
-            "type": "object",
-            "properties": {
-                name: (
-                    {"type": "array", "items": {"type": "object"}}
-                    if kind is list
-                    else {"type": _PYTHON_TYPES.get(kind, "string")}
-                )
-                for name, kind in schema.items()
-            },
-            "required": list(schema),
-        }
-    return {"type": "object", "properties": {}}
+    return tool_input_schema(schema)
 
 
 def _project() -> str:
@@ -248,7 +144,7 @@ def _successful_terminal_save(name: str, response: Any) -> bool:
     stage budget; the persisted artifact is the stage's actual completion boundary.
     """
     return bool(
-        name in _TERMINAL_SAVE_TOOLS
+        name in TERMINAL_SAVE_TOOLS
         and isinstance(response, dict)
         and not response.get("is_error")
     )
@@ -274,7 +170,7 @@ _REREADABLE = frozenset(
 )
 
 _READS_KEPT_WHOLE = 2
-_READ_CHARS_BEFORE_FORGETTING = 60_000
+_READ_CHARS_BEFORE_FORGETTING = 180_000
 _FORGOTTEN = "[dropped to keep this session small] "
 
 
@@ -287,7 +183,7 @@ def _forget_old_reads(contents: list[Any]) -> None:
     from google.genai import types
 
     arguments: dict[str, str] = {}
-    reads: list[tuple[Any, str, str]] = []
+    reads: list[tuple[Any, str, str, int]] = []
     held = 0
     for content in contents:
         for part in getattr(content, "parts", None) or []:
@@ -306,13 +202,15 @@ def _forget_old_reads(contents: list[Any]) -> None:
             if text.startswith(_FORGOTTEN):
                 continue
             held += len(text)
-            reads.append((part, name, getattr(answer, "id", "") or ""))
+            reads.append((part, name, getattr(answer, "id", "") or "", len(text)))
     if held <= _READ_CHARS_BEFORE_FORGETTING:
         return
     recent: dict[str, int] = {}
-    for part, name, call_id in reversed(reads):
+    kept_chars = 0
+    for part, name, call_id, size in reversed(reads):
         recent[name] = recent.get(name, 0) + 1
-        if recent[name] <= _READS_KEPT_WHOLE:
+        if recent[name] <= _READS_KEPT_WHOLE or kept_chars + size <= _READ_CHARS_BEFORE_FORGETTING:
+            kept_chars += size
             continue
         said = arguments.get(call_id, "")
         part.function_response = types.FunctionResponse(
@@ -380,7 +278,7 @@ def _spec_tool(name: str, spec: ToolSpec) -> Any:
             return types.FunctionDeclaration(
                 name=name,
                 description=spec.description,
-                parameters=_json_schema(spec.input_schema),
+                parameters_json_schema=_json_schema(spec.input_schema),
             )
 
         async def run_async(self, *, args: dict[str, Any], tool_context: Any) -> Any:
@@ -593,7 +491,6 @@ class VertexGeminiSession:
 
     async def replies(self) -> AsyncIterator[Any]:
         from google.adk.agents.run_config import RunConfig, StreamingMode
-
         # google.adk.sessions does not re-export it in the locked ADK (2.7.1).
         from google.adk.sessions.base_session_service import GetSessionConfig
         from google.genai import types
@@ -620,6 +517,17 @@ class VertexGeminiSession:
         context = self._spec.conversation
         run_config = RunConfig(
             max_llm_calls=max(self._spec.max_turns, 1),
+            http_options=types.HttpOptions(
+                timeout=300_000,
+                retry_options=types.HttpRetryOptions(
+                    attempts=8,
+                    initial_delay=2,
+                    max_delay=60,
+                    exp_base=2,
+                    jitter=1,
+                    http_status_codes=[408, 429, 500, 502, 503, 504],
+                ),
+            ),
             streaming_mode=(
                 StreamingMode.SSE
                 if context is not None and context.streaming
@@ -650,78 +558,81 @@ class VertexGeminiSession:
             ),
         )
         try:
-            async for event in self._runner.run_async(
-                user_id=self._user_id,
-                session_id=self.session_id,
-                new_message=message,
-                invocation_id=resume_invocation_id,
-                run_config=run_config,
-            ):
-                usage = getattr(event, "usage_metadata", None)
-                if usage is not None:
-                    tokens_in += usage.prompt_token_count or 0
-                    tokens_out += usage.candidates_token_count or 0
-                    tokens_cached += (
-                        getattr(usage, "cached_content_token_count", 0) or 0
-                    )
-                parts: list[Any] = []
-                returned: list[ToolReturned] = []
-                for part in (event.content.parts if event.content else []) or []:
-                    if getattr(part, "text", None):
-                        parts.append(
-                            Say(
-                                text=part.text,
-                                partial=bool(getattr(event, "partial", False)),
-                                event_id=str(getattr(event, "id", "") or ""),
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
-                                author=str(getattr(event, "author", "") or ""),
+            async with aclosing(
+                self._runner.run_async(
+                    user_id=self._user_id,
+                    session_id=self.session_id,
+                    new_message=message,
+                    invocation_id=resume_invocation_id,
+                    run_config=run_config,
+                )
+            ) as events:
+                async for event in events:
+                    usage = getattr(event, "usage_metadata", None)
+                    if usage is not None:
+                        tokens_in += usage.prompt_token_count or 0
+                        tokens_out += usage.candidates_token_count or 0
+                        tokens_cached += (
+                            getattr(usage, "cached_content_token_count", 0) or 0
+                        )
+                    parts: list[Any] = []
+                    returned: list[ToolReturned] = []
+                    for part in (event.content.parts if event.content else []) or []:
+                        if getattr(part, "text", None):
+                            parts.append(
+                                Say(
+                                    text=part.text,
+                                    partial=bool(getattr(event, "partial", False)),
+                                    event_id=str(getattr(event, "id", "") or ""),
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                    author=str(getattr(event, "author", "") or ""),
+                                )
                             )
-                        )
-                    if getattr(part, "function_call", None):
-                        parts.append(
-                            Call(
-                                id=getattr(part.function_call, "id", None)
-                                or f"call-{uuid.uuid4().hex[:8]}",
-                                name=part.function_call.name or "",
-                                arguments=dict(part.function_call.args or {}),
-                                by=getattr(event, "author", "") or "",
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
+                        if getattr(part, "function_call", None):
+                            parts.append(
+                                Call(
+                                    id=getattr(part.function_call, "id", None)
+                                    or f"call-{uuid.uuid4().hex[:8]}",
+                                    name=part.function_call.name or "",
+                                    arguments=dict(part.function_call.args or {}),
+                                    by=getattr(event, "author", "") or "",
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                )
                             )
-                        )
-                    if getattr(part, "function_response", None):
-                        response = part.function_response.response
-                        response_name = part.function_response.name or ""
-                        terminal_save_succeeded = terminal_save_succeeded or (
-                            _successful_terminal_save(response_name, response)
-                        )
-                        returned.append(
-                            ToolReturned(
-                                id=getattr(part.function_response, "id", None) or "",
-                                text=_flattened(response),
-                                is_error=bool(
-                                    isinstance(response, dict)
-                                    and response.get("is_error")
-                                ),
-                                invocation_id=str(
-                                    getattr(event, "invocation_id", "") or ""
-                                ),
+                        if getattr(part, "function_response", None):
+                            response = part.function_response.response
+                            response_name = part.function_response.name or ""
+                            terminal_save_succeeded = terminal_save_succeeded or (
+                                _successful_terminal_save(response_name, response)
                             )
-                        )
-                if parts:
-                    if not getattr(event, "partial", False):
-                        turns += 1
-                    yield ModelReply(parts=parts, model=self._model)
-                for outcome in returned:
-                    yield outcome
-                if terminal_save_succeeded:
-                    settled = True
-                    break
-                if event.is_final_response():
-                    settled = True
+                            returned.append(
+                                ToolReturned(
+                                    id=getattr(part.function_response, "id", None) or "",
+                                    text=_flattened(response),
+                                    is_error=bool(
+                                        isinstance(response, dict)
+                                        and response.get("is_error")
+                                    ),
+                                    invocation_id=str(
+                                        getattr(event, "invocation_id", "") or ""
+                                    ),
+                                )
+                            )
+                    if parts:
+                        if not getattr(event, "partial", False):
+                            turns += 1
+                        yield ModelReply(parts=parts, model=self._model)
+                    for outcome in returned:
+                        yield outcome
+                    if terminal_save_succeeded:
+                        settled = True
+                        break
+                    if event.is_final_response():
+                        settled = True
         except Exception as exc:
             yield StageDone(
                 outcome="failed",

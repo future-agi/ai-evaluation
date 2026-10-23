@@ -11,10 +11,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import urljoin
 
+from fi._diagnostics import sanitize_diagnostic
 from fi.simulate.agent.wrapper import AgentInput
-from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
+from fi.simulate.agent.wrappers.http import HTTPAgentWrapper, HTTPCallFailure
 
 from .call_runner import (
     ArtifactUploader,
@@ -86,7 +86,7 @@ async def _record_text_usage(
         )
 
 
-DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 120.0
+DEFAULT_CHAT_TARGET_TIMEOUT_SECONDS = 300.0
 
 
 def _chat_target_timeout_seconds() -> float:
@@ -166,6 +166,13 @@ def _tool_world(
     runtime: EnvironmentRuntime,
     source_directory: Path | None = None,
 ) -> GeneratedWorld:
+    if runtime.metadata.get("observation_mode") == "native":
+        import random
+        from .world.observation import ObservationWorld, http_endpoints
+        return ObservationWorld(
+            runtime.world_index, random.Random(0), http_endpoints(runtime),
+            observations=contract.runtime.observations if contract.runtime else {},
+        )
     endpoint = runtime.endpoints.get("world_db")
     if endpoint is None or endpoint.protocol != "postgres":
         raise CallAborted(
@@ -305,6 +312,7 @@ class _HostedChatTarget:
         self._scenario_key = scenario_key
         self._scenario_id = scenario_id
         self._messages: list[dict[str, Any]] = []
+        self._tool_call_ids: set[str] = set()
         self._turn = 0
 
     async def open(self) -> None:
@@ -331,13 +339,20 @@ class _HostedChatTarget:
             )
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
-                raise RuntimeError(
-                    str(trace.get("error") or "submitted endpoint request failed")
+                raise HTTPCallFailure(trace)
+            for observed in (response.metadata or {}).get("native_completed_tools", []):
+                _record_completed_tool_call(
+                    self.world, name=observed["name"],
+                    arguments=observed["arguments"], response=observed,
                 )
             conversation_ended = bool(
                 (response.metadata or {}).get("conversation_ended")
             )
-            returned = list(response.tool_calls or [])
+            returned = [
+                call
+                for call in (response.tool_calls or [])
+                if not call.get("id") or str(call["id"]) not in self._tool_call_ids
+            ]
             if not returned:
                 answer = response.content.strip()
                 if conversation_ended:
@@ -363,6 +378,8 @@ class _HostedChatTarget:
             for index, call in enumerate(returned, start=1):
                 name, arguments, call_id = _tool_call(call, index)
                 returned_ids.add(call_id)
+                if call.get("id"):
+                    self._tool_call_ids.add(call_id)
                 provided = response_by_id.get(call_id)
                 if provided is not None:
                     _record_completed_tool_call(
@@ -470,9 +487,9 @@ class HostedChatCallRunner:
                 "chat_contract_unavailable: bundle/contract.json is absent"
             )
         interface = self._contract.runtime.interface if self._contract.runtime else None
-        if interface is None or interface.kind not in {"http", "callable"}:
+        if interface is None or interface.kind not in {"http", "callable", "command"}:
             raise CallAborted(
-                "chat_interface_unsupported: an HTTP or callable runtime interface is required"
+                "chat_interface_unsupported: an HTTP, callable, or command runtime interface is required"
             )
         endpoint = runtime.endpoints.get("target_http")
         if endpoint is None:
@@ -480,7 +497,9 @@ class HostedChatCallRunner:
                 "chat_capability_unavailable: target_http endpoint is absent"
             )
 
-        source_key = getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        source_key = (
+            getattr(scenario, "source_scenario_key", None) or scenario.scenario_key
+        )
         document = _with_scenario_edits(
             _scenario_document(self._context.bundle_dir, source_key),
             getattr(self._context.job, "metadata", None),
@@ -495,21 +514,14 @@ class HostedChatCallRunner:
             runtime,
             self._context.source_directory,
         )
-        adapter_path = "/invoke" if interface.kind == "callable" else interface.path
-        adapter_protocol = (
-            "fi.alk" if interface.kind == "callable" else interface.protocol
-        )
-        wrapper = HTTPAgentWrapper(
-            endpoint=urljoin(
-                endpoint.address.rstrip("/") + "/", adapter_path.lstrip("/")
-            ),
-            protocol=adapter_protocol,
-            include_tools=interface.include_tools,
-            request_template=interface.request_template,
-            response_path=interface.response_path,
-            setup_requests=[
-                item.model_dump(mode="python") for item in interface.setup_requests
-            ],
+        from .chat_transport import create_chat_wrapper
+
+        wrapper = create_chat_wrapper(
+            interface,
+            endpoint.address,
+            wrapper_type=HTTPAgentWrapper,
+            secret_values=self._context.target_provider_secret_values,
+            local_auth_values=getattr(runtime, "_local_auth_values", None),
             timeout=_chat_target_timeout_seconds(),
             metadata={
                 "target": "hosted_repository_runtime",
@@ -547,17 +559,41 @@ class HostedChatCallRunner:
             )
         except CallAborted as exc:
             failure = exc
-            raise
+            transcript = getattr(exc, "partial_transcript", None) or Transcript()
         except Exception as exc:  # noqa: BLE001 - convert target transport failures to call faults
+            status = (
+                exc.trace.get("status_code")
+                if isinstance(exc, HTTPCallFailure)
+                else None
+            )
             wrapped = CallAborted(
-                f"chat_target_failed: {type(exc).__name__}: {exc}",
-                code="target_agent_failed",
+                f"chat_target_failed: {type(exc).__name__}: "
+                + sanitize_diagnostic(
+                    str(exc),
+                    {
+                        **self._context.target_provider_secret_values,
+                        **getattr(runtime, "_local_auth_values", {}),
+                    },
+                ),
+                code=(
+                    "call_failed"
+                    if isinstance(status, int)
+                    and status in {408, 429, 502, 503, 504}
+                    else "target_agent_failed"
+                ),
             )
             partial = getattr(exc, "partial_transcript", None)
             if partial is not None:
                 setattr(wrapped, "partial_transcript", partial)
             failure = wrapped
-            raise wrapped from exc
+            transcript = partial or Transcript()
+            trace = getattr(exc, "trace", None)
+            if trace is not None:
+                await self._adapter.upload_artifact(
+                    json.dumps(trace, sort_keys=True).encode("utf-8"),
+                    kind=ArtifactKind.TRACE,
+                    scenario_key=scenario.scenario_key,
+                )
         finally:
             await _record_text_usage(
                 self._context.usage_reporter,
@@ -604,7 +640,7 @@ class HostedChatCallRunner:
                 kind=ArtifactKind.TOOL_TRACE,
                 scenario_key=scenario.scenario_key,
             )
-        return CallOutcome(
+        outcome = CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),
             started_at=format_rfc3339_millis(started),
@@ -613,3 +649,7 @@ class HostedChatCallRunner:
             transcript_artifact=transcript_id,
             messages=tuple(transcript.canonical_messages()),
         )
+        if failure is not None:
+            failure.partial = outcome
+            raise failure
+        return outcome

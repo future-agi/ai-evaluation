@@ -11,6 +11,7 @@ All three are recorded, because how a conversation ended is often the finding.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -267,7 +268,7 @@ async def converse(
             record("customer", said)
         else:
             transcript.ended = RAN_OUT
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         # Preserve simulator usage already consumed before a target/provider failure.  Call
         # runners attach this partial transcript to the failed usage record instead of silently
         # dropping a paid attempt that never reached a normal return.
@@ -278,6 +279,14 @@ async def converse(
             transcript.simulator_output_tokens,
         ) = getattr(customer, "simulator_tokens", (0, 0))
         setattr(exc, "partial_transcript", transcript)
+        trace_path = getattr(target, "trace_path", None)
+        trace = getattr(exc, "trace", None)
+        if trace_path is not None and trace is not None:
+            from pathlib import Path
+
+            path = Path(trace_path).with_name("http-failure.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(trace, sort_keys=True) + "\n", encoding="utf-8")
         raise
     finally:
         await customer.__aexit__(None, None, None)

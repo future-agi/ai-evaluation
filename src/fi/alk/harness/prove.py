@@ -26,6 +26,7 @@ Only a scenario that clears all three is kept. That is the green light.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 from dataclasses import dataclass, field, replace
@@ -37,13 +38,14 @@ from .checks import Outcome, reference_of, run_check
 from .folder import apply_setup, check_ready
 from .scenario import Scenario
 from .world.runtime import Call, GeneratedWorld
-from .world.snapshot import restore
+from .world.snapshot import restore, read_manifest
 
 
 @dataclass
 class Proof:
     """Whether a scenario holds up, and what happened when it was tried."""
 
+    deferred: bool = False
     ready: bool = False
     solvable: bool = False
     vacuous: bool = True
@@ -95,6 +97,8 @@ class Proof:
 
     def why(self) -> str:
         """What to fix, in the order worth fixing it."""
+        if self.deferred and not self.broken:
+            return "DEFERRED: setup, readiness and outcome checks require the live runtime; file access declarations do not verify fixture contents."
         if self.broken and not self.why_not_ready:
             return "these checks are broken, not failing:\n  - " + "\n  - ".join(self.broken)
         if not self.ready:
@@ -192,6 +196,10 @@ def prepared(
     scenario: Scenario, world_root: Path
 ) -> tuple[GeneratedWorld, Outcome, Outcome]:
     """A fresh world with this scenario's setup applied, and how that went."""
+    if native_runtime(world_root):
+        raise RuntimeError("native_fixture_proof_deferred_to_live_runtime")
+    if workspace_fixture(scenario, Catalogue()):
+        raise RuntimeError("workspace_fixture_proof_deferred_to_live_runtime")
     world = restore(world_root)
     world.reset()
     applied = apply_setup(scenario, world)
@@ -326,6 +334,95 @@ def _run(
     return world, list(world.calls), refused, sorted(set(assumed))
 
 
+def native_runtime(world_root: Path) -> bool:
+    try:
+        return bool(read_manifest(world_root).get("native_runtime", False))
+    except FileNotFoundError:
+        return False
+
+
+def workspace_bindings(world_root: Path) -> dict[str, str]:
+    from .understand import load
+
+    contract = load(world_root)
+    return dict(contract.runtime.workspaces) if contract and contract.runtime else {}
+
+
+def _file_calls(tree: ast.AST) -> list[ast.Call]:
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "world"
+            and node.func.attr in {"write_file", "read_file"}]
+
+
+def workspace_fixture(scenario: Scenario, catalogue: Catalogue) -> bool:
+    sources = [scenario.setup_code, scenario.ready_code]
+    sources.extend(source for _, source in _checks_for(scenario, catalogue))
+    for source in sources:
+        try:
+            if _file_calls(ast.parse(source)):
+                return True
+        except SyntaxError:
+            continue
+    return False
+
+
+def workspace_fixture_problems(scenario: Scenario, catalogue: Catalogue,
+                               bindings: dict[str, str]) -> list[str]:
+    """Check fixture structure; only live readiness can verify target file contents."""
+    if not bindings:
+        return ["file fixtures require a declared runtime.workspaces binding"]
+    from .world.files import relative_parts
+    from .world.errors import WorldUsageError
+
+    writes = False
+    reads = False
+    problems = []
+    sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]
+    sources.extend(("check", source) for _, source in _checks_for(scenario, catalogue))
+    for entry, source in sources:
+        if not source.strip():
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            problems.append(f"{entry} syntax error: {exc.msg}")
+            continue
+        if not any(isinstance(node, ast.FunctionDef) and node.name == entry for node in tree.body):
+            problems.append(f"missing {entry} function")
+        for node in _file_calls(tree):
+            writes |= entry == "setup" and node.func.attr == "write_file"
+            reads |= entry == "ready" and node.func.attr == "read_file"
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                try:
+                    relative_parts(node.args[1].value)
+                except WorldUsageError as exc:
+                    problems.append(str(exc))
+            if node.args and isinstance(node.args[0], ast.Constant):
+                name = node.args[0].value
+                if name not in bindings:
+                    problems.append(f"workspace {name!r} is not declared in runtime.workspaces")
+    if writes and not reads:
+        problems.append("ready(world) must read back seeded files and verify their contents in the live runtime")
+    return problems
+
+
+def native_source_problem(source: str, entry: str) -> str:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return f"{entry} syntax error: {exc.msg}"
+    if not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry
+               for node in tree.body):
+        return f"missing {entry} function"
+    forbidden = {"state", "query", "put", "change", "drop", "call", "read_file", "write_file",
+                 "checkpoint", "restore", "handle_tool_call"}
+    if any(isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+           and node.value.id == "world" and node.attr in forbidden for node in ast.walk(tree)):
+        return "native fixtures/checks must use actual API responses or native call observations, not shadow state"
+    return ""
+
+
 def _declared_options(world_root: Path) -> set[str]:
     """`tool.argument` names whose values the agent's own tool definitions limit to a set."""
     try:
@@ -407,6 +504,23 @@ def prove(
     """Run all three gates and say whether this scenario is worth keeping."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
+    if workspace_fixture(scenario, catalogue) and not native_runtime(world_root):
+        proof.deferred = True
+        proof.broken = workspace_fixture_problems(scenario, catalogue, workspace_bindings(world_root))
+        return proof
+    if native_runtime(world_root):
+        proof.deferred = True
+        sources = [("setup", scenario.setup_code), ("ready", scenario.ready_code)]
+        sources += [("check", source) for _, source in checks]
+        for entry, source in sources:
+            if not source.strip():
+                continue
+            problem = native_source_problem(source, entry)
+            if problem:
+                proof.broken.append(problem)
+        if scenario.setup_code.strip() and not scenario.ready_code.strip():
+            proof.broken.append("native fixture setup requires ready(world) to verify actual API state")
+        return proof
     reference = reference_of(scenario.solution)
     if not checks:
         # Every sub-goal is judged on the call itself, so the gates that still mean something are

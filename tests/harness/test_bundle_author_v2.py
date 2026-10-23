@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,7 +15,10 @@ from fi.alk.harness.bundle_author_v2 import (
     _compile_source_tool_handlers,
     _contract_column_declarations,
     _contract_sql_type,
+    _docker_python,
+    _source_schema_artifacts,
     _sqlite_sql,
+    _uv_sync_build_command,
     author_bundle_v2,
     reseal_scenarios,
     resolve_environment_plan,
@@ -287,6 +292,52 @@ def test_phone_connect_only_uses_platform_telephony_without_target_secret(
     preflight_bundle(tmp_path / "bundle", bundle, parallelism=1, secret_refs={})
 
 
+def test_phone_connect_only_does_not_require_a_local_transport_seam(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "phone-target"
+    source.mkdir()
+    job = HarnessJob.model_validate(
+        {
+            "job_id": "phone-only-job",
+            "run_id": "phone-only-run",
+            "execution": "hosted",
+            "source": {"kind": "provider", "visibility": "public"},
+            "agent": {
+                "connector": "phone",
+                "mode": "connect_only",
+                "config": {
+                    "phone_number": "+14155551234",
+                    "target_system_prompt": "Answer questions about a ride booking.",
+                },
+            },
+            "scenario_count": 1,
+            "runtime": {
+                "isolation": "dedicated_vm",
+                "cpu_units": 2,
+                "memory_mb": 4096,
+                "parallelism": 1,
+            },
+        }
+    )
+
+    plan = resolve_environment_plan(
+        source,
+        job,
+        contract_modality="voice",
+        runtime_dependencies=[
+            {
+                "kind": "transport",
+                "name": "phone_network",
+                "engine": "telephony",
+                "reached": {},
+            }
+        ],
+    )
+
+    assert plan.packaging == "provider_connect_only"
+
+
 def test_generic_connect_only_provider_uses_authored_world_schema(
     tmp_path: Path,
 ) -> None:
@@ -420,6 +471,56 @@ def test_bundle_compiles_discovered_source_tool_entrypoint(tmp_path: Path) -> No
         "email": "customer@example.com",
         "status": "active",
     }
+
+
+def test_tool_registration_is_not_observed_as_tool_execution(tmp_path: Path) -> None:
+    source = tmp_path / "chat-agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (source / "tools.py").write_text(
+        "class Editor:\n"
+        "    @classmethod\n"
+        "    def prepare(cls, context):\n"
+        "        return [{'name': 'edit', 'description': 'Edit a file'}]\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python3", "agent.py"],
+        interface={
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/chat", "include_tools": False,
+        },
+    )
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract["tool_entrypoints"] = [
+        {
+            "tool": "edit", "mode": "construct", "module": "tools",
+            "callable": "Editor.prepare", "factory": "Editor()",
+        }
+    ]
+    contract_path.write_text(json.dumps(contract))
+    bundle = author_bundle_v2(
+        source=source, job=_job(connector="http"), authoring=authoring,
+        output=tmp_path / "bundle",
+    )
+    process = next(p for p in bundle.processes if p.name == bundle.runtime.control_service)
+    trace = tmp_path / "agent-tool-calls.jsonl"
+    bootstrap = Path(__file__).resolve().parents[2] / "src/fi/alk/harness/livekit_tool_trace_bootstrap.py"
+    shutil.copy2(bootstrap, source / "sitecustomize.py")
+    result = subprocess.run(
+        [sys.executable, "-c", "from tools import Editor; print(Editor.prepare({}))"],
+        env={
+            **os.environ,
+            **{k: v.replace("{{WORLD_DIR}}", str(tmp_path)) for k, v in process.environment.items()},
+            "PYTHONPATH": str(source),
+        },
+        capture_output=True, text=True, check=True,
+    )
+    assert "Edit a file" in result.stdout
+    assert not trace.exists(), "Registering a tool does not prove the agent executed it"
 
 
 def test_auto_voice_contract_compiles_livekit_process_runtime(tmp_path: Path) -> None:
@@ -557,9 +658,16 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
 
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract.setdefault("runtime", {})["required_environment"] = {
+        "agent": ["GOOGLE_CLOUD_PROJECT"]
+    }
+    contract_path.write_text(json.dumps(contract))
+
     with pytest.raises(
         BundleAuthorError,
-        match="target_runtime_configuration_missing: environment:GOOGLE_CLOUD_PROJECT",
+        match="target_runtime_configuration_missing: agent:GOOGLE_CLOUD_PROJECT",
     ):
         author_bundle_v2(
             source=source,
@@ -634,6 +742,7 @@ def test_src_layout_keeps_nearest_project_manifest(tmp_path, project_dir, manife
             "--no-cache",
             "--python",
             "python3.14",
+            "--no-dev",
         ]
         assert any("download-files" in command for command in agent.build_commands)
     else:
@@ -688,7 +797,10 @@ def test_repository_runtime_environment_rejects_secrets(tmp_path: Path) -> None:
         )
 
 
-def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command", [None, ["python", "-m", "app.agent"]])
+def test_callable_contract_compiles_repository_callback_adapter(
+    tmp_path: Path, command: list[str] | None,
+) -> None:
     source = tmp_path / "ava"
     app = source / "app"
     app.mkdir(parents=True)
@@ -703,6 +815,11 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     (source / "requirements.txt").write_text("agent-simulate\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_callable_contract(authoring)
+    if command:
+        contract_path = authoring / "contract.json"
+        contract = json.loads(contract_path.read_text())
+        contract["runtime"]["command"] = command
+        contract_path.write_text(json.dumps(contract))
 
     bundle = author_bundle_v2(
         source=source,
@@ -712,7 +829,8 @@ def test_callable_contract_compiles_repository_callback_adapter(tmp_path: Path) 
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.build_commands[1][-1] == "requirements.txt"
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert "ThreadingHTTPServer" in agent.run_command[2]
@@ -769,7 +887,8 @@ def test_repository_callback_is_discovered_when_contract_omits_interface(
     )
 
     agent = next(process for process in bundle.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.run_command[:2] == [".venv/bin/python", "-c"]
     assert agent.environment["ALK_CALLBACK_ENTRYPOINT"] == "app.agent:agent_callback"
     assert bundle.capabilities["target_http"].service == "agent"
@@ -990,6 +1109,105 @@ def test_fixed_multi_store_fixture_compiles_to_a_preflight_clean_bundle(
     assert manifest.capabilities["target_http"].service == "agent"
     assert manifest.capabilities["cache_redis"].service == "cache"
     preflight_bundle(output, manifest, parallelism=2, secret_refs={})
+
+
+def test_native_multi_store_contract_uses_source_compose_dependency_topology(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "harness"
+        / "generic_multi_store_chat"
+    )
+    runtime = {
+        "language": "python",
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http",
+            "protocol": "openai_chat",
+            "port": 8080,
+            "path": "/v1/chat/completions",
+            "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {
+            "name": "account store",
+            "kind": "datastore",
+            "engine": "postgresql",
+            "reached": {"dsn_env": "DATABASE_URL", "database": "app"},
+        },
+        {
+            "name": "access cache",
+            "kind": "queue",
+            "engine": "redis",
+            "reached": {"dsn_env": "CACHE_URL"},
+        },
+    ]
+
+    plan = resolve_environment_plan(
+        source,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.depends_on == ["world-db", "cache"]
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
+    assert plan.capabilities["target_http"].service == "agent"
+    assert plan.capabilities["cache_redis"].service == "cache"
+
+
+def test_native_multi_store_contract_accepts_compose_list_environment(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    source = tmp_path / "generic_multi_store_chat"
+    shutil.copytree(
+        Path(__file__).resolve().parents[2] / "examples" / "harness" / "generic_multi_store_chat",
+        source,
+    )
+    compose = source / "compose.yml"
+    compose.write_text(compose.read_text().replace(
+        "      DATABASE_URL: postgresql://source:source@postgres:5432/app\n"
+        "      CACHE_URL: redis://cache:6379/2\n"
+        '      PORT: "8080"\n',
+        "      - DATABASE_URL=postgresql://source:source@postgres:5432/app\n"
+        "      - CACHE_URL=redis://cache:6379/2\n"
+        "      - PORT=8080\n",
+    ))
+    runtime = {
+        "language": "python", "execution": "native", "command": ["python", "agent.py"],
+        "required_environment": {"agent": ["DATABASE_URL", "CACHE_URL"]},
+        "interface": {
+            "kind": "http", "protocol": "openai_chat", "port": 8080,
+            "path": "/v1/chat/completions", "health_path": "/health",
+        },
+    }
+    dependencies = [
+        {"name": "account store", "kind": "datastore", "engine": "postgresql",
+         "reached": {"dsn_env": "DATABASE_URL", "database": "app"}},
+        {"name": "access cache", "kind": "queue", "engine": "redis",
+         "reached": {"dsn_env": "CACHE_URL"}},
+    ]
+
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_modality="chat",
+        contract_interface_kind="http", contract_runtime=runtime,
+        runtime_dependencies=dependencies,
+    )
+
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    assert agent.environment["CACHE_URL"] == "{{CACHE_URL}}/2"
 
 
 def test_bundle_never_persists_resolved_secret(tmp_path: Path) -> None:
@@ -1466,6 +1684,197 @@ def test_generic_pipeline_packages_source_schema_and_world_separately(
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+def test_documented_readme_schema_is_adopted_without_setup_or_fixture_sql(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE DATABASE ticketsdb;
+\\c ticketsdb
+CREATE TABLE tickets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT
+);
+INSERT INTO tickets (title, description) VALUES ('Broken login', 'Fixture');
+```
+
+```sql
+CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert len(artifacts) == 1
+    assert artifacts[0].relative_path == "README.md#sql-1"
+    assert "CREATE TABLE tickets" in artifacts[0].sql
+    assert "title TEXT NOT NULL" in artifacts[0].sql
+    assert "CREATE DATABASE" not in artifacts[0].sql
+    assert "INSERT INTO" not in artifacts[0].sql
+    assert "embedding" not in artifacts[0].sql
+
+
+def test_documented_readme_schema_keeps_dependencies_across_sql_fences(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE ride_status AS ENUM ('requested', 'accepted');
+CREATE SEQUENCE ride_number_seq;
+CREATE TABLE rides (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status ride_status NOT NULL,
+    ride_number BIGINT DEFAULT nextval('ride_number_seq')
+);
+```
+
+```postgresql
+CREATE TABLE riders (id UUID PRIMARY KEY);
+ALTER TABLE rides ADD COLUMN rider_id UUID REFERENCES riders(id);
+CREATE INDEX rides_rider_id_idx ON rides (rider_id);
+INSERT INTO riders VALUES (gen_random_uuid());
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-2",
+    ]
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert "CREATE EXTENSION" in sql
+    assert "CREATE TYPE ride_status" in sql
+    assert "CREATE SEQUENCE ride_number_seq" in sql
+    assert "CREATE TABLE rides" in sql
+    assert "CREATE TABLE riders" in sql
+    assert "ALTER TABLE rides" in sql
+    assert "CREATE INDEX rides_rider_id_idx" in sql
+    assert "INSERT INTO" not in sql
+
+
+def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        "FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.10,<3.13'\n",
+        encoding="utf-8",
+    )
+
+    assert _docker_python(tmp_path) == "python3.12"
+
+
+@pytest.mark.parametrize("version", ["3.14", "3.14.2"])
+@pytest.mark.parametrize("manifest", ["pyproject.toml", "requirements.txt", None])
+def test_native_python_provisions_source_pin(tmp_path: Path, version: str, manifest: str | None) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / ".python-version").write_text(version + "\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    if manifest:
+        (tmp_path / manifest).write_text(
+            "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+            if manifest == "pyproject.toml" else ""
+        )
+    process = _plan_python(
+        tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+        needs_secrets=False,
+    )
+    command = " ".join(process.build_commands[0])
+    assert "uv " in command
+    assert "--python" in command
+    assert version in command
+    if manifest != "pyproject.toml":
+        assert process.run_command == [".venv/bin/python", "agent.py"]
+
+
+def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'case " $* " in\n'
+        '  *" --locked "*) echo "The lockfile at uv.lock needs to be updated" >&2; exit 2;;\n'
+        "  *) exit 0;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(
+            tmp_path, "python3.12", extra_arguments=["--all-packages", "--extra", "cloud"]
+        ),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    attempts = calls.read_text(encoding="utf-8").splitlines()
+    assert len(attempts) == 2
+    assert "--locked" in attempts[0]
+    assert "--locked" not in attempts[1]
+    assert "--no-dev" in attempts[0]
+    assert "--no-dev" in attempts[1]
+    assert all("--all-packages --extra cloud" in attempt for attempt in attempts)
+
+
+def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    calls = tmp_path / "calls"
+    uv = binary / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UV_CALLS"\n'
+        'echo "Could not connect to package registry" >&2\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+    completed = subprocess.run(
+        _uv_sync_build_command(tmp_path, "python3.12"),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binary}:{os.environ['PATH']}",
+            "UV_CALLS": str(calls),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 7
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+
+
 def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
@@ -1530,8 +1939,9 @@ def test_generic_pipeline_prefers_canonical_world_ir(tmp_path: Path) -> None:
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
+@pytest.mark.parametrize("source_invariants", [CheckStatus.PASSED, CheckStatus.NOT_APPLICABLE])
 def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
-    tmp_path: Path,
+    tmp_path: Path, source_invariants,
 ) -> None:
     source = tmp_path / "source"
     (source / "db").mkdir(parents=True)
@@ -1579,13 +1989,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.PASSED,
             processes=CheckStatus.PASSED,
-            source_invariants=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
+            source_invariants=source_invariants,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
             action_behavior="0/0",
             reset_equivalence=CheckStatus.PASSED,
             world_isolation=CheckStatus.PASSED,
         ),
+        limitations=("No runtime SQL business tables; private state is not certified",),
         repairs=RepairHistory(
             decisions=(),
             results=(),
@@ -1598,10 +2010,9 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         certificate.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
 
-    # Build/cache directories do not alter source identity.  They also must not cause a second
-    # compilation to replace the exact environment bytes that passed runtime validation.
-    (source / "build").mkdir()
-    (source / "build" / "generated.py").write_text(
+    # Excluded interpreter caches must not replace the certified environment bytes.
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "generated.pyc").write_text(
         "def agent_callback(message):\n    return message\n", encoding="utf-8"
     )
     execution = tmp_path / "execution"
@@ -1612,6 +2023,16 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
     assert reused.digest == manifest.digest
     assert (tmp_path / "runtime-validation.json").is_file()
     assert load_bundle_v2(execution).digest == manifest.digest
+
+    changed_world = WorldIR.create(
+        source_model_fingerprint="sha256:" + "f" * 64, tables=()
+    )
+    (artifact_root / "world-ir.json").write_text(changed_world.model_dump_json())
+    with pytest.raises(BundleAuthorError, match="certified_bundle_inputs_changed: world"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-world"
+        )
+    (artifact_root / "world-ir.json").write_text(world.model_dump_json())
 
     # A black-box hosted agent has no harness-owned schema/world. Those fingerprints are
     # intentionally synthetic and must not be compared to model-authored placeholder artifacts
@@ -1634,6 +2055,7 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
             static=CheckStatus.PASSED,
             schema_and_seed=CheckStatus.NOT_APPLICABLE,
             processes=CheckStatus.PASSED,
+            chat_ingress=CheckStatus.PASSED,
             source_invariants=CheckStatus.NOT_APPLICABLE,
             scenario_setup_ready="1/1",
             tool_contract="0/0",
@@ -1658,6 +2080,15 @@ def test_generic_pipeline_reuses_the_exact_runtime_certified_bundle(
         source=source, job=job, authoring=authoring, output=external_execution
     )
     assert external_reused.digest == manifest.digest
+
+    from fi.alk.harness.certification import CertificationGateError
+
+    (source / "build").mkdir()
+    (source / "build" / "agent.py").write_text("print('new source')\n")
+    with pytest.raises(CertificationGateError, match="source digest"):
+        author_bundle_v2(
+            source=source, job=job, authoring=authoring, output=tmp_path / "changed-source"
+        )
 
 
 def test_generic_pipeline_requires_source_schema_and_world(tmp_path: Path) -> None:
@@ -2302,11 +2733,8 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
     (source / "main.py").write_text("print('real target output')\n", encoding="utf-8")
     authoring = _authoring(tmp_path)
-    _write_chat_contract(authoring, command=["python", "main.py"])
-    contract = json.loads((authoring / "contract.json").read_text(encoding="utf-8"))
-    contract.pop("data_store")
-    contract.pop("tools")
-    (authoring / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+    interface = {"kind": "command", "protocol": "fi.alk"}
+    _write_chat_contract(authoring, command=["python", "main.py"], interface=interface)
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
@@ -2322,69 +2750,72 @@ def test_chat_command_runtime_compiles_generic_subprocess_bridge(
     )
 
     agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.working_directory == "."
+    assert agent.source_origin == "bundle"
+    assert agent.working_directory == "generated/source/agent"
     assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
         [".venv/bin/python", "main.py"]
     )
     assert "ThreadingHTTPServer" in agent.run_command[-1]
     assert manifest.capabilities["target_http"].service == "agent"
     sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert sealed_contract["runtime"]["interface"] == interface
     preflight_bundle(output, manifest, parallelism=1, secret_refs={})
 
 
-def test_chat_callable_without_exported_callback_falls_back_to_command_bridge(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "source_text",
+    [
+        "print('target')\n",
+        "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+        "HTTPServer(('127.0.0.1', 9119), BaseHTTPRequestHandler).serve_forever()\n",
+    ],
+)
+@pytest.mark.parametrize("interface_kind", [None, "callable"])
+def test_chat_command_without_supported_interface_requires_runtime_repair(
+    tmp_path: Path, source_text: str, interface_kind: str | None,
 ) -> None:
+    from fi.alk.harness.authoring_runtime_validation import (
+        RuntimeValidationError,
+        _fallback_diagnostic,
+        _needs_runtime_plan_repair,
+    )
+
     source = tmp_path / "source"
     source.mkdir()
     (source / "requirements.txt").write_text("\n", encoding="utf-8")
-    (source / "main.py").write_text(
-        "async def main():\n    print('target')\n",
-        encoding="utf-8",
-    )
+    (source / "main.py").write_text(source_text, encoding="utf-8")
     authoring = _authoring(tmp_path)
     _write_chat_contract(
         authoring,
         command=["python", "main.py"],
         interface={
-            "kind": "callable",
+            "kind": interface_kind,
             "protocol": "fi.alk",
             "path": "",
             "health_path": "",
             "include_tools": True,
-        },
+        } if interface_kind else None,
     )
     with sqlite3.connect(authoring / "world.sqlite") as database:
         database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
 
     output = tmp_path / "bundle"
-    manifest = author_bundle_v2(
-        source=source,
-        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
-        authoring=authoring,
-        output=output,
+    with pytest.raises(
+        BundleAuthorError, match="generated_runtime_entrypoint_ambiguous"
+    ) as failure:
+        author_bundle_v2(
+            source=source,
+            job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+            authoring=authoring,
+            output=output,
+        )
+    diagnostic = _fallback_diagnostic(
+        RuntimeValidationError("environment", str(failure.value))
     )
-
-    agent = next(process for process in manifest.processes if process.name == "agent")
-    assert agent.environment["ALK_SUBPROCESS_COMMAND"] == json.dumps(
-        [".venv/bin/python", "main.py"]
-    )
-    assert "ThreadingHTTPServer" in agent.run_command[-1]
-    sealed_contract = json.loads((output / "contract.json").read_text(encoding="utf-8"))
-    assert sealed_contract["runtime"]["interface"] == {
-        "kind": "callable",
-        "protocol": "fi.alk",
-        "path": "",
-        "health_path": "",
-        "include_tools": False,
-    }
+    assert diagnostic.code == "generated_runtime_plan_invalid"
+    assert "chat" in diagnostic.redacted_message
+    assert _needs_runtime_plan_repair((diagnostic,))
+    assert not (output / "contract.json").exists()
 
 
 def test_declared_langgraph_graph_compiles_without_agent_script(tmp_path: Path) -> None:
@@ -2558,10 +2989,504 @@ def test_declared_http_runtime_uses_contract_command_port_and_health(
     assert agent.working_directory == "."
     assert agent.run_command == runtime["command"]
     assert agent.fixed_port == 9090
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
     readiness = next(
         item for item in plan.readiness if item.capability == "target_http"
     )
     assert readiness.path == "/docs"
+
+
+@pytest.mark.parametrize("declare_mount_root", [False, True])
+def test_declared_http_runtime_selects_gpt_researcher_compose_backend(
+    tmp_path: Path, monkeypatch, declare_mount_root: bool
+) -> None:
+    fixture = Path(__file__).parents[1] / "fixtures" / "gpt_researcher_compose.yml"
+    shutil.copyfile(fixture, tmp_path / "docker-compose.yml")
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12\nCMD uvicorn main:app --port 8000\n"
+    )
+    (tmp_path / "main.py").write_text("print('server')\n")
+    monkeypatch.setenv("PWD", "/ambient-private")
+    if declare_mount_root:
+        (tmp_path / "alk.yaml").write_text(
+            'schema_version: "1"\nruntime:\n  environment:\n    PWD: "."\n'
+        )
+    else:
+        with pytest.raises(
+            BundleAuthorError, match="compose_structural_configuration_missing: PWD"
+        ):
+            resolve_environment_plan(
+                tmp_path,
+                _job(connector="auto"),
+                contract_modality="chat",
+                contract_interface_kind="http",
+                contract_runtime={
+                    "command": ["python", "main.py"],
+                    "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+                },
+            )
+        return
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000, "health_path": "/"},
+        },
+    )
+    assert plan.control_service == "gpt-researcher"
+    assert [process.name for process in plan.processes] == [
+        "world-db",
+        "gpt-researcher",
+    ]
+    agent = plan.processes[1]
+    assert agent.environment["PWD"] == "."
+    assert agent.run_command == ["python", "main.py"]
+    assert agent.fixed_port == 8000
+    assert plan.capabilities["target_http"].container_port == 8000
+    assert (
+        next(
+            probe for probe in plan.readiness if probe.capability == "target_http"
+        ).path
+        == "/"
+    )
+
+
+@pytest.mark.parametrize("command", [[], ["python", "agent.py", "start"]])
+def test_voice_runtime_with_http_health_interface_keeps_worker_entrypoint(
+    tmp_path: Path, command: list[str]
+) -> None:
+    (tmp_path / "agent.py").write_text("print('worker')\n")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="livekit"),
+        contract_modality="voice",
+        contract_interface_kind="http",
+        contract_runtime={
+            "workdir": ".",
+            "command": command,
+            "interface": {"kind": "http", "port": 8081},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert "agent.py" in agent.run_command
+    assert agent.started_check.log_marker == "registered worker"
+
+
+def test_http_workspace_requires_native_command_before_selecting_internal_agent(
+    tmp_path: Path,
+) -> None:
+    backend = tmp_path / "backend"
+    harness = backend / "packages" / "harness"
+    extension = backend / "packages" / "extension-api"
+    harness.mkdir(parents=True)
+    extension.mkdir()
+    (backend / "pyproject.toml").write_text(
+        "[project]\nname='gateway'\nversion='1'\n"
+        "[tool.uv.workspace]\nmembers=['packages/harness', 'packages/extension-api']\n"
+    )
+    (backend / "uv.lock").write_text("version = 1\n")
+    (harness / "pyproject.toml").write_text("[project]\nname='harness'\nversion='1'\n")
+    (extension / "pyproject.toml").write_text(
+        "[project]\nname='extension-api'\nversion='1'\n"
+    )
+    (harness / "agent.py").write_text("agent = object()\n")
+    runtime = {
+        "workdir": "backend",
+        "command": [],
+        "interface": {"kind": "http", "port": 8001, "health_path": "/health"},
+    }
+    with pytest.raises(BundleAuthorError, match="runtime_http_command_missing"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime=runtime,
+        )
+
+    runtime["command"] = ["uv", "run", "--no-sync", "uvicorn", "app.gateway.app:app"]
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime,
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "backend"
+    assert agent.run_command == runtime["command"]
+    assert "--locked" in agent.build_commands[0][-1]
+    assert (
+        tmp_path / agent.working_directory / "packages/harness/pyproject.toml"
+    ).is_file()
+    assert (
+        tmp_path / agent.working_directory / "packages/extension-api/pyproject.toml"
+    ).is_file()
+
+
+def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: [{target: 8000, published: 8000}]\n"
+        "    depends_on: {cache: {condition: service_started}}\n"
+        "  cache:\n    image: redis:7\n    depends_on: [postgres]\n"
+        "  postgres:\n    image: postgres:16\n"
+        "  unrelated:\n    image: unsupported:latest\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+    assert next(
+        process for process in plan.processes if process.name == "backend"
+    ).depends_on == ["cache"]
+
+
+@pytest.mark.parametrize(
+    ("postgres_image", "redis_image", "redis_version"),
+    [
+        ("postgres", "redis", "7"),
+        ("registry.example/team/postgres:16", "bitnami/redis:7-alpine", "7"),
+    ],
+)
+def test_declared_compose_runtime_accepts_catalog_images_without_a_tag_or_with_a_namespace(
+    tmp_path: Path,
+    postgres_image: str,
+    redis_image: str,
+    redis_version: str,
+) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        "    depends_on: [cache, postgres]\n"
+        f"  cache:\n    image: {redis_image}\n"
+        f"  postgres:\n    image: {postgres_image}\n"
+    )
+
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+
+    cache = next(process for process in plan.processes if process.name == "cache")
+    assert cache.version == redis_version
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+
+
+@pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
+def test_declared_compose_runtime_rejects_ambiguous_or_missing_match(
+    tmp_path: Path, ports: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        f"  first:\n    build: .\n    ports: ['{ports}']\n"
+        f"  second:\n    build: .\n    ports: ['{ports}']\n"
+    )
+    with pytest.raises(BundleAuthorError, match="control_service_ambiguous"):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("dependency", "error"),
+    [
+        ("depends_on: [missing]", "compose_dependency_missing"),
+        ("depends_on: worker", "compose_dependency_invalid"),
+        ("depends_on: [{worker: {}}]", "compose_dependency_invalid"),
+        ("links: [worker]", "compose_dependency_unsupported"),
+        ("volumes_from: [worker]", "compose_dependency_unsupported"),
+        ("network_mode: service:worker", "compose_dependency_unsupported"),
+        ("ipc: service:worker", "compose_dependency_unsupported"),
+        ("pid: service:worker", "compose_dependency_unsupported"),
+        (
+            "environment: {CACHE_URL: 'redis://worker:6379'}",
+            "compose_dependency_undeclared",
+        ),
+        ("environment: [CACHE_HOST=worker]", "compose_dependency_undeclared"),
+    ],
+)
+def test_declared_compose_runtime_does_not_drop_dependency_references(
+    tmp_path: Path, dependency: str, error: str
+) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        f"    {dependency}\n"
+        "  worker:\n    build: ./worker\n"
+    )
+    with pytest.raises(BundleAuthorError, match=error):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="http",
+            contract_runtime={
+                "command": ["python", "main.py"],
+                "interface": {"kind": "http", "port": 8000},
+            },
+        )
+
+
+def test_declared_compose_http_runtime_ignores_udp_port_match(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  tcp:\n    build: .\n    ports: ['8000:8000/tcp']\n"
+        "  udp:\n    build: .\n    ports: [{target: 8000, protocol: udp}]\n"
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+    assert plan.control_service == "tcp"
+    assert [process.name for process in plan.processes] == ["world-db", "tcp"]
+
+
+def test_adk_web_command_without_interface_uses_source_http_api(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "software_bug_assistant"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='software-bug-assistant'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    command = [
+        "uv",
+        "run",
+        "adk",
+        "web",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+    ]
+    _write_chat_contract(authoring, command=command)
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.run_command[:2] == ["sh", "-c"]
+    assert "adk web" in agent.run_command[-1]
+    assert "$PORT" in agent.run_command[-1]
+    assert agent.fixed_port_consumable is True
+    assert agent.environment["PORT"] == "{{PORT_agent}}"
+    assert "ALK_SUBPROCESS_COMMAND" not in agent.environment
+    assert "ThreadingHTTPServer" not in agent.run_command[-1]
+    assert agent.fixed_port == 8080
+    readiness = next(
+        item for item in manifest.readiness if item.capability == "target_http"
+    )
+    assert readiness.path == "/docs"
+
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["kind"] == "http"
+    assert interface["protocol"] == "json_template"
+    assert interface["path"] == "/run_sse"
+    assert interface["request_template"]["app_name"] == "software_bug_assistant"
+    assert interface["setup_requests"][0]["path"] == (
+        "/apps/software_bug_assistant/users/{{thread_id}}/sessions"
+    )
+
+
+def test_adk_source_toolbox_is_hosted_against_world_database(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    tools = source / "deployment" / "mcp-toolbox"
+    app.mkdir(parents=True)
+    tools.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    (app / "tools.py").write_text(
+        "from toolbox_core import ToolboxSyncClient\n"
+        "tools = ToolboxSyncClient('http://127.0.0.1:5000').load_toolset('tickets')\n",
+        encoding="utf-8",
+    )
+    (tools / "tools.yaml").write_text(
+        "sources:\n"
+        "  db:\n"
+        "    kind: postgres\n"
+        "tools:\n"
+        "  get-ticket:\n"
+        "    kind: postgres-sql\n"
+        "    source: db\n"
+        "    description: Get one ticket.\n"
+        "    parameters:\n"
+        "      - name: ticket_id\n"
+        "        type: string\n"
+        "    statement: SELECT * FROM tickets WHERE ticket_id = $1;\n"
+        "toolsets:\n"
+        "  tickets:\n"
+        "    - get-ticket\n",
+        encoding="utf-8",
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=[
+            "uv",
+            "run",
+            "adk",
+            "web",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+        ],
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE tickets (ticket_id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    adapter = next(
+        process for process in manifest.processes if process.name == "mcp-toolbox"
+    )
+    assert adapter.depends_on == ["world-db"]
+    assert adapter.environment["DATABASE_URL"] == "{{WORLD_DATABASE_URL}}"
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "mcp-toolbox" in agent.depends_on
+    assert agent.environment["MCP_TOOLBOX_URL"] == "{{MCP_TOOLBOX_URL}}"
+    assert (output / "generated" / "mcp-toolbox" / "server.py").is_file()
+    definition = json.loads(
+        (output / "generated" / "mcp-toolbox" / "toolbox.json").read_text()
+    )
+    assert definition["tools"]["get-ticket"]["statement"].endswith("$1;")
+
+
+def test_explicit_adk_command_keeps_one_shot_adapter(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='target'\nversion='1'\n", encoding="utf-8"
+    )
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "run", "app"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert "ThreadingHTTPServer" in agent.run_command[-1]
+    assert "ALK_SUBPROCESS_COMMAND" in agent.environment
+
+
+def test_adk_web_command_repairs_stale_http_interface(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    app = source / "bug_agent"
+    app.mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        "[project]\nname='bug-agent'\nversion='1'\n", encoding="utf-8"
+    )
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (app / "agent.py").write_text("root_agent = object()\n", encoding="utf-8")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["uv", "run", "adk", "web", "--port=9090"],
+        interface={
+            "kind": "http",
+            "port": 9090,
+            "path": "/run",
+            "request_template": {
+                "new_message": {"parts": [{"text": "{{new_message}}"}]}
+            },
+        },
+    )
+    with sqlite3.connect(authoring / "world.sqlite") as database:
+        database.execute("CREATE TABLE fixture (id TEXT PRIMARY KEY)")
+
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source,
+        job=_job(connector="auto", metadata={"generic_harness_v1": True}),
+        authoring=authoring,
+        output=output,
+    )
+
+    agent = next(process for process in manifest.processes if process.name == "agent")
+    assert agent.fixed_port == 9090
+    assert agent.fixed_port_consumable is True
+    interface = json.loads((output / "contract.json").read_text())["runtime"][
+        "interface"
+    ]
+    assert interface["path"] == "/run_sse"
+    assert interface["health_path"] == "/docs"
+    assert interface["request_template"]["app_name"] == "bug_agent"
 
 
 @pytest.mark.parametrize(
@@ -2704,3 +3629,617 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
     assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
     assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
     assert reseal_scenarios(authoring) == digest
+
+
+def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('source')")
+    (source / "optional.py").write_text(
+        "import os\ndef unused(): return os.environ['UNUSED_TOKEN']\n"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=output
+    )
+    inventory = json.loads((output / "credentials.json").read_text())
+    unused = next(
+        item
+        for item in inventory["requirements"]
+        if item["environment_name"] == "UNUSED_TOKEN"
+    )
+    assert unused["status"] == "missing"
+    assert unused["required"] is True
+
+@pytest.mark.parametrize("version", ["3.12", "3.12.8"])
+def test_native_runtime_honors_declared_python_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="http"),
+        contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    command = process.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "==3.12.*,>=3.12" if version == "3.12" else "python3.12.8"
+    )
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+@pytest.mark.parametrize("version", ["3.11.9", "nonsense", "3.12garbage"])
+def test_native_runtime_rejects_invalid_declared_python(tmp_path: Path, version: str) -> None:
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported"):
+        resolve_environment_plan(
+            tmp_path, _job(connector="http"),
+            contract_runtime={"language": "python", "version": version, "command": ["python", "agent.py"]},
+        )
+
+
+@pytest.mark.parametrize("child", [".", "packages/chat", "-chat"])
+def test_native_bun_plan_installs_locked_root_and_preserves_child_command(
+    tmp_path: Path, child: str
+) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "plain-chat" if child == "." else "workspace-bot",
+                "packageManager": "bun@1.3.14",
+            }
+        )
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion": 1}')
+    component = tmp_path / child
+    component.mkdir(parents=True, exist_ok=True)
+    if child != ".":
+        (component / "package.json").write_text('{"name":"chat"}')
+    (component / "server.ts").write_text("Bun.serve({fetch: () => new Response('ok')})")
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "language": "bun",
+            "version": "1.3.14",
+            "execution": "native",
+            "workdir": child,
+            "command": ["bun", "run", "server.ts"],
+            "install": "touch /tmp/must-not-execute",
+            "workspaces": {"project": "files"},
+            "interface": {"kind": "http", "port": 8001},
+        },
+    )
+    agent = next(process for process in plan.processes if process.name == "agent")
+    assert agent.working_directory == "."
+    assert agent.workspaces == {
+        "project": "files" if child == "." else child + "/files"
+    }
+    assert agent.build_commands[-1] == ["bun", "install", "--frozen-lockfile"]
+    assert agent.run_command == (
+        ["bun", "run", "server.ts"]
+        if child == "."
+        else [
+            "sh",
+            "-c",
+            'cd "./$1" && shift && exec "$@"',
+            "alk-source-process",
+            child,
+            "bun",
+            "run",
+            "server.ts",
+        ]
+    )
+    assert "must-not-execute" not in repr(agent.build_commands)
+
+
+@pytest.mark.parametrize(
+    "manifest,lock,version,command,error",
+    [
+        ({}, True, "", ["bun", "run", "server.ts"], "package_manager_missing"),
+        (
+            {"packageManager": "bun@latest"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "npm@10.0.0"},
+            True,
+            "",
+            ["bun", "run", "server.ts"],
+            "package_manager_unpinned",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            False,
+            "",
+            ["bun", "run", "server.ts"],
+            "lock_required",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "1.3.13",
+            ["bun", "run", "server.ts"],
+            "version_mismatch",
+        ),
+        (
+            {"packageManager": "bun@1.3.14"},
+            True,
+            "",
+            ["sh", "-c", "bun server.ts"],
+            "command_required",
+        ),
+        ([], True, "", ["bun", "run", "server.ts"], "manifest_invalid"),
+    ],
+)
+def test_native_bun_rejects_invalid_source(
+    tmp_path: Path, manifest, lock, version, command, error: str
+) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text(json.dumps(manifest))
+    if lock:
+        (tmp_path / "bun.lock").write_text("{}")
+    with pytest.raises(BundleAuthorError, match=error):
+        _plan_source_process(
+            tmp_path,
+            language="bun",
+            name="agent",
+            root=tmp_path,
+            entry=None,
+            control=True,
+            needs_secrets=False,
+            version=version,
+            run_override=command,
+        )
+
+
+def test_native_bun_requires_matching_installed_toolchain(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    process = _plan_source_process(
+        tmp_path,
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    command = [sys.executable, *process.build_commands[0][1:]]
+    missing = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert missing.returncode != 0
+    assert "runtime_bun_toolchain_missing" in missing.stderr
+    binary = tmp_path / "bun"
+    binary.write_text("#!/bin/sh\necho 1.3.13\n")
+    binary.chmod(0o755)
+    wrong = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert wrong.returncode != 0
+    assert "runtime_bun_toolchain_version_mismatch" in wrong.stderr
+    binary.write_text("#!/bin/sh\necho 1.3.14\n")
+    matching = subprocess.run(
+        command, env={"PATH": str(tmp_path)}, capture_output=True, text=True
+    )
+    assert matching.returncode == 0
+    assert matching.stdout.strip() == "Bun toolchain 1.3.14"
+
+
+def test_native_bun_rejects_ambiguous_and_symlink_lock(tmp_path: Path) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_source_process
+
+    (tmp_path / "package.json").write_text('{"packageManager":"bun@1.3.14"}')
+    (tmp_path / "bun.lock").write_text("{}")
+    (tmp_path / "bun.lockb").write_bytes(b"frozen")
+    kwargs = dict(
+        language="bun",
+        name="agent",
+        root=tmp_path,
+        entry=None,
+        control=True,
+        needs_secrets=False,
+        run_override=["bun", "server.ts"],
+    )
+    with pytest.raises(BundleAuthorError, match="lock_required"):
+        _plan_source_process(tmp_path, **kwargs)
+    (tmp_path / "bun.lockb").unlink()
+    (tmp_path / "bun.lock").unlink()
+    (tmp_path / "bun.lock").symlink_to(tmp_path / "package.json")
+    with pytest.raises(BundleAuthorError, match="manifest_unsafe"):
+        _plan_source_process(tmp_path, **kwargs)
+
+
+def test_native_process_runs_from_scanned_bundle_context(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("from helper import answer\nprint(answer())\n")
+    (source / "helper.py").write_text("def answer():\n    return 'chat-ready'\n")
+    (source / "fixtures").mkdir()
+    (source / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (source / "manifest.json").write_text('{"application": "fixture"}')
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(
+        authoring,
+        command=["python", "agent.py"],
+        interface={"kind": "command", "protocol": "fi.alk"},
+    )
+    document = json.loads((authoring / "contract.json").read_text())
+    document["runtime"]["execution"] = "native"
+    (authoring / "contract.json").write_text(json.dumps(document))
+    output = tmp_path / "bundle"
+    with pytest.raises(ValueError, match="generated_runtime_secret_material_detected"):
+        author_bundle_v2(
+            source=source,
+            authoring=authoring,
+            job=_job(connector="auto"),
+            output=output,
+        )
+    document["runtime"]["context_excludes"] = ["fixtures"]
+    (authoring / "contract.json").write_text(json.dumps(document))
+    manifest = author_bundle_v2(
+        source=source, authoring=authoring, job=_job(connector="auto"), output=output
+    )
+    process = next(
+        p for p in manifest.processes if p.name == manifest.runtime.control_service
+    )
+    assert process.source_origin == "bundle"
+    context = output / process.working_directory
+    assert not (context / "fixtures").exists()
+    assert (context / "manifest.json").read_text() == '{"application": "fixture"}'
+    assert any(f.path.endswith("/manifest.json") for f in manifest.files)
+    assert (source / "fixtures/token.txt").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        [sys.executable, "agent.py"],
+        cwd=context,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == "chat-ready\n"
+    load_bundle_v2(output)
+
+
+@pytest.mark.parametrize("directory", ["vendor", "coverage", "target"])
+def test_packaged_runtime_preserves_named_source_packages(tmp_path, directory):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    (source / directory).mkdir(parents=True)
+    (source / directory / "agent.py").write_text("print('source preserved')\n")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", f"{directory}/agent.py"],
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert (
+        output / agent.working_directory / directory / "agent.py"
+    ).read_text() == "print('source preserved')\n"
+
+
+@pytest.mark.parametrize("required", ["agent.py", "requirements.txt", "extra.txt"])
+def test_packaging_cannot_exclude_declared_runtime_inputs(tmp_path, required):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    (tmp_path / "agent.py").write_text("print('ready')\n")
+    (tmp_path / "requirements.txt").write_text("")
+    (tmp_path / "extra.txt").write_text("")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        command=["python", "agent.py"],
+        requirements_files=["extra.txt"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    runtime.context_excludes = [required]
+    with pytest.raises(ValueError, match="context_exclude_required"):
+        _package_process_sources(tmp_path, tmp_path.parent / "bundle", plan, runtime)
+
+
+def test_workspace_exclusions_stay_relative_to_declared_component(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    (app / "fixtures").mkdir(parents=True)
+    (app / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (app / "server.ts").write_text("Bun.serve({fetch: () => new Response('ready')})")
+    (app / "package.json").write_text('{"name":"chat"}')
+    (tmp_path / "package.json").write_text(
+        '{"name":"workspace","packageManager":"bun@1.3.14","workspaces":["apps/*"]}'
+    )
+    (tmp_path / "bun.lock").write_text('{"lockfileVersion":1,"workspaces":{}}')
+    runtime = Runtime(
+        language="bun",
+        execution="native",
+        workdir="apps/chat",
+        command=["bun", "server.ts"],
+        context_excludes=["fixtures"],
+        interface={"kind": "http", "port": 8080, "path": "/chat"},
+    )
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime=runtime.model_dump(),
+    )
+    assert (
+        next(
+            p for p in plan.processes if p.name == plan.control_service
+        ).working_directory
+        == "."
+    )
+    output = tmp_path.parent / "bundle"
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "apps/chat/fixtures").exists()
+    assert (context / "apps/chat/server.ts").is_file()
+    assert (context / "package.json").is_file()
+
+
+def test_workspace_exclusions_accept_repository_relative_paths(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    app = tmp_path / "apps/chat"
+    app.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*"]\n'
+    )
+    (tmp_path / "uv.lock").write_text("version = 1\n")
+    (app / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (app / "server.py").write_text("print('ready')\n")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "auth.md").write_text("sk-unreviewedFixtureValue1234567890")
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/chat",
+        command=[sys.executable, "server.py"],
+        context_excludes=["docs/auth.md"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert not (context / "docs/auth.md").exists()
+    assert (context / "apps/chat/server.py").is_file()
+
+
+def test_python_workspace_packages_siblings_and_preserves_member_cwd(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    source = tmp_path / "source"
+    member = source / "apps" / "server"
+    sibling = source / "library"
+    member.mkdir(parents=True)
+    sibling.mkdir()
+    (source / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["apps/*", "library"]\n'
+    )
+    (source / "uv.lock").write_text("version = 1\n")
+    (member / "pyproject.toml").write_text(
+        '[project]\nname="chat-server"\nversion="1"\n'
+    )
+    (sibling / "pyproject.toml").write_text(
+        '[project]\nname="chat-library"\nversion="1"\n[project.optional-dependencies]\ntransport=[]\n'
+    )
+    (sibling / "value.txt").write_text("local source")
+    (member / "app.py").write_text(
+        'from pathlib import Path\nprint(Path("../../library/value.txt").read_text())\n'
+    )
+    (member / "fixtures").mkdir()
+    (member / "fixtures" / "token.txt").write_text(
+        "sk-unreviewedFixtureValue1234567890"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="native",
+        workdir="apps/server",
+        command=[sys.executable, "app.py"],
+        context_excludes=["fixtures"],
+        workspaces={"files": "files"},
+    )
+    plan = resolve_environment_plan(
+        source, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    agent = next(p for p in plan.processes if p.name == plan.control_service)
+    assert agent.working_directory == "."
+    assert agent.workspaces == {"files": "apps/server/files"}
+    assert "--package chat-server" in agent.build_commands[0][-1]
+    assert "--locked" in agent.build_commands[0][-1]
+    output = tmp_path / "bundle"
+    packaged = _package_process_sources(source, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    context = output / agent.working_directory
+    assert (context / "uv.lock").is_file()
+    assert not (context / "apps/server/fixtures").exists()
+    shutil.rmtree(source)
+    result = subprocess.run(
+        agent.run_command, cwd=context, check=True, text=True, capture_output=True
+    )
+    assert result.stdout == "local source\n"
+
+
+def test_compose_workspace_member_exclusions_without_runtime_workdir(tmp_path):
+    from fi.alk.harness.bundle_author_v2 import _package_process_sources
+    from fi.alk.harness.contract import Runtime
+
+    member = tmp_path / "server"
+    (member / "fixtures").mkdir(parents=True)
+    (member / "fixtures/token.txt").write_text("sk-unreviewedFixtureValue1234567890")
+    (member / "agent.py").write_text("print('ready')")
+    (member / "pyproject.toml").write_text('[project]\nname="server"\nversion="1"\n')
+    (member / "Dockerfile").write_text('FROM python:3.12\nCMD ["python", "agent.py"]\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server"]\n'
+    )
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n  agent:\n    build: ./server\n    command: [python, agent.py]\n"
+    )
+    runtime = Runtime(
+        language="python",
+        execution="compose",
+        compose_file="compose.yaml",
+        service="agent",
+        context_excludes=["fixtures"],
+    )
+    plan = resolve_environment_plan(
+        tmp_path, _job(connector="auto"), contract_runtime=runtime.model_dump()
+    )
+    output = tmp_path.parent / (tmp_path.name + "-bundle")
+    packaged = _package_process_sources(tmp_path, output, plan, runtime)
+    agent = next(p for p in packaged.processes if p.name == packaged.control_service)
+    assert not (output / agent.working_directory / "server/fixtures").exists()
+    assert (output / agent.working_directory / "server/agent.py").exists()
+    assert 'source_component' not in agent.model_dump()
+
+
+def test_environment_bundle_omits_public_suite_and_simulator(tmp_path):
+    source = tmp_path / "agent"
+    source.mkdir()
+    (source / "agent.py").write_text("print('agent')\n")
+    (source / "pyproject.toml").write_text("[project]\nname='agent'\nversion='1'\n")
+    authoring = _authoring(tmp_path)
+    _write_chat_contract(authoring, command=["python", "agent.py"], interface={
+        "kind": "http", "port": 8080, "path": "/chat",
+    })
+    (authoring / "simulator_prompt.md").write_text("Public simulator prompt")
+    shutil.rmtree(authoring / "scenarios")
+    job = _job(connector="auto", with_secrets=False)
+    output = tmp_path / "bundle"
+    manifest = author_bundle_v2(
+        source=source, job=job, authoring=authoring, output=output,
+        include_scenarios=False,
+    )
+    assert (output / "contract.json").is_file()
+    assert not (output / "scenarios").exists()
+    assert not (output / "simulator_prompt.md").exists()
+    assert "scenarios/" not in manifest.provenance.adopted_files
+    with pytest.raises(BundleAuthorError, match="scenario_artifacts_missing"):
+        author_bundle_v2(source=source, job=job, authoring=authoring, output=tmp_path / "full")
+
+
+def test_native_plan_preserves_config_files_and_rejects_unknown_aliases(tmp_path):
+    (tmp_path / "agent.py").write_text("print('hello')")
+    runtime = {
+        "execution": "native",
+        "command": ["python", "agent.py"],
+        "config_files": {
+            ".env": {"values": {"MODE": "test"}, "secret_aliases": {"API_KEY": "KEY"}}
+        },
+        "directories": ["state"],
+    }
+    job = _job(connector="auto", with_secrets=True, secret_aliases=("KEY",))
+    plan = resolve_environment_plan(
+        tmp_path,
+        job,
+        contract_modality="chat",
+        contract_interface_kind="command",
+        contract_runtime=runtime,
+    )
+    process = next(p for p in plan.processes if p.name == "agent")
+    assert process.config_files[".env"].secret_aliases == {"API_KEY": "KEY"}
+    assert process.environment["MODE"] == "test"
+    assert process.directories == ["state"]
+    with pytest.raises(
+        BundleAuthorError, match="runtime_config_target_reference_required"
+    ):
+        resolve_environment_plan(
+            tmp_path,
+            _job(connector="auto"),
+            contract_modality="chat",
+            contract_interface_kind="command",
+            contract_runtime=runtime,
+        )
+
+
+@pytest.mark.parametrize("version", ["3.11", "3.11.9"])
+def test_native_python_rejects_source_uv_environment_mismatch(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.14'\"]\n"
+    )
+    with pytest.raises(BundleAuthorError, match="generated_runtime_python_version_unsupported") as caught:
+        _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                     needs_secrets=False, version=version)
+    assert "python_version >= '3.14'" in str(caught.value)
+    assert "source .python-version: 3.14" in str(caught.value)
+
+
+@pytest.mark.parametrize("version", ["3.13", "3.13.8", ">=3.11"])
+def test_native_python_selects_compatible_uv_environment_without_overriding_explicit_version(tmp_path: Path, version: str) -> None:
+    from fi.alk.harness.bundle_author_v2 import _plan_python
+
+    (tmp_path / "agent.py").write_text("print('hello')\n")
+    (tmp_path / ".python-version").write_text("3.14\n")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.11,<3.15'\n"
+        "[tool.uv]\nenvironments=[\"python_version >= '3.13'\"]\n"
+    )
+    plan = _plan_python(tmp_path, name="agent", root=tmp_path, entry="agent.py", control=True,
+                        needs_secrets=False, version=version)
+    command = plan.build_commands[0]
+    assert command[command.index("--python") + 1] == (
+        "python3.13.8" if version == "3.13.8" else
+        "python3.13" if version == ">=3.11" else "<3.15,==3.13.*,>=3.11"
+    )
+
+
+@pytest.mark.parametrize("environments", [
+    ["python_version == '3.11'", "python_version >= '3.14'"],
+    ["python_version == '3.11' or python_version >= '3.14'"],
+    ["python_version >= '3.14'", "sys_platform == 'linux'"],
+    ["python_full_version >= '3.11.8'"],
+])
+def test_python_selection_preserves_uv_alternatives_and_target_only_constraints(tmp_path: Path, environments: list[str]) -> None:
+    from fi.alk.harness.generated_runtime import _python_language_version
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nrequires-python='>=3.11'\n[tool.uv]\n"
+        f"environments={json.dumps(environments)}\n"
+    )
+    assert _python_language_version(tmp_path, "3.11", interpreter_selector=True) == "==3.11.*,>=3.11"

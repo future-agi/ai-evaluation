@@ -34,15 +34,29 @@ async def main() -> None:
     state = payload["world"]
     rng = random.Random()
     rng.setstate(tuples(state["rng"]))
+    http_client = None
     try:
-        world = HostedWorld(
-            AttachedPostgresStore(state["dsn"]),
-            state["world_index"],
-            rng,
-            state["baseline"],
-            # The parent already validated this handle before scenario execution.
-            _validate_baseline=False,
-        )
+        if state.get("kind") == "native_observation":
+            from .world.observation import ObservationWorld
+            world = ObservationWorld(
+                state["world_index"], rng, state.get("endpoints", {}),
+                observations=state.get("observations", {}),
+            )
+            http_client = world
+        else:
+            world = HostedWorld(
+                AttachedPostgresStore(state["dsn"]),
+                state["world_index"],
+                rng,
+                state["baseline"],
+                # The parent already validated this handle before scenario execution.
+                _validate_baseline=False,
+                workspace_roots=state.get("workspace_roots", {}),
+                endpoints=state.get("endpoints", {}),
+                observations=state.get("observations", {}),
+            )
+            http_client = world._http_client
+        http_client._restore_private_http_state(payload.get("private_http", {}))
         handle = world.read_only() if state["read_only"] else world
         namespace: dict[str, Any] = {}
         exec(compile(payload["source"], "<scenario-phase>", "exec"), namespace)  # noqa: S102 - isolated scenario execution
@@ -81,6 +95,19 @@ async def main() -> None:
             ),
             "rng": rng.getstate(),
         }
+    if http_client is not None:
+        if isinstance(result.get("value"), str):
+            result["value"] = http_client._redact_http_text(result["value"])
+        try:
+            result["private_http"] = http_client._private_http_state()
+        except WorldUsageError:
+            result = {
+                "error": "WorldUsageError",
+                "world_error": "WorldUsageError",
+                "rng": rng.getstate(),
+                "private_http": {},
+            }
+        result["http_events"] = http_client._drain_http_events()
     fd = os.open(Path(sys.argv[1]), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as stream:
         json.dump(result, stream)

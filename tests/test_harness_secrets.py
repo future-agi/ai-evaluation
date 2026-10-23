@@ -4,9 +4,38 @@ from fi.alk.harness.secrets import (
     SecretResolutionError,
     resolve_worker_secrets,
     runtime_configuration_value,
+    target_provider_environment,
     worker_environment,
 )
 from fi.simulate.runtime.spec import SecretRef
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["VERTEXAI_LOCATION", "VERTEX_LOCATION", "VERTEXAI_PROJECT", "VERTEX_PROJECT"],
+)
+@pytest.mark.parametrize("explicit", ["", "chosen-value"])
+def test_target_provider_projection_preserves_explicit_aliases(alias, explicit):
+    values = {
+        "GOOGLE_CLOUD_LOCATION": "global",
+        "GOOGLE_CLOUD_PROJECT": "target-project",
+        alias: explicit,
+    }
+    projected = target_provider_environment(values)
+    assert projected[alias] == explicit
+    primary = "VERTEXAI_LOCATION" if "LOCATION" in alias else "VERTEXAI_PROJECT"
+    if alias != primary:
+        assert primary not in projected
+    assert len(values) == 3
+
+
+def test_target_provider_projection_does_not_read_host_configuration(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "host-location")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "host-project")
+    assert target_provider_environment({}) == {}
+    assert target_provider_environment({"GOOGLE_CLOUD_LOCATION": ""}) == {
+        "GOOGLE_CLOUD_LOCATION": ""
+    }
 
 
 def _ref(manager="futureagi", key="secret-livekit"):
@@ -105,9 +134,12 @@ def test_worker_inherits_runner_topology_but_uploaded_values_cannot_replace_it()
     assert child["HARNESS_RUNTIME_WEBHOOK_URL"] == "http://runner.internal:8787"
 
 
-def test_worker_never_inherits_host_voice_provider_credentials():
+def test_worker_inherits_only_the_runner_owned_caller_voice_credential():
     child = worker_environment(
-        {"LIVEKIT_API_KEY": "job-livekit"},
+        {
+            "LIVEKIT_API_KEY": "job-livekit",
+            "CARTESIA_API_KEY": "job-cartesia",
+        },
         host_environment={
             "PATH": "/bin",
             "LIVEKIT_API_KEY": "runner-livekit",
@@ -120,7 +152,7 @@ def test_worker_never_inherits_host_voice_provider_credentials():
     assert child["LIVEKIT_API_KEY"] == "job-livekit"
     assert "LIVEKIT_API_SECRET" not in child
     assert "DEEPGRAM_API_KEY" not in child
-    assert "CARTESIA_API_KEY" not in child
+    assert child["CARTESIA_API_KEY"] == "runner-cartesia"
 
 
 def test_worker_inherits_runner_model_roles_but_jobs_cannot_replace_them():

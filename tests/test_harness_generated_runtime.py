@@ -1097,3 +1097,74 @@ def test_real_unpackaged_node_agent_builds_and_starts(
     finally:
         stop_runtime(session)
         stop(session)
+
+@pytest.mark.parametrize("version", ["3.11.9", "not-a-version", "<3.12"])
+def test_generated_python_rejects_incompatible_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12'\n"
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    with pytest.raises(GeneratedRuntimeError, match="generated_runtime_python_version_unsupported"):
+        detect_generated_runtime(tmp_path, Runtime(language="python", version=version))
+
+
+def test_generated_python_range_intersects_project_requirement(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.13'\n"
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    plan = detect_generated_runtime(tmp_path, Runtime(language="python", version=">=3.12"))
+    assert "FROM python:3.13-slim" in plan.dockerfile
+
+
+def test_generated_python_minor_image_allows_source_patch_floor(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='agent'\nversion='1'\nrequires-python='>=3.12.1,<3.13'\n"
+    )
+    (tmp_path / "agent.py").write_text("print('agent')\n")
+    plan = detect_generated_runtime(tmp_path, Runtime(language="python", version="3.12"))
+    assert "FROM python:3.12-slim" in plan.dockerfile
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_workspace_root_does_not_promote_unrelated_or_excluded_member(
+    tmp_path, excluded
+):
+    from fi.alk.harness.generated_runtime import python_workspace_root
+
+    member = tmp_path / "server"
+    member.mkdir()
+    (member / "pyproject.toml").write_text('[project]\nname="server"\nversion="1"\n')
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers=["server"]\nexclude=["server"]\n'
+        if excluded
+        else '[project]\nname="unrelated"\nversion="1"\n'
+    )
+    assert python_workspace_root(tmp_path, member) == member
+
+
+@pytest.mark.parametrize("self_member", [".", "./", ".//./"])
+def test_workspace_self_member_preserves_children_and_unique_extra_owner(
+    tmp_path: Path, self_member: str
+) -> None:
+    from fi.alk.harness.generated_runtime import (
+        python_workspace_members,
+        python_workspace_root,
+        select_python_extras,
+    )
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname="root"\nversion="1"\n'
+        '[project.optional-dependencies]\nchat=["httpx"]\n'
+        f'[tool.uv.workspace]\nmembers=["{self_member}", "packages/*"]\n'
+        'exclude=["packages/excluded"]\n'
+    )
+    member = tmp_path / "packages" / "server"
+    member.mkdir(parents=True)
+    (tmp_path / "packages" / "excluded").mkdir()
+
+    assert python_workspace_members(tmp_path) == {member.resolve()}
+    assert python_workspace_root(tmp_path, member) == tmp_path.resolve()
+    selection = select_python_extras(tmp_path, ["chat"], required_owner=tmp_path)
+    assert selection.names == ("chat",)
+    assert not selection.all_packages

@@ -8,7 +8,10 @@ import mimetypes
 import os
 import re
 from pathlib import Path, PurePosixPath
+
 from pydantic import BaseModel, Field, model_validator
+
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
 
 ARTIFACT_MANIFEST_VERSION = "futureagi.harness-artifacts.v1"
 ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
@@ -66,12 +69,6 @@ class ArtifactManifest(BaseModel):
         return self
 
 
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
 _SECRET_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa"}
 _TERMINAL_STATUSES = {
     "completed",
@@ -116,13 +113,6 @@ def seal_artifacts(
                 f"artifact_symlink_forbidden: {path.relative_to(root)}"
             )
         relative = path.relative_to(root).as_posix()
-        if path.name in _SECRET_FILES or path.suffix.lower() in {
-            ".pem",
-            ".key",
-            ".p12",
-            ".pfx",
-        }:
-            raise ArtifactIntegrityError(f"artifact_secret_file_forbidden: {relative}")
         digest, size = _hash_file(path, relative)
         total += size
         if total > max_bytes:
@@ -273,17 +263,16 @@ def _scenario_evidence(root: Path) -> list[ScenarioEvidence]:
 
 
 def _hash_file(path: Path, relative: str) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            size += len(chunk)
-            digest.update(chunk)
-            if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                raise ArtifactIntegrityError(
-                    f"artifact_secret_material_detected: {relative}"
-                )
-    return digest.hexdigest(), size
+    if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
+        path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
+        and not is_public_pem(path)
+    ):
+        raise ArtifactIntegrityError(f"artifact_secret_file_forbidden: {relative}")
+    try:
+        return inspect_public_file(path)
+    except ValueError as exc:
+        raise ArtifactIntegrityError(f"artifact_secret_material_detected: {relative}") from exc
+
 
 
 def _kind(path: Path) -> str:

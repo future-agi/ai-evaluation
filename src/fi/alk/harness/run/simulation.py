@@ -40,7 +40,7 @@ from ..world.runtime import Call
 from .grade import Judgement, Result
 
 if TYPE_CHECKING:
-    from .conversation import Exchange
+    from .conversation import Exchange, Transcript
 
 RUNS = "runs"
 RUN = "run.json"
@@ -187,6 +187,7 @@ async def simulate(
     on_case_start: Callable[[Scenario], Any] | None = None,
     on_case_done: Callable[[Result], Any] | None = None,
     on_exchange: Callable[[str, dict[str, Any]], Any] | None = None,
+    require_tool_workflow: bool = False,
 ) -> dict[str, Any]:
     """Run a whole suite through ALK and write it out as one run.
 
@@ -195,7 +196,13 @@ async def simulate(
     """
     from .models import for_roles
 
+    from ..job import HarnessJob
+
     destination = Path(destination or world_root)
+    job_path = Path(world_root) / "job.json"
+    if job_path.is_file():
+        job = HarnessJob.model_validate_json(job_path.read_text())
+        require_tool_workflow = require_tool_workflow or job.require_tool_workflow
     if (Path(world_root) / "environment.json").exists() and concurrency != 1:
         # Restored source worlds point at the submitted Compose project's one real datastore.
         # Until a provisioner can clone that entire project per case, parallel cases would reset
@@ -235,6 +242,7 @@ async def simulate(
                     world_root,
                     folder,
                     roles=roles,
+                    require_tool_workflow=require_tool_workflow,
                     on_exchange=(
                         (lambda turn: on_exchange(scenario.name, turn))
                         if on_exchange
@@ -242,6 +250,9 @@ async def simulate(
                     ),
                 )
             except Exception as failed:  # noqa: BLE001 - one bad scenario never stops the suite
+                partial = getattr(failed, "partial_transcript", None)
+                if partial is not None:
+                    (folder / "partial-transcript.json").write_bytes(partial.artifact())
                 result = Result(
                     scenario=scenario.name,
                     tests=scenario.tests,
@@ -331,6 +342,7 @@ async def _run_one(
     *,
     roles: dict[str, str],
     on_exchange: Callable[[dict[str, Any]], Any] | None = None,
+    require_tool_workflow: bool = False,
 ) -> Result:
     """One scenario, in its own world, through ALK's runner.
 
@@ -375,7 +387,13 @@ async def _run_one(
             # build stage wrote for this agent. Everything around it is unchanged: same world,
             # same setup, same checks, same run folder.
             return await _typed_to(
-                scenario, contract, world, world_root, folder, roles=roles
+                scenario,
+                contract,
+                world,
+                world_root,
+                folder,
+                roles=roles,
+                require_tool_workflow=require_tool_workflow,
             )
 
         # Spoken. The agent is not here: it runs in Vapi, with its own prompt, its own model
@@ -389,6 +407,7 @@ async def _run_one(
             world_root,
             folder,
             roles=roles,
+            require_tool_workflow=require_tool_workflow,
             on_exchange=on_exchange,
         )
     finally:
@@ -420,6 +439,7 @@ async def _typed_to(
     folder: Path,
     *,
     roles: dict[str, str],
+    require_tool_workflow: bool = False,
 ) -> Result:
     """A typed conversation, with a model on both sides.
 
@@ -454,6 +474,8 @@ async def _typed_to(
     transcript = await converse(
         agent, scenario, contract, world_root=world_root, model=roles["user"]
     )
+    if require_tool_workflow and not transcript.calls:
+        return _missing_tool_evidence(scenario, transcript)
     catalogue = load_catalogue(world_root)
     settled = grade_sub_goals(world, scenario, catalogue, transcript.calls)
     ending = ", ".join(
@@ -491,6 +513,23 @@ async def _typed_to(
     )
     result.calls_detail = _calls_of(transcript.calls)
     return result
+
+
+def _missing_tool_evidence(scenario: Scenario, transcript: Transcript) -> Result:
+    return Result(
+        scenario=scenario.name,
+        tests=scenario.tests,
+        problems=["evidence_missing: required tool workflow captured no tool calls"],
+        ended="evidence_missing",
+        turns=len(transcript.exchanges),
+        spent_usd=transcript.spent_usd,
+        transcript=transcript.spoken(),
+        exchanges=[
+            {"speaker": turn.speaker, "text": turn.text}
+            for turn in transcript.exchanges
+        ],
+        actions=transcript.actions(),
+    )
 
 
 def _calls_of(calls: Any) -> list[dict[str, Any]]:
@@ -535,6 +574,7 @@ async def _spoken_to(
     *,
     roles: dict[str, str],
     on_exchange: Callable[[dict[str, Any]], Any] | None = None,
+    require_tool_workflow: bool = False,
 ) -> Result:
     """A real call, with the agent's own tools answered by this world.
 
@@ -732,8 +772,6 @@ async def _spoken_to(
         result.measured["voice_attempts"] = attempts_used
         return result
 
-    catalogue = load_catalogue(world_root)
-    settled = grade_sub_goals(world, scenario, catalogue, world.calls)
     # Judged the same way a typed run is. Without this a spoken scenario reports "1/2" when what
     # happened is that one check passed and the other was never asked, which reads as the agent
     # half-failing rather than as the suite not having looked.
@@ -742,6 +780,18 @@ async def _spoken_to(
         calls=list(world.calls),
         ended=str((case.get("metadata") or {}).get("status") or "finished"),
     )
+    if require_tool_workflow and not world.calls:
+        result = _missing_tool_evidence(scenario, spoken_transcript)
+        result.exchanges = _timed_exchanges(
+            spoken_transcript.exchanges, spoken_times(case)
+        )
+        result.recording = kept[0]["path"] if kept else ""
+        result.tracks = kept
+        result.measured = measured(case)
+        result.measured["voice_attempts"] = attempts_used
+        return result
+    catalogue = load_catalogue(world_root)
+    settled = grade_sub_goals(world, scenario, catalogue, world.calls)
     judgements, judged_cost = await judge(
         scenario,
         spoken_transcript,

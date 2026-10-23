@@ -13,12 +13,18 @@ import json
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Iterable
+from typing import AbstractSet, Iterable, Mapping, TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 import yaml
 
 from fi.simulate.runtime.spec import SecretRef
+
+from .secrets import process_secret_environment_names
+
+if TYPE_CHECKING:
+    from .contract import Runtime
+    from .runtime_selection import ComposeSelection, NativeSelection
 
 CREDENTIAL_MANIFEST_VERSION = "futureagi.credential-requirements.v1"
 
@@ -97,9 +103,6 @@ _IGNORED_PARTS = {
     "test",
     "tests",
     "__pycache__",
-    "artifacts",
-    "build",
-    "dist",
     "vendor",
 }
 _SOURCE_SUFFIXES = {
@@ -275,6 +278,38 @@ def _dotted_name(node: ast.AST) -> str:
     return ""
 
 
+def _python_environment_reads(content: str) -> list[tuple[str, bool]]:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        # A newer Python syntax must not hide strict reads from an older scanner.
+        return [(match.group(1), False) for match in _PYTHON_REQUIRED.finditer(content)]
+    nodes = list(ast.walk(tree))
+    augmented_targets = {node.target for node in nodes if isinstance(node, ast.AugAssign)}
+    nullable_reads = {
+        (node.lineno, node.args[0].value)
+        for node in nodes
+        if isinstance(node, ast.Call)
+        and _dotted_name(node.func) in {"os.getenv", "os.environ.get"}
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    found = []
+    for node in nodes:
+        if (
+            isinstance(node, ast.Subscript)
+            and (isinstance(node.ctx, ast.Load) or node in augmented_targets)
+            and _dotted_name(node.value) == "os.environ"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+            and re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", node.slice.value)
+        ):
+            name = node.slice.value
+            found.append((name, (node.lineno, name) in nullable_reads))
+    return found
+
+
 def _python_sdk_requirements(content: str) -> list[tuple[str, str]]:
     """Discover credentials consumed internally by constructors in submitted Python.
 
@@ -386,11 +421,7 @@ def discover_credentials(
         configured.add(str(alias).upper())
         configured.add(str(ref.key).upper())
         configured.add(_identifier(ref.purpose).upper())
-    # Hosted process runtime materializes this vault value to a private file and exports the
-    # conventional Google variable to the child.  Discovery deals in names only; no credential
-    # value is read or persisted here.
-    if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in configured:
-        configured.add("GOOGLE_APPLICATION_CREDENTIALS")
+    configured.update(process_secret_environment_names(configured))
 
     findings: dict[str, dict[str, object]] = {}
     connector_hits: set[str] = set()
@@ -482,21 +513,10 @@ def discover_credentials(
                     required=required,
                     declared_default=bool(fallback) and operator not in {"?", ":?"},
                 )
-        for match in _PYTHON_REQUIRED.finditer(content):
-            # ``os.environ[NAME] if os.environ.get(NAME) else default`` is a common guarded
-            # access idiom. The indexed read alone looks mandatory, but the same-line guard
-            # proves the application has a fallback and should not block job submission.
-            line_start = content.rfind("\n", 0, match.start()) + 1
-            line_end = content.find("\n", match.end())
-            line = content[line_start : line_end if line_end >= 0 else len(content)]
-            name = match.group(1)
-            guarded = bool(
-                re.search(
-                    rf"(?:os\.getenv|os\.environ\.get)\s*\(\s*['\"]{re.escape(name)}['\"]",
-                    line,
-                )
-            )
-            record(name, required=not guarded, declared_default=guarded)
+        if path.suffix.lower() == ".py":
+            for name, guarded in _python_environment_reads(content):
+                # Preserve nullable same-line reads such as ``env[NAME] if env.get(NAME) else default``.
+                record(name, required=not guarded, declared_default=guarded)
         for match in _PYTHON_GETENV.finditer(content):
             default = (match.group(2) or "").strip()
             record(
@@ -713,3 +733,80 @@ __all__ = [
     "RequirementStatus",
     "discover_credentials",
 ]
+
+
+class EnvironmentObligation(BaseModel):
+    process: str
+    environment_name: str
+    origin: Literal["runtime_declaration", "compose_required"]
+    source_location: str
+
+
+class ConfigurationAdmission(BaseModel):
+    status: Literal["selection_pending", "validation_pending"] = "selection_pending"
+    missing: list[EnvironmentObligation] = Field(default_factory=list)
+
+    def require_no_missing_declarations(self) -> None:
+        if self.missing:
+            raise ValueError(
+                "target_runtime_configuration_missing: "
+                + ", ".join(
+                    f"{item.process}:{item.environment_name} ({item.source_location})"
+                    for item in self.missing
+                )
+            )
+
+
+def assess_configuration(
+    *,
+    runtime: Runtime | None = None,
+    selected: NativeSelection | ComposeSelection | None = None,
+    supplied_by_process: Mapping[str, AbstractSet[str]] | None = None,
+) -> ConfigurationAdmission:
+    from .runtime_selection import ComposeSelection
+
+    if runtime is None or selected is None:
+        return ConfigurationAdmission()
+    supplied_by_process = supplied_by_process or {}
+    unknown = set(runtime.required_environment) - set(supplied_by_process)
+    if unknown:
+        raise ValueError(
+            "runtime_required_environment_scope_unknown: " + ", ".join(sorted(unknown))
+        )
+    obligations = [
+        EnvironmentObligation(
+            process=process,
+            environment_name=name,
+            origin="runtime_declaration",
+            source_location=f"runtime.required_environment.{process}",
+        )
+        for process, names in runtime.required_environment.items()
+        for name in names
+    ]
+    if isinstance(selected, ComposeSelection):
+        for process, service in selected.services.items():
+            environment = service.get("environment") or {}
+            values = (
+                environment.values() if isinstance(environment, dict) else environment
+            )
+            for value in values:
+                for match in re.finditer(
+                    r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\?[^}]*\}", str(value)
+                ):
+                    obligations.append(
+                        EnvironmentObligation(
+                            process=process,
+                            environment_name=match.group(1),
+                            origin="compose_required",
+                            source_location=f"{selected.compose_file.name}:services.{process}.environment",
+                        )
+                    )
+    return ConfigurationAdmission(
+        status="validation_pending",
+        missing=[
+            obligation
+            for obligation in obligations
+            if obligation.environment_name
+            not in supplied_by_process.get(obligation.process, set())
+        ],
+    )

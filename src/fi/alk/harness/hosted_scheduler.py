@@ -31,6 +31,7 @@ Decoupling, deliberate:
 from __future__ import annotations
 
 import asyncio
+import json
 import inspect
 import logging
 import os
@@ -92,6 +93,10 @@ class ReadOnlyWorld(Protocol):
     world_index: int
     rng: random.Random
 
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
+
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
     def put(
@@ -112,6 +117,10 @@ class ReadOnlyWorld(Protocol):
 class World(Protocol):
     world_index: int
     rng: random.Random
+
+    def read_file(self, workspace: str, path: str) -> str: ...
+
+    def write_file(self, workspace: str, path: str, content: str) -> None: ...
 
     def state(self, table: str | None = None) -> dict[str, list[dict[str, Any]]]: ...
 
@@ -656,6 +665,7 @@ async def _invoke(
     timeout: float,
     phase: str,
     executor: ThreadPoolExecutor,
+    http_events: list[dict[str, Any]] | None = None,
 ) -> object:
     # R1: a `threading.Event` set as the thread body's first statement — the only way to tell
     # "the phase ran past its budget" (genuine overrun, world half-applied) apart from "the
@@ -673,9 +683,11 @@ async def _invoke(
         from .process_runtime import _allowlisted_ambient_env
         from .world.handle import HostedWorld, ReadOnlyWorld as HostedReadOnlyWorld
 
+        from .world.observation import ObservationWorld
+
         if (
             args
-            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld))
+            and isinstance(args[0], (HostedWorld, HostedReadOnlyWorld, ObservationWorld))
             and hasattr(fn, "_alk_source")
         ):
             started_flag.set()
@@ -685,6 +697,8 @@ async def _invoke(
                 "entry": fn._alk_entry,
                 "world": world._execution_state(),
             }
+            http_client = world if isinstance(world, ObservationWorld) else world._http_client
+            payload["private_http"] = http_client._private_http_state()
             if len(args) > 1:
                 payload["calls"] = [asdict(call) for call in args[1]]
             if len(args) > 2:
@@ -694,8 +708,24 @@ async def _invoke(
                 payload,
                 environ=_allowlisted_ambient_env(dict(os.environ)),
                 work_directory=Path(tempfile.gettempdir()) / "alk-phase-workers",
+                # Authored phases can print private login responses before redaction.
+                suppress_output=True,
             )
             world.rng.setstate(tuples(result["rng"]))
+            from .world.http_session import validate_events
+
+            events = validate_events(
+                result.get("http_events", []), http_client._endpoints
+            )
+            if http_events is not None:
+                http_events.extend(events)
+            http_client._restore_private_http_state(result.get("private_http", {}))
+            for event in events:
+                logger.info(
+                    "native_http phase=%s evidence=%s",
+                    phase,
+                    json.dumps(event, sort_keys=True),
+                )
             if "error" in result:
                 error_types = {
                     error.__name__: error
@@ -792,10 +822,14 @@ async def _run_phase(
     timeout: float,
     phase: str,
     executor: ThreadPoolExecutor,
+    audit_log: Callable[..., Awaitable[None]] | None = None,
+    audit_context: dict[str, Any] | None = None,
 ) -> _PhaseResult:
+    http_events: list[dict[str, Any]] = []
     try:
         value = await _invoke(
-            fn, *args, timeout=timeout, phase=phase, executor=executor
+            fn, *args, timeout=timeout, phase=phase, executor=executor,
+            http_events=http_events,
         )
         return _PhaseResult(value, None)
     except _PhaseNeverStarted:
@@ -827,6 +861,22 @@ async def _run_phase(
                 _CRASH_CODE_BY_PHASE[phase], f"{type(exc.cause).__name__}: {exc.cause}"
             ),
         )
+    finally:
+        if audit_log is not None:
+            for event in http_events:
+                try:
+                    await audit_log(
+                        level="info",
+                        message="native_http "
+                        + json.dumps(
+                            {"phase": phase, **(audit_context or {}), "http": event},
+                            sort_keys=True,
+                        ),
+                    )
+                except _FATAL_OUTBOUND:
+                    raise
+                except Exception:
+                    logger.warning("native_http evidence sink failed")
 
 
 # --- the world pool -----------------------------------------------------------------------------
@@ -1594,6 +1644,7 @@ class HostedScheduler:
         job_seed: int,
         cancel_requested: Callable[[], bool] | None = None,
         judge: JudgeFn | None = None,
+        require_tool_workflow: bool = False,
         joint_judge: JointJudgeFn | None = None,
     ) -> None:
         self._pool = pool
@@ -1601,6 +1652,7 @@ class HostedScheduler:
         self._call_runner = call_runner
         self._outbound = outbound
         self._job_seed = job_seed
+        self._require_tool_workflow = require_tool_workflow
         self._cancel_requested = cancel_requested or (lambda: False)
         # Injected like every other collaborator, so a test decides a judged sub-goal without a
         # model call. Resolved here rather than as a default argument, which would bind at import
@@ -2069,12 +2121,22 @@ class HostedScheduler:
         attempt: int,
         context: "_ScenarioContext",
     ) -> "ResultReceipt | _Retry":
+        async def audit_log(**value):
+            await self._emit(self._outbound.log(**value), what="native_http")
+
+        audit_context = {
+            "scenario_key": scenario.scenario_key,
+            "world_index": world_index,
+            "scenario_attempt": attempt,
+        }
         setup = await _run_phase(
             scenario.setup,
             world,
             timeout=SETUP_TIMEOUT_SECONDS,
             phase="setup",
             executor=self._executor,
+            audit_log=audit_log,
+            audit_context=audit_context,
         )
         if setup.failure is not None:
             return self._fault(
@@ -2092,6 +2154,8 @@ class HostedScheduler:
             timeout=READY_TIMEOUT_SECONDS,
             phase="ready",
             executor=self._executor,
+            audit_log=audit_log,
+            audit_context=audit_context,
         )
         if ready.failure is not None:
             return self._fault(
@@ -2171,7 +2235,10 @@ class HostedScheduler:
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
-        if not calls and getattr(scenario, "requires_tool_evidence", True):
+        if not calls and (
+            self._require_tool_workflow
+            or getattr(scenario, "requires_tool_evidence", True)
+        ):
             # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
             # whether the simulator observed a turn (world-handle-interface.md "Coverage
             # guarantee": "An empty list is never handed to checks").
@@ -2223,6 +2290,8 @@ class HostedScheduler:
                 timeout=CHECK_TIMEOUT_SECONDS,
                 phase="check",
                 executor=self._executor,
+                audit_log=audit_log,
+                audit_context={**audit_context, "check": goal.name},
             )
             if outcome.failure is not None:
                 if outcome.failure.code == "world_unavailable":

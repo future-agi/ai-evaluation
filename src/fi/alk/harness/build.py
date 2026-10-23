@@ -26,11 +26,32 @@ from .world.tools import WORLD_SERVER, world_tools
 SKILL = "build-environment"
 
 
+def uses_native_runtime(contract: AgentContract, source_root: str) -> bool:
+    from .compose_integration import enabled
+    from .runtime_selection import ComposeSelection, select_runtime
+
+    from .contract import runtime_public_environment
+
+    if not source_root or not contract.runtime or not enabled():
+        return False
+    runtime = contract.runtime.model_dump()
+    return isinstance(
+        select_runtime(
+            Path(source_root),
+            runtime,
+            public_environment=runtime_public_environment(runtime),
+            validate_environment_dependencies=False,
+        ),
+        ComposeSelection,
+    )
+
+
 def blockers(
     contract: AgentContract,
     source_root: str = "",
     *,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> list[str]:
     """Reasons the real agent implementation cannot be put in a test environment.
 
@@ -44,6 +65,8 @@ def blockers(
     # This exemption is intentionally explicit and is never inferred for repository-backed jobs.
     if external_runtime:
         return []
+    if native_runtime:
+        return [] if source_root else ["native runtime requires the submitted source path"]
 
     problems: list[str] = []
     if contract.tools and not source_root:
@@ -97,11 +120,13 @@ def require_buildable(
     source_root: str = "",
     *,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> None:
     problems = blockers(
         contract,
         source_root,
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     if problems:
         raise RuntimeError(
@@ -159,8 +184,10 @@ def open_stage(
     max_turns: int = 0,
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> tuple[Stage, Path]:
     """A live build-the-world stage, and where it will write."""
+    native_runtime = native_runtime or uses_native_runtime(contract, source_root)
     destination = out or artifact_dir(contract.agent)
     from .provision import ProvisionedEnvironment
 
@@ -176,7 +203,10 @@ def open_stage(
         + declared_store
         + ", and the baseline seeded here is replayed into that engine before the first call. "
         "Seed structured columns as real lists and objects, never as JSON text."
-        if declared_store.lower() not in ("", "sqlite", "in_process", "memory")
+        if any(
+            marker in declared_store.lower()
+            for marker in ("postgres", "mysql", "mariadb", "clickhouse")
+        )
         else ""
     )
     if provisioned is not None and provisioned.running:
@@ -232,6 +262,24 @@ def open_stage(
                 else "one truthful service-backed sequence, check_world, and save_world."
             )
         )
+    elif native_runtime:
+        environment_note = (
+            "\nNative Compose runtime. Author declarations only. Do not create schema, seed a "
+            "shadow database, import tools, or execute reference calls locally. Preserve "
+            "deterministic checks against actual native tool results or world.request responses. "
+            "Scenario setup/ready must use the real API through world.request(capability, "
+            "method, relative_path, json=payload), using capability target_http for the chat service. GET/HEAD are available to checks; mutation is allowed only in setup. "
+            " Use form=fields instead of json for form login; never both. Cookies persist privately "
+            "per capability across setup/ready/checks. In setup, world.set_headers(capability, "
+            "{header: value}) sets private default auth headers from a real login response. "
+            "request(headers=...) overrides defaults for that request only. Use "
+            "capture_headers=[name] to read selected response headers via response['headers']. "
+            "No session credentials enter public world state or artifacts. "
+            "No secret access or redirects. Local proof is DEFERRED; "
+            "live setup, ready and chat ingress must pass before execution. Fixture values "
+            "must be declared ahead of time; setup cannot update simulator fixture slots. "
+            "Save the simulator prompt and sub-goals without manufacturing state."
+        )
     elif external_runtime:
         environment_note = (
             "\n\n## Existing external provider runtime\n\n"
@@ -246,19 +294,23 @@ def open_stage(
     elif deferred_runtime:
         environment_note = (
             "\n\n## Runtime deferred to hosted execution\n\n"
-            "The submitted repository processes and datastore will be built, started and "
-            "validated inside the Daytona execution sandbox from the sealed process bundle. "
-            "Do not start containers here. Build the deterministic baseline, simulator prompt, "
-            "sub-goals and world checks. Runtime tools are owned by the submitted process for "
-            "every modality: do not replace, bind or smoke-call them in this credentialed "
-            "control process. Their dependencies are installed in the writable target build "
-            "tree and their real behavior is validated when generated scenarios run in Daytona."
+            "The submitted repository processes and declared services will be built, started "
+            "and validated in the hosted execution sandbox. Do not start containers here. "
+            "Runtime tools belong to the submitted process for every modality: do not replace, "
+            "bind or smoke-call them in this credentialed control process. "
+            "Write the simulator prompt and sub-goals. Create schema and seed baseline records "
+            "only for a source-backed datastore the target actually uses. For filesystem, "
+            "command or API tools without such a datastore, keep the authoring world empty; "
+            "do not create tables to represent files, tool calls or remote state. A table named "
+            "files does not create files in the target workspace. Seed task files only through "
+            "a declared runtime.workspaces binding in scenario setup and verify them in ready; "
+            "without that binding, use self-contained tasks that create their own inputs."
             + declared_store_note
-            + "\n\nYou cannot call a tool here, so you have not seen a single real response "
-            "shape. Write every world check and sub-goal against world state you can read now, "
-            "never against the fields or wording you expect a tool response to carry. A check "
-            "that asserts on an imagined response passes or fails for the wrong reason and "
-            "reports the agent did nothing when it did."
+            + "\n\nChecks may inspect completed native tool results whose schema is established "
+            "by source, declared runtime observations, or real bound state. Do not guess result "
+            "fields or manufacture shadow state to make checks run locally. Local authoring "
+            "does not prove these checks: private runtime readiness and real scenario chats "
+            "must verify actual tool execution and outcomes before acceptance."
         )
     server, _world = world_tools(
         contract,
@@ -266,6 +318,7 @@ def open_stage(
         source_root=source_root,
         deferred_runtime=deferred_runtime,
         external_runtime=external_runtime,
+        native_runtime=native_runtime,
     )
     spec = SessionSpec(
         system_prompt=(
@@ -295,7 +348,12 @@ def opening(
     provisioned: bool = False,
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    native_runtime: bool = False,
 ) -> str:
+    if native_runtime:
+        return (f"Declare native runtime tests for {contract.agent!r}. Do not seed or replay "
+                "a local world. Add deterministic native response checks and a simulator prompt, "
+                "then check_world and save_world. Live fixture and chat validation is mandatory.")
     if provisioning():
         return (
             f"Provision the environment for {contract.agent!r}.\n\n"
@@ -336,9 +394,11 @@ def opening(
         return (
             f"Build the logical baseline for {contract.agent!r}.\n\n"
             "The submitted runtime and all of its tools are built later by the isolated process "
-            "runtime. Do not adopt or smoke-call those tools here. Seed the source-backed data "
-            "described by the contract, write the simulator prompt, add observable sub-goals "
-            "and world checks, then check_world and save_world. Runtime tool coverage and "
+            "runtime. Do not adopt or smoke-call those tools here. Seed only source-backed "
+            "datastore records. Keep the world empty for runtime tools without such a store; "
+            "do not create tables for files or remote state. Write the simulator prompt and "
+            "checks against actual bound state or source-grounded completed native tool results, "
+            "then check_world and save_world. Runtime tool coverage and "
             "stateful ordering are proven by the real generated scenarios."
         )
     return (
@@ -362,11 +422,12 @@ async def build(
     max_turns: int = 0,
 ) -> Path | None:
     """Run the stage start to finish. Returns where the world was written, or None."""
-    require_buildable(contract, source_root)
+    native_runtime = uses_native_runtime(contract, source_root)
+    require_buildable(contract, source_root, native_runtime=native_runtime)
     destination = out or artifact_dir(contract.agent)
     from .provision import provision_if_present
 
-    provisioned = await asyncio.to_thread(
+    provisioned = None if native_runtime else await asyncio.to_thread(
         provision_if_present, source_root, destination, contract
     )
     stage, destination = open_stage(
@@ -375,10 +436,11 @@ async def build(
         ask=ask,
         source_root=source_root,
         max_turns=max_turns,
+        native_runtime=native_runtime,
     )
     async with stage:
         await stage.say(
-            opening(contract, provisioned=provisioned is not None), on_event=on_event
+            opening(contract, provisioned=provisioned is not None, native_runtime=native_runtime), on_event=on_event
         )
         for follow_up in follow_ups or []:
             await stage.say(follow_up, on_event=on_event)

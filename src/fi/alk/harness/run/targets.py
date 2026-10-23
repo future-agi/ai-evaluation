@@ -251,6 +251,8 @@ class RepositoryChatTarget:
                 "Record its existing HTTP port, path and protocol during understanding; the "
                 "harness will not reconstruct the repository agent from its prompt."
             )
+        if interface.local_auth:
+            raise ValueError("runtime_local_auth_requires_native_process")
         if interface.kind not in {"http", "websocket"}:
             raise RuntimeError(
                 f"submitted chat interface {interface.kind!r} is not wired for hosted repository "
@@ -317,19 +319,12 @@ class RepositoryChatTarget:
                 from fi.simulate.agent.wrappers.http import HTTPAgentWrapper
 
                 wrapper = HTTPAgentWrapper
-            self._wrapper = wrapper(
-                endpoint=urljoin(
-                    base.rstrip("/") + "/", self.interface.path.lstrip("/")
-                ),
-                protocol=self.interface.protocol,
-                include_tools=self.interface.include_tools,
-                request_template=self.interface.request_template,
-                response_path=self.interface.response_path,
-                setup_requests=[
-                    item.model_dump(mode="python")
-                    for item in self.interface.setup_requests
-                ],
-                timeout=30.0,
+            from ..chat_transport import create_chat_wrapper
+
+            self._wrapper = create_chat_wrapper(
+                self.interface,
+                base,
+                wrapper_type=wrapper,
                 metadata={
                     "target": "submitted_repository_runtime",
                     "scenario": self.scenario_name,
@@ -387,6 +382,10 @@ class RepositoryChatTarget:
             response = await self._wrapper.call(request)
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
+                from fi.simulate.agent.wrappers.http import HTTPCallFailure
+
+                if self.interface.kind == "http":
+                    raise HTTPCallFailure(trace)
                 raise RuntimeError(
                     str(trace.get("error") or "submitted chat endpoint request failed")
                 )

@@ -11,6 +11,12 @@ sub-goals just to satisfy a checklist below. Preserve and provision the real wor
 connections; write the simulator prompt and conversational evaluation criteria. Save the empty
 world normally. Internal harness bookkeeping is not agent business data.
 
+Tools do not imply a database. Native filesystem, command and API tools can also have no
+harness-managed record store. Keep that authoring world empty. Do not create tables to stand
+in for files or remote application state. Use completed native tool results with source-grounded
+schemas, declared observations, or real workspace bindings. Private readiness and real chats
+must verify these tools; a local fixture table cannot prove that the target ran them.
+
 You are building the world an AI agent will be tested in. Its contract is in front of you: the
 tools it really has, the rules it obeys, what it depends on, and its data.
 
@@ -253,7 +259,11 @@ and a way to run container commands from there:
 Some things worth knowing before you start:
 
 **Use the agent's own Dockerfile if it has one.** The contract records whether it does. Theirs is
-what its authors tested; yours is a guess at it.
+what its authors tested; yours is a guess at it. When source deployment instructions instead
+select a published Compose image, use `runtime.compose_image_services` for that already
+selected service. ALK retains its source-declared image and removes its build from the generated
+runtime only. Never write an image override or alter upstream files. The selection requires a
+container runtime and does not itself verify an immutable image identity.
 
 **Use its own install command**, from its lockfile or requirements, exactly as written. Do not
 substitute a different package manager or add dependencies it did not ask for.
@@ -703,12 +713,36 @@ Every sub-goal, coded or judged:
 
 So you meet these while writing, not after:
 
-- **A check that only matches call names**, such as `any(c.name == "transfer" for c in calls)`. It
-  passes an agent that called the right tool with the wrong arguments.
-- **A judged sub-goal without its four criteria lines**, or whose "If it does not arise" line does
-  not say Pass or Fail.
+- **A check that only matches call names.** `any(c.name == "transfer" for c in calls)` is refused.
+  It passes an agent that called the right tool with the wrong arguments, which is the failure this
+  harness exists to catch: an agent that mishears a name and opens somebody else's account calls
+  exactly the tool it should have. Read `.arguments`, `.result`, or the world.
+  For a dispatcher that wraps subtools, establish success from its source-defined result contract
+  and the returned state. Child names and arguments show intent, not execution. A top-level
+  dispatcher name alone must neither prove nor disprove a subtool's successful effect. Inspect
+  the recorded outcome and verify the relevant returned state or source-declared child outcome. Do not
+  invent separate completed calls by flattening arguments.
+- **A judged sub-goal without its criteria.** `judged` needs the four labelled lines above, and its
+  "If it does not arise" line has to say Pass or Fail. "Was it polite" is not criteria.
 - **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
 - **A check that takes `reference` without a contract** saying where each compared value comes from.
+
+Check the *identity* the agent acted on, not just that it acted. If the caller is Corwin and the
+agent looked up a record, assert whose record it was. An agent that proceeds against the wrong row
+must not pass merely because it called the expected tool.
+
+Reading an argument is not the same as checking it:
+
+```python
+# Weak: any non-empty reason passes.
+reason = xfers[0].arguments.get("reason")
+if not reason or not isinstance(reason, str) or not reason.strip():
+    return f"no reason given: {reason!r}"
+
+# Strong: compare the value with the scenario or world truth.
+if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
+    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
+```
 
 Every scenario's proof then plays the scenario's solution, any other ways its writer declared, an
 agent that gets every fixed value right but chooses everything else itself, and an agent that gets one

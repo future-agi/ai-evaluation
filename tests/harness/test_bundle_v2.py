@@ -756,7 +756,7 @@ def test_seal_bundle_v2_matches_a_hand_computed_vector() -> None:
     core_json = (
         '{"capabilities":{},"metadata":{},"name":"café","processes":[],"provenance":'
         '{"adopted_files":[],"commit":null,"generated_files":[],"generator":'
-        '"fi.alk.harness","generator_version":"1","repository":null,"source_digest":"'
+        '"fi.alk.harness","generator_version":"1","public_material_admissions":[],"public_test_fixture_admissions":[],"repository":null,"source_digest":"'
         + "a" * 64
         + '","source_kind":"remote"},"readiness":[],"runtime":'
         '{"control_service":null,"document":null,"evidence_seam":null,"kind":"external"},'

@@ -19,6 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
+from .public_material import is_public_pem, inspect_public_file, is_public_npm_config
+
 BUNDLE_SCHEMA_VERSION = "futureagi.environment-bundle.v1"
 BUNDLE_MANIFEST = "manifest.json"
 
@@ -143,12 +145,6 @@ _SECRET_FIELD = re.compile(
     re.IGNORECASE,
 )
 _SECRET_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "credentials", "id_rsa"}
-_SECRET_CONTENT = (
-    re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(rb"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
-    re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
-)
 
 
 def _safe_relative(value: str) -> PurePosixPath:
@@ -186,25 +182,20 @@ def _iter_files(root: Path) -> list[Path]:
     return files
 
 
-def _inspect_file(root: Path, path: Path) -> BundleFile:
+def _inspect_file(root: Path, path: Path, *, admissions=(), fixture=None) -> BundleFile:
     relative = path.relative_to(root).as_posix()
     _safe_relative(relative)
-    if path.name in _SECRET_FILES or path.suffix.lower() in {
-        ".pem",
-        ".key",
-        ".p12",
-        ".pfx",
-    }:
+    if (path.name in _SECRET_FILES and not is_public_npm_config(path)) or (
+        path.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
+        and not is_public_pem(path)
+        and not (path.suffix.lower() == ".key" and fixture is not None)
+    ):
         raise BundleError(f"bundle_secret_file_forbidden: {relative}")
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            size += len(chunk)
-            digest.update(chunk)
-            if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                raise BundleError(f"bundle_secret_material_detected: {relative}")
-    return BundleFile(path=relative, sha256=digest.hexdigest(), size=size)
+    try:
+        digest, size = inspect_public_file(path, admissions, fixture=fixture)
+    except ValueError as exc:
+        raise BundleError(f"bundle_secret_material_detected: {relative}: {exc}") from exc
+    return BundleFile(path=relative, sha256=digest, size=size)
 
 
 def _bundle_digest(manifest: dict[str, Any], files: list[BundleFile]) -> str:
@@ -285,9 +276,6 @@ _COPY_IGNORED = {
     ".ruff_cache",
     ".venv",
     "__pycache__",
-    "artifacts",
-    "build",
-    "dist",
     "node_modules",
 }
 
@@ -386,7 +374,7 @@ def export_session_bundle(
 
     The source is copied into the internal bundle because Compose build contexts must survive
     deletion of a hosted executor's repository clone. Customer dotenv files, VCS metadata,
-    caches, and prior artifacts are excluded. The secret scanner then validates every retained
+    and caches are excluded. The secret scanner then validates every retained
     byte before the staging directory is atomically promoted.
     """
     from .provision import ProvisionedEnvironment, compose_file, source_fingerprint
@@ -395,6 +383,8 @@ def export_session_bundle(
     session = Path(session).expanduser().resolve()
     if not source.is_dir():
         raise BundleError(f"bundle_source_missing: {source}")
+    if session == source:
+        raise BundleError("bundle_session_is_source")
     session.mkdir(parents=True, exist_ok=True)
     final = session / "environment-bundle"
     staging_parent = Path(tempfile.mkdtemp(prefix=".bundle-", dir=session))
@@ -404,11 +394,13 @@ def export_session_bundle(
     generated: list[str] = []
     try:
         for path in sorted(source.rglob("*")):
+            if session.is_relative_to(source) and path.is_relative_to(session):
+                continue
             relative = path.relative_to(source)
             if any(part in _COPY_IGNORED for part in relative.parts):
                 continue
             if (
-                path.name in _SECRET_FILES
+                (path.name in _SECRET_FILES and not is_public_npm_config(path))
                 or path.name.startswith(".env.")
                 and path.name != ".env.example"
             ):
@@ -525,7 +517,7 @@ def export_session_bundle(
                 "source_kind": "repository",
                 "repository": repository,
                 "commit": commit,
-                "source_digest": source_fingerprint(source),
+                "source_digest": source_fingerprint(source, exclude=session),
                 "adopted_files": adopted,
                 "generated_files": generated,
             },

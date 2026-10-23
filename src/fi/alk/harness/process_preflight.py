@@ -30,7 +30,8 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
-from .artifacts import _SECRET_CONTENT, _SECRET_FILES
+from .artifacts import _SECRET_FILES
+from .public_material import inspect_public_file, is_public_npm_config
 from .bundle import CapabilityProtocol
 from .bundle_v2 import (
     BUNDLE_V2_MANIFEST,
@@ -47,6 +48,7 @@ from .bundle_v2 import (
 )
 from .provider_import import ProviderImportSpec
 from .provider_lifecycle import ProviderLifecycleSpec, ProviderScope
+from .public_material import is_public_pem
 
 _SECRET_PURPOSE_VALUES = {member.value for member in SecretPurpose}
 
@@ -161,6 +163,7 @@ def preflight_bundle(
     *,
     parallelism: int,
     secret_refs: dict[str, str],
+    allow_compose: bool = False,
 ) -> None:
     """Run the complete §2e checklist against a sealed v2 bundle directory, in the contract's own
     numbered order. Raises ``PreflightError`` on the first violation; returns ``None`` when clean.
@@ -192,7 +195,7 @@ def preflight_bundle(
                 f"secret_refs[{alias!r}] = {purpose!r} is not a SecretPurpose value"
             )
 
-    if manifest.runtime.kind is RuntimeKindV2.COMPOSE:
+    if manifest.runtime.kind is RuntimeKindV2.COMPOSE and not allow_compose:
         # §2a: "a hosted job with kind: compose fails preflight" — not one of §2e's seven numbered
         # items, so ahead of item 1 rather than slotted between them: every item below assumes
         # v2's processes/seed shape, which a compose bundle need not carry, and a compose bundle's
@@ -207,6 +210,30 @@ def preflight_bundle(
     walked_files = _verify_path_safety(bundle_dir, files)  # 2
     _scan_bundle_files_for_secrets(bundle_dir, walked_files)  # 3
     _verify_unknown_fields(bundle_dir, manifest)  # 4
+    contract_path = bundle_dir / "contract.json"
+    if contract_path.is_file():
+        contract = json.loads(contract_path.read_text())
+        runtime = contract.get("runtime") if isinstance(contract, dict) else None
+        interface = runtime.get("interface") if isinstance(runtime, dict) else None
+        interface = interface if isinstance(interface, dict) else {}
+        bindings = interface.get("setup_secrets", {})
+        if bindings:
+            from .contract import RuntimeInterface
+
+            try:
+                RuntimeInterface._setup_secret_aliases(bindings)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise PreflightError(
+                    "secret_purpose_forbidden", "invalid HTTP setup secret declarations"
+                ) from exc
+            if any(
+                secret_refs.get(alias) != "target_provider"
+                for alias in bindings.values()
+            ):
+                raise PreflightError(
+                    "secret_purpose_forbidden",
+                    "HTTP setup secrets require declared target-provider aliases",
+                )
 
     if manifest.runtime.kind is RuntimeKindV2.PROCESS:
         _verify_placeholder_vocabulary(manifest)  # 5
@@ -327,18 +354,19 @@ def _scan_bundle_files_for_secrets(bundle_dir: Path, walked_files: list[Path]) -
         relative = path.relative_to(root).as_posix()
         posix_path = PurePosixPath(relative)
         if (
-            posix_path.name in _SECRET_FILES
-            or posix_path.suffix.lower() in _SECRET_SUFFIXES
+            (posix_path.name in _SECRET_FILES and not is_public_npm_config(path))
+            or (posix_path.suffix.lower() in _SECRET_SUFFIXES and not is_public_pem(path))
         ):
             raise PreflightError(
                 "secret_in_bundle", f"{relative}: forbidden secret-shaped file"
             )
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                if any(pattern.search(chunk) for pattern in _SECRET_CONTENT):
-                    raise PreflightError(
-                        "secret_in_bundle", f"{relative}: high-entropy secret-scan hit"
-                    )
+        try:
+            inspect_public_file(path)
+        except ValueError as exc:
+            raise PreflightError(
+                "secret_in_bundle", f"{relative}: high-entropy secret-scan hit"
+            ) from exc
+
 
 
 # --- item 4: unknown-field translation ----------------------------------------------------------
@@ -498,6 +526,25 @@ def _verify_secret_purposes(
             "customer processes cannot claim observability_export credentials: "
             + ", ".join(sorted(export_claimants)),
         )
+
+    from .secrets import process_secret_environment_names
+
+    target_names = process_secret_environment_names(
+        alias for alias, purpose in secret_refs.items() if purpose == "target_provider"
+    )
+    for process in manifest.processes:
+        if not isinstance(process, SourceProcess):
+            continue
+        for resource in process.config_files.values():
+            if any(
+                alias not in target_names
+                or SecretPurpose.TARGET_PROVIDER not in process.secret_purposes
+                for alias in resource.secret_aliases.values()
+            ):
+                raise PreflightError(
+                    "secret_purpose_forbidden",
+                    "runtime config requires declared target-provider aliases",
+                )
 
     ref_has_target_provider = any(
         purpose == SecretPurpose.TARGET_PROVIDER.value

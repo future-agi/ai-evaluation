@@ -53,7 +53,16 @@ from .folder import (
     write_index,
 )
 from .checks import reference_of, run_check
-from .prove import executes, play_reference_step, prepared, prove
+from .prove import (
+    executes,
+    native_runtime,
+    native_source_problem,
+    play_reference_step,
+    prepared,
+    prove,
+    workspace_bindings,
+    workspace_fixture,
+)
 from .scenario import (
     ANSWERED_BY,
     CALLER_AWARENESS,
@@ -83,6 +92,7 @@ from .tools import brief, schema
 from .world.snapshot import read_manifest, restore
 
 logger = logging.getLogger(__name__)
+
 
 SCENARIO_SERVER = "scenarios"
 
@@ -161,7 +171,7 @@ def _no_longer_hold(
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             failed.append((scenario.name, type(exc).__name__))
             continue
-        if not proof.holds:
+        if not proof.holds and not (proof.deferred and not proof.broken):
             why = "not ready" if not proof.ready else (
                 "the reference solution no longer passes it"
                 if not proof.solvable
@@ -907,27 +917,38 @@ def accept_scenario(
             place_for(scenario.name, scenario.fixture, scenario.instruction) or True
         )
 
-    # Read against the world this scenario actually runs in, so a setup that creates the table
-    # a check reads is not reported as referring to something that does not exist.
-    trial, _applied, _ready = prepared(scenario, world_root)
-    try:
+    native = native_runtime(world_root) or workspace_fixture(scenario, catalogue)
+    if native:
         problems = validate_scenario(
-            scenario,
-            catalogue,
-            trial.state(),
-            simulator_prompt,
-            allow_empty_solution=allow_empty_solution,
-            spoken=spoken,
+            scenario, catalogue, {}, simulator_prompt,
+            allow_empty_solution=True, spoken=spoken,
         )
         problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
-        problems.extend(_credentials_the_world_lacks(scenario, trial))
-        problems.extend(_identifiers_the_instruction_invents(scenario, trial))
-        problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
         problems.extend(_steps_the_contract_refuses(scenario, world_root))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
-    finally:
-        trial.close()
+    else:
+        # Read against the world this scenario actually runs in, so a setup that creates the table
+        # a check reads is not reported as referring to something that does not exist.
+        trial, _applied, _ready = prepared(scenario, world_root)
+        try:
+            problems = validate_scenario(
+                scenario,
+                catalogue,
+                trial.state(),
+                simulator_prompt,
+                allow_empty_solution=allow_empty_solution,
+                spoken=spoken,
+            )
+            problems.extend(contract_sequence_problems(scenario, hard_constraints or []))
+            problems.extend(_credentials_the_world_lacks(scenario, trial))
+            problems.extend(_identifiers_the_instruction_invents(scenario, trial))
+            problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
+            problems.extend(_steps_the_contract_refuses(scenario, world_root))
+            problems.extend(_overlay_asserts_nothing(scenario, catalogue))
+            problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
+        finally:
+            trial.close()
 
     if problems:
         return _err(
@@ -935,7 +956,7 @@ def accept_scenario(
         )
 
     proof = prove(scenario, catalogue, world_root)
-    if not proof.holds:
+    if not proof.holds and not (proof.deferred and not proof.broken):
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
         # check fail here, and the exception alone does not say which collections are mappings and
@@ -996,7 +1017,11 @@ def accept_scenario(
         else ""
     )
     proof_summary = (
-        "The world is ready for it, and its sub-goals will be judged from the call: the "
+        proof.why()
+        if proof.deferred
+        else "Local checks passed with assumed tool results; the reference solution remains unverified."
+        if proof.assumed
+        else "The world is ready for it, and its sub-goals will be judged from the call: the "
         "recording, the transcript, every action with its arguments and the records left."
         if proof.judged_only
         else "All three gates pass: the world is ready for it, the reference solution passes "
@@ -1157,7 +1182,7 @@ def scenario_tools(
     # Identical-refusal counts per scenario, so an unsatisfiable gate ends the stage.
     refused: dict[tuple[str, int], int] = {}
     external_runtime_target = _is_external_runtime(world_root)
-    tool_free_target = not bool(contract.tools) or external_runtime_target
+    tool_free_target = not bool(contract.tools) or external_runtime_target or native_runtime(world_root)
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -1180,18 +1205,24 @@ def scenario_tools(
         schema({"table": str, "limit": int, "matching": str}, []),
     )
     async def inspect_world(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime(world_root):
+            return _ok(world_summary(world_root))
+        if not args.get("table"):
+            lines = [world_summary(world_root)]
+            if catalogue.sub_goals:
+                lines.append("\nsub-goals available:")
+                for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
+                    compares = (
+                        f" Its check compares {goal.reference.strip()}"
+                        if goal.reference.strip()
+                        else ""
+                    )
+                    lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
+            return _ok("\n".join(lines))
         world = restore(world_root)
         try:
             state = world.state()
             table = str(args.get("table") or "")
-            if not table:
-                lines = [f"{n}: {len(r)} rows" for n, r in sorted(state.items())]
-                if catalogue.sub_goals:
-                    lines.append("\nsub-goals available:")
-                    for goal in sorted(catalogue.sub_goals, key=lambda one: one.name):
-                        compares = f" Its check compares {goal.reference.strip()}" if goal.reference.strip() else ""
-                        lines.append(f"- {goal.name}: {goal.what.strip()}{compares}")
-                return _ok("\n".join(lines) or "this world has no tables")
             if table not in state:
                 return _err(
                     f"no table {table!r}; this world has {', '.join(sorted(state))}"
@@ -1247,6 +1278,10 @@ def scenario_tools(
         schema({"calls": list, "setup_code": str}, ["calls"]),
     )
     async def try_calls(args: dict[str, Any]) -> dict[str, Any]:
+        if native_runtime(world_root) or workspace_fixture(
+            Scenario(name="trial", setup_code=str(args.get("setup_code") or "")), Catalogue()
+        ):
+            return _err("DEFERRED: native tools and fixtures run only in the live runtime; no local replay exists.")
         # A suite that already holds what was asked for has nothing left to explore.
         if cap() and len(kept) >= cap():
             return _err(
@@ -1381,6 +1416,9 @@ def scenario_tools(
             **{field: str(args.get(field) or "") for field in CONTRACT_FIELDS},
         )
         problems = validate_sub_goal(sub_goal)
+        if native_runtime(world_root) and sub_goal.deterministic():
+            if problem := native_source_problem(sub_goal.check, "check"):
+                problems.append(problem)
         if problems:
             return _err("Not added:\n  - " + "\n  - ".join(problems))
         sub_goal, cleared = without_delivery_overlay(sub_goal)
@@ -1708,7 +1746,7 @@ def scenario_tools(
             ) if args.get("persona") else ""
             if crowded:
                 return _refuse(crowded)
-        if args.get("persona") and args.get("fixture"):
+        if not native_runtime(world_root) and args.get("persona") and args.get("fixture"):
             try:
                 stranger = persona_off_the_record(
                     [Scenario.model_validate(args)], world_root
@@ -2239,8 +2277,8 @@ def scenario_tools(
             )
             + ". Written to coverage.json.\n"
             + _coverage_gaps(coverage)
-            + "Every one cleared all three gates: the world is ready for it, the reference "
-            "solution passes its checks, and those checks fail when nothing is done.\n"
+            + "Scenarios passed their applicable authoring checks. Deferred runtime checks and "
+            "assumed tool steps still require live execution; saving is not end-to-end proof.\n"
             f"{judged} sub-goal references are judged rather than settled by code."
         )
         if noted:
@@ -2329,6 +2367,39 @@ def _fields_of(world: Any, collection: str) -> list[str]:
 
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
+    if native_runtime(world_root):
+        return (
+            "NATIVE RUNTIME: no local database or tool replay exists. Write setup(world) using "
+            "world.request(capability, method, relative_path, json=payload) against the real API. "
+            " Use form=fields instead of json for form login; never both. Cookies persist privately "
+            "per capability across setup/ready/checks. In setup, world.set_headers(capability, "
+            "{header: value}) sets private default auth headers from a real login response. "
+            "request(headers=...) overrides defaults for that request only. Use "
+            "capture_headers=[name] to read selected response headers via response['headers']. "
+            "No session credentials enter public world state or artifacts. "
+            "ready(world) must read and verify the exact fixture. Checks may read GET/HEAD "
+            "responses and actual calls. For source-reviewed POST read operations already declared in "
+            "runtime.observations, use world.observe(name, parameters); the fixed request cannot "
+            "be overridden. Local proof is DEFERRED until live validation. "
+            "Do not invent login credentials or fixture IDs; declare fixed values the native "
+            "API accepts and verify them. Setup cannot change simulator fixture slots. "
+            "Existing sub-goals: " + ", ".join(sorted(load_catalogue(world_root).names()))
+        )
+    bindings = workspace_bindings(world_root)
+    workspace_context = (
+        "TARGET FILE WORKSPACES (relative to the target working directory): "
+        + json.dumps(bindings, sort_keys=True)
+        + ". Seed required existing files with world.write_file(name, relative_path, content) in "
+        "setup; ready must read back each file with world.read_file and verify its contents. "
+        "These operate on the actual target directory only at live "
+        "validation, so local file-fixture proof is DEFERRED. Do not seed a database files table.\n"
+        if bindings else
+        "NO TARGET FILE WORKSPACE IS DECLARED. Do not assume repository files, test suites, "
+        "symbols or documents exist in the agent's working directory. File tasks must be "
+        "self-contained: provide all input content in the conversation and ask the agent to "
+        "create it before using it. Otherwise select a task with no existing-file prerequisite. "
+        "The uploaded agent source is not the agent's task workspace.\n"
+    )
     world = restore(world_root)
     try:
         state = world.state()
@@ -2357,7 +2428,7 @@ def world_summary(world_root: Path) -> str:
                 "replay, or inspect provider-owned tools/state. Use solution: [] and judged "
                 "sub-goals; live conversation/tool events are the outcome evidence.\n"
             )
-        return prefix + "\n".join(lines)
+        return prefix + workspace_context + "\n".join(lines)
     finally:
         world.close()
 
@@ -2383,7 +2454,11 @@ def _handed_to_the_caller(fixture: Any, key: str = "") -> list[tuple[str, str]]:
 def grounding_problems(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Scenarios that hand the caller a credential the world does not hold once setup has run."""
     problems: list[str] = []
+    if native_runtime(world_root):
+        return problems
     for scenario in scenarios:
+        if workspace_fixture(scenario, load_catalogue(world_root)):
+            continue
         claimed = _handed_to_the_caller(scenario.fixture)
         if not claimed:
             continue
@@ -2436,8 +2511,12 @@ def _words(text: str) -> set[str]:
 def persona_off_the_record(scenarios: list[Scenario], world_root: Path) -> list[str]:
     """Callers whose own name is nowhere on the record the agent's lookup will return."""
     problems: list[str] = []
+    if native_runtime(world_root):
+        return problems
     base = None
     for scenario in scenarios:
+        if workspace_fixture(scenario, load_catalogue(world_root)):
+            continue
         pinned = [
             one.split("=", 1)[1]
             for one in _pinned_identity(scenario.fixture)

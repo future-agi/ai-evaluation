@@ -38,7 +38,10 @@ from typing import Any, Callable, Protocol, Sequence
 from . import observability
 from . import outbound as ob
 from .backends import GOOGLE_ADK_APPROVAL_ENV
-from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, load_bundle_v2
+from .bundle_v2 import BundleV2Error, EnvironmentBundleV2, RuntimeKindV2, load_bundle_v2
+from .compose_broker import BrokerError, ComposeBrokerClient
+from .hosted_compose_bootstrap import initialize_hosted_compose
+from .world.observation import ObservationWorldFactory
 from .call_runner import CallRunnerContext, CallRunnerImpl
 from .hosted_scheduler import (
     CallOutcome,
@@ -673,16 +676,28 @@ class ProcessWorldFactory:
     a container's own lifecycle, matching a hosted world where `ProcessRuntimeProvider` already
     owns the postgres process."""
 
-    def __init__(self, work_directory: Path) -> None:
+    def __init__(self, work_directory: Path, bundle_dir: Path | None = None) -> None:
+        from .world.observation import load_observations
+
         self._work_directory = work_directory
+        self._observations = load_observations(bundle_dir)
 
     async def create(self, runtime: EnvironmentRuntime, *, rng: random.Random) -> World:
+        from .world.observation import http_endpoints
+
         endpoint = _find_postgres_endpoint(runtime)
         build_output = await asyncio.to_thread(load_build_output, self._work_directory)
         row_counts = row_counts_for_capability(build_output, endpoint.capability)
         store = AttachedPostgresStore(endpoint.address)
         return await asyncio.to_thread(
-            HostedWorld, store, runtime.world_index, rng, row_counts
+            HostedWorld,
+            store,
+            runtime.world_index,
+            rng,
+            row_counts,
+            workspace_roots=runtime.metadata.get("workspace_roots", {}),
+            endpoints=http_endpoints(runtime),
+            observations=self._observations,
         )
 
 
@@ -733,7 +748,11 @@ def _agent_instructions(job: Any, bundle_dir: Path) -> str:
         if excerpt and not prompt:
             parts.append(excerpt)
         summary = str(body.get("one_liner") or "").strip()
-        rules = [str(rule).strip() for rule in body.get("hard_constraints") or [] if str(rule).strip()]
+        rules = [
+            str(rule).strip()
+            for rule in body.get("hard_constraints") or []
+            if str(rule).strip()
+        ]
         if summary:
             parts.append(f"Summary: {summary}")
         if rules:
@@ -1993,7 +2012,7 @@ class HostedEntrypointDeps:
             )
         )
     )
-    build_world_factory: Callable[[Path], WorldFactory] = field(
+    build_world_factory: Callable[[Path, Path], WorldFactory] = field(
         default=ProcessWorldFactory
     )
     retry_policy: Callable[[], ob.RetryPolicy] = field(default=lambda: ob.RetryPolicy())
@@ -2308,8 +2327,17 @@ async def run_job(
             return EXIT_FENCED
         # the exit code comes from drain()'s own post-hoc fence check (deadline computed AFTER
         # emit_terminal, which is what arms the flush window), never a stale pre-drain read.
-        fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
+        await adapter.flush_terminal(deadline=adapter.deadline())
         await _bounded_close()
+        from .process_diagnostics import upload_process_logs
+
+        try:
+            await upload_process_logs(
+                work_directory / "diagnostics", adapter, deadline=adapter.deadline()
+            )
+        except Exception:
+            logger.exception("process diagnostic upload failed")
+        fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
         if fenced:
             return EXIT_FENCED
         # §0.6 v1.14: the terminal was decided but the final drain could not flush it (the events
@@ -2356,6 +2384,18 @@ async def run_job(
             # build a reportable failure from, and every downstream stage assumes a valid `job`.
             logger.error("job.json invalid: %s", exc)
             return EXIT_CRASHED
+
+        try:
+            broker_socket = await asyncio.to_thread(initialize_hosted_compose, job, source)
+        except BrokerError as exc:
+            return await _fail(
+                domain=FailureDomain.ENVIRONMENT,
+                fail_stage=HarnessStage.VALIDATING_ENVIRONMENT,
+                code="compose_bootstrap_failed",
+                message=str(exc),
+            )
+        if broker_socket is not None:
+            os.environ["ALK_COMPOSE_BROKER_SOCKET"] = str(broker_socket)
 
         observability.begin(
             job.job_id, job.run_id, (job.metadata or {}).get("telemetry")
@@ -2412,6 +2452,7 @@ async def run_job(
             from .certification import (
                 CertificationGateError,
                 verify_runtime_certification,
+                requires_chat_ingress,
             )
 
             try:
@@ -2420,6 +2461,7 @@ async def run_job(
                     work_directory / "runtime-validation.json",
                     bundle_digest=manifest.digest,
                     source_digest=manifest.provenance.source_digest,
+                    chat_ingress_required=requires_chat_ingress(job, bundle_dir),
                 )
             except CertificationGateError as exc:
                 return await _fail(
@@ -2451,6 +2493,7 @@ async def run_job(
                 manifest,
                 parallelism=parallelism,
                 secret_refs=secret_purposes,
+                allow_compose=broker_socket is not None,
             )
         except PreflightError as exc:
             return await _fail(
@@ -2464,12 +2507,11 @@ async def run_job(
         if cancel_requested():
             return await _canceled()
 
-        # 4/5. Provision -- ProcessRuntimeProvider, hosted lane never passes
-        # require_declared_user=False (the provider defaults it True on its own; the local lane's
-        # opt-out is a construction-site concern, not this module's). §4.5b's provider mutex is
-        # `WorldPool`'s own `_provider_lock` now (mutation-verified: it serializes
-        # provision/reset/close/healthy under one lock) -- wired directly, no extra wrapper.
-        provider = deps.build_provider(capabilities, transport)
+        provider = (
+            ComposeBrokerClient(broker_socket)
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE and broker_socket is not None
+            else deps.build_provider(capabilities, transport)
+        )
         pool = WorldPool(
             provider,
             bundle=manifest,
@@ -2608,7 +2650,11 @@ async def run_job(
         # pre-allocation CLIENT (ScenariosClient) is.
         adapter.stage_changed(HarnessStage.VALIDATING_SCENARIOS)
         await adapter.aflush_events()
-        world_factory = deps.build_world_factory(work_directory)
+        world_factory = (
+            ObservationWorldFactory(bundle_dir)
+            if manifest.runtime.kind is RuntimeKindV2.COMPOSE
+            else deps.build_world_factory(work_directory, bundle_dir)
+        )
         # An injected `ScenarioSource` (every test, every future caller) always wins -- the real
         # bundle-reading adapter (scenario_source.py) only steps in when the default
         # `NotWiredScenarioSource` is still in place AND the bundle actually carries a `scenarios/`
@@ -2719,6 +2765,7 @@ async def run_job(
             call_runner=call_runner,
             outbound=adapter,
             job_seed=job_seed,
+            require_tool_workflow=job.require_tool_workflow,
             cancel_requested=cancel_requested,
             judge=functools.partial(
                 _judge_sub_goal, agent_instructions=_agent_instructions(job, bundle_dir)

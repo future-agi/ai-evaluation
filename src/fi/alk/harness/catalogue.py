@@ -561,6 +561,24 @@ def _judged_problems(sub_goal: SubGoal) -> list[str]:
     return []
 
 
+def catalogue_problems(
+    sub_goals: Sequence[SubGoal], *, world_is_observable: bool = True
+) -> list[str]:
+    """Reject catalogues that outsource most observable outcomes to a judge."""
+    usable = [one for one in sub_goals if one.name.strip()]
+    if not usable or not world_is_observable:
+        return []
+    judged = [one for one in usable if not one.deterministic()]
+    if len(judged) * 2 > len(usable):
+        return [
+            f"{len(judged)} of {len(usable)} sub-goals are judged rather than settled by code. A "
+            "judge is the fallback, not the method: most of these are answerable from the "
+            "arguments the agent passed or the state it left. Rewrite the ones that are, and keep "
+            "judging only what nothing observable can settle"
+        ]
+    return []
+
+
 def save_catalogue(catalogue: Catalogue, destination: Path) -> Path:
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)

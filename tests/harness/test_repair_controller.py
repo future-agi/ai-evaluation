@@ -179,3 +179,122 @@ def test_repair_result_records_before_after_and_no_op() -> None:
             after_candidate_hash="candidate-b",
             outcome=RepairOutcome.APPLIED,
         )
+
+
+@pytest.mark.parametrize("changed", [True, False])
+@pytest.mark.parametrize("code", ["chat_ingress_failed", "chat_tool_evidence_unverified"])
+def test_chat_setup_hypotheses_are_bounded_and_keep_source_ownership(changed, code):
+    from fi.alk.harness.diagnostics import RepairOwner
+
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component="chat_ingress",
+        code=code,
+        message="Application error",
+    )
+    controller = RepairController(RepairBudgets(environment_patches=2))
+    expected_actions = (
+        [
+            RepairAction.PATCH_ENVIRONMENT,
+            RepairAction.PATCH_ENVIRONMENT,
+            RepairAction.REJECT,
+        ]
+        if changed
+        else [RepairAction.PATCH_ENVIRONMENT, RepairAction.REJECT, RepairAction.REJECT]
+    )
+    for index, expected in enumerate(expected_actions):
+        decision = controller.decide(
+            CandidateObservation(
+                candidate_hash=f"candidate-{index if changed else 0}",
+                phase=RepairPhase.ENVIRONMENT,
+                diagnostics=(diagnostic,),
+            )
+        )
+        assert decision.action is expected
+    assert diagnostic.owner is RepairOwner.SOURCE
+    assert controller.history.environment_patches_used == (2 if changed else 1)
+
+
+@pytest.mark.parametrize(
+    "budget,phase,extra,component",
+    [
+        (0, RepairPhase.ENVIRONMENT, (), "chat_ingress"),
+        (4, RepairPhase.SCENARIOS, (), "chat_ingress"),
+        (4, RepairPhase.ENVIRONMENT, ("credential_missing",), "chat_ingress"),
+        (
+            4,
+            RepairPhase.ENVIRONMENT,
+            ("generated_runtime_plan_invalid",),
+            "chat_ingress",
+        ),
+        (4, RepairPhase.ENVIRONMENT, (), "other"),
+    ],
+)
+def test_chat_dependency_hypothesis_cannot_expand_repair_permission(
+    budget, phase, extra, component
+):
+    diagnostic = HarnessDiagnostic.create(
+        stage=HarnessStage.CONNECTING_AGENT,
+        component=component,
+        code="chat_ingress_failed",
+        message="Application error",
+    )
+    controller = RepairController(RepairBudgets(environment_patches=budget))
+    assert (
+        controller.decide(
+            CandidateObservation(
+                candidate_hash="candidate",
+                phase=phase,
+                diagnostics=(diagnostic,) + tuple(_diagnostic(code) for code in extra),
+            )
+        ).action
+        is RepairAction.REJECT
+    )
+
+
+def test_chat_investigation_cannot_exceed_already_consumed_environment_budget():
+    controller = RepairController(RepairBudgets(environment_patches=1))
+    assert controller.decide(_observation("first", "generated_runtime_plan_invalid")).action is RepairAction.PATCH_ENVIRONMENT
+    diagnostic = HarnessDiagnostic.create(stage=HarnessStage.CONNECTING_AGENT, component="chat_ingress", code="chat_ingress_failed", message="application error")
+    assert controller.decide(CandidateObservation(candidate_hash="second", phase=RepairPhase.ENVIRONMENT, diagnostics=(diagnostic,))).action is RepairAction.REJECT
+
+
+@pytest.mark.parametrize("code", ["external_service_unavailable", "chat_ingress_timeout"])
+def test_ingress_failure_retry_budget_is_stable_and_does_not_reauthor(code):
+    controller = RepairController(RepairBudgets(infrastructure_retries_per_candidate=2))
+    actions = [controller.decide(_observation("same-candidate", code)).action for _ in range(4)]
+    assert actions == [RepairAction.RETRY_INFRASTRUCTURE, RepairAction.RETRY_INFRASTRUCTURE,
+                       RepairAction.REJECT, RepairAction.REJECT]
+    assert controller.decide(_observation("changed-candidate", code)).action is RepairAction.RETRY_INFRASTRUCTURE
+
+
+@pytest.mark.parametrize("code", ["ready_condition_invalid", "process_dependency_timeout"])
+def test_runtime_budget_is_bounded_and_independent_of_chat_repairs(code):
+    controller = RepairController(RepairBudgets(
+        runtime_patches=1, environment_patches=1,
+        infrastructure_retries_per_candidate=0,
+    ))
+    runtime = _observation("runtime-a", code, phase=RepairPhase.RUNTIME)
+    assert controller.decide(runtime).action is RepairAction.PATCH_ENVIRONMENT
+    assert controller.decide(runtime).action is RepairAction.REJECT
+    assert controller.decide(_observation(
+        "runtime-b", code, phase=RepairPhase.RUNTIME,
+    )).action is RepairAction.REJECT
+    assert controller.decide(_observation("chat-a", code)).action is RepairAction.PATCH_ENVIRONMENT
+    assert controller.decide(_observation("chat-b", code)).action is RepairAction.REJECT
+    assert controller.history.runtime_patches_used == 1
+    assert controller.history.environment_patches_used == 1
+
+
+def test_default_runtime_budget_allows_eight_changed_candidates_but_not_repeats():
+    controller = RepairController()
+    for attempt in range(8):
+        observation = _observation(
+            f"candidate-{attempt}", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
+        )
+        assert controller.decide(observation).action is RepairAction.PATCH_ENVIRONMENT
+        assert controller.decide(observation).action is RepairAction.REJECT
+    assert controller.history.runtime_patches_used == 8
+    assert controller.decide(_observation(
+        "candidate-8", "ready_condition_invalid", phase=RepairPhase.RUNTIME,
+    )).action is RepairAction.REJECT

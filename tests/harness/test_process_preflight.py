@@ -1139,6 +1139,7 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "build_requires_root",
         "user_assignment_invalid",
         "configuration_name_duplicate",
+        "workspace_name_duplicate",
         "configuration_name_required",
         "configuration_name_reserved",
         "sentinel_shape_invalid",
@@ -1157,6 +1158,9 @@ _SECTION_2E_CONTRACT_RULE_CODES = frozenset(
         "fixed_port_duplicate",
         "fixed_port_consumable_unwired",
         "agent_name_not_world_unique",
+        "public_material_admission_requires_native_compose",
+        "public_material_admission_source_changed",
+        "runtime_local_auth_requires_native_http_target",
     }
 )
 _SECTION_2E_MECHANICAL_CODES = frozenset(
@@ -1582,3 +1586,70 @@ def test_observability_export_purpose_is_accepted_and_never_claimable(
             secret_refs=TARGET_PROVIDER_REFS,
         )
     assert refused_without_ref.value.code == "secret_purpose_forbidden"
+
+@pytest.mark.parametrize(
+    "purpose", [None, "source_checkout", "simulator_provider", "target_provider"]
+)
+@pytest.mark.parametrize("compose", [False, True])
+def test_setup_secret_purpose_checked_on_sealed_bundle(tmp_path, purpose, compose):
+    contract = {
+        "runtime": {"interface": {"setup_secrets": {"provider_token": "BOOTSTRAP"}}}
+    }
+    extra = {"contract.json": json.dumps(contract).encode()}
+    override = None
+    if compose:
+        extra["compose.json"] = b'{"services":{"agent":{"image":"example/agent"}}}'
+
+        def override(body):
+            body.update(
+                runtime={
+                    "kind": "compose",
+                    "document": "compose.json",
+                    "control_service": "agent",
+                    "evidence_seam": "tool_trace",
+                },
+                processes=[],
+                capabilities={},
+            )
+            return body
+
+    manifest = _build_bundle(
+        tmp_path, extra_files=extra, body_overrides=override, include_seed=not compose
+    )
+    refs = dict(TARGET_PROVIDER_REFS)
+    if purpose is not None:
+        refs["BOOTSTRAP"] = purpose
+    if purpose == "target_provider":
+        preflight_bundle(
+            tmp_path, manifest, parallelism=1, secret_refs=refs, allow_compose=compose
+        )
+    else:
+        with pytest.raises(PreflightError, match="secret_purpose_forbidden"):
+            preflight_bundle(
+                tmp_path,
+                manifest,
+                parallelism=1,
+                secret_refs=refs,
+                allow_compose=compose,
+            )
+
+
+@pytest.mark.parametrize(
+    "alias", ["LIVEKIT_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "UNKNOWN"]
+)
+def test_config_file_alias_is_admitted_only_for_declared_target_secret(tmp_path, alias):
+    def configure(body):
+        process = next(p for p in body["processes"] if p["kind"] == "source")
+        process["config_files"] = {".env": {"secret_aliases": {"API_KEY": alias}}}
+        return body
+
+    manifest = _build_bundle(tmp_path, body_overrides=configure)
+    refs = {
+        **TARGET_PROVIDER_REFS,
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON": "target_provider",
+    }
+    if alias == "UNKNOWN":
+        with pytest.raises(PreflightError, match="runtime config requires declared"):
+            preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)
+    else:
+        preflight_bundle(tmp_path, manifest, parallelism=2, secret_refs=refs)

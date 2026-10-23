@@ -11,13 +11,27 @@ import json
 from pathlib import Path
 from typing import Any
 
+from fi.simulate.agent.wrappers.http_events import (
+    CompletedToolEvents,
+    CompletedToolRows,
+)
+
 from .backends import qualified as qualified  # noqa: F401  (re-export; callers import it here)
 from .backends import tool, tool_server
 
 from .contract import (
     CALL_DIRECTIONS,
     AgentContract,
+    Runtime,
+    RuntimeInterface,
+    RuntimeSecretFile,
+    RuntimeConfigFile,
+    HttpObservation,
+    RuntimeHttpFailureRule,
+    RuntimeHttpSetupRequest,
+    LocalHttpAuth,
     known_modalities,
+    generated_chat_interface_problem,
     validate_contract,
 )
 from .instrumentation_evidence import detect_instrumentation
@@ -124,7 +138,11 @@ def unwrapped(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def accept_contract(
-    payload: dict[str, Any], destination: Path, *, source_root: Path | None = None
+    payload: dict[str, Any],
+    destination: Path,
+    *,
+    source_root: Path | None = None,
+    require_setup_contract: bool = False,
 ) -> dict[str, Any]:
     """The gate itself: validate, and write only if it passes.
 
@@ -139,6 +157,20 @@ def accept_contract(
         return _problems([f"schema:{invalid}"[:600]], arrived)
 
     problems = validate_contract(contract)
+    if (
+        require_setup_contract
+        and contract.modality != "voice"
+        and (contract.data_store is None or not contract.data_store.kind.strip())
+    ):
+        problems.append(
+            "missing-storage-decision: inspect the source and declare data_store.kind. "
+            "Use its actual storage engine, filesystem for file-backed state, in_process "
+            "for memory-only state, or none when there is no state store. "
+            "Omitting data_store does not declare a stateless agent."
+        )
+    if require_setup_contract and contract.modality == "chat":
+        if problem := generated_chat_interface_problem(contract.runtime):
+            problems.append(problem)
     if source_root is not None:
         from .source_tool_evidence import tool_evidence_problems
 
@@ -192,7 +224,9 @@ def _without_nulls(value: Any) -> Any:
     """Treat JSON null like an omitted optional field, including in nested records."""
     if isinstance(value, dict):
         return {
-            key: _without_nulls(item) for key, item in value.items() if item is not None
+            key: item if key == "failure_values" else _without_nulls(item)
+            for key, item in value.items()
+            if item is not None
         }
     if isinstance(value, list):
         return [_without_nulls(item) for item in value if item is not None]
@@ -208,12 +242,22 @@ def contract_tools(
     available_evals: list[dict[str, Any]] | None = None,
     *,
     source_root: Path | None = None,
+    require_setup_contract: bool = False,
 ) -> Any:
     """A server exposing ``submit_contract``, writing to ``destination`` on acceptance.
 
     ``available_evals`` is the platform's own eval catalogue when the job carried one. Absent, the
     contract simply chooses none, which is what every job did before the catalogue existed.
     """
+    events_schema = CompletedToolEvents.model_json_schema()
+    events_schema["properties"]["failure_events"]["items"] = (
+        events_schema.pop("$defs")["CompletedToolFailureEvent"]
+    )
+    observation_schema = HttpObservation.model_json_schema()
+    observation_schema["properties"]["parameters"]["additionalProperties"] = (
+        observation_schema.pop("$defs")["ObservationParameter"]
+    )
+
     # Name to modality, empty or "any" for all. Refused here too, where it is still free to fix.
     offered_modality = {
         str(one.get("name") or "").strip(): str(one.get("modality") or "")
@@ -607,12 +651,13 @@ def contract_tools(
                 "data_store": {
                     "type": "object",
                     "description": "What the agent's tools read and write, and how to point them "
-                    "at a different one.",
+                    "at a different one. Explicitly declare kind, including none for a stateless "
+                    "agent, during autonomous source setup.",
                     "properties": {
                         "kind": {
                             "type": "string",
                             "description": "postgres, clickhouse, mysql, sqlite, in_process for "
-                            "state held in memory, or none.",
+                            "state held in memory, filesystem for file-backed state, or none.",
                         },
                         "configured_by": {
                             "type": "string",
@@ -676,30 +721,113 @@ def contract_tools(
                     "type": "object",
                     "description": "What it takes to run the agent's code.",
                     "properties": {
-                        "language": {"type": "string"},
+                        "language": {
+                            "type": "string",
+                            "description": Runtime.model_fields["language"].description,
+                        },
                         "version": {"type": "string"},
                         "install": {
                             "type": "string",
-                            "description": "Its own install command, e.g. from its lockfile or "
-                            "requirements. Recorded as evidence; generated packaging derives "
-                            "the executable install from the submitted manifest/lockfile.",
+                            "description": Runtime.model_fields["install"].description,
                         },
                         "extras": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional dependency groups declared by the source "
-                            "manifest that this runtime needs, such as voice or qdrant. Never "
-                            "invent a group that the manifest does not declare.",
+                            "description": Runtime.model_fields["extras"].description,
+                        },
+                        "requirements_files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": Runtime.model_fields[
+                                "requirements_files"
+                            ].description,
+                        },
+                        "observations": {
+                            "type": "object",
+                            "maxProperties": 32,
+                            "additionalProperties": observation_schema,
+                        },
+                        "workspaces": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                            "description": Runtime.model_fields[
+                                "workspaces"
+                            ].description,
+                        },
+                        "config_files": {
+                            "type": "object",
+                            "additionalProperties": RuntimeConfigFile.model_json_schema(),
+                            "description": "Source-relative dotenv instance resources. Public values and declared target-provider aliases only; confidential files remain outside build contexts.",
+                        },
+                        "directories": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Source-relative missing writable bind directories created independently per instance.",
+                        },
+                        "secret_files": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": RuntimeSecretFile.model_json_schema(),
+                            },
+                            "description": "Confidential files by selected service. Bind declared target-provider aliases to absolute container destinations; never include secret values.",
                         },
                         "workdir": {
                             "type": "string",
                             "description": "Where in the source imports resolve from, if not the "
                             "root.",
                         },
+                        "execution": {
+                            "type": "string",
+                            "enum": ["auto", "native", "compose"],
+                            "description": "Select native or compose explicitly from source evidence. auto preserves legacy discovery.",
+                        },
+                        "service": {
+                            "type": "string",
+                            "description": "Exact selected Compose service. Its dependency closure is retained.",
+                        },
+                        "additional_services": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": "Additional source-declared Compose roots needed by this workflow. Their declared dependency closures are retained alongside service. Requires explicit compose_file and service; exclude service itself. Never infer roots from environment URLs.",
+                        },
+                        "required_environment": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "uniqueItems": True,
+                            },
+                            "description": "Required environment names by selected process name. Native control process is agent. No values.",
+                        },
                         "compose_file": {
                             "type": "string",
-                            "description": "Exact path to the submitted Compose file to run "
+                            "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
+                        },
+                        "compose_image_services": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "uniqueItems": True,
+                            "items": {
+                                "type": "string",
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+                            },
+                            "description": Runtime.model_fields["compose_image_services"].description,
+                        },
+                        "compose_overrides": {
+                            "type": "array",
+                            "maxItems": 8,
+                            "uniqueItems": True,
+                            "items": {"type": "string", "maxLength": 1024},
+                            "description": "Ordered repository-relative source Compose overlays applied after compose_file using the native Compose CLI. Requires explicit compose_file and service. Never synthesize overlays or change upstream files.",
                         },
                         "dockerfile": {
                             "type": "string",
@@ -717,7 +845,8 @@ def contract_tools(
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Repository-relative large generated outputs or "
-                            "documentation to omit from a generated build context. Never omit "
+                            "documentation or repeated test-only patterns to omit from a generated "
+                            "build context. Simple * and ** patterns are supported. Never omit "
                             "runtime source, dependency manifests, seed data, or tool data.",
                         },
                         "platform": {
@@ -734,16 +863,20 @@ def contract_tools(
                             "properties": {
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["http", "websocket", "callable"],
-                                    "description": "How the simulator reaches the running "
-                                    "agent. HTTP is currently the hosted repository path.",
+                                    "enum": ["http", "websocket", "callable", "command"],
+                                    "description": RuntimeInterface.model_fields["kind"].description,
                                 },
                                 "protocol": {
                                     "type": "string",
                                     "enum": ["fi.alk", "openai_chat", "json_template"],
-                                    "description": "The submitted endpoint's request/response "
-                                    "envelope. Use json_template for any other source-owned JSON "
-                                    "API and describe its exact envelope below.",
+                                    "description": RuntimeInterface.model_fields["protocol"].description,
+                                },
+                                "model": {
+                                    "type": "string",
+                                    "description": "For openai_chat: exact source-owned model "
+                                    "or profile identifier accepted by this endpoint. Read it "
+                                    "from the source API or configuration; do not substitute "
+                                    "the backing provider model unless the endpoint expects it.",
                                 },
                                 "port": {
                                     "type": "integer",
@@ -752,7 +885,9 @@ def contract_tools(
                                 },
                                 "path": {
                                     "type": "string",
-                                    "description": "Exact POST path for one conversational turn.",
+                                    "description": "Exact POST path for one conversational turn. "
+                                    "Path placeholders may use canonical inputs or prior setup "
+                                    "captures; substituted values are encoded as path segments.",
                                 },
                                 "health_path": {
                                     "type": "string",
@@ -776,9 +911,69 @@ def contract_tools(
                                 },
                                 "response_path": {
                                     "type": "string",
-                                    "description": "For json_template only: optional dotted path "
-                                    "to assistant text in the JSON response, including numeric "
-                                    "list indexes such as '-1.content.parts.0.text'.",
+                                    "description": RuntimeInterface.model_fields["response_path"].description,
+                                },
+                                "completed_tools": CompletedToolRows.model_json_schema(),
+                                "completed_tool_events": events_schema,
+                                "local_auth": LocalHttpAuth.model_json_schema(),
+                                "setup_secrets": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 16,
+                                    "description": "Map private setup placeholder names to declared target-provider secret aliases. Values resolve privately into setup bodies/headers only. Never put credential values in this declaration.",
+                                },
+                                "failure_rule": {
+                                    "type": "object",
+                                    "required": ["status_path"],
+                                    "oneOf": [
+                                        {"required": ["failure_values"]},
+                                        {"required": ["success_values"]},
+                                    ],
+                                    "description": "Optional source-declared application failure envelope. Never infer failures from an arbitrary error field.",
+                                    "properties": {
+                                        "status_path": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 512,
+                                        },
+                                        "failure_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                        },
+                                        "success_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                            "description": "Alternative to failure_values. Any status outside this explicit successful set fails, including missing status fields. Preserve JSON scalar types: [null] for JSON null, [0] for numeric zero, [false] for boolean false. An empty list is invalid.",
+                                        },
+                                        "message_path": {
+                                            "type": "string",
+                                            "maxLength": 512,
+                                        },
+                                    },
+                                },
+                                "headers_template": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                    "maxProperties": 32,
+                                    "description": RuntimeInterface.model_fields["headers_template"].description,
                                 },
                                 "setup_requests": {
                                     "type": "array",
@@ -798,6 +993,34 @@ def contract_tools(
                                             },
                                             "path": {"type": "string"},
                                             "body_template": {},
+                                            "encoding": {
+                                                "type": "string",
+                                                "enum": ["json", "form"],
+                                            },
+                                            "headers_template": {
+                                                "type": "object",
+                                                "description": RuntimeHttpSetupRequest.model_fields["headers_template"].description,
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 32,
+                                            },
+                                            "capture_headers": {
+                                                "type": "object",
+                                                "additionalProperties": {
+                                                    "type": "string"
+                                                },
+                                                "maxProperties": 16,
+                                                "description": "Map placeholder names to response header names. Use capture for JSON response fields; cookies are automatic.",
+                                            },
+                                            "failure_rule": {
+                                                **RuntimeHttpFailureRule.model_json_schema(),
+                                                "oneOf": [
+                                                    {"required": ["failure_values"]},
+                                                    {"required": ["success_values"]},
+                                                ],
+                                                "description": "Optional source-declared application status rule for this setup response. Checked after HTTP status and before captures or the next request. Use it when HTTP success can contain application failure.",
+                                            },
                                             "accepted_statuses": {
                                                 "type": "array",
                                                 "items": {"type": "integer"},
@@ -1011,14 +1234,14 @@ def contract_tools(
             (
                 "data",
                 bool(payload.get("tools"))
+                and structured_seed_store
                 and not payload.get("data_schema")
                 and not payload.get("base_environment"),
-                "no data_schema and no base_environment, for an agent that has tools. The world "
-                "every test runs against is built from exactly these two, so without them the "
-                "next stage has no schema to create and no rows to seed, and every tool call it "
-                "makes will refuse. Record the shape of each kind of record the tools read or "
-                "write, and enough real rows to reach every branch those tools have — a "
-                "representative sample for a large dataset, the whole thing for a small one.",
+                "no data_schema and no base_environment, although data_store declares a "
+                "structured database. Record the source-owned schema and any existing records "
+                "the tools require, using real source identifiers and values. An initially "
+                "empty database may be correct; do not invent records or schema to satisfy "
+                "this warning.",
             ),
             (
                 "starting-data",
@@ -1054,7 +1277,12 @@ def contract_tools(
             return _problems(
                 say + ["If any of these genuinely does not apply, submit again as is."]
             )
-        return accept_contract(payload, destination, source_root=source_root)
+        return accept_contract(
+            payload,
+            destination,
+            source_root=source_root,
+            require_setup_contract=require_setup_contract,
+        )
 
     return tool_server(name=CONTRACT_SERVER, version="0.1.0", tools=[submit_contract])
 

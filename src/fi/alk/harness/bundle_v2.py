@@ -41,6 +41,8 @@ from pydantic import (
     model_validator,
 )
 
+from .contract import LocalHttpAuth, RuntimeConfigFile, validate_runtime_resource_paths
+from .public_material import PublicMaterialAdmission, PublicTestFixtureAdmission
 from .bundle import CapabilityProtocol, _reject_secret_values, _safe_relative
 
 BUNDLE_V2_SCHEMA_VERSION = "futureagi.environment-bundle.v2"
@@ -177,8 +179,14 @@ class SourceProcess(BaseModel):
     kind: Literal[ProcessKind.SOURCE] = ProcessKind.SOURCE
     working_directory: str
     source_origin: Literal["repository", "bundle"] = "repository"
+    # Compiler-only coordinate for packaging member-relative inputs after workspace promotion.
+    source_component: str = Field(default=".", exclude=True)
     build_commands: list[list[str]] = Field(default_factory=list)
     run_command: list[str] = Field(min_length=1)
+    workspaces: dict[str, str] = Field(default_factory=dict)
+    local_auth: LocalHttpAuth | None = None
+    config_files: dict[str, RuntimeConfigFile] = Field(default_factory=dict)
+    directories: list[str] = Field(default_factory=list)
     environment: dict[str, str] = Field(default_factory=dict)
     build_environment: dict[str, str] | None = None
     fixed_port: int | None = Field(default=None, ge=1, le=65535)
@@ -201,7 +209,22 @@ class SourceProcess(BaseModel):
 
     @model_validator(mode="after")
     def _shape(self) -> "SourceProcess":
+        from .world.files import validate_bindings
+
+        if self.local_auth:
+            self.local_auth.reject_collisions(
+                set(self.environment) | set(self.build_environment or {})
+            )
+            for resource in self.config_files.values():
+                self.local_auth.reject_collisions(
+                    set(resource.values)
+                    | set(resource.secret_aliases)
+                    | set(resource.secret_aliases.values())
+                )
+        validate_bindings(self.workspaces)
+        validate_runtime_resource_paths(self.config_files, self.directories)
         _safe_relative(self.working_directory)
+        _safe_relative(self.source_component)
         for step in self.build_commands:
             if not step:
                 raise ValueError("build_command_step_empty")
@@ -219,6 +242,14 @@ class SourceProcess(BaseModel):
         # reproduces its bytes and digest unchanged. A pydantic v2 `@field_serializer` cannot drop a
         # key (it only rewrites a value), so the omission is done here at the model level.
         data = handler(self)
+        if self.local_auth is None:
+            data.pop("local_auth", None)
+        if not self.config_files:
+            data.pop("config_files", None)
+        if not self.directories:
+            data.pop("directories", None)
+        if not self.workspaces:
+            data.pop("workspaces", None)
         if not self.fixed_port_consumable:
             data.pop("fixed_port_consumable", None)
         return data
@@ -387,6 +418,12 @@ class BundleFileV2(BaseModel):
 class BundleProvenanceV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    public_material_admissions: list[PublicMaterialAdmission] = Field(
+        default_factory=list, max_length=512
+    )
+    public_test_fixture_admissions: list[PublicTestFixtureAdmission] = Field(
+        default_factory=list, max_length=128
+    )
     source_kind: str
     repository: str | None = None
     commit: str | None = None
@@ -398,6 +435,11 @@ class BundleProvenanceV2(BaseModel):
 
     @model_validator(mode="after")
     def _valid_source_digest(self) -> "BundleProvenanceV2":
+        if any(
+            item.source_digest != self.source_digest
+            for item in [*self.public_material_admissions, *self.public_test_fixture_admissions]
+        ):
+            raise ValueError("public_material_admission_source_changed")
         # Bare 64-hex, matching what `source_fingerprint` (v1's producer) actually emits — no
         # `sha256:` prefix, unlike `digest`/`inputs_digest`.
         if not re.fullmatch(r"[0-9a-f]{64}", self.source_digest):
@@ -441,6 +483,11 @@ class EnvironmentBundleV2(BaseModel):
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.digest):
             raise ValueError("bundle_digest_invalid")
 
+        if (
+            (self.provenance.public_material_admissions or self.provenance.public_test_fixture_admissions)
+            and self.runtime.kind is not RuntimeKindV2.COMPOSE
+        ):
+            raise ValueError("public_material_admission_requires_native_compose")
         if self.runtime.kind is RuntimeKindV2.PROCESS and not self.processes:
             raise ValueError("processes_required: kind=process")
         if self.runtime.kind is RuntimeKindV2.EXTERNAL and (
@@ -448,6 +495,16 @@ class EnvironmentBundleV2(BaseModel):
         ):
             raise ValueError("processes_and_seed_forbidden: kind=external")
 
+        for process in self.processes:
+            if isinstance(process, SourceProcess) and process.local_auth:
+                target = self.capabilities.get("target_http")
+                if (
+                    self.runtime.kind is not RuntimeKindV2.PROCESS
+                    or target is None
+                    or target.service != process.name
+                    or target.protocol is not CapabilityProtocol.HTTP
+                ):
+                    raise ValueError("runtime_local_auth_requires_native_http_target")
         for slug in self.capabilities:
             if not _CAPABILITY_SLUG.fullmatch(slug):
                 raise ValueError(f"capability_slug_invalid: {slug}")
@@ -458,6 +515,14 @@ class EnvironmentBundleV2(BaseModel):
         )
         if duplicated_names:
             raise ValueError("process_name_duplicate: " + ", ".join(duplicated_names))
+        workspace_names = [
+            name
+            for process in self.processes
+            if isinstance(process, SourceProcess)
+            for name in process.workspaces
+        ]
+        if len(workspace_names) != len(set(workspace_names)):
+            raise ValueError("workspace_name_duplicate")
         known_names = set(process_names)
         processes_by_name = {process.name: process for process in self.processes}
 
@@ -614,7 +679,15 @@ class EnvironmentBundleV2(BaseModel):
         # identifiers, never values, the same reasoning v1 exempts `secret_refs` under.
         _reject_secret_values(
             self.model_dump(
-                exclude={"digest": True, "processes": {"__all__": {"secret_purposes"}}}
+                exclude={
+                    "digest": True,
+                    "processes": {
+                        "__all__": {
+                            "secret_purposes": True,
+                            "config_files": {"__all__": {"secret_aliases"}},
+                        }
+                    },
+                }
             )
         )
         return self

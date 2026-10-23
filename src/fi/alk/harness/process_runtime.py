@@ -37,6 +37,8 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -47,7 +49,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import quote as urlquote, urlsplit
 
-from pydantic import BaseModel, Field, JsonValue, ValidationError
+from pydantic import BaseModel, Field, JsonValue, PrivateAttr, ValidationError
 
 from .bundle import CapabilityProtocol
 from .bundle_v2 import (
@@ -67,6 +69,7 @@ from .job import FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT, target_provider_environment
 from .provider_import import (
     ProviderImportError,
     ProviderImportSpec,
@@ -176,6 +179,8 @@ class EnvironmentRuntime(BaseModel):
     """§3's per-world provisioner output. No `provider` field (§4 delta: "no remote provider
     exists at this seam") — the class attribute `RuntimeProvider.name` (`runtime.py`) is retained
     there for logging only, not carried onto each world's own record."""
+
+    _local_auth_values: dict[str, str] = PrivateAttr(default_factory=dict)
 
     runtime_id: str
     world_index: int = Field(ge=0)
@@ -942,7 +947,7 @@ _INHERITED_ENV_ALLOWLIST = (
     "NODE_EXTRA_CA_CERTS",
 )
 _GOOGLE_ADC_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
-_GOOGLE_ADC_PATH_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
+_GOOGLE_ADC_PATH_ALIAS = PROCESS_SECRET_FILE_ENVIRONMENT[_GOOGLE_ADC_JSON_ALIAS]
 
 
 def _allowlisted_ambient_env(source: dict[str, str]) -> dict[str, str]:
@@ -1267,6 +1272,7 @@ _TRANSIENT_BUILD_NETWORK_MARKERS = (
     "request failed after",
     "client error (connect)",
     "operation timed out",
+    "network timeout",
     "connection timed out",
     "connection reset",
     "temporary failure in name resolution",
@@ -1281,9 +1287,71 @@ _TRANSIENT_BUILD_NETWORK_MARKERS = (
 )
 
 
+def _run_build_step(
+    args: Sequence[str], **kwargs: Any
+) -> subprocess.CompletedProcess:
+    capture_output = kwargs.pop("capture_output", False)
+    timeout = kwargs.pop("timeout", None)
+    if capture_output:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    process = subprocess.Popen(args, start_new_session=True, **kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
 def _is_transient_build_network_failure(result: subprocess.CompletedProcess) -> bool:
     output = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
     return any(marker in output for marker in _TRANSIENT_BUILD_NETWORK_MARKERS)
+
+
+def _build_step_evidence(
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    step: list[str],
+    process: str,
+    attempt: int,
+    directory: Path,
+    secret_values: dict[str, str] | None,
+    retain_log: Callable[[Path], None] | None,
+) -> str:
+    from fi._diagnostics import sanitize_diagnostic
+
+    def text(value: str | bytes | None) -> str:
+        return (
+            value.decode("utf-8", errors="replace")
+            if isinstance(value, bytes)
+            else value or ""
+        )
+
+    body = "stdout:\n" + text(stdout) + "\nstderr:\n" + text(stderr)
+    body = sanitize_diagnostic(body, secret_values, limit=len(body))[-7600:]
+    header = sanitize_diagnostic(
+        f"Build process {process}, attempt {attempt + 1}, command {step!r}\n",
+        secret_values,
+        limit=512,
+    )
+    evidence = header + body
+    if retain_log is not None:
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w+", dir=directory, prefix="build-", suffix=".log"
+            ) as stream:
+                stream.write(evidence)
+                stream.flush()
+                retain_log(Path(stream.name))
+        except (OSError, ValueError, RecursionError):
+            logger.warning("build diagnostic retention failed")
+    return evidence
 
 
 def build_process_tree(
@@ -1291,7 +1359,7 @@ def build_process_tree(
     *,
     source_root: Path,
     build_root: Path,
-    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    run: Callable[..., subprocess.CompletedProcess] = _run_build_step,
     copy: Callable[[Path, Path], None] | None = None,
     user_resolver: Callable[[str], "pwd.struct_passwd | None"] = default_user_resolver,
     require_declared_user: bool = False,
@@ -1299,6 +1367,8 @@ def build_process_tree(
     build_step_timeout_seconds: float = _DEFAULT_BUILD_STEP_TIMEOUT_SECONDS,
     build_step_network_retries: int = _DEFAULT_BUILD_STEP_NETWORK_RETRIES,
     sleep: Callable[[float], None] = time.sleep,
+    secret_values: dict[str, str] | None = None,
+    retain_process_log: Callable[[Path], None] | None = None,
 ) -> Path:
     """§2b: copy `source_root/<working_directory>` to `build_root/<name>/`, chowned to the
     process's `user` (F1), then argv-exec each `build_commands` step there under that same user —
@@ -1375,6 +1445,11 @@ def build_process_tree(
         stage="build",
         domain=FailureDomain.AGENT,
     )
+    from .world.files import prepare_root
+
+    for relative in process.workspaces.values():
+        prepare_root(build_dir / relative)
+
     from .runtime_files import prepare_runtime_environment
 
     try:
@@ -1414,6 +1489,11 @@ def build_process_tree(
                     group=spawn_gid,
                 )
             except subprocess.TimeoutExpired as exc:
+                evidence = _build_step_evidence(
+                    exc.stdout, exc.stderr, step=step, process=process.name,
+                    attempt=network_attempt, directory=build_root.parent,
+                    secret_values=secret_values, retain_log=retain_process_log,
+                )
                 # F15, p5-round1-review: an install step wedged on a private registry with no DNS
                 # answer used to block the provisioner forever — the only backstop was the gateway's
                 # whole-job TTL, which arrives as SIGTERM to the entrypoint while this call is still
@@ -1421,7 +1501,7 @@ def build_process_tree(
                 raise ProcessRuntimeError(
                     "build",
                     "build_failed",
-                    f"{step!r} exceeded the {build_step_timeout_seconds}s build-step timeout",
+                    f"build step exceeded the {build_step_timeout_seconds}s timeout: {evidence[-2000:]}",
                     process=process.name,
                     domain=FailureDomain.AGENT,
                 ) from exc
@@ -1456,6 +1536,11 @@ def build_process_tree(
                 ) from exc
             if result.returncode == 0:
                 break
+            evidence = _build_step_evidence(
+                result.stdout, result.stderr, step=step, process=process.name,
+                attempt=network_attempt, directory=build_root.parent,
+                secret_values=secret_values, retain_log=retain_process_log,
+            )
             if network_attempt < max(
                 0, build_step_network_retries
             ) and _is_transient_build_network_failure(result):
@@ -1474,12 +1559,10 @@ def build_process_tree(
             break
         assert result is not None
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()[:2000]
             raise ProcessRuntimeError(
                 "build",
                 "build_failed",
-                f"{step!r} exited {result.returncode}"
-                + (f": {stderr}" if stderr else ""),
+                f"build step exited {result.returncode}: {evidence[-2000:]}",
                 process=process.name,
                 domain=FailureDomain.AGENT,
             )
@@ -1532,6 +1615,7 @@ class ProcessRunner(Protocol):
         log_path: Path,
         user: int | None = None,
         group: int | None = None,
+        output_redactions: dict[str, str] | None = None,
     ) -> SpawnedProcess: ...
 
 
@@ -1551,18 +1635,18 @@ class CapabilityProber(Protocol):
 
 @dataclass
 class PopenProcess:
-    """`SpawnedProcess` backed by a real subprocess. stdout+stderr are redirected to a log file
-    under the process's own scratch directory rather than captured through a pipe-reading thread
-    — simpler, and `started_check`'s `log_marker` only ever needs to re-read the file's current
-    contents, not race a live stream."""
+    """A subprocess with optional filtering before stdout reaches its diagnostic log."""
 
     popen: subprocess.Popen
     log_path: Path
+    log_thread: threading.Thread | None = field(default=None, repr=False)
 
     def is_running(self) -> bool:
         return self.popen.poll() is None
 
     def captured_output(self) -> str:
+        if self.log_thread and self.popen.poll() is not None:
+            self.log_thread.join(timeout=1)
         try:
             return self.log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -1578,7 +1662,13 @@ class PopenProcess:
 
     def wait(self, timeout: float) -> bool:
         try:
+            started = time.monotonic()
             self.popen.wait(timeout=timeout)
+            if self.log_thread:
+                self.log_thread.join(
+                    timeout=max(0, timeout - (time.monotonic() - started))
+                )
+                return not self.log_thread.is_alive()
             return True
         except subprocess.TimeoutExpired:
             return False
@@ -1668,6 +1758,35 @@ def _default_log_chown(path: Path, uid: int, gid: int) -> None:
     os.chown(path, uid, gid)
 
 
+def _copy_redacted_output(source, destination, values: dict[str, str]) -> None:
+    patterns = tuple(value.encode() for value in values.values() if value)
+    pending = b""
+    try:
+        with source, destination:
+            while chunk := source.read1(8192):
+                pending += chunk
+                for pattern in patterns:
+                    pending = pending.replace(pattern, b"<redacted>")
+                # Retain only a possible token prefix, including across separate writes.
+                held = max(
+                    (
+                        size
+                        for pattern in patterns
+                        for size in range(1, len(pattern))
+                        if pending.endswith(pattern[:size])
+                    ),
+                    default=0,
+                )
+                emitted = pending[:-held] if held else pending
+                destination.write(emitted)
+                destination.flush()
+                pending = pending[-held:] if held else b""
+            if pending:
+                destination.write(b"<redacted>")
+    except OSError:
+        logger.warning("process log filtering failed")
+
+
 def default_process_runner(
     argv: Sequence[str],
     *,
@@ -1677,6 +1796,7 @@ def default_process_runner(
     user: int | None = None,
     group: int | None = None,
     chown: Callable[[Path, int, int], None] = _default_log_chown,
+    output_redactions: dict[str, str] | None = None,
 ) -> PopenProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("wb")
@@ -1690,20 +1810,34 @@ def default_process_runner(
         # CAP_CHOWN — the same privilege `user=`/`group=` below already requires, so a real
         # hosted deployment has both or neither; a dev-box test fakes it structurally).
         chown(log_path, user, group if group is not None else -1)
-    popen = subprocess.Popen(
-        list(argv),
-        cwd=cwd,
-        env=env,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        user=user,
-        group=group,
-        # Each declared runtime process owns a process group. This is necessary for
-        # deterministic reset/cleanup when the command is a launcher which forks the
-        # real long-lived server (for example ``uv run`` or ``npm start``).
-        start_new_session=True,
-    )
-    return PopenProcess(popen=popen, log_path=log_path)
+    try:
+        popen = subprocess.Popen(
+            list(argv),
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE if output_redactions else log_file,
+            stderr=subprocess.STDOUT,
+            user=user,
+            group=group,
+            # Each declared runtime process owns a process group. This is necessary for
+            # deterministic reset/cleanup when the command is a launcher which forks the
+            # real long-lived server (for example ``uv run`` or ``npm start``).
+            start_new_session=True,
+        )
+    except BaseException:
+        log_file.close()
+        raise
+    log_thread = None
+    if output_redactions:
+        log_thread = threading.Thread(
+            target=_copy_redacted_output,
+            args=(popen.stdout, log_file, output_redactions),
+            daemon=True,
+        )
+        log_thread.start()
+    else:
+        log_file.close()
+    return PopenProcess(popen=popen, log_path=log_path, log_thread=log_thread)
 
 
 @dataclass
@@ -1721,6 +1855,7 @@ class SpawnedWorldProcess:
     # per-world environment, which is discarded after spawn — carried here so the provider can
     # surface it on the world's runtime metadata without re-rendering templates.
     dispatch_agent_name: str | None = None
+    local_auth_values: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 def _agent_name_source_default(source_root: Path) -> str:
@@ -1761,7 +1896,7 @@ def _dispatch_metadata(
 #
 # §2b fixes the catalog (engine/version/role/db-name/strategies) and the port formula; it does
 # not fix an exact launch invocation for any of the three engines — that is provisioner-internal,
-# same status as `LocalComposeRuntimeProvider`'s own Compose mechanics. The commands below are a
+# same status as the certified Compose provider's lifecycle mechanics. The commands below are a
 # defensible V1 default, kept swappable through `ProcessRunner`/`sync_run` injection; they are
 # never executed in this module's own test lane (§0: assumed on PATH, never required in tests).
 
@@ -2116,6 +2251,7 @@ def spawn_source_process(
     world_dir: Path,
     world_index: int,
     job_id: str = "local",
+    local_auth_values: dict[str, str] | None = None,
     port_plan: PortPlan,
     configuration_addresses: dict[str, str],
     secret_values: dict[str, str],
@@ -2254,7 +2390,12 @@ def spawn_source_process(
                 process.name,
             )
     runtime_dir = build_dir
-    if port_plan.effective_instances > 1:
+    if (
+        port_plan.effective_instances > 1
+        or process.workspaces
+        or process.config_files
+        or process.directories
+    ):
         runtime_dir = world_dir / "runtime"
         try:
             # Stop/reap precedes every spawn/reset. Never reuse another world's
@@ -2303,12 +2444,34 @@ def spawn_source_process(
             "could not prepare runtime caches",
             process=process.name,
         ) from exc
+    from .runtime_files import materialize_config_resources
+
+    try:
+        config_environment = materialize_config_resources(
+            runtime_dir, process.config_files, process.directories, injected
+        )
+        if resolved_user is not None and (process.config_files or process.directories):
+            _chown_tree(
+                runtime_dir,
+                uid=resolved_user.pw_uid,
+                gid=resolved_user.pw_gid,
+                chown=chown,
+            )
+    except OSError as exc:
+        raise ProcessRuntimeError(
+            "spawn",
+            "spawn_failed",
+            "could not materialize runtime config resources",
+            process=process.name,
+            domain=FailureDomain.AGENT,
+        ) from exc
     env = _base_process_env(
         runtime_dir,
         {
             **(process.build_environment or {}),
             **rendered,
             **injected,
+            **config_environment,
             **authoritative_endpoints,
         },
     )
@@ -2323,10 +2486,27 @@ def spawn_source_process(
             env[name] = value
     if mark_hook_due:
         env["FI_SIMULATION_CALL_FILE"] = str(world_dir.parent / SIMULATION_CALL_FILE)
+    if process.local_auth:
+        process.local_auth.reject_collisions(set(env) | set(secret_values))
+        token = (local_auth_values or {}).get(process.local_auth.server_environment)
+        if not token:
+            raise ProcessRuntimeError(
+                "spawn",
+                "spawn_failed",
+                "local HTTP auth token unavailable",
+                process=process.name,
+            )
+        env[process.local_auth.server_environment] = token
+    env = target_provider_environment(env)
     if resolved_user is not None:
         env["HOME"] = getattr(resolved_user, "pw_dir", f"/tmp/{process.user.value}")
     command = list(process.run_command)
-    if port_plan.effective_instances > 1:
+    if (
+        port_plan.effective_instances > 1
+        or process.workspaces
+        or process.config_files
+        or process.directories
+    ):
         for name, directory in (
             ("TMPDIR", "tmp"),
             ("PYTHONPYCACHEPREFIX", "pycache"),
@@ -2357,6 +2537,7 @@ def spawn_source_process(
             log_path=world_dir / "process.log",
             user=resolved_user.pw_uid if resolved_user is not None else None,
             group=resolved_user.pw_gid if resolved_user is not None else None,
+            **({"output_redactions": local_auth_values} if process.local_auth else {}),
         )
     except FileNotFoundError as exc:
         raise ProcessRuntimeError(
@@ -2378,6 +2559,7 @@ def spawn_source_process(
         # target-provider value can intentionally override the bundle's rendered default; using
         # ``rendered`` here sent the simulator to one name while the worker registered another.
         dispatch_agent_name=env.get("LIVEKIT_AGENT_NAME") or None,
+        local_auth_values=dict(local_auth_values or {}) if process.local_auth else {},
     )
 
 
@@ -2622,7 +2804,13 @@ def wait_for_dependency(
                     capability, world_index=world_index, credentials=credentials
                 )
                 if not prober(
-                    protocol=capability.protocol,
+                    # The real chat gate proves authentication after TCP startup readiness.
+                    protocol=(
+                        CapabilityProtocol.TCP
+                        if isinstance(dependency, SourceProcess)
+                        and dependency.local_auth
+                        else capability.protocol
+                    ),
                     host="localhost",
                     port=port,
                     path=probe.path,
@@ -2644,7 +2832,7 @@ def wait_for_dependency(
                     "depends_on",
                     "spawn_failed",
                     f"{dependency_name}: exited before readiness probe passed"
-                    f"{_output_tail(spawned.handle)}",
+                    f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
                     process=dependency_name,
                     domain=(
                         FailureDomain.AGENT
@@ -2703,7 +2891,7 @@ def wait_for_dependency(
                 "depends_on",
                 "spawn_failed",
                 f"{dependency_name}: exited before started_check passed"
-                f"{_output_tail(spawned.handle)}",
+                f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
                 process=dependency_name,
                 domain=FailureDomain.AGENT,
             )
@@ -2720,7 +2908,7 @@ def wait_for_dependency(
             "depends_on_timeout",
             f"{dependency_name}: started_check did not pass within "
             f"{started_check.timeout_seconds}s"
-            f"{_output_tail(spawned.handle)}",
+            f"{_output_tail(spawned.handle, spawned.local_auth_values)}",
             process=dependency_name,
             domain=FailureDomain.INFRASTRUCTURE,
         ),
@@ -2731,9 +2919,16 @@ _OUTPUT_TAIL_LINES = 40
 _OUTPUT_TAIL_CHARS = 1500
 
 
-def _output_tail(handle: SpawnedProcess) -> str:
+def _output_tail(handle: SpawnedProcess, secret_values=None) -> str:
     """The dependency's last output lines, formatted as a message suffix (empty when silent)."""
-    lines = handle.captured_output().splitlines()[-_OUTPUT_TAIL_LINES:]
+    from fi._diagnostics import sanitize_diagnostic
+
+    output = handle.captured_output()
+    lines = (
+        sanitize_diagnostic(output, secret_values, limit=len(output))
+        if secret_values
+        else output
+    ).splitlines()[-_OUTPUT_TAIL_LINES:]
     tail = "\n".join(line.rstrip() for line in lines if line.strip())
     if not tail:
         return "; process wrote no output"
@@ -3909,6 +4104,11 @@ class SpawnContext:
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer
     bundle_dir: Path | None = None
     generic_artifact_root: Path | None = None
+    retain_process_log: Callable[[Path], None] | None = None
+    local_auth_values: dict[int, dict[str, str]] = field(
+        default_factory=dict, repr=False
+    )
+    local_auth_redactions: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 @dataclass
@@ -3934,6 +4134,16 @@ def spawn_world(
     `build_process_tree`, called once per process before any world is spawned) — this function only
     creates per-world scratch directories, never a build tree.
     """
+    local_auth_values = context.local_auth_values.setdefault(world_index, {})
+    for process in manifest.processes:
+        if isinstance(process, SourceProcess) and process.local_auth:
+            process.local_auth.reject_collisions(context.secret_values)
+            name = process.local_auth.server_environment
+            if name not in local_auth_values:
+                local_auth_values[name] = secrets.token_hex(32)
+                context.local_auth_redactions[
+                    str(len(context.local_auth_redactions))
+                ] = local_auth_values[name]
     endpoints = build_endpoints(
         manifest,
         world_index=world_index,
@@ -3991,6 +4201,7 @@ def spawn_world(
                     configuration_addresses=configuration_addresses,
                     secret_values=context.secret_values,
                     secret_purposes=context.secret_purposes,
+                    local_auth_values=local_auth_values if process.local_auth else None,
                     runner=context.runner,
                     user_resolver=context.user_resolver,
                     require_declared_user=context.require_declared_user,
@@ -4039,6 +4250,8 @@ def build_process_trees(
             require_declared_user=context.require_declared_user,
             chown=context.chown,
             build_step_timeout_seconds=context.build_step_timeout_seconds,
+            secret_values=context.secret_values,
+            retain_process_log=context.retain_process_log,
         )
         for process in manifest.processes
         if isinstance(process, SourceProcess)
@@ -4085,8 +4298,15 @@ def probe_runtime_health(
             user, password, dbname = _postgres_credentials_from_address(
                 endpoint.address
             )
+        process = next(
+            (p for p in manifest.processes if p.name == capability.service), None
+        )
         if not prober(
-            protocol=capability.protocol,
+            protocol=(
+                CapabilityProtocol.TCP
+                if isinstance(process, SourceProcess) and process.local_auth
+                else capability.protocol
+            ),
             host=host,
             port=port,
             path=probe.path,
@@ -4104,8 +4324,7 @@ async def healthy(
     *,
     prober: CapabilityProber = default_capability_prober,
 ) -> bool:
-    """Async wrapper matching §4's `RuntimeProvider.healthy` shape (`runtime.py`'s own
-    `LocalComposeRuntimeProvider.healthy` uses the same `asyncio.to_thread` idiom).
+    """Async wrapper matching §4's `RuntimeProvider.healthy` shape.
 
     §3's `state` transitions are fixed: `preparing->ready`, `ready->unhealthy`, and
     `unhealthy->ready` ONLY via re-provision reconcile (§4 point 1: "a sick world mid-job is
@@ -5017,7 +5236,14 @@ def _clone_or_reset_world(
     # world's own postgres while its `tools-api`/`agent` may still hold connections, guaranteeing
     # the full escalation wait every reset. A dict preserves insertion order, so `reversed()` here
     # IS reverse-topological order without recomputing it.
-    in_place = keep_processes and bool(existing_handles) and _stores_reset_in_place(manifest)
+    in_place = (
+        keep_processes
+        and bool(existing_handles)
+        and _stores_reset_in_place(manifest)
+        and not any(
+            isinstance(p, SourceProcess) and p.workspaces for p in manifest.processes
+        )
+    )
     for name, handle in reversed(list(existing_handles.items())):
         if not in_place and name not in job_shared_handles:
             # M7, p6-review-r1: waits for real exit before `_seal_world_store` below `rmtree`s
@@ -5027,6 +5253,9 @@ def _clone_or_reset_world(
                 handle.handle,
                 prefer_interrupt=_prefers_interrupt(manifest, name),
             )
+            log_path = getattr(handle.handle, "log_path", None)
+            if log_path is not None and context.retain_process_log is not None:
+                context.retain_process_log(log_path)
 
     store_by_process = _store_by_process_name(manifest)
     baseline_by_process = {record.process_name: record for record in baseline.stores}
@@ -5716,6 +5945,9 @@ class ProcessRuntimeProvider:
         self._provider_attempt_id = provider_attempt_id
         self._provider_expires_at = provider_expires_at
         self._generic_artifact_root = generic_artifact_root
+        self._diagnostic_work_directory: Path | None = None
+        self._diagnostic_logs_retained = 0
+        self._diagnostic_engine_secrets: dict[str, str] = {}
 
         self._manifest: EnvironmentBundleV2 | None = None
         self._bundle_digest: str | None = None
@@ -6008,7 +6240,8 @@ class ProcessRuntimeProvider:
         if reason == "port_not_consumable":
             logger.warning(
                 "world %d could not bind its own port (%s); continuing on one world",
-                world_index, process_name,
+                world_index,
+                process_name,
             )
             reason = "world_start_failed"
         self._append_degrade(reason, from_ceiling, 1)
@@ -6186,6 +6419,10 @@ class ProcessRuntimeProvider:
             # First call for this job identity, or the bundle changed underneath it (§2c: a
             # digest mismatch forces a rebuild) — build once, seed+freeze once, gate once.
             credentials = generate_engine_credentials(bundle, token=self._token)
+            self._diagnostic_engine_secrets = {
+                name: value.password for name, value in credentials.items()
+            }
+            self._diagnostic_work_directory = work_directory
             context = SpawnContext(
                 work_directory=work_directory,
                 port_plan=port_plan,
@@ -6212,6 +6449,7 @@ class ProcessRuntimeProvider:
                 rabbitmq_import=self._rabbitmq_import,
                 bundle_dir=bundle_dir,
                 generic_artifact_root=self._generic_artifact_root,
+                retain_process_log=self._retain_process_log,
             )
             # N3, p6-review-r2 (MAJOR): the job identity (`_manifest`/`_bundle_digest`) is
             # committed only AFTER `build_process_trees`/`freeze_baseline` both succeed —
@@ -6348,7 +6586,7 @@ class ProcessRuntimeProvider:
             if armed and world_index >= 1:
                 try:
                     self._ensure_world(world_index)
-                except (ProcessRuntimeError, OSError, shutil.Error) as exc:
+                except (ProcessRuntimeError, OSError, shutil.Error):
                     # Rule 2: continue on the contiguous 0..k−1 prefix — NO renumbering. Tear
                     # down whatever this world published, drop the ceiling to k, ledger
                     # `world_start_failed`, re-write build.json.
@@ -6687,6 +6925,8 @@ class ProcessRuntimeProvider:
         # tracked world's database, so every world OTHER than this one must be demoted for the
         # scheduler to notice and repair it.
         self._ensure_job_shared_handles_alive(current_world_index=world_index)
+        if existing is not None:
+            self._context.local_auth_values.pop(world_index, None)
         try:
             result = _clone_or_reset_world(
                 self._manifest,
@@ -6749,15 +6989,33 @@ class ProcessRuntimeProvider:
                 metadata=metadata,
             )
 
-    def _control_metadata(self, world_index: int) -> dict[str, str]:
+        self._runtimes[world_index]._local_auth_values = dict(
+            self._context.local_auth_values.get(world_index, {})
+        )
+
+    def _control_metadata(self, world_index: int) -> dict[str, Any]:
         """Per-world facts the CallRunner needs, surfaced on `EnvironmentRuntime.metadata`:
         `livekit_agent_name` (the agent's LiveKit dispatch name) and `tool_trace_path` (where the
         agent writes its function-call trace). Both are rendered from the control service's declared
         environment (`LIVEKIT_AGENT_NAME` / `HARNESS_TOOL_TRACE`); a bundle that does not set them
         simply omits the key, and the CallRunner then fails typed-and-loud rather than guessing."""
+        workspace_roots = {}
+        for item in self._manifest.processes:
+            if isinstance(item, SourceProcess):
+                for name, relative in item.workspaces.items():
+                    workspace_roots[name] = str(
+                        world_scratch_dir(
+                            self._context.work_directory, world_index, item.name
+                        )
+                        / "runtime"
+                        / relative
+                    )
+        metadata: dict[str, Any] = (
+            {"workspace_roots": workspace_roots} if workspace_roots else {}
+        )
         control = self._manifest.runtime.control_service
         if control is None:
-            return {}
+            return metadata
         process = next((p for p in self._manifest.processes if p.name == control), None)
         env = dict(getattr(process, "environment", {}) or {})
         world_dir = world_scratch_dir(
@@ -6771,7 +7029,6 @@ class ProcessRuntimeProvider:
                 .replace("{{WORLD_DIR}}", str(world_dir))
             )
 
-        metadata: dict[str, str] = {}
         agent_name = env.get("LIVEKIT_AGENT_NAME")
         if not agent_name:
             # A freshly authored bundle may not render LIVEKIT_AGENT_NAME onto the control
@@ -6851,6 +7108,40 @@ class ProcessRuntimeProvider:
                     "teardown: failed to drop %s on %s: %s", world_db, process.name, exc
                 )
 
+    def _retain_process_log(self, path: Path) -> None:
+        from .process_diagnostics import retain_process_log
+
+        work = self._diagnostic_work_directory
+        if work is None or self._diagnostic_logs_retained >= 512:
+            return
+        secrets = dict(self._secret_values) if self._secrets_loaded else None
+        if secrets is not None:
+            secrets.update(self._diagnostic_engine_secrets)
+        if self._context and self._context.local_auth_redactions:
+            secrets = {**(secrets or {}), **self._context.local_auth_redactions}
+        try:
+            retain_process_log(
+                path,
+                work=work,
+                destination=self._generic_artifact_root or work / "diagnostics",
+                secrets=secrets,
+            )
+            self._diagnostic_logs_retained += 1
+        except (OSError, ValueError, RecursionError):
+            logger.warning("process diagnostic retention failed; continuing teardown")
+
+    def _retain_directory_logs(self, directory: Path) -> None:
+        if directory.is_symlink():
+            return
+        pattern = "*/*/process.log" if directory.name == "worlds" else "*/process.log"
+        try:
+            for index, path in enumerate(directory.glob(pattern)):
+                if index >= 512:
+                    break
+                self._retain_process_log(path)
+        except OSError:
+            logger.warning("process diagnostic enumeration failed; continuing teardown")
+
     def _teardown_world(self, world_index: int) -> None:
         self._destroy_provider_target(world_index)
         handles = self._world_handles.pop(world_index, {})
@@ -6875,6 +7166,7 @@ class ProcessRuntimeProvider:
             # other space-leak half of the same finding.
             world_dir = self._context.work_directory / "worlds" / f"w{world_index}"
             if world_dir.exists():
+                self._retain_directory_logs(world_dir)
                 shutil.rmtree(world_dir, ignore_errors=True)
 
     async def reset(
@@ -7075,6 +7367,9 @@ class ProcessRuntimeProvider:
         for runtime in self._runtimes.values():
             runtime.state = RuntimeState.STOPPED
 
+        self._diagnostic_work_directory = work_directory
+        for directory_name in ("worlds", "managed"):
+            self._retain_directory_logs(work_directory / directory_name)
         for directory_name in ("build", "worlds", "managed", "provider"):
             directory = work_directory / directory_name
             try:
@@ -7083,6 +7378,11 @@ class ProcessRuntimeProvider:
             except OSError:
                 logger.warning("teardown: failed to remove %s; continuing", directory)
 
+        if self._context:
+            self._context.local_auth_values.clear()
+            self._context.local_auth_redactions.clear()
+        for runtime in self._runtimes.values():
+            runtime._local_auth_values.clear()
         self._job_shared_handles = {}
         self._world_handles = {}
         self._runtimes = {}
@@ -7111,6 +7411,8 @@ class ProcessRuntimeProvider:
         self._bundle_digest = None
         self._context = None
         self._build_output = None
+        self._diagnostic_engine_secrets = {}
+        self._diagnostic_logs_retained = 0
         # Full reset, not just the spawn-state dicts `_teardown_processes_and_directories`
         # already cleared — a provider reused for a genuinely NEW job after `close()` must load
         # ITS OWN secrets file fresh, not silently run with the previous job's in-memory map (or
