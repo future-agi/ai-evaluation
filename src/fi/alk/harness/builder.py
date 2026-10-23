@@ -34,10 +34,13 @@ from .tools import schema
 
 BUILDER = "builder"
 BIND_AGENT = "bind-agent"
+# A design session's own skill: its system prompt in place of the builder's (`fi.alk.harness.design`).
+DESIGNER = "design-environment"
 KNOWLEDGE_SERVER = "knowledge"
 BUILDER_TURNS = 200
-# The builder's own skill is its system prompt; every other skill is loaded when needed.
-_NOT_LOADABLE = {BUILDER}
+
+# A session's own skill is its system prompt; every other skill is loaded when needed.
+_NOT_LOADABLE = {BUILDER, DESIGNER}
 
 
 def _description(path: Path) -> str:
@@ -680,10 +683,12 @@ def open_builder(
     more_servers: dict[str, ToolServer] | None = None,
     files_note: str = "",
     without: frozenset[str] = frozenset(),
+    skill: str = BUILDER,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
-    ``without`` names tools this session must not have; ``files_note`` replaces the file listing."""
+    ``without`` names tools this session must not have; ``files_note`` replaces the file listing;
+    ``skill`` is the session's own method (a design's, in place of the builder's)."""
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -723,7 +728,7 @@ def open_builder(
     )
     spec = SessionSpec(
         system_prompt=(
-            load_skill(BUILDER)
+            load_skill(skill)
             + "\n\n## What you know\n\nLoad any of these with `read_skill` before you answer a "
             "question it covers or do work it governs. Answer internals from them, never from "
             "general knowledge.\n\n"

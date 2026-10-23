@@ -20,7 +20,7 @@ import sqlite3
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from ..catalogue import load_catalogue
 from ..folder import check_file_drift, read_all, write_index
@@ -41,6 +41,7 @@ from ..releases import (
     PolicyProfile,
     ReleaseError,
     ReleaseRef,
+    RuleClass,
     SuiteReleaseV1,
     _policy_rows,
     load_environment_release,
@@ -76,17 +77,43 @@ class DesignTemplate(BaseModel):
     suite: ReleaseRef
 
 
+class Proposal(BaseModel):
+    """The design the person approves before anything is built."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    one_liner: str = Field(min_length=1)
+    # What the environment is: who the agent serves, the tools and what they change, the rules,
+    # the data, and what failure looks like. Shown to the person as written.
+    summary: str = Field(min_length=1)
+    # Each scenario's `use_case` is one of these, and each has a scenario.
+    use_cases: list[str] = Field(min_length=1)
+
+
 class Design(BaseModel):
-    """`design.json`: what the design is called and what it started from."""
+    """`design.json`: what the design is called, what it started from, and how far it got."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["futureagi.environment-design.v1"] = DESIGN_SCHEMA
     name: str = Field(pattern=_SLUG_PATTERN)
+    requirements: str = ""
+    modality: Literal["chat", "voice"] = "chat"
     template: DesignTemplate | None = None
     policy_profile: PolicyProfile = Field(default_factory=PolicyProfile)
     # The template world's schema that PostgreSQL seeds do not enforce; listed, not refused.
     inherited_schema: list[str] = Field(default_factory=list)
+    # The template's rows, which the world's base-data gate takes as given rather than demo data.
+    base_environment: dict[str, list[dict[str, JsonValue]]] = Field(
+        default_factory=dict
+    )
+    proposal: Proposal | None = None
+    # A proposal the person has been asked to approve and has not answered yet; it survives a
+    # park, so the answer given on resume approves it.
+    pending_proposal: Proposal | None = None
+    # interview: nothing may be built; world: approved, the world is being built; suite: the
+    # world is saved and the scenarios are being written.
+    stage: Literal["interview", "world", "suite"] = "interview"
 
 
 def load_design(workspace: str | Path) -> Design:
@@ -99,15 +126,22 @@ def load_design(workspace: str | Path) -> Design:
         raise ReleaseError("design_invalid", str(exc)) from exc
 
 
-def _write_design(workspace: Path, design: Design) -> None:
-    (workspace / DESIGN).write_text(
+def save_design(workspace: Path, design: Design) -> None:
+    temporary = workspace / f"{DESIGN}.tmp"
+    temporary.write_text(
         json.dumps(design.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    temporary.replace(workspace / DESIGN)
 
 
 def open_design(
-    workspace: str | Path, *, name: str, template: tuple[Path, Path] | None = None
+    workspace: str | Path,
+    *,
+    name: str,
+    requirements: str = "",
+    modality: str = "chat",
+    template: tuple[Path, Path] | None = None,
 ) -> Design:
     """The workspace's design: an empty one, or a root template's environment and suite unpacked
     into it. `template` is `(environment_root, suite_root)`. A workspace that already holds a
@@ -116,14 +150,14 @@ def open_design(
     if (workspace / DESIGN).is_file():
         return load_design(workspace)
     try:
-        design = Design(name=name)
+        design = Design(name=name, requirements=requirements, modality=modality)
     except ValidationError as exc:
         raise ReleaseError("design_invalid", str(exc)) from exc
     workspace.mkdir(parents=True, exist_ok=True)
     if template is not None:
         design = _unpack(workspace, design, Path(template[0]), Path(template[1]))
     # Written last, so a failed unpack leaves no design and opening again lays it out afresh.
-    _write_design(workspace, design)
+    save_design(workspace, design)
     return design
 
 
@@ -170,8 +204,29 @@ def _unpack(
             ),
             "policy_profile": suite.policy_profile,
             "inherited_schema": unseeded_schema(environment_root / WORLD / DATABASE),
+            "base_environment": _rows(environment_root / WORLD / DATABASE),
         }
     )
+
+
+def _rows(database: Path) -> dict[str, list[dict[str, JsonValue]]]:
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        tables = [
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name != ? ORDER BY name",
+                (POLICY_TABLE,),
+            )
+        ]
+        return {
+            table: [dict(row) for row in connection.execute(f'SELECT * FROM "{table}"')]
+            for table in tables
+        }
+    finally:
+        connection.close()
 
 
 def _copy_tree(source: Path, target: Path) -> None:
@@ -263,6 +318,38 @@ def _resave_world(workspace: Path, design: Design) -> None:
         world.close()
 
 
+def _design_suite_problems(
+    design: Design, proposal: Proposal, suite_root: Path, environment_root: Path
+) -> list[str]:
+    """What an approved design's suite must show beyond the release gates: the model wrote the
+    tools, the world, the rules and the checks, so a self-consistent but wrong design passes
+    those. Every agent rule is graded by a sub-goal a scenario names, and the scenarios cover
+    exactly the approved use cases."""
+    scenarios = read_all(suite_root)
+    named = {name for scenario in scenarios for name in scenario.sub_goals}
+    scored = design.policy_profile.scored_agent_rules
+    problems = [
+        f"agent rule {rule} is graded by no sub-goal a scenario names"
+        for rule in sorted(
+            load_policy(environment_root).rule_ids(RuleClass.AGENT_POLICY)
+        )
+        if not set(scored.get(rule) or []) & named
+    ]
+    use_cases = set(proposal.use_cases)
+    problems += [
+        f"{scenario.name}: use case {scenario.use_case!r} is not one of the design's"
+        for scenario in scenarios
+        if scenario.use_case not in use_cases
+    ]
+    covered = {scenario.use_case for scenario in scenarios}
+    problems += [
+        f"no scenario for the use case {use_case!r}"
+        for use_case in proposal.use_cases
+        if use_case not in covered
+    ]
+    return problems
+
+
 def seal_design(
     workspace: str | Path, out: str | Path, *, postgres_dsn: str
 ) -> tuple[EnvironmentReleaseV1, SuiteReleaseV1]:
@@ -295,6 +382,12 @@ def seal_design(
         )
         if drift := check_file_drift(suite_root, load_catalogue(suite_root)):
             raise ReleaseError("design_check_files_invalid", "; ".join(drift))
+        if design.proposal is not None and (
+            problems := _design_suite_problems(
+                design, design.proposal, suite_root, environment_root
+            )
+        ):
+            raise ReleaseError("design_suite_incomplete", "; ".join(problems))
         suite = seal_suite_release(
             suite_root,
             name=f"{design.name}_base",

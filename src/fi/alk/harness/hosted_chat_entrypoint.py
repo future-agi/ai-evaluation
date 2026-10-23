@@ -10,7 +10,7 @@ import signal
 import time
 import uuid
 from collections.abc import Awaitable
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -280,6 +280,16 @@ class HostedChatRuntime:
         self.workbench: Any = None
         # Set when this conversation edits a composition's suite: its verified workspace.
         self.composition: Any = None
+        # Set when a design job's session opens: the design tools, whose state says whether the
+        # design is finished or the session must be opened again.
+        self.design_tools: Any = None
+        # A design's proofs run on a PostgreSQL cluster this process starts on first use and
+        # stops at exit; its superuser DSN stays in memory.
+        self._design_cluster = ExitStack()
+        self._design_dsn = ""
+        # True while `_ask` waits for the person, so a pending question on disk without one is
+        # a parked question to ask again.
+        self._asking = False
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
@@ -299,7 +309,9 @@ class HostedChatRuntime:
         from .poc_guest_booking import guest_booking_policy_job
         from .understand import load as load_contract
 
-        if self._adapting():
+        if self._designing():
+            stage = await self._open_for_designing()
+        elif self._adapting():
             stage = await self._open_for_adapting()
         elif self._composing():
             stage = await self._open_for_composition()
@@ -315,7 +327,8 @@ class HostedChatRuntime:
                 except ConversationTransportError:
                     overview = None
                 stage = self._open_built(contract, overview, policy_job)
-        if not self._control_only():
+        # A design's approval is its gate: per-call confirmations do not apply to it.
+        if not self._control_only() and not self._designing():
             self._guard(stage.spec)
         capabilities = self.client.capabilities
         stage.configure(
@@ -375,6 +388,49 @@ class HostedChatRuntime:
                 "as completed until a tool result proves it."
             ),
         )
+
+    def _designing(self) -> bool:
+        """A design job: the harness designs an environment from requirements (and a template)."""
+        return isinstance((self.job.get("metadata") or {}).get("design"), dict)
+
+    async def _open_for_designing(self) -> Stage:
+        from . import spend
+        from .design.hosted import OUTPUT
+        from .design.session import open_for_designing
+        from .design.workspace import DESIGN
+
+        # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+        spend.journal_to(self.workspace / "cost.json")
+        # The control process lays the design out (unpacking any template) before it is opened.
+        for _ in range(150):
+            if (self.workspace / DESIGN).is_file():
+                break
+            await asyncio.sleep(2)
+        stage, self.design_tools = open_for_designing(
+            self.workspace,
+            approve=self._approve_design,
+            ask=self._ask,
+            postgres_dsn=self._design_postgres,
+            output=self.workspace / OUTPUT,
+            hosted_prompt=(
+                "\n\n## Hosted conversation behavior\n"
+                "Reply directly to the person in this conversation. Never describe work as done "
+                "until a tool result proves it."
+            ),
+        )
+        return stage
+
+    def _design_postgres(self) -> str:
+        if not self._design_dsn:
+            from .adaptation.scratch_postgres import scratch_cluster
+
+            self._design_dsn = self._design_cluster.enter_context(scratch_cluster())
+        return self._design_dsn
+
+    async def _approve_design(self, question: str, options: list[dict[str, str]]) -> str:
+        answer = await self._ask("propose_design", {"question": question, "options": options}, None)
+        content = answer.get("content") if isinstance(answer, dict) else None
+        return "\n".join(str(part.get("text") or "") for part in content or [])
 
     def _composing(self) -> bool:
         """A composition's chat: the suite of a prebuilt environment bound to the person's agent."""
@@ -964,6 +1020,10 @@ class HostedChatRuntime:
 
     async def _publish_if_changed(self) -> str:
         """A line for the reply when the turn left changes the model did not save itself."""
+        if self._designing():
+            # A design is checkpointed, never published: finish_design seals it.
+            await self._checkpoint()
+            return ""
         if self._control_only():
             # While building, the build's own sealing publishes; there is nothing to save yet.
             return ""
@@ -1167,14 +1227,21 @@ class HostedChatRuntime:
             with suppress(asyncio.CancelledError):
                 await activity_task
             await self.conversation.close()
+            self._design_cluster.close()
 
     async def _carry_on(self) -> bool:
         """While the environment is being built, keep the harness at it until it calls
         finish_build: when it has saved something that opens more tools, it is reopened with
         them and resumes; otherwise it is told the build is not finished. Waits on the person
         while a question is open, and gives up after a few turns that change nothing."""
-        if not self._control_only() or self._side_chat() or (self.workspace / _BUILD_FINISHED).is_file():
+        if (
+            not (self._control_only() or self._designing())
+            or self._side_chat()
+            or (self.workspace / _BUILD_FINISHED).is_file()
+        ):
             return False
+        if self._designing():
+            return await self._carry_on_designing()
         if (self.workspace / _PENDING_QUESTION).is_file():
             return False
         exists = self._what_exists()
@@ -1217,6 +1284,69 @@ class HostedChatRuntime:
             }
         )
         return True
+
+    async def _carry_on_designing(self) -> bool:
+        """Keep a design at it until finish_design or stop_design: open it again when it saved
+        what opens the scenario tools or changed the contract its writers read, and ask again a
+        question it parked on, which a resumed design starts with."""
+        from .design.session import unfinished
+        from .design.workspace import load_design
+
+        if (self.workspace / _PENDING_QUESTION).is_file():
+            if self._asking:
+                return False
+            said = await self._resume_question()
+            if not said:
+                return False
+        else:
+            tools = self.design_tools
+            if tools is None:
+                # Not opened yet: the first message opens it.
+                return False
+            stage = load_design(self.workspace).stage
+            progress = (stage, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+            if progress != self._last_progress or tools.reopen:
+                self._last_progress, self._idle_turns = progress, 0
+            elif self._idle_turns >= 3:
+                return False
+            self._idle_turns += 1
+            if tools.reopen:
+                await self.conversation.close()
+                said = "[You were opened again with the tools for what you saved: carry on where you were.]"
+            else:
+                said = unfinished(stage)
+        await self._handle(
+            {
+                "sequence": self.client.command_watermark,
+                "message_id": str(uuid.uuid4()),
+                "kind": "continue",
+                "payload": {"content": said},
+            }
+        )
+        return True
+
+    async def _resume_question(self) -> str:
+        """The question a design parked on, asked again under its own message id; what to tell
+        the session about the answer, or nothing when it parks again."""
+        from .design.tools import PARKED, settle_proposal
+
+        pending = json.loads((self.workspace / _PENDING_QUESTION).read_text(encoding="utf-8"))
+        answer = await self._ask(
+            "resume",
+            {"question": pending.get("question"), "options": pending.get("options") or []},
+            None,
+        )
+        content = answer.get("content") if isinstance(answer, dict) else None
+        said = "\n".join(str(part.get("text") or "") for part in content or [])
+        if said == PARKED or (self.workspace / _PENDING_QUESTION).is_file():
+            return ""
+        approved = settle_proposal(self.workspace, said)
+        return (
+            f"[Resumed from the checkpoint. You had asked:\n{pending.get('question')}\n"
+            f"The person answered: {said}"
+            + ("\nThe design is approved: build it." if approved else "")
+            + "]"
+        )
 
     def _after_saved(self, *, world_changed: bool = False) -> None:
         """The work that follows a saved contract or world, the same as a staged build does it,
@@ -1663,7 +1793,8 @@ class HostedChatRuntime:
     async def _ask(
         self, _tool_name: str, payload: dict[str, Any], _context: Any
     ) -> Any:
-        if self._from_platform:
+        # A design asks the person even when the platform started its turn: its approval blocks.
+        if self._from_platform and not self._designing():
             return {
                 "content": [
                     {
@@ -1720,7 +1851,24 @@ class HostedChatRuntime:
             stage=self.conversation.stage_name,
             payload={"prompt": question, "options": options},
         )
+        self._asking = True
+        try:
+            return await self._await_reply(message_id, asked)
+        finally:
+            self._asking = False
+
+    async def _await_reply(self, message_id: str, asked: list[dict[str, Any]]) -> Any:
+        pending_path = self.workspace / _PENDING_QUESTION
+        # A design waits a set window for the person, then parks rather than idle the sandbox.
+        deadline = (
+            time.monotonic()
+            + float(os.environ.get("ALK_DESIGN_QUESTION_WINDOW_SECONDS") or 900)
+            if self._designing()
+            else None
+        )
         while not self.stopping.is_set():
+            if deadline is not None and time.monotonic() > deadline:
+                return await self._park_design(asked)
             commands = await self.client.commands()
             for command in commands:
                 command_payload = command.get("payload") or {}
@@ -1764,6 +1912,34 @@ class HostedChatRuntime:
             "content": [{"type": "text", "text": "The conversation was stopped."}],
             "is_error": True,
         }
+
+    async def _park_design(self, asked: list[dict[str, Any]]) -> Any:
+        """Checkpoint the design with its open question, then finish the job as waiting: the
+        platform keeps the checkpoint, and continuing the design starts from it."""
+        from .design.hosted import OUTPUT
+        from .design.tools import FINISHED_MARKER, PARKED, RESULT
+
+        await self._checkpoint()
+        output = self.workspace / OUTPUT
+        output.mkdir(parents=True, exist_ok=True)
+        (output / RESULT).write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "failure": {
+                        "code": "design_waiting",
+                        "message": "the design is waiting for an answer; continue it to resume",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.workspace / FINISHED_MARKER).write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+        if asked and self.backend_name == "claude":
+            from claude_agent_sdk.types import PermissionResultDeny
+
+            return PermissionResultDeny(message=PARKED)
+        return {"content": [{"type": "text", "text": PARKED}], "is_error": True}
 
     def _provider_sessions_key(self) -> dict[str, str]:
         return {

@@ -526,12 +526,14 @@ def world_tools(
     source_root: str = "",
     deferred_runtime: bool = False,
     external_runtime: bool = False,
+    implementation: str | None = None,
 ) -> Any:
     """A server exposing the world-building surface for one agent.
 
     ``source_root`` is where the agent's own code lives. With it, a tool can be bound to the
     agent's own implementation; without it the agent was given as a specification and its
-    tools have to be written here.
+    tools have to be written here. ``implementation`` is what `save_world` records as the
+    world's `tool_implementation` (a designed environment's handlers are its own).
     """
     # An existing world is picked up rather than replaced. Amending one is the ordinary case
     # once it has been built once, and starting empty every time would mean rebuilding a
@@ -1666,6 +1668,7 @@ def world_tools(
             # Written out with the world. They are judgement about this agent, and a world reopened
             # without them would have to have them rewritten before it could be saved again.
             world_checks=world_checks,
+            implementation=implementation,
         )
         draft_path.unlink(missing_ok=True)
         tables = world.state()

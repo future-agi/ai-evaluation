@@ -121,6 +121,18 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   expression defaults, other types; a template's are listed as inherited), and
   refuses check files that differ from the catalogue, before sealing both
   releases on PostgreSQL.
+- Design mode (`python -m fi.alk.harness.design run|hosted`): the builder
+  interviews the person one question at a time, and nothing is built until they
+  approve `propose_design`. It then builds the world with the world server and
+  its own tools (`define_tool`, `change_tool`, `drop_tool`, `add_policy_rule`,
+  `change_policy_rule`, `drop_policy_rule`, `detach_server`), writes the suite
+  with the scenario tools, and seals with `finish_design`. Each handler is checked
+  before it is kept: only allow-listed imports, no builtins that reach outside
+  the world, a sample call whose effect matches `mutates_state`, missing required
+  arguments refused, and every argument used. A designed suite must grade every
+  agent rule and cover exactly the approved use cases. An unanswered question
+  parks the design (hosted: the job ends `design_waiting` with the question
+  checkpointed), and continuing asks it again and resumes.
 
 ## v1.0.0-rc.1 — 2026-06-10
 
