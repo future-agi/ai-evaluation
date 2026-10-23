@@ -485,6 +485,10 @@ The named things this agent can be checked on. Defined **here, once**, because e
 names the ones it needs — that is what makes results add up. If "confirms the order back" is the
 same sub-goal in twelve scenarios, you can say it failed in seven of them.
 
+**Give every outcome a caller comes for its own sub-goal**, checked against the reference where the
+call or the records carry the value (a record changed, a record looked up, a document sent), so a scenario never has to borrow an
+unrelated one to name two.
+
 **Cover the difficulties the suite will test, not only the outcome.** A catalogue whose sub-goals
 all fit every call (answered the request, stayed on topic, spoke clearly) leaves every scenario
 checked by the same few lines, and a scenario built around a hard moment passes whether or not the
@@ -493,38 +497,128 @@ sub-goal: a request too vague to act on, a caller who corrects a detail they gav
 of subject partway through, a request outside what the agent handles, pressure to break a rule. One
 behaviour each, named once, so the suite can report how often the agent got that moment right.
 
-**Write the check as code wherever the answer is observable.**
+**Code or judged.** Code settles what the calls and the records show: a change was made, for this
+caller, with their values; a forbidden change did not happen; one step came before another. A judge
+settles what only the conversation shows: what was said, read back, explained or refused, and
+anything compared by meaning. When one outcome has a part of each (the right record was changed, and
+the change was read back), write both and set `verifier` to `both`. A spoken behaviour is never
+settled by the call that usually goes with it: that passes an agent that made the call and said the
+wrong thing, and fails one that said the right thing another way. A change, or a change that must
+not happen, always has a code part: a judge reading the call log alone can misread it.
+
+### Write a code check in five steps
+
+A verdict that is wrong because of the check, and not because of the agent, is a failure of this
+stage, and the agent's builder will act on it. Write each check so that every verdict it gives is one
+you could defend from the call alone.
+
+A check is Python, `check(world, calls, reference)`. `world.state()` is what the world holds after the
+call; `calls` is every call the agent made, each with `.name`, `.arguments`, `.result`, `.ok` and
+`.refused`; `reference` is the scenario's solution, each step a `tool` and the `arguments` the
+scenario marks fixed for this caller. Return `None` when it held, or a sentence: `not done: ...` when
+no successful call or record is there, `done wrong: <field> expected X, got Y` when it was done with
+the wrong value. A sub-goal is shared by every scenario that names it, so a check never holds one
+caller's values: it reads them from `reference`.
+
+**1. Read the agent first.** In its instructions and its tool code, find for this step: which tool
+its instructions say to use, and which other tools reach the same outcome (another tool for the same
+step, or a tool that does the step inside its own work); in which situations a rule tells it to skip
+the step or to act at once; and, for each argument, whether its right value comes from the caller,
+from their record, from a rule that names it, or from the agent's own choice (a destination or
+category it picks, a label or note it writes in its own words, a default its instructions never
+mention). Decide this from what the instructions and code say, never from a field's name.
+
+**2. Find the evidence of the outcome, whatever way the agent reached it.** Prefer the record the
+outcome leaves in the world: it shows the outcome however it came about. Where only the calls show
+it, accept a successful call to any tool that achieves it. A tool can be called more than once and one
+call can be reported twice with fewer arguments, so match each reference step to any successful call
+that carries its fields, never to the first or the last. When the outcome is assembled over several
+steps and a last call commits it, that call often carries none of its parts: the check compares every
+value the reference fixes on the steps that build it, against the committed record where the world
+keeps one, otherwise against those steps' successful calls. A check that reads only the committing
+call asserts that something was done, not that it was this person's thing.
+An argument the agent sets to say a step happened (a flag that the person agreed, a token it was
+handed back) is not evidence of that step: the agent can set it without the step. Whether the person
+agreed is settled by what was said; the check compares what was changed.
+
+**3. Compare only what something fixes.** Read each reference value with `.get()`: a scenario leaves
+out every argument nothing fixes for its caller, so an absent value means there is nothing to compare,
+and the check must still hold. When the reference sets the same thing twice, the later value counts.
+Compare each value in the one right form its kind has:
+
+| Case | Rule |
+|---|---|
+| Account id, PIN, quantity | Exact, as the type it is; leading zeros count |
+| Address | The world's place or address id where it has one; otherwise its parts, where `Street` and `St` agree but a different unit does not, and a missing part fails |
+| Date, time zone, currency, unit | One common form; a tolerance only where the scenario states one |
+| Name | Exact spelling, the aliases the scenario lists, or the person's id; never a spelling the agent had no way to learn, such as a name only spoken |
+| A place or description the caller gives and the agent writes down in words | Never compared as text; compare the id where the world resolves it to one, otherwise judge it against what the caller said |
+| Feedback, a reason | Judged by meaning against what the caller said: facts kept, nothing contradicted or invented, wording free |
+| A caller who corrects themselves | The final request; lookups and drafts on the way are fine |
+| A wrong change, then the right one | The final record, with no duplicate; whether the first change broke a rule (no consent) is checked separately, since a correction does not undo it |
+| A refusal, or nothing to do | The refusal itself (judged) and the absence of the forbidden change (code); an untouched world alone shows neither |
+| A call that failed, a record that already existed | A change needs a successful effect from this call; an existing record counts only where the scenario allows it |
+| A step more than one tool can do (the instructions name one tool, another does the same thing inside itself) | The record the step leaves, or a successful call to any of those tools; never one tool by name |
+| A value the agent picks that nothing fixes (where a handoff goes, a category or label it writes as free text, a note, a reason) | Absent from the reference, and never compared in code, exactly, by substring or by searching it for words; the check asserts the step happened, for this caller, and a judged part decides whether the choice suited the situation |
+
+Never compare the agent's own choices or wording, exactly, by substring, by searching for words or by
+a similarity score; a judged part decides whether those suited the situation. The most important
+comparison is whose record the agent acted on: an agent that mishears and proceeds confidently on the
+wrong record calls exactly the tools it should have, and only a comparison of the identifier catches it.
+
+**4. A step that must come before something fails only when that something happened without it.**
+Identify the caller before disclosing, confirm before changing: when nothing was disclosed or changed,
+the check holds, and it accepts every tool the agent has for that step. A check that demands the step
+on its own fails a correct agent whose instructions skip it in that situation, such as a rule that
+says to hand over at once. "Before" is a position in `calls`: the step must appear earlier than the
+change it guards. Finding both somewhere in the call passes an agent that changed first and asked after.
+
+**5. State the contract, then try the check.** Fill `reference` with where each compared value comes
+from ("item_id: what the world holds for this person; quantity: what they asked for"); a check that
+takes `reference` is refused until it says this. Then run it with `try_check` against three agents you
+write: one that does it the way the reference does, one that does it right another way its
+instructions allow (another tool, another choice of something nothing fixes, a step a rule lets it
+skip), and one that gets a fixed value wrong. The first two must hold and the third must fail. If any
+verdict is wrong, the check is wrong: fix it before adding it.
 
 ```python
-def check(world, calls):
-    rows = world.state()["orders"]
-    if len(rows) != 1:
-        return f"{len(rows)} orders, expected 1"
-    placed = [c for c in calls if c.name == "place_order" and c.ok]
-    if not placed:
-        return "no order call succeeded"
-    if placed[0].arguments.get("size") != "large":
-        return f"size was {placed[0].arguments.get('size')!r}, asked for large"
+def check(world, calls, reference):
+    def same(a, b):
+        return str(a).strip().lower() == str(b).strip().lower()
+
+    wanted = {}
+    for step in reference:
+        if step["tool"] == "set_detail" and "value" in step["arguments"]:
+            wanted[step["arguments"].get("field")] = step["arguments"]["value"]  # the later one counts
+    made = [call for call in calls if call.name == "set_detail" and call.ok]
+    for field, value in wanted.items():
+        if not made:
+            return "not done: no detail was set"
+        if not any(same(c.arguments.get("value"), value)
+                   for c in made if c.arguments.get("field") == field):
+            got = [c.arguments.get("value") for c in made if c.arguments.get("field") == field]
+            return f"done wrong: {field} expected {value!r}, got {got!r}"
     return None
 ```
 
-You get the world afterwards and every call that was made, each with `.name`, `.arguments`,
-`.ok` and `.refused`. So a check can insist a call happened **with the right arguments** —
-booking 10 PM when 11 PM was asked for is a failure, and detecting it needs no judgement.
+Reading an argument is not checking it. `if not str(c.arguments.get("record_id") or "").strip()`
+passes an agent that misheard and named the wrong record; compare the value with the one the
+reference fixes, as above.
 
-Return a sentence when something is wrong, `None` when it held.
-
-Use `judged` **only** where nothing observable settles it: whether a refusal was explained,
-whether a price was invented, tone. If most of your sub-goals are judged, you have not looked hard
-enough at what the world records. (An agent reached only by conversation has no world and no calls to
-read: then every sub-goal is judged, and the rules below matter all the more.)
+**Write each to survive the next version of the agent.** Sub-goals are how two versions are compared,
+so assert the behaviour and where its rule comes from ("what its instructions require it to say"),
+never today's wording, amounts or names copied from the prompt, unless the instructions demand that
+exact text. A quality of every call (turn length, tone, varied phrasing) is not a sub-goal: the suite
+evals grade it on every call. An agent reached only by conversation has no world and no calls to read:
+then every sub-goal is judged.
 
 ### A judged sub-goal is an eval: write its criteria
 
 A judged sub-goal is decided the way any eval is: a judge reads its criteria and the evidence and
 returns pass or fail (`output` is pass_fail, the only kind judged today). The judge is given
-the criteria, the agent's own instructions, the conversation, the actions the agent took and the
-records it left, plus the customer's side of the scenario as context. It judges the agent only,
+the criteria, the agent's own instructions, the conversation and its recording, the actions the
+agent took with their arguments, the records it left and the scenario's reference solution, plus the
+customer's side of the scenario as context. It judges the agent only,
 never the customer, and never holds the agent to more than its own instructions require. So the
 criteria are the whole standard: whatever they do not say, the judge will not apply, and whatever
 they leave vague, two judges will read two ways.
@@ -568,12 +662,23 @@ A step the agent is meant to take on its own
   for identity; Pass if the caller asked for nothing that changes the account.
 ```
 
+Pass when and Fail when together cover every way the agent can handle the situation: a safe response
+neither names is otherwise failed for its wording, so ask for the behaviour, not a sentence. Applies
+when describes what happens in the conversation, never what a scenario was written to test. Two
+sub-goals never judge the same answer: one owns whether it was right.
+
 Each line describes behaviour a reader could point at in the conversation. "Handles it well",
 "appropriately", "professionally" point at nothing; say what the agent says or does. Name one
 behaviour per sub-goal: if the Pass line needs "and", it is usually two sub-goals.
 
 Every sub-goal, coded or judged:
 
+- **Catches a real failure.** Before writing one, name the wrong thing an agent could do that it
+  catches: acted on another caller's record, made the change without the consent its rules ask for,
+  gave way on a rule under pressure. Then make sure a correct agent passes it whichever way its
+  instructions allow it to get there. A sub-goal that a correct and a broken agent pass alike, or
+  that fails a correct agent for a choice its instructions leave open, misleads everyone who reads
+  its verdict.
 - **Requires exactly what the agent's instructions require, never more.** If the instructions say
   to decline in one of two supported languages, a sub-goal that demands the refusal in the caller's
   own language fails a correct agent.
@@ -594,40 +699,22 @@ Every sub-goal, coded or judged:
   "clean baseline" are ways a scenario is described, not things an agent does; nothing can fail them.
   Nor is "accurate" a behaviour a judge can see (see above).
 
-Three things are refused outright, so write for them rather than discovering them:
+### What the build refuses, and what every scenario's proof plays
 
-- **A check that only matches call names.** `any(c.name == "transfer" for c in calls)` is refused.
-  It passes an agent that called the right tool with the wrong arguments, which is the failure this
-  harness exists to catch: an agent that mishears a name and opens somebody else's account calls
-  exactly the tool it should have. Read `.arguments`, `.result`, or the world.
-- **A judged sub-goal without its criteria.** `judged` needs the four labelled lines above, and its
-  "If it does not arise" line has to say Pass or Fail. "Was it polite" is not criteria.
+So you meet these while writing, not after:
+
+- **A check that only matches call names**, such as `any(c.name == "transfer" for c in calls)`. It
+  passes an agent that called the right tool with the wrong arguments.
+- **A judged sub-goal without its four criteria lines**, or whose "If it does not arise" line does
+  not say Pass or Fail.
 - **A catalogue that is more judged than coded.** The judge is the fallback, not the method.
+- **A check that takes `reference` without a contract** saying where each compared value comes from.
 
-The one that matters most: check the *identity* the agent acted on, not just that it acted. If the
-caller is Corwin and the agent looked up a record, assert whose record it was. An agent that
-mishears and proceeds confidently against the wrong row is the worst failure this can find, and it
-is invisible to every check that only counts calls.
-
-**Reading the argument is not the same as checking it.** This is the most common weak check, and
-measuring a real catalogue found five of six doing it:
-
-```python
-# Weak. An agent that misheard the name passes this: a reason was given, it is a string, and it
-# is not empty.
-reason = xfers[0].arguments.get("reason")
-if not reason or not isinstance(reason, str) or not reason.strip():
-    return f"no reason given: {reason!r}"
-
-# Strong. Compare the value against what this scenario expected, or against the world row it
-# should have matched.
-if xfers[0].arguments.get("policy_id") != world.state()["policies"][0]["id"]:
-    return f"transferred with policy {xfers[0].arguments.get('policy_id')!r}, caller holds another"
-```
-
-`add_sub_goal` accepts a truthiness check and tells you it is one. Take the note: the agent under
-test will pass it while doing the wrong thing, and that is the failure the whole suite exists to
-catch.
+Every scenario's proof then plays the scenario's solution, any other ways its writer declared, an
+agent that gets every fixed value right but chooses everything else itself, and an agent that gets one
+fixed value wrong at a time. A check that fails a correct agent is refused as too strict; a fixed
+value that no check notices when wrong is refused as unchecked. The five steps above are how you pass
+these the first time.
 
 ## If the contract is wrong
 
@@ -655,7 +742,11 @@ Never work around a contract you believe is wrong. Everything after you inherits
 6. `declare_sequence` for at least one flow where state has to carry across calls. Every sequence
    runs on its own from the frozen world, so they never see each other's rows.
 7. `write_simulator_prompt`, if this agent is conversational.
-8. `add_sub_goal` for each thing worth checking, with its check in code.
+8. `add_sub_goal` for each thing worth checking, with its check in code. Write nothing on faith:
+   before adding a check, run it with `try_check` against three agents you write yourself, one that
+   does it right the way the reference does, one that does it right another way its instructions
+   allow, and one that gets a fixed value wrong. The first two must hold and the third must fail;
+   if any verdict is wrong, the check is wrong.
 9. `write_env_file` and `run_env_command`, where this agent's code needs a store or a service
    stood up. Nothing to do when it keeps its state in its own process.
 10. `add_world_check` for what has to be true of the environment itself.

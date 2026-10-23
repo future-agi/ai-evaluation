@@ -79,7 +79,7 @@ class ObservationWorld:
             read_only=True,
             observations=self._observations,
         )
-        world._sessions = self._sessions
+        world._sessions = restore_sessions(self._private_http_state(), self._endpoints)
         world._http_events = self._http_events
         return world
 
@@ -92,7 +92,7 @@ class ObservationWorld:
         values = validate_headers(headers)
         session = self._sessions.setdefault(capability, HttpSession())
         previous = session.headers
-        session.redactions.update(previous.values())
+        session.remember(_sensitive_header_values(previous))
         session.headers = values
         try:
             self._private_http_state()
@@ -242,10 +242,8 @@ class ObservationWorld:
             "route_hash": hashlib.sha256(relative.path.encode()).hexdigest(),
         }
         url = urlunsplit((base.scheme, base.netloc, relative.path, relative.query, ""))
-        session.redactions.update(headers.values())
-        session.redactions.update(
-            cookie.value for cookie in session.cookies if cookie.value
-        )
+        session.remember(_sensitive_header_values(headers))
+        session.remember(cookie.value for cookie in session.cookies if cookie.value)
         self._private_http_state()
         try:
             with httpx.Client(
@@ -259,7 +257,7 @@ class ObservationWorld:
                 ) as response:
                     event["status"] = response.status_code
                     session.cookies = client.cookies.jar
-                    session.redactions.update(
+                    session.remember(
                         cookie.value for cookie in session.cookies if cookie.value
                     )
                     self._private_http_state()
@@ -269,7 +267,7 @@ class ObservationWorld:
                         if name in response.headers
                     }
                     validate_headers(selected_headers)
-                    session.redactions.update(selected_headers.values())
+                    session.remember(selected_headers.values())
                     self._private_http_state()
                     chunks = []
                     size = 0
@@ -321,6 +319,17 @@ class ObservationWorld:
 
     state = query = put = change = drop = call = _unsupported
     read_file = write_file = checkpoint = restore = handle_tool_call = _unsupported
+
+
+def _sensitive_header_values(headers):
+    return (
+        value
+        for name, value in headers.items()
+        if any(
+            marker in name.lower()
+            for marker in ("authorization", "cookie", "token", "key")
+        )
+    )
 
 
 def http_endpoints(runtime):

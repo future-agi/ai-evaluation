@@ -307,7 +307,7 @@ class HTTPAgentWrapper(AgentWrapper):
                         "completed event collection cannot accompany tool requests"
                     )
                 observed = (
-                    self._completed_rows(response_payload)
+                    self._completed_rows(response_payload, thread_id=input.thread_id)
                     if self.completed_tools
                     else self._completed_response_events(
                         response_payload, thread_id=input.thread_id
@@ -693,18 +693,20 @@ class HTTPAgentWrapper(AgentWrapper):
                 return status, text
             raise _ResponseFailure("decode", status, str(exc)) from exc
 
-    def _completed_rows(self, payload):
+    def _completed_rows(self, payload, *, thread_id):
         spec = self.completed_tools
         items = _select_response_value(payload, spec.items_path)
         if not isinstance(items, list) or len(items) > spec.max_items:
             raise ValueError("completed tool rows must be a bounded array")
         completed = []
+        identities = set()
         for item in items:
             if not isinstance(item, Mapping):
                 raise ValueError("completed tool row must be an object")
             name = _select_response_value(item, spec.name_path)
             arguments = _select_response_value(item, spec.arguments_path)
             result = _select_response_value(item, spec.result_path)
+            key = _select_response_value(item, spec.id_path) if spec.id_path else None
             error = (
                 _select_response_value(item, spec.error_path)
                 if spec.error_path
@@ -712,6 +714,18 @@ class HTTPAgentWrapper(AgentWrapper):
             )
             if isinstance(arguments, str):
                 arguments = json.loads(arguments)
+            if spec.id_path and (
+                not isinstance(key, str)
+                or not key
+                or len(key) > 1024
+                or key in identities
+            ):
+                raise ValueError("invalid or duplicate tool event identity")
+            identity = ("response:" + str(thread_id), key)
+            if spec.id_path:
+                identities.add(key)
+            if spec.id_path and identity in self._observed_event_ids:
+                continue
             if (
                 not isinstance(name, str)
                 or not name.strip()
@@ -729,6 +743,11 @@ class HTTPAgentWrapper(AgentWrapper):
                     "ok": not error,
                 }
             )
+        if spec.id_path:
+            observed = {("response:" + str(thread_id), key) for key in identities}
+            if len(self._observed_event_ids) + len(observed) > 10000:
+                raise ValueError("completed tool evidence exceeds call limit")
+            self._observed_event_ids.update(observed)
         return completed
 
     def _accumulate_tool_events(self, items, actions, observations):
@@ -781,7 +800,9 @@ class HTTPAgentWrapper(AgentWrapper):
                 "missing or invalid event correlation",
             )
         base = urlsplit(self.endpoint)
-        relative = spec.path.replace("{{correlation_id}}", _encoded_path_segment(correlation))
+        relative = spec.path.replace(
+            "{{correlation_id}}", _encoded_path_segment(correlation)
+        )
         endpoint = urlunsplit(
             (
                 base.scheme,
