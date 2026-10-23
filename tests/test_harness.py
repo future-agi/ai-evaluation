@@ -6340,6 +6340,63 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
     assert "not \nthe agent being contacted" in OPENING or "not the agent" in OPENING
 
 
+@pytest.mark.parametrize(
+    "openings, first",
+    [
+        (["", ""], "Hello."),
+        (["", "Hi, where is my order?"], "Hi, where is my order?"),
+        (
+            ["Sure! Let me look that up for you.", "Hi, where is my order?"],
+            "Hi, where is my order?",
+        ),
+        (["Sure! Let me look that up for you.", ""], "Hello."),
+        (
+            ["Sure! Let me look that up for you.", "Sure! Let me look that up for you."],
+            "Hello.",
+        ),
+    ],
+)
+def test_an_unusable_opening_is_asked_again_once_and_the_instruction_is_never_sent(
+    monkeypatch, openings, first
+):
+    import asyncio
+    from types import SimpleNamespace
+
+    from fi.alk.harness.contract import AgentContract
+    from fi.alk.harness.run import conversation
+    from fi.alk.harness.scenario import Scenario
+
+    openings = iter(openings)
+    sent = []
+
+    async def noop(*_args):
+        return None
+
+    async def opening(_prompt):
+        return SimpleNamespace(text=next(openings))
+
+    customer = SimpleNamespace(
+        __aenter__=noop,
+        __aexit__=noop,
+        say=opening,
+        spent_usd=0.0,
+        simulator_tokens=(0, 0),
+    )
+    monkeypatch.setattr(conversation, "Stage", lambda *_a, **_k: customer)
+
+    async def say(text):
+        sent.append(text)
+        raise conversation.TargetConversationEnded("Done.")
+
+    target = SimpleNamespace(open=noop, say=say, close=noop, spent_usd=0.0)
+    scenario = Scenario(
+        name="s",
+        instruction="You contact support. You open by asking about your order.",
+    )
+    asyncio.run(conversation.converse(target, scenario, AgentContract()))
+    assert sent == [first]
+
+
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():
     """Where the right behaviour is to decline and touch nothing, every check about the world holds
     with nothing done, and the explanation is the only real evidence.
