@@ -585,6 +585,22 @@ def _verify_provider_import(manifest: EnvironmentBundleV2) -> None:
             "capability_unresolved",
             f"{spec.public_capability!r} must name an HTTP capability",
         )
+    if spec.request_binding:
+        # Only per-tool admission puts the world secret on the clone's tools, and the runner
+        # registers each call's token in the world's PostgreSQL.
+        if spec.admission != "per_tool":
+            raise PreflightError(
+                "bundle_manifest_invalid",
+                "provider_import request_binding requires admission 'per_tool'",
+            )
+        if not any(
+            item.protocol is CapabilityProtocol.POSTGRES
+            for item in manifest.capabilities.values()
+        ):
+            raise PreflightError(
+                "capability_unresolved",
+                "provider_import request_binding requires a postgres capability",
+            )
 
 
 def _verify_depends_on(manifest: EnvironmentBundleV2) -> None:

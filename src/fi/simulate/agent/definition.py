@@ -227,6 +227,10 @@ class VapiTargetConfig(BaseModel):
         "VAPI_API_KEY",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
+    # Attached to every call this target places: `assistantOverrides.metadata` and
+    # `assistantOverrides.variableValues` (Vapi's create-call body has no top-level metadata).
+    call_metadata: dict[str, str] = Field(default_factory=dict)
+    call_variables: dict[str, str] = Field(default_factory=dict)
 
 
 class RetellTargetConfig(BaseModel):
@@ -246,6 +250,9 @@ class RetellTargetConfig(BaseModel):
         "RETELL_API_KEY",
         pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
     )
+    # Attached to every web call: `metadata` and `retell_llm_dynamic_variables`.
+    call_metadata: dict[str, str] = Field(default_factory=dict)
+    call_variables: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check_livekit_url(self) -> "RetellTargetConfig":

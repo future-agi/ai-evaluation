@@ -67,6 +67,7 @@ from .job import FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from . import request_binding
 from .provider_import import (
     ProviderImportError,
     ProviderImportSpec,
@@ -6429,9 +6430,15 @@ class ProcessRuntimeProvider:
     ) -> None:
         spec = self._provider_spec()
         import_spec = self._provider_import_spec()
-        if (
-            spec is None and import_spec is None
-        ) or world_index in self._provider_receipts:
+        if spec is None and import_spec is None:
+            return
+        if world_index in self._provider_receipts:
+            # A rebuilt world gets fresh metadata but keeps its clone, which still sends the
+            # secret it was created with.
+            existing = self._provider_contexts.get(world_index)
+            if existing is not None and existing.tool_secret:
+                key = request_binding.SECRET_METADATA_KEY
+                runtime.metadata[key] = existing.tool_secret
             return
         if self._context is None or self._manifest is None:
             raise ProcessRuntimeError(
@@ -6569,6 +6576,7 @@ class ProcessRuntimeProvider:
                 domain=FailureDomain.INFRASTRUCTURE,
             )
         public_base_url = self._public_url_resolver(port, 7200).rstrip("/")
+        tool_secret = request_binding.new_secret() if spec.request_binding else None
         context = ProviderContext(
             attempt_id=self._provider_attempt_id or self._context.job_id,
             world_id=str(world_index),
@@ -6580,6 +6588,7 @@ class ProcessRuntimeProvider:
             idempotency_key=f"{self._context.job_id}:{self._bundle_digest}:w{world_index}",
             expires_at=self._provider_expires_at
             or datetime.fromtimestamp(time.time() + 7200, tz=timezone.utc),
+            tool_secret=tool_secret,
         )
         secret_name = "VAPI_API_KEY" if spec.type.value == "vapi" else "RETELL_API_KEY"
         try:
@@ -6600,6 +6609,8 @@ class ProcessRuntimeProvider:
         runtime.metadata["provider_target_id"] = receipt.target.id
         runtime.metadata["provider_target_kind"] = receipt.target.kind
         runtime.metadata["provider_import_source_target_id"] = spec.source_target_id
+        if tool_secret is not None:
+            runtime.metadata[request_binding.SECRET_METADATA_KEY] = tool_secret
 
     def _destroy_provider_target(self, world_index: int) -> None:
         receipt = self._provider_receipts.pop(world_index, None)

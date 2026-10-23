@@ -10,7 +10,8 @@ changes the environment only through the tools that prove each change.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from .session import Stage
 from .tools import schema
 
 BUILDER = "builder"
+BIND_AGENT = "bind-agent"
 KNOWLEDGE_SERVER = "knowledge"
 BUILDER_TURNS = 200
 # The builder's own skill is its system prompt; every other skill is loaded when needed.
@@ -597,6 +599,73 @@ def open_for_building(
     return Stage(spec, name=BUILDER)
 
 
+def open_for_adapting(
+    workbench: Any,
+    *,
+    approve: Callable[[str, list[str]], Awaitable[str]],
+    ask: Callable[..., Any] | None = None,
+    hosted_prompt: str = "",
+) -> Stage:
+    """The same harness on a prebuilt environment it does not own, binding the person's agent to
+    it. The environment and its suite are sealed: the binding tools are the only way to change
+    anything, and they, not the session, decide whether the binding is proved and sealed."""
+    from .adaptation.workbench import binding_server
+
+    adaptation = binding_server(workbench, approve)
+    spec = SessionSpec(
+        system_prompt=(
+            load_skill(BUILDER)
+            + "\n\n## What you know\n\nLoad any of these with `read_skill` before you answer a "
+            "question it covers or do work it governs.\n\n"
+            + "\n".join(f"- `{name}`: {about}" for name, about in skill_index().items())
+            + "\n\n## The work in front of you now\n\n"
+            + load_skill(BIND_AGENT, preamble=False)
+            + "\n\n## This adaptation\n\n"
+            + workbench.brief()
+            + hosted_prompt
+        ),
+        servers={
+            adaptation.name: adaptation,
+            KNOWLEDGE_SERVER: knowledge_server(None, workbench.output),
+        },
+        builtins=(ASK_TOOL,) if ask is not None else (),
+        cwd=str(workbench.output),
+        max_turns=BUILDER_TURNS,
+        model=chosen_model(),
+        ask=ask,
+    )
+    return Stage(spec, name=BUILDER)
+
+
+def open_for_composition(
+    composition: Any,
+    *,
+    platform: ToolServer | None = None,
+    ask: Callable[..., Any] | None = None,
+    hosted_prompt: str = "",
+) -> Stage:
+    """The same harness on a composition: a prebuilt environment it does not own, bound to the
+    person's agent. Only the suite changes, so the tools that change the world or the contract
+    are left out; saving seals a child suite and re-proves the binding (`composition_edit`)."""
+    from .composition_edit import FIXED_ENVIRONMENT_TOOLS, trajectory_server
+
+    return open_builder(
+        composition.contract,
+        out=composition.workspace,
+        source_root=None,
+        platform=platform,
+        ask=ask,
+        hosted_prompt=hosted_prompt,
+        brief=composition.brief(),
+        sealed=False,
+        more_servers=(
+            {"composition": trajectory_server(composition)} if composition.routed else None
+        ),
+        files_note=composition.files_note(),
+        without=FIXED_ENVIRONMENT_TOOLS,
+    )
+
+
 def open_builder(
     contract: AgentContract,
     *,
@@ -609,9 +678,12 @@ def open_builder(
     brief: str = "",
     sealed: bool = True,
     more_servers: dict[str, ToolServer] | None = None,
+    files_note: str = "",
+    without: frozenset[str] = frozenset(),
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
-    ``sealed`` is False while the environment is still being built and has no sealed bundle yet."""
+    ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
+    ``without`` names tools this session must not have; ``files_note`` replaces the file listing."""
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -629,6 +701,11 @@ def open_builder(
     if platform is not None:
         servers[platform.name] = platform
     servers.update(more_servers or {})
+    if without:
+        servers = {
+            name: replace(one, tools=[spec for spec in one.tools if spec.name not in without])
+            for name, one in servers.items()
+        }
     health = suite_health(contract, out, kept, sealed=sealed) if kept else []
     health_note = (
         "\n\n## Health when this conversation opened\n\n"
@@ -639,7 +716,7 @@ def open_builder(
             "tell the person what you found and fixed:\n- " + "\n- ".join(health[:40])
         )
     )
-    where = (
+    where = files_note or (
         f"\n\nThe environment's files are in {out}: contract.json, sub_goals.json, coverage.json, "
         "simulator_prompt.md, scenarios/ and the sealed environment-bundle/."
         + (f" The agent's own source is in {source_root}." if source_root else "")

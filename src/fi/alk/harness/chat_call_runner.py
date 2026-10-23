@@ -29,12 +29,7 @@ from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
 from .run.conversation import TargetConversationEnded, Transcript, converse
 from .scenario import Scenario as ConversationScenario
-from .usage import (
-    UsageDenied,
-    UsageUnavailable,
-    failure_domain_for_code,
-    simulator_funding,
-)
+from .usage import failure_domain_for_code, simulator_funding
 from .world.runtime import Call, GeneratedWorld
 from .world.stores.postgres import AttachedPostgresStore
 
@@ -49,7 +44,10 @@ async def _record_text_usage(
     funding: str,
     transcript: Transcript | None,
     failure: BaseException | None,
+    agent_tokens: int = 0,
 ) -> None:
+    """`agent_tokens` is the agent under test's own model use when we host it; it is billed in
+    `text_call` with the simulator's."""
     if reporter is None:
         return
     partial = transcript or getattr(failure, "partial_transcript", None)
@@ -64,7 +62,7 @@ async def _record_text_usage(
             reporter.record,
             action="text_call",
             scenario_key=scenario_key,
-            amount=simulator_tokens,
+            amount=simulator_tokens + agent_tokens,
             funding=funding,
             occurred_at=started,
             outcome="completed" if completed else "failed",
@@ -517,17 +515,6 @@ class HostedChatCallRunner:
             },
         )
         funding = simulator_funding()
-        if self._context.usage_reporter is not None and funding == "platform":
-            try:
-                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
-            except UsageDenied as exc:
-                raise CallAborted(
-                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
-                ) from exc
-            except UsageUnavailable as exc:
-                raise CallAborted(
-                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
-                ) from exc
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None

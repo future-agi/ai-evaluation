@@ -62,6 +62,51 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
 - Hosted voice calls whose agent writes its own tool trace no longer report
   each call twice: the agent's line (real arguments, structured result) takes
   the time from the LiveKit hook's line for the same call.
+- Hosted chat simulations are metered again. Since chat calls moved into an
+  isolated worker, the worker had no usage reporter, so no chat call was checked
+  against the usage limit or recorded as `text_call`. The parent now checks
+  before starting the worker and records the simulator tokens the worker
+  measured, for repository and Retell chat agents alike.
+- Environment releases can attach MCP servers (`servers.json`): each world
+  starts them fresh, their tools reach agents as `<id>__<tool>`, and their
+  calls are traced like the release's own tools. The first is ALK's read-only
+  `sql` server, which reads only the tables a release lists through a reader
+  role. Scenarios that use attached tools are proved on PostgreSQL. The clinic
+  release attaches it and adds a schedule question only it can answer; for
+  agents without that tool, adaptation reports the scenario unscorable.
+- The official filesystem MCP server (`@modelcontextprotocol/server-filesystem`
+  2026.1.14, MIT) can be attached with a `directory` under the release's
+  `attached/`; it is installed in the hosted image from a committed lockfile and
+  never downloaded at run time. The clinic attaches its patient guides through
+  it (read tools only) and adds a first-visit question only the guide answers.
+- Our own agent can run on an environment release: connector `hosted_agent`,
+  an `AgentSpec` (instructions and a model) whose digest the binding pins. Its
+  bundle serves the world's tools over MCP (`fi.alk.harness.world_mcp`, `/mcp`,
+  the release's tools plus attached servers'), and the agent runs in the chat
+  worker as a tool loop through Agent Command Center, billed in `text_call`.
+  Its evidence is the world's trace, not anything it reports.
+- A scenario with no tool calls is graded normally when the harness wrote and
+  read the trace itself (our agent, or a request-bound provider run); only an
+  unreadable trace is still `evidence_missing`.
+- Suite sealing refuses a simulator prompt without `{{ persona }}` and
+  `{{ instruction }}` slots. The clinic's had neither, so in chat runs the
+  simulated patient never saw the scenario's task; it now has both.
+- Environment sealing refuses handler files with no tool, handler modes other
+  than `environment` (`customer_source`/`customer_spec` are reserved), attached
+  tool names an agent cannot be offered, and an extension that changes its
+  parent's `attached/` files. Resealing a sealed directory with a different
+  parent or different scenario origins is refused instead of silently turning
+  an extension into a root or a derived suite into a base one.
+- The PostgreSQL proof also replays every reference call as crashed, as the
+  SQLite proof does, so a check that credits an attempted call without its
+  effect is refused on both engines. An attached tool counts as changing state
+  unless its server declares it read-only; the `sql` server does.
+- The clinic's world no longer declares foreign keys, CHECK constraints or a
+  partial index, which PostgreSQL seeds dropped anyway; its handlers enforce
+  those rules, so both engines grade alike. Its release digests changed.
+- Hosted adaptation keeps the scratch PostgreSQL's superuser DSN in
+  `.authoring-credentials/` beside the workspace, which the model's file tools
+  refuse, instead of in `adaptation/inputs.json`.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

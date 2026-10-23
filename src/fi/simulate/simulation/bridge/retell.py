@@ -40,6 +40,8 @@ class RetellWebCallConnector(ProviderConnector):
                 assistant_id=target.agent_id,
                 api_url=str(target.api_url),
                 livekit_url=str(target.livekit_url),
+                call_metadata=dict(target.call_metadata),
+                call_variables=dict(target.call_variables),
             )
         )
 
@@ -72,11 +74,16 @@ class RetellWebCallConnector(ProviderConnector):
         )
 
     async def connect(self) -> None:
+        create: dict[str, object] = {"agent_id": self._config.assistant_id}
+        if self._config.call_metadata:
+            create["metadata"] = dict(self._config.call_metadata)
+        if self._config.call_variables:
+            create["retell_llm_dynamic_variables"] = dict(self._config.call_variables)
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 self._config.api_url,
                 headers={"Authorization": f"Bearer {self._config.api_key}"},
-                json={"agent_id": self._config.assistant_id},
+                json=create,
             ) as response:
                 if response.status != 201:
                     raise RuntimeError(

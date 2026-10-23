@@ -7,6 +7,7 @@ resource is returned in a validated lifecycle receipt so cleanup is exact and re
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import model_validator
 
+from .request_binding import SECRET_HEADER
 from .provider_lifecycle import (
     ProviderCleanupReceipt,
     ProviderContext,
@@ -43,6 +45,10 @@ class ProviderImportSpec(BaseModel):
     tool_path: str = "/provider/tools"
     api_base_url: str | None = None
     target_modality: Literal["voice", "chat"] = "voice"
+    admission: Literal["legacy", "per_tool"] = "legacy"
+    request_binding: bool = False
+    # The inspected profile the agent was adapted as; a run refuses an assistant that differs.
+    profile_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _provider_api_origin_is_fixed(self) -> "ProviderImportSpec":
@@ -351,6 +357,464 @@ def _validate_retell_custom_tools(value: Any, environment_tools: set[str]) -> No
         _validate_retell_custom_tools(item, environment_tools)
 
 
+class ToolAdmission(BaseModel):
+    """How a clone treats one provider tool (`environment-releases.md` §6.3)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    provider_type: str
+    action: Literal["routed", "replaced", "kept", "disabled"]
+    reason: str
+
+
+_VAPI_KEPT = frozenset({"endCall", "dtmf", "voicemail", "query"})
+_VAPI_BUILTIN_NAMES = {"transferCall": "transfer_call", "sms": "send_sms"}
+# Typed tools that may carry a `function` block but still act outside the call.
+_VAPI_NEVER_REPLACED = frozenset(
+    {"handoff", "mcp", "code", "bash", "computer", "textEditor"}
+)
+_RETELL_REPLACED = frozenset(
+    {"transfer_call", "send_sms", "check_availability_cal", "book_appointment_cal"}
+)
+_RETELL_KEPT = frozenset({"end_call", "press_digit", "extract_dynamic_variable"})
+_RETELL_UNCONTROLLED_NODES = frozenset(
+    {"transfer_call", "sms", "code", "agent_swap", "bridge_transfer", "mcp"}
+)
+_RETELL_TOOL_LISTS = ("general_tools", "tools")
+# Assistant fields that can still act outside the call once every tool is admitted: hooks run
+# transfers/tools on events, the legacy forwarding number transfers, and the legacy server URL
+# would receive tool calls with the customer's secret.
+_VAPI_PER_TOOL_DROPPED = frozenset(
+    {"hooks", "forwardingPhoneNumber", "serverUrl", "serverUrlSecret"}
+)
+_EMPTY_PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}}
+
+
+def _vapi_tool_admission(tool: Mapping[str, Any]) -> ToolAdmission:
+    kind = str(tool.get("type") or "")
+    function = tool.get("function")
+    function_name = (
+        str(function.get("name") or "").strip() if isinstance(function, Mapping) else ""
+    )
+    if kind == "function":
+        return ToolAdmission(
+            name=function_name,
+            provider_type=kind,
+            action="routed",
+            reason="custom function served by the world",
+        )
+    if kind == "apiRequest":
+        return ToolAdmission(
+            name=str(tool.get("name") or "").strip(),
+            provider_type=kind,
+            action="replaced",
+            reason="HTTP request replaced by a world-served function",
+        )
+    if kind in _VAPI_BUILTIN_NAMES:
+        return ToolAdmission(
+            name=_VAPI_BUILTIN_NAMES[kind],
+            provider_type=kind,
+            action="replaced",
+            reason="provider action replaced by a world-served function",
+        )
+    if kind in _VAPI_KEPT:
+        return ToolAdmission(
+            name=function_name or kind,
+            provider_type=kind,
+            action="kept",
+            reason="no effect outside the call",
+        )
+    if function_name and kind not in _VAPI_NEVER_REPLACED:
+        return ToolAdmission(
+            name=function_name,
+            provider_type=kind,
+            action="replaced",
+            reason="integration replaced by its function definition",
+        )
+    return ToolAdmission(
+        name=function_name or str(tool.get("name") or "").strip() or kind,
+        provider_type=kind,
+        action="disabled",
+        reason=f"{kind or 'untyped'} tool acts outside the call",
+    )
+
+
+def _retell_tool_admission(tool: Mapping[str, Any]) -> ToolAdmission:
+    kind = str(tool.get("type") or "")
+    name = str(tool.get("name") or "").strip()
+    if kind == "custom":
+        action, reason = "routed", "custom function served by the world"
+    elif kind in _RETELL_REPLACED:
+        action, reason = (
+            "replaced",
+            "provider action replaced by a world-served function",
+        )
+    elif kind in _RETELL_KEPT:
+        action, reason = "kept", "no effect outside the call"
+    else:
+        action, reason = "disabled", f"{kind or 'untyped'} tool acts outside the call"
+    return ToolAdmission(
+        name=name or kind, provider_type=kind, action=action, reason=reason
+    )
+
+
+def _retell_tool_lists(value: Any, visit: Callable[[list[Any]], list[Any]]) -> Any:
+    """Apply `visit` to every tool list wherever Retell nests one (states, flow, components)."""
+    if isinstance(value, list):
+        return [_retell_tool_lists(item, visit) for item in value]
+    if not isinstance(value, Mapping):
+        return value
+    return {
+        key: (
+            visit(item)
+            if key in _RETELL_TOOL_LISTS and isinstance(item, list)
+            else _retell_tool_lists(item, visit)
+        )
+        for key, item in value.items()
+    }
+
+
+def _retell_uncontrolled_nodes(value: Any, disabled_tool_ids: set[str]) -> list[str]:
+    """Flow nodes that act outside the call themselves, or call a tool the clone removes."""
+    found: list[str] = []
+
+    def walk(item: Any, in_nodes: bool) -> None:
+        if isinstance(item, list):
+            for child in item:
+                walk(child, in_nodes)
+            return
+        if not isinstance(item, Mapping):
+            return
+        if in_nodes:
+            kind = str(item.get("type") or "")
+            if kind in _RETELL_UNCONTROLLED_NODES or (
+                kind == "function"
+                and str(item.get("tool_id") or "") in disabled_tool_ids
+            ):
+                found.append(
+                    f"{kind} node {str(item.get('name') or item.get('id') or '?')!r}"
+                )
+        for key, child in item.items():
+            walk(child, key == "nodes")
+
+    walk(value, False)
+    return found
+
+
+def _require_controlled_flow(flow: Any) -> None:
+    disabled_ids: set[str] = set()
+
+    def collect(tools: list[Any]) -> list[Any]:
+        for tool in tools:
+            if (
+                isinstance(tool, Mapping)
+                and _retell_tool_admission(tool).action == "disabled"
+            ):
+                disabled_ids.add(str(tool.get("tool_id") or ""))
+        return tools
+
+    _retell_tool_lists(flow, collect)
+    disabled_ids.discard("")
+    nodes = _retell_uncontrolled_nodes(flow, disabled_ids)
+    if nodes:
+        raise ProviderImportError("provider_tool_uncontrolled: " + ", ".join(nodes))
+
+
+def _profile_tools(
+    provider: ProviderType, target: Mapping[str, Any]
+) -> list[tuple[Mapping[str, Any], ToolAdmission]]:
+    if provider is ProviderType.VAPI:
+        model = target.get("model")
+        inline = model.get("tools") if isinstance(model, Mapping) else None
+        return [
+            (tool, _vapi_tool_admission(tool))
+            for tool in [*(inline or []), *(target.get("reusable_tools") or [])]
+            if isinstance(tool, Mapping)
+        ]
+    found: list[tuple[Mapping[str, Any], ToolAdmission]] = []
+
+    def visit(tools: list[Any]) -> list[Any]:
+        found.extend(
+            (tool, _retell_tool_admission(tool))
+            for tool in tools
+            if isinstance(tool, Mapping)
+        )
+        return tools
+
+    _retell_tool_lists(
+        {
+            key: target.get(key)
+            for key in ("general_tools", "states", "conversation_flow")
+        },
+        visit,
+    )
+    if target.get("conversation_flow") is not None:
+        _require_controlled_flow(target["conversation_flow"])
+    return found
+
+
+def admit_provider_tools(
+    provider: ProviderType | str, target: Mapping[str, Any]
+) -> list[ToolAdmission]:
+    """Per-tool admission over an `inspect_provider_target` profile (§6.3).
+
+    Pure: the clone applies exactly this decision, so Adaptation can show it beforehand. A
+    conversation flow with a node that acts outside the call raises `provider_tool_uncontrolled`
+    here too, because no clone of it can be made safe.
+    """
+    return list(
+        dict.fromkeys(
+            admission for _, admission in _profile_tools(ProviderType(provider), target)
+        )
+    )
+
+
+def admitted_tool_definitions(
+    provider: ProviderType | str, target: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """`{name, description, parameters, admission}` of every routed or replaced tool, exactly as
+    the per-tool clone exposes it to the agent, in `admit_provider_tools` order."""
+    provider = ProviderType(provider)
+    definitions: dict[str, dict[str, Any]] = {}
+    for tool, admission in _profile_tools(provider, target):
+        if (
+            admission.action not in {"routed", "replaced"}
+            or admission.name in definitions
+        ):
+            continue
+        if provider is ProviderType.VAPI:
+            admitted = _vapi_admitted_tool(
+                tool, admission, tool_base_url="", headers={}
+            )
+            function = (admitted or {}).get("function") or {}
+            description, parameters = (
+                function.get("description"),
+                function.get("parameters"),
+            )
+        else:
+            admitted = (
+                _retell_admitted_tool(tool, admission, tool_base_url="", headers={})
+                or {}
+            )
+            description, parameters = (
+                admitted.get("description"),
+                admitted.get("parameters"),
+            )
+        definitions[admission.name] = {
+            "name": admission.name,
+            "description": str(description or ""),
+            "parameters": dict(parameters)
+            if isinstance(parameters, Mapping)
+            else dict(_EMPTY_PARAMETERS),
+            "admission": admission.action,
+        }
+    return list(definitions.values())
+
+
+def _admission_metadata(
+    spec: ProviderImportSpec, admissions: list[ToolAdmission]
+) -> dict[str, Any]:
+    if spec.admission != "per_tool":
+        return {}
+    return {
+        "admission": "per_tool",
+        "tool_admissions": [
+            admission.model_dump() for admission in dict.fromkeys(admissions)
+        ],
+    }
+
+
+def _admitted_tool_headers(
+    spec: ProviderImportSpec, context: ProviderContext
+) -> dict[str, str]:
+    """Headers on every admitted tool; the customer's own headers never reach the world."""
+    if not spec.request_binding:
+        return {}
+    if not context.tool_secret:
+        raise ProviderImportError("provider_tool_secret_missing")
+    return {SECRET_HEADER: context.tool_secret}
+
+
+def _routed_url(tool_base_url: str, name: str) -> str:
+    return tool_base_url.rstrip("/") + "/" + name
+
+
+def _require_admitted_name(
+    admission: ToolAdmission, provider: str, environment_tools: set[str]
+) -> None:
+    if admission.action in {"routed", "replaced"}:
+        _require_environment_tool(
+            provider=provider,
+            name=admission.name or None,
+            available=environment_tools,
+        )
+
+
+def _transfer_parameters(destinations: list[str], description: str) -> dict[str, Any]:
+    # Neither provider documents the arguments its model passes to a built-in transfer; the
+    # tool's own configured destinations are the only schema that is not a guess.
+    destination: dict[str, Any] = {"type": "string", "description": description}
+    if destinations:
+        destination["enum"] = destinations
+    return {
+        "type": "object",
+        "properties": {"destination": destination},
+        "required": ["destination"],
+    }
+
+
+def _vapi_replacement_parameters(tool: Mapping[str, Any]) -> dict[str, Any]:
+    function = tool.get("function")
+    if isinstance(function, Mapping) and isinstance(
+        function.get("parameters"), Mapping
+    ):
+        return dict(function["parameters"])
+    kind = str(tool.get("type") or "")
+    if kind == "apiRequest" and isinstance(tool.get("body"), Mapping):
+        return dict(tool["body"])
+    if kind == "transferCall":
+        destinations = [
+            str(item.get("number") or item.get("sipUri") or item.get("assistantName"))
+            for item in tool.get("destinations") or []
+            if isinstance(item, Mapping)
+            and (item.get("number") or item.get("sipUri") or item.get("assistantName"))
+        ]
+        return _transfer_parameters(destinations, "Where to transfer the call.")
+    return dict(_EMPTY_PARAMETERS)
+
+
+def _vapi_admitted_tool(
+    tool: Mapping[str, Any],
+    admission: ToolAdmission,
+    *,
+    tool_base_url: str,
+    headers: Mapping[str, str],
+) -> dict[str, Any] | None:
+    if admission.action == "disabled":
+        return None
+    if admission.action == "kept":
+        return dict(tool)
+    source_server = tool.get("server")
+    server: dict[str, Any] = {
+        "url": _routed_url(tool_base_url, admission.name),
+        "headers": dict(headers),
+    }
+    if isinstance(source_server, Mapping) and source_server.get("timeoutSeconds"):
+        server["timeoutSeconds"] = source_server["timeoutSeconds"]
+    if admission.action == "routed":
+        return {**dict(tool), "server": server}
+    function = tool.get("function")
+    description = str(
+        (function.get("description") if isinstance(function, Mapping) else None)
+        or tool.get("description")
+        or ""
+    )
+    replaced: dict[str, Any] = {
+        "type": "function",
+        "function": {
+            "name": admission.name,
+            "description": description,
+            "parameters": _vapi_replacement_parameters(tool),
+        },
+        "server": server,
+    }
+    if isinstance(tool.get("messages"), list):
+        replaced["messages"] = tool["messages"]
+    return replaced
+
+
+def _retell_replacement_parameters(tool: Mapping[str, Any]) -> dict[str, Any]:
+    if isinstance(tool.get("parameters"), Mapping):
+        return dict(tool["parameters"])
+    kind = str(tool.get("type") or "")
+    if kind == "transfer_call":
+        target = tool.get("transfer_destination")
+        target = target if isinstance(target, Mapping) else {}
+        number = str(target.get("number") or "").strip()
+        return _transfer_parameters(
+            [number] if target.get("type") == "predefined" and number else [],
+            str(target.get("prompt") or "Where to transfer the call."),
+        )
+    if kind == "send_sms":
+        # Retell's SendSMSTool exposes no model arguments; an inferred message is the one value
+        # the model chooses (create-retell-llm, SmsContent).
+        content = tool.get("sms_content")
+        if isinstance(content, Mapping) and content.get("type") == "inferred":
+            return {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": str(content.get("prompt") or "The message."),
+                    }
+                },
+                "required": ["content"],
+            }
+    return dict(_EMPTY_PARAMETERS)
+
+
+def _retell_admitted_tool(
+    tool: Mapping[str, Any],
+    admission: ToolAdmission,
+    *,
+    tool_base_url: str,
+    headers: Mapping[str, str],
+) -> dict[str, Any] | None:
+    if admission.action == "disabled":
+        return None
+    if admission.action == "kept":
+        return dict(tool)
+    routed = {
+        "url": _routed_url(tool_base_url, admission.name),
+        "method": "POST",
+        "headers": dict(headers),
+        "args_at_root": False,
+    }
+    if admission.action == "routed":
+        return {**dict(tool), **routed}
+    replaced: dict[str, Any] = {
+        "type": "custom",
+        "name": admission.name,
+        "description": str(tool.get("description") or ""),
+        "parameters": _retell_replacement_parameters(tool),
+        "speak_during_execution": bool(tool.get("speak_during_execution", False)),
+        "speak_after_execution": True,
+        **routed,
+    }
+    for key in ("tool_id", "execution_message_description", "execution_message_type"):
+        if tool.get(key) is not None:
+            replaced[key] = tool[key]
+    return replaced
+
+
+def _admit_retell_engine(
+    engine: Any,
+    *,
+    environment_tools: set[str],
+    tool_base_url: str,
+    headers: Mapping[str, str],
+    admissions: list[ToolAdmission],
+) -> Any:
+    def visit(tools: list[Any]) -> list[Any]:
+        kept: list[Any] = []
+        for tool in tools:
+            if not isinstance(tool, Mapping):
+                kept.append(tool)
+                continue
+            admission = _retell_tool_admission(tool)
+            _require_admitted_name(admission, "retell", environment_tools)
+            admissions.append(admission)
+            admitted = _retell_admitted_tool(
+                tool, admission, tool_base_url=tool_base_url, headers=headers
+            )
+            if admitted is not None:
+                kept.append(admitted)
+        return kept
+
+    return _retell_tool_lists(engine, visit)
+
+
 _RETELL_AGENT_READ_ONLY_FIELDS = {
     "agent_id",
     "last_modification_timestamp",
@@ -410,41 +874,49 @@ def _clone_vapi(
     assistant["server"] = {"url": context.event_url}
     resources: list[ProviderResource] = []
     environment_tools = set(spec.environment_tools)
+    per_tool = spec.admission == "per_tool"
+    headers = _admitted_tool_headers(spec, context) if per_tool else {}
+    admissions: list[ToolAdmission] = []
+    if per_tool:
+        assistant = _without(assistant, set(_VAPI_PER_TOOL_DROPPED))
+
+    def admit(item: Any) -> Any:
+        if not isinstance(item, Mapping):
+            return item
+        if per_tool:
+            admission = _vapi_tool_admission(item)
+            _require_admitted_name(admission, "vapi", environment_tools)
+            admissions.append(admission)
+            return _vapi_admitted_tool(
+                item, admission, tool_base_url=context.tool_base_url, headers=headers
+            )
+        if str(item.get("type") or "") in {"function", "apiRequest"}:
+            _require_environment_tool(
+                provider="vapi",
+                name=_vapi_custom_tool_name(item),
+                available=environment_tools,
+            )
+        return _rewire_vapi_tool(item, context.tool_base_url)
+
     try:
         model = assistant.get("model")
         if isinstance(model, dict):
             model = dict(model)
             inline = model.get("tools")
             if isinstance(inline, list):
-                rewritten_inline: list[Any] = []
-                for item in inline:
-                    if isinstance(item, Mapping) and str(item.get("type") or "") in {
-                        "function",
-                        "apiRequest",
-                    }:
-                        _require_environment_tool(
-                            provider="vapi",
-                            name=_vapi_custom_tool_name(item),
-                            available=environment_tools,
-                        )
-                        item = _rewire_vapi_tool(item, context.tool_base_url)
-                    rewritten_inline.append(item)
-                model["tools"] = rewritten_inline
+                model["tools"] = [
+                    tool for tool in map(admit, inline) if tool is not None
+                ]
             tool_ids = model.get("toolIds")
             if isinstance(tool_ids, list):
                 cloned_ids: list[str] = []
                 for source_id in tool_ids:
                     source = request("GET", f"{base}/tool/{source_id}", api_key, None)
-                    if str(source.get("type") or "") in {"function", "apiRequest"}:
-                        _require_environment_tool(
-                            provider="vapi",
-                            name=_vapi_custom_tool_name(source),
-                            available=environment_tools,
-                        )
-                    create = _rewire_vapi_tool(
-                        _without(source, {"id", "orgId", "createdAt", "updatedAt"}),
-                        context.tool_base_url,
+                    create = admit(
+                        _without(source, {"id", "orgId", "createdAt", "updatedAt"})
                     )
+                    if create is None:
+                        continue
                     created = request("POST", f"{base}/tool", api_key, create)
                     target_id = str(created.get("id") or "").strip()
                     if not target_id:
@@ -479,6 +951,7 @@ def _clone_vapi(
         metadata={
             "source_target_id": spec.source_target_id,
             "clone_kind": "provider_import",
+            **_admission_metadata(spec, admissions),
         },
     )
 
@@ -500,6 +973,27 @@ def _clone_retell(
             "retell_response_engine_unsupported: response_engine must be an object"
         )
     environment_tools = set(spec.environment_tools)
+    per_tool = spec.admission == "per_tool"
+    headers = _admitted_tool_headers(spec, context) if per_tool else {}
+    admissions: list[ToolAdmission] = []
+
+    def engine_body(source_engine: dict[str, Any], *, flow: bool) -> Any:
+        if not per_tool:
+            _validate_retell_custom_tools(source_engine, environment_tools)
+            return _rewire_retell_tools(
+                _without(source_engine, _RETELL_ENGINE_READ_ONLY_FIELDS),
+                context.tool_base_url,
+            )
+        if flow:
+            _require_controlled_flow(source_engine)
+        return _admit_retell_engine(
+            _without(source_engine, _RETELL_ENGINE_READ_ONLY_FIELDS),
+            environment_tools=environment_tools,
+            tool_base_url=context.tool_base_url,
+            headers=headers,
+            admissions=admissions,
+        )
+
     engine_type = str(engine.get("type") or "").strip()
     engine_resource: ProviderResource
     cloned_engine: dict[str, Any]
@@ -513,11 +1007,7 @@ def _clone_retell(
         source_engine = request(
             "GET", f"{base}/get-retell-llm/{source_engine_id}", api_key, None
         )
-        _validate_retell_custom_tools(source_engine, environment_tools)
-        engine_create = _rewire_retell_tools(
-            _without(source_engine, _RETELL_ENGINE_READ_ONLY_FIELDS),
-            context.tool_base_url,
-        )
+        engine_create = engine_body(source_engine, flow=False)
         created_engine = request(
             "POST", f"{base}/create-retell-llm", api_key, engine_create
         )
@@ -541,11 +1031,7 @@ def _clone_retell(
             api_key,
             None,
         )
-        _validate_retell_custom_tools(source_engine, environment_tools)
-        engine_create = _rewire_retell_tools(
-            _without(source_engine, _RETELL_ENGINE_READ_ONLY_FIELDS),
-            context.tool_base_url,
-        )
+        engine_create = engine_body(source_engine, flow=True)
         created_engine = request(
             "POST", f"{base}/create-conversation-flow", api_key, engine_create
         )
@@ -608,8 +1094,17 @@ def _clone_retell(
             "source_response_engine_type": engine_type,
             "target_modality": spec.target_modality,
             "clone_kind": "provider_import",
+            **_admission_metadata(spec, admissions),
         },
     )
+
+
+def provider_profile_digest(profile: Mapping[str, Any]) -> str:
+    """The identity of an inspected (redacted) provider profile: prompt, model, voice and tools."""
+    encoded = json.dumps(
+        profile, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def clone_provider_target(
@@ -621,6 +1116,23 @@ def clone_provider_target(
 ) -> ProviderProvisionReceipt:
     if not api_key:
         raise ProviderImportError(f"{spec.type.value}_api_key_missing")
+    if spec.profile_digest is not None:
+        # Inspected exactly as adaptation inspected it, so an untouched assistant digests the same.
+        current = provider_profile_digest(
+            inspect_provider_target(
+                spec.type,
+                source_target_id=spec.source_target_id,
+                api_key=api_key,
+                api_base_url=spec.api_base_url,
+                target_modality=spec.target_modality,
+                request=request,
+            )
+        )
+        if current != spec.profile_digest:
+            raise ProviderImportError(
+                "provider_configuration_changed: the provider agent's prompt, model, voice or "
+                "tools changed after it was adapted; adapt this agent version again"
+            )
     result = (
         _clone_vapi(spec, context, api_key, request)
         if spec.type is ProviderType.VAPI
@@ -697,6 +1209,9 @@ def destroy_imported_target(
 __all__ = [
     "ProviderImportError",
     "ProviderImportSpec",
+    "ToolAdmission",
+    "admit_provider_tools",
+    "admitted_tool_definitions",
     "clone_provider_target",
     "destroy_imported_target",
     "inspect_provider_target",

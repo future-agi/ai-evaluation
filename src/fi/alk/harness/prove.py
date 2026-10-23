@@ -71,9 +71,14 @@ class Proof:
     too_strict: list[str] = field(default_factory=list)
     # Values the scenario marks fixed that no code check notices when they are wrong.
     unchecked: list[str] = field(default_factory=list)
+    # The reference solution calls an attached MCP server, which only the PostgreSQL proof runs,
+    # so this pass checked setup and readiness and left the other gates to it.
+    postgres_only: bool = False
 
     @property
     def holds(self) -> bool:
+        if self.postgres_only:
+            return self.ready and not self.broken
         return (
             self.ready
             and self.solvable
@@ -403,8 +408,13 @@ def prove(
     scenario: Scenario,
     catalogue: Catalogue,
     world_root: Path,
+    *,
+    postgres_only: frozenset[str] = frozenset(),
 ) -> Proof:
-    """Run all three gates and say whether this scenario is worth keeping."""
+    """Run all three gates and say whether this scenario is worth keeping.
+
+    A scenario whose solution calls a tool in `postgres_only` is checked for readiness here and
+    proved in full by the PostgreSQL proof, which runs those tools."""
     proof = Proof()
     checks = _checks_for(scenario, catalogue)
     reference = reference_of(scenario.solution)
@@ -436,6 +446,9 @@ def prove(
             proof.broken = [ready.said]
         return proof
     proof.ready = True
+    if postgres_only & {str(step.tool) for step in scenario.solution}:
+        proof.postgres_only = True
+        return proof
 
     # Gate 2: does the reference solution pass this scenario's own checks?
     world, calls, refused, assumed = _run(scenario, world_root, with_solution=True)

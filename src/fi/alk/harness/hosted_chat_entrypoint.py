@@ -84,6 +84,8 @@ _PUBLISHED_PARTS = (
     "contract.json",
     "simulator_prompt.md",
     "world.sqlite",
+    # A composition's agent trajectories: proof inputs saved with its suite.
+    "trajectories.json",
 )
 # Only these change the workspace, so only these are worth a checkpoint before they run.
 _WRITING_TOOLS = frozenset(
@@ -274,6 +276,10 @@ class HostedChatRuntime:
         self._opened_with: tuple[bool, bool] | None = None
         self._last_progress: Any = None
         self._idle_turns = 0
+        # Set when an adaptation job's session opens: the binding work and its gates.
+        self.workbench: Any = None
+        # Set when this conversation edits a composition's suite: its verified workspace.
+        self.composition: Any = None
         self.conversation = self._conversation()
         if isinstance(self.conversation, BuilderConversation):
             # What the sandbox started from is what the environment holds, unless an earlier
@@ -293,17 +299,22 @@ class HostedChatRuntime:
         from .poc_guest_booking import guest_booking_policy_job
         from .understand import load as load_contract
 
-        policy_job = guest_booking_policy_job(self.job)
-        contract = load_contract(self.workspace)
-        self._opened_with = self._what_exists()
-        if not self._opened_with[1]:
-            stage = self._open_for_building(contract)
+        if self._adapting():
+            stage = await self._open_for_adapting()
+        elif self._composing():
+            stage = await self._open_for_composition()
         else:
-            try:
-                overview = await self.client.overview()
-            except ConversationTransportError:
-                overview = None
-            stage = self._open_built(contract, overview, policy_job)
+            policy_job = guest_booking_policy_job(self.job)
+            contract = load_contract(self.workspace)
+            self._opened_with = self._what_exists()
+            if not self._opened_with[1]:
+                stage = self._open_for_building(contract)
+            else:
+                try:
+                    overview = await self.client.overview()
+                except ConversationTransportError:
+                    overview = None
+                stage = self._open_built(contract, overview, policy_job)
         if not self._control_only():
             self._guard(stage.spec)
         capabilities = self.client.capabilities
@@ -341,6 +352,92 @@ class HostedChatRuntime:
             "requested work as completed until a tool result proves it."
             + _HOSTED_CHAT_CAPABILITIES
         )
+
+    def _adapting(self) -> bool:
+        """An adaptation job: the harness binds the person's agent to a prebuilt environment."""
+        return isinstance((self.job.get("metadata") or {}).get("adaptation"), dict)
+
+    async def _open_for_adapting(self) -> Stage:
+        from . import spend
+        from .adaptation.hosted import load_workbench
+        from .builder import open_for_adapting
+
+        # The platform reads this ledger before the sandbox is deleted and bills it as authoring.
+        spend.journal_to(self.workspace / "cost.json")
+        self.workbench = await load_workbench(self.workspace)
+        return open_for_adapting(
+            self.workbench,
+            approve=self._approve,
+            ask=self._ask,
+            hosted_prompt=(
+                "\n\n## Hosted conversation behavior\n"
+                "Reply directly to the user in this conversation. Never describe requested work "
+                "as completed until a tool result proves it."
+            ),
+        )
+
+    def _composing(self) -> bool:
+        """A composition's chat: the suite of a prebuilt environment bound to the person's agent."""
+        from .composition_edit import is_composition
+
+        return is_composition(self.workspace)
+
+    async def _open_for_composition(self) -> Stage:
+        from .builder import open_for_composition
+        from .composition_edit import open_composition
+
+        self.composition, laid_out = await asyncio.to_thread(open_composition, self.workspace)
+        if laid_out:
+            # The working copy is the composition's suite as published: nothing is unsaved yet.
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+        return open_for_composition(
+            self.composition,
+            platform=self._builder_platform_server(),
+            ask=self._ask,
+            hosted_prompt=self._hosted_prompt(),
+        )
+
+    async def _seal_composition(self) -> dict[str, Any] | None:
+        """Seal the edited suite as a child of the composition's and prove the binding against
+        it. None when the change is ready to publish; otherwise the result to report."""
+        from .adaptation.scratch_postgres import scratch_cluster
+        from .composition_edit import (
+            CompositionEditError,
+            open_composition,
+            plan_change,
+            seal_change,
+        )
+
+        def seal() -> dict[str, Any] | None:
+            if self.composition is None:
+                self.composition, _laid_out = open_composition(self.workspace)
+            plan = plan_change(self.composition)
+            if plan is None:
+                return None
+            with scratch_cluster() as dsn:
+                return seal_change(plan, postgres_dsn=dsn)
+
+        try:
+            sealed = await asyncio.to_thread(seal)
+        except CompositionEditError as exc:
+            return {"applied": False, "code": exc.code, "message": exc.message[:2000]}
+        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+            traceback.print_exc()
+            return {
+                "applied": False,
+                "code": "composition_seal_failed",
+                "message": f"the edited suite could not be sealed: {exc}"[:600],
+            }
+        if sealed is None:
+            self._write_dotfile(_PUBLISHED, {"fingerprint": self._environment_fingerprint()})
+            return {"applied": True, "unchanged": True, "message": "the suite is unchanged; nothing to save"}
+        return None
+
+    async def _approve(self, question: str, options: list[str]) -> str:
+        """The person's answer to a question code asks, not the model."""
+        answer = await self._ask("finish_adaptation", {"question": question, "options": options}, None)
+        content = answer.get("content") if isinstance(answer, dict) else None
+        return "\n".join(str(part.get("text") or "") for part in content or [])
 
     def _open_built(self, contract: Any, overview: Any, policy_job: Any) -> Stage:
         from .builder import environment_brief, open_builder
@@ -820,17 +917,22 @@ class HostedChatRuntime:
         fingerprint = self._environment_fingerprint()
         if fingerprint == self._published_fingerprint() and not force:
             return {"applied": True, "unchanged": True, "message": "nothing is waiting to be saved"}
-        from .bundle_author_v2 import reseal_scenarios
+        if self._composing():
+            refused = await self._seal_composition()
+            if refused is not None:
+                return refused
+        else:
+            from .bundle_author_v2 import reseal_scenarios
 
-        try:
-            await asyncio.to_thread(reseal_scenarios, self.workspace)
-        except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
-            traceback.print_exc()
-            return {
-                "applied": False,
-                "code": "reseal_failed",
-                "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
-            }
+            try:
+                await asyncio.to_thread(reseal_scenarios, self.workspace)
+            except Exception as exc:  # noqa: BLE001 - reported to the model, never swallowed
+                traceback.print_exc()
+                return {
+                    "applied": False,
+                    "code": "reseal_failed",
+                    "message": f"the edited scenarios could not be sealed for runs: {exc}"[:600],
+                }
         result: dict[str, Any] = {}
         for _attempt in range(3):
             try:
@@ -850,6 +952,10 @@ class HostedChatRuntime:
                 "environment after this reply; the change has to be made again on it."
             )
         if result.get("applied"):
+            if self._composing():
+                from .composition_edit import accept_change
+
+                await asyncio.to_thread(accept_change, self.composition)
             await self._record_touched(result)
             if result.get("revision"):
                 self._write_dotfile(_AUTHORING_BASIS, {"authoring_revision": result["revision"]})
@@ -1072,24 +1178,36 @@ class HostedChatRuntime:
         if (self.workspace / _PENDING_QUESTION).is_file():
             return False
         exists = self._what_exists()
-        progress = (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        progress = (
+            (self.workbench.fingerprint() if self.workbench is not None else "")
+            if self._adapting()
+            else (exists, len(list((self.workspace / "scenarios").glob("*/scenario.json"))))
+        )
         if progress != self._last_progress:
             self._last_progress, self._idle_turns = progress, 0
         elif self._idle_turns >= 3:
             return False
         self._idle_turns += 1
-        await asyncio.to_thread(self._after_saved)
-        if self._opened_with is not None and exists != self._opened_with:
-            await self.conversation.close()
-            said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
-        else:
-            asked = int(self.job.get("scenario_count") or 0)
+        if self._adapting():
+            missing = self.workbench.unfinished() if self.workbench is not None else []
             said = (
-                f"[The build is not finished: the test environment for this agent, with {asked} "
-                "scenarios. Carry on, and call finish_build when it is.]"
-                if asked
-                else "[The build is not finished. Carry on, and call finish_build when it is.]"
+                "[The adaptation is not finished"
+                + (":\n- " + "\n- ".join(missing) if missing else "")
+                + "\nCarry on, and call finish_adaptation, or stop_adaptation with the reason.]"
             )
+        else:
+            await asyncio.to_thread(self._after_saved)
+            if self._opened_with is not None and exists != self._opened_with:
+                await self.conversation.close()
+                said = "[What you saved opened the next part of the build: your tools now cover it. Carry on.]"
+            else:
+                asked = int(self.job.get("scenario_count") or 0)
+                said = (
+                    f"[The build is not finished: the test environment for this agent, with {asked} "
+                    "scenarios. Carry on, and call finish_build when it is.]"
+                    if asked
+                    else "[The build is not finished. Carry on, and call finish_build when it is.]"
+                )
         await self._handle(
             {
                 "sequence": self.client.command_watermark,

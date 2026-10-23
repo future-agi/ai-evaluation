@@ -1,0 +1,166 @@
+[
+  {
+    "name": "verify_patient",
+    "description": "Verify a patient by full name and date of birth. Required before reading or changing that patient's appointments, insurance or forms.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "full_name": {"type": "string", "description": "The patient's full name."},
+        "dob": {"type": "string", "description": "Date of birth, YYYY-MM-DD."}
+      },
+      "required": ["full_name", "dob"]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "patient_id": {"type": "string"},
+        "full_name": {"type": "string"},
+        "verified": {"type": "boolean"}
+      }
+    }
+  },
+  {
+    "name": "find_available_slots",
+    "description": "List open appointment slots for a specialty between two dates, inclusive, earliest first.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "specialty": {"type": "string", "enum": ["primary_care", "pediatrics", "dermatology"]},
+        "date_from": {"type": "string", "description": "First day, YYYY-MM-DD."},
+        "date_to": {"type": "string", "description": "Last day, YYYY-MM-DD."}
+      },
+      "required": ["specialty", "date_from", "date_to"]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "slot_id": {"type": "string"},
+              "provider": {"type": "string"},
+              "specialty": {"type": "string"},
+              "starts_at": {"type": "string"},
+              "location": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "book_appointment",
+    "description": "Book an open slot for a verified patient.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "patient_id": {"type": "string"},
+        "slot_id": {"type": "string"},
+        "reason": {"type": "string", "description": "Reason for the visit."}
+      },
+      "required": ["patient_id", "slot_id", "reason"]
+    },
+    "mutates_state": true,
+    "returns": {
+      "type": "object",
+      "properties": {
+        "appointment_id": {"type": "string"},
+        "slot_id": {"type": "string"},
+        "provider": {"type": "string"},
+        "starts_at": {"type": "string"},
+        "location": {"type": "string"}
+      }
+    }
+  },
+  {
+    "name": "list_appointments",
+    "description": "List a verified patient's appointments, booked and cancelled.",
+    "parameters": {
+      "type": "object",
+      "properties": {"patient_id": {"type": "string"}},
+      "required": ["patient_id"]
+    },
+    "mutates_state": false,
+    "returns": {
+      "type": "object",
+      "properties": {"appointments": {"type": "array", "items": {"type": "object"}}}
+    }
+  },
+  {
+    "name": "reschedule_appointment",
+    "description": "Move a booked appointment to another open slot.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "appointment_id": {"type": "string"},
+        "new_slot_id": {"type": "string"}
+      },
+      "required": ["appointment_id", "new_slot_id"]
+    },
+    "mutates_state": true,
+    "returns": {"type": "object"}
+  },
+  {
+    "name": "cancel_appointment",
+    "description": "Cancel a booked appointment.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "appointment_id": {"type": "string"},
+        "reason": {"type": "string"}
+      },
+      "required": ["appointment_id"]
+    },
+    "mutates_state": true,
+    "returns": {"type": "object"}
+  },
+  {
+    "name": "update_insurance",
+    "description": "Record or replace a verified patient's insurance.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "patient_id": {"type": "string"},
+        "payer": {"type": "string"},
+        "member_id": {"type": "string"},
+        "group_number": {"type": "string"}
+      },
+      "required": ["patient_id", "payer", "member_id"]
+    },
+    "mutates_state": true,
+    "returns": {"type": "object"}
+  },
+  {
+    "name": "send_intake_forms",
+    "description": "Send the intake and consent forms to a verified patient by text message or email, using the contact details on file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "patient_id": {"type": "string"},
+        "channel": {"type": "string", "enum": ["sms", "email"]}
+      },
+      "required": ["patient_id", "channel"]
+    },
+    "mutates_state": true,
+    "returns": {"type": "object"}
+  },
+  {
+    "name": "escalate_to_staff",
+    "description": "Hand the request to clinic staff: the front desk for scheduling and identity problems, the nurse line for clinical questions.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "team": {"type": "string", "enum": ["front_desk", "nurse"]},
+        "reason": {"type": "string"},
+        "patient_id": {"type": "string", "description": "When the patient is known."}
+      },
+      "required": ["team", "reason"]
+    },
+    "mutates_state": true,
+    "returns": {"type": "object"}
+  }
+]

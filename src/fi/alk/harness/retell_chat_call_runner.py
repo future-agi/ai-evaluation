@@ -17,7 +17,13 @@ from fi.simulate.agent.wrapper import (
     SimulationEvent,
 )
 
-from .call_runner import ArtifactUploader, CallRunnerContext, RETELL_API_KEY_ALIAS
+from .call_runner import (
+    ArtifactUploader,
+    CallRunnerContext,
+    RETELL_API_KEY_ALIAS,
+    _bind_call,
+    _upload_tool_trace,
+)
 from .chat_call_runner import (
     _HostedChatTarget,
     _conversation_scenario,
@@ -32,7 +38,7 @@ from .hosted_scheduler import CallAborted, CallOutcome, Scenario, World
 from .run.conversation import Transcript
 from .outbound import ArtifactKind, format_rfc3339_millis
 from .process_runtime import EnvironmentRuntime
-from .usage import UsageDenied, UsageUnavailable, simulator_funding
+from .usage import simulator_funding
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +105,7 @@ class RetellChatWrapper(AgentWrapper):
         agent_id: str,
         agent_version: int | None = None,
         dynamic_variables: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, str] | None = None,
         api_base_url: str = "https://api.retellai.com",
     ) -> None:
         if not api_key:
@@ -111,6 +118,7 @@ class RetellChatWrapper(AgentWrapper):
         self._dynamic_variables = {
             str(key): str(value) for key, value in dict(dynamic_variables or {}).items()
         }
+        self._metadata = dict(metadata or {})
         self._base = api_base_url.rstrip("/")
         self._chat_id: str | None = None
 
@@ -189,7 +197,7 @@ class RetellChatWrapper(AgentWrapper):
         if self._chat_id is None:
             create: dict[str, Any] = {
                 "agent_id": self._agent_id,
-                "metadata": {"source": "futureagi-rl-environment"},
+                "metadata": {"source": "futureagi-rl-environment", **self._metadata},
             }
             if self._agent_version is not None:
                 create["agent_version"] = self._agent_version
@@ -293,14 +301,20 @@ class RetellChatCallRunner:
         )
         config = self._context.job.agent.config
         raw_dynamic = config.get("dynamic_variables")
-        dynamic_variables = raw_dynamic if isinstance(raw_dynamic, Mapping) else {}
+        dynamic_variables = (
+            dict(raw_dynamic) if isinstance(raw_dynamic, Mapping) else {}
+        )
         version_value = config.get("agent_version")
         agent_version = int(version_value) if version_value not in (None, "") else None
+        binding = _bind_call(self._context, runtime, scenario.scenario_key)
+        bound = binding.call_values() if binding else {}
+        dynamic_variables.update(bound)
         wrapper = RetellChatWrapper(
             api_key=api_key,
             agent_id=agent_id,
             agent_version=agent_version,
             dynamic_variables=dynamic_variables,
+            metadata=bound,
             api_base_url=str(
                 config.get("provider_api_base_url") or "https://api.retellai.com"
             ),
@@ -324,17 +338,6 @@ class RetellChatCallRunner:
             scenario_id=scenario.scenario_id,
         )
         funding = simulator_funding()
-        if self._context.usage_reporter is not None and funding == "platform":
-            try:
-                await asyncio.to_thread(self._context.usage_reporter.check, "text_call")
-            except UsageDenied as exc:
-                raise CallAborted(
-                    f"text_usage_check_denied: {exc}", code="usage_exhausted"
-                ) from exc
-            except UsageUnavailable as exc:
-                raise CallAborted(
-                    f"text_usage_check_failed: {exc}", code="usage_check_failed"
-                ) from exc
         started = datetime.now(timezone.utc)
         transcript: Transcript | None = None
         failure: CallAborted | None = None
@@ -373,26 +376,9 @@ class RetellChatCallRunner:
             scenario_key=scenario.scenario_key,
         )
         calls = tuple(transcript.calls)
-        if calls:
-            trace = "\n".join(
-                json.dumps(
-                    {
-                        "name": call.name,
-                        "arguments": call.arguments,
-                        "result": call.result,
-                        "ok": call.ok,
-                        "error": call.error,
-                        "refused": call.refused,
-                        "at": call.at,
-                    },
-                    sort_keys=True,
-                    default=str,
-                )
-                for call in calls
-            ).encode()
-            await self._adapter.upload_artifact(
-                trace, kind=ArtifactKind.TOOL_TRACE, scenario_key=scenario.scenario_key
-            )
+        await _upload_tool_trace(
+            self._adapter, calls, scenario_key=scenario.scenario_key, binding=binding
+        )
         return CallOutcome(
             calls=calls,
             turns=len(transcript.exchanges),

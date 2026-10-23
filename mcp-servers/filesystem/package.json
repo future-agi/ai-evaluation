@@ -1,0 +1,9 @@
+{
+  "name": "alk-mcp-server-filesystem",
+  "private": true,
+  "description": "The filesystem MCP server environment releases attach, pinned.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2026.1.14"
+  }
+}

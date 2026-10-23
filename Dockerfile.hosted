@@ -114,6 +114,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && rm /tmp/alk-requirements.txt \
     && chmod -R a-w /opt/alk-venv
 
+# MCP servers environment releases may attach (fi.alk.harness.mcp_servers.REGISTRY), installed
+# from their committed lockfiles: a sandbox never downloads a package at run time.
+COPY mcp-servers/filesystem/package.json mcp-servers/filesystem/package-lock.json /opt/mcp-servers/filesystem/
+RUN cd /opt/mcp-servers/filesystem \
+    && npm22 ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && chmod -R a-w /opt/mcp-servers
+
 # Daytona's direct-image builder can reuse an image when only build-context
 # files change.  Bump this source revision whenever guest code changes so a
 # hosted test cannot silently execute an older installed ALK.

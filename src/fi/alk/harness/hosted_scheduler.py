@@ -243,6 +243,10 @@ class CallOutcome:
     target_metrics: dict[str, Any] | None = None
     # A local path the judge can play; the artifacts above are ids the sandbox cannot read back.
     recording: str | None = None
+    # The calls came from a trace this harness wrote (the world's `_alk_tool_trace`) and reading
+    # it succeeded, so an empty `calls` means the agent made none: the scenario is graded rather
+    # than retried as missing evidence.
+    evidence_collected: bool = False
 
 
 class CallAborted(RuntimeError):
@@ -2171,10 +2175,15 @@ class HostedScheduler:
         calls = list(
             call_outcome.calls
         )  # m12: `folder.py::_RUNNABLE` expects a list, not a tuple.
-        if not calls and getattr(scenario, "requires_tool_evidence", True):
-            # M10: unconditioned on `turns` — an empty list must never reach checks regardless of
-            # whether the simulator observed a turn (world-handle-interface.md "Coverage
-            # guarantee": "An empty list is never handed to checks").
+        if (
+            not calls
+            and not call_outcome.evidence_collected
+            and getattr(scenario, "requires_tool_evidence", True)
+        ):
+            # M10: unconditioned on `turns` — without a trace this harness collected, an empty
+            # list must never reach checks regardless of whether the simulator observed a turn
+            # (world-handle-interface.md "Coverage guarantee": "An empty list is never handed to
+            # checks").
             failure = _failure(
                 "evidence_missing",
                 "no tool calls were captured for this scenario's call",
