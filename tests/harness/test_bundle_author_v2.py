@@ -1509,6 +1509,52 @@ CREATE TABLE tickets (id BIGINT PRIMARY KEY, embedding vector(768));
     assert "embedding" not in artifacts[0].sql
 
 
+def test_documented_readme_schema_keeps_dependencies_across_sql_fences(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text(
+        """# Local setup
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TYPE ride_status AS ENUM ('requested', 'accepted');
+CREATE SEQUENCE ride_number_seq;
+CREATE TABLE rides (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status ride_status NOT NULL,
+    ride_number BIGINT DEFAULT nextval('ride_number_seq')
+);
+```
+
+```postgresql
+CREATE TABLE riders (id UUID PRIMARY KEY);
+ALTER TABLE rides ADD COLUMN rider_id UUID REFERENCES riders(id);
+CREATE INDEX rides_rider_id_idx ON rides (rider_id);
+INSERT INTO riders VALUES (gen_random_uuid());
+```
+""",
+        encoding="utf-8",
+    )
+
+    artifacts = _source_schema_artifacts(source)
+
+    assert [artifact.relative_path for artifact in artifacts] == [
+        "README.md#sql-1",
+        "README.md#sql-2",
+    ]
+    sql = "\n".join(artifact.sql for artifact in artifacts)
+    assert "CREATE EXTENSION" in sql
+    assert "CREATE TYPE ride_status" in sql
+    assert "CREATE SEQUENCE ride_number_seq" in sql
+    assert "CREATE TABLE rides" in sql
+    assert "CREATE TABLE riders" in sql
+    assert "ALTER TABLE rides" in sql
+    assert "CREATE INDEX rides_rider_id_idx" in sql
+    assert "INSERT INTO" not in sql
+
+
 def test_docker_python_respects_project_requires_python(tmp_path: Path) -> None:
     (tmp_path / "Dockerfile").write_text(
         "FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim\n",
