@@ -282,7 +282,7 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
                 "name": "one",
                 "scenario_key": "one",
                 "instruction": "ask for a refund",
-                "persona": {"name": "Ana"},
+                "persona": {"name": "Ana", "accent": "American"},
                 "solution": [
                     {
                         "tool": "refund",
@@ -346,6 +346,8 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
         is True
     )
     assert "ask for a cancellation" in asked.pop()
+    assert not runtime._changes_situation({"scenario_key": "one", "persona": {"name": "Ana"}})
+    assert runtime._changes_situation({"scenario_key": "one", "persona": {"accent": "Indian"}})
 
     answers.extend(["No, keep it", "Which scenarios use it?"])
     assert asyncio.run(drop.handler({"names": ["one"]}))["is_error"] is True

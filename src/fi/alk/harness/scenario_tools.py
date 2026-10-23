@@ -874,6 +874,21 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+def edited(held: Scenario, change: dict[str, Any]) -> dict[str, Any]:
+    """``held`` with ``change`` applied: a field it names is replaced, and a mapping such as the
+    persona changes only the entries it names."""
+    saved = held.model_dump(exclude_none=True)
+    return {
+        **saved,
+        **{
+            field: {**saved[field], **value}
+            if isinstance(value, dict) and isinstance(saved.get(field), dict)
+            else value
+            for field, value in change.items()
+        },
+    }
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -2309,9 +2324,10 @@ def scenario_tools(
 
     @tool(
         "edit_scenario",
-        "Change a kept scenario: give its `scenario_key` and only the fields that change, such as a new "
-        "`name`. Every other field keeps its saved value, and the scenario keeps its key, number and "
-        "history. The result is checked exactly like `submit_scenario`.",
+        "Change a kept scenario: give its `scenario_key` and only what changes, such as a new "
+        "`name` or the persona fields that change. Everything else keeps its saved value, and the "
+        "scenario keeps its key, number and history. The result is checked exactly like "
+        "`submit_scenario`.",
         edit_schema,
     )
     async def edit_scenario(args: dict[str, Any]) -> dict[str, Any]:
@@ -2321,9 +2337,7 @@ def scenario_tools(
             return _err(
                 f"Not changed: no scenario in this suite has the scenario_key {key!r}."
             )
-        return await submit_scenario.handler(
-            {**held.model_dump(exclude_none=True), **args}
-        )
+        return await submit_scenario.handler(edited(held, args))
 
     server = tool_server(
         name=SCENARIO_SERVER,

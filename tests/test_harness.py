@@ -8007,6 +8007,11 @@ def test_an_edit_sends_only_what_changes_and_keeps_the_rest(tmp_path):
         ("orders-one-big-mac", key)
     ]
     assert kept[0].model_dump(exclude={"name"}) == before
+    said = asyncio.run(edit.handler({"scenario_key": key, "persona": {"name": "Meera Iyer"}}))
+    assert not said.get("is_error"), said
+    assert kept[0].persona.name == "Meera Iyer"
+    assert kept[0].persona.initial_message == "Hi, I want a Big Mac."
+    assert kept[0].persona.languages == ["English"]
     unknown = asyncio.run(edit.handler({"scenario_key": "not-here", "name": "x"}))
     assert unknown.get("is_error") and "not-here" in unknown["content"][0]["text"]
     assert [one.name for one in kept] == ["orders-one-big-mac"]

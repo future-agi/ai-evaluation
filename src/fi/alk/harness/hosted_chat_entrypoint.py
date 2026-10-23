@@ -531,18 +531,17 @@ class HostedChatRuntime:
         `whole_persona` compares the persona the submission would save, so a changed language or a
         dropped persona counts: a submission replaces the scenario rather than patching it.
         """
-        from .scenario_tools import load_scenarios
+        from .scenario_tools import edited, load_scenarios
 
-        name, key = str(args.get("name") or ""), str(args.get("scenario_key") or "")
-        if key:
-            name = next(
-                (
-                    one.name
-                    for one in load_scenarios(self.workspace)
-                    if one.scenario_key == key
-                ),
-                name,
-            )
+        key = str(args.get("scenario_key") or "")
+        target = next(
+            (one for one in load_scenarios(self.workspace) if key and one.scenario_key == key),
+            None,
+        )
+        name = str(args.get("name") or "") if target is None else target.name
+        sent = args.get("persona") or {}
+        if target is not None:
+            args = edited(target, args)
         path = self.workspace / "scenarios" / name / "scenario.json"
         try:
             held = json.loads(path.read_text(encoding="utf-8"))
@@ -572,7 +571,7 @@ class HostedChatRuntime:
             except ValueError:  # an unreadable persona is never a safe unattended change
                 return True
         return any(
-            key in persona and persona.get(key) != before.get(key)
+            key in sent and persona.get(key) != before.get(key)
             for key in ("name", "gender", "age_group")
         )
 
