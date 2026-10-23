@@ -141,7 +141,8 @@ what the gates check. Then:
   field that follows from it (setup, ready check, solution, instruction, sub-goals, labels), and
   `submit_scenario` it under the same name, keeping every field the change does not touch. That
   replaces it, keeps its number, and proves it.
-- **Rename one**: `rename_scenario`. Only the name changes; it keeps its number and its run history.
+- **Rename one**: `submit_scenario` it with its `scenario_key` and the new name, every other field
+  unchanged. It keeps its number and its run history.
 - **Add**: `aim_for` the new total first, then write and submit each one. For more than a handful,
   brief `scenario_writer` sub-agents in one message. When the person asks for a level of an axis (no
   background noise, only one kind of caller), pass it in `aim_for`'s `asked_for` so it is not held to
