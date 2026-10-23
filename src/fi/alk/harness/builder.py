@@ -193,12 +193,18 @@ def suite_server(
         schema({"name": str, "new_name": str}, ["name", "new_name"]),
     )
     async def rename_scenario(args: dict[str, Any]) -> dict[str, Any]:
-        name, new = str(args.get("name") or "").strip(), str(args.get("new_name") or "").strip()
+        name, new = (
+            str(args.get("name") or "").strip(),
+            str(args.get("new_name") or "").strip(),
+        )
         if not any(one.name == name for one in kept):
             return _err(f"{name} is not in the suite")
         if not new or any(one.name == new for one in kept):
             return _err(f"{new or 'that name'} is taken or empty; choose another")
-        kept[:] = [one.model_copy(update={"name": new}) if one.name == name else one for one in kept]
+        kept[:] = [
+            one.model_copy(update={"name": new}) if one.name == name else one
+            for one in kept
+        ]
         write_scenarios(kept, out, load_catalogue(out))
         return _ok(f"renamed {name} to {new}; same key, number and history")
 
@@ -328,7 +334,15 @@ def suite_server(
 
     return tool_server(
         name="suite",
-        tools=[drop_scenarios, rename_scenario, prove_scenarios, check_health, impact_of, change_world, declare_tool],
+        tools=[
+            drop_scenarios,
+            rename_scenario,
+            prove_scenarios,
+            check_health,
+            impact_of,
+            change_world,
+            declare_tool,
+        ],
     )
 
 

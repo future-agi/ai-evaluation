@@ -951,12 +951,14 @@ def accept_scenario(
     # The scenario this one replaces: the one whose key it carries, else the one with its name. It
     # keeps that key, so a rename is the same scenario under a new name, not a new one.
     named = str(payload.get("scenario_key") or "").strip()
-    previous = next((one for one in kept if named and one.scenario_key == named), None) or next(
-        (one for one in kept if one.name == scenario.name), None
-    )
+    previous = next(
+        (one for one in kept if named and one.scenario_key == named), None
+    ) or next((one for one in kept if one.name == scenario.name), None)
     if previous is not None and previous.name != scenario.name:
         if any(one.name == scenario.name for one in kept):
-            return _err(f"Not kept. Another scenario is already named {scenario.name}; choose another name.")
+            return _err(
+                f"Not kept. Another scenario is already named {scenario.name}; choose another name."
+            )
         kept[:] = [one for one in kept if one is not previous]
     if previous is not None:
         scenario.scenario_key = previous.scenario_key
@@ -1697,7 +1699,8 @@ def scenario_tools(
         # so the checks below never count it against itself.
         key = str(args.get("scenario_key") or "").strip()
         same = next(
-            (one.name for one in kept if key and one.scenario_key == key), str(args.get("name") or "")
+            (one.name for one in kept if key and one.scenario_key == key),
+            str(args.get("name") or ""),
         )
         # Cheap label checks run before the gates, since proving is expensive.
         strayed = _off_the_grid(args.get("coverage"), target.get("axes"))
@@ -1717,7 +1720,9 @@ def scenario_tools(
             short = _red_team_short(args, target.get("axes"), kept, cap())
             if short:
                 return _refuse(short)
-        twin = _already_in_the_suite({**args, "name": same}, kept, _first_names_on_disk(destination, same))
+        twin = _already_in_the_suite(
+            {**args, "name": same}, kept, _first_names_on_disk(destination, same)
+        )
         if twin:
             return _refuse(twin)
         if cap() and target.get("people") != "alike":

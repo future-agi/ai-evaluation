@@ -2686,10 +2686,15 @@ def test_a_renamed_scenario_keeps_its_key_and_replaces_the_old_one(tmp_path):
     accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
     key = kept[0].scenario_key
     said = accept_scenario(
-        _delta(name="orders-one-big-mac", scenario_key=key), world_root=root, catalogue=catalogue, kept=kept
+        _delta(name="orders-one-big-mac", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
     )
     assert not said.get("is_error"), said
-    assert [(one.name, one.scenario_key) for one in kept] == [("orders-one-big-mac", key)]
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("orders-one-big-mac", key)
+    ]
     assert (root / "scenarios" / "orders-one-big-mac" / "scenario.json").exists()
     assert not (root / "scenarios" / "adds-a-big-mac").exists()
 
@@ -2699,9 +2704,18 @@ def test_an_edit_under_the_same_name_keeps_the_key_it_was_kept_with(tmp_path):
 
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
-    accept_scenario(_delta(scenario_key="kept-key"), world_root=root, catalogue=catalogue, kept=kept)
-    accept_scenario(_delta(instruction="Order one Big Mac, please."), world_root=root, catalogue=catalogue, kept=kept)
-    assert [(one.name, one.scenario_key) for one in kept] == [("adds-a-big-mac", "kept-key")]
+    accept_scenario(
+        _delta(scenario_key="kept-key"), world_root=root, catalogue=catalogue, kept=kept
+    )
+    accept_scenario(
+        _delta(instruction="Order one Big Mac, please."),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
+    )
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("adds-a-big-mac", "kept-key")
+    ]
 
 
 def test_a_rename_onto_another_scenario_s_name_is_refused(tmp_path):
@@ -2710,12 +2724,20 @@ def test_a_rename_onto_another_scenario_s_name_is_refused(tmp_path):
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
     accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
-    accept_scenario(_delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept
+    )
     key = kept[0].scenario_key
     said = accept_scenario(
-        _delta(name="orders-again", scenario_key=key), world_root=root, catalogue=catalogue, kept=kept
+        _delta(name="orders-again", scenario_key=key),
+        world_root=root,
+        catalogue=catalogue,
+        kept=kept,
     )
-    assert said.get("is_error") and "already named orders-again" in said["content"][0]["text"]
+    assert (
+        said.get("is_error")
+        and "already named orders-again" in said["content"][0]["text"]
+    )
     assert sorted(one.name for one in kept) == ["adds-a-big-mac", "orders-again"]
 
 
@@ -7912,13 +7934,25 @@ def test_renaming_through_the_tool_is_not_refused_as_a_duplicate_of_itself(tmp_p
     root, _contract, _catalogue = _built_environment(tmp_path)
     server, kept = scenario_tools(_contract, root, root, wanted=2)
     submit = next(one for one in server.tools if one.name == "submit_scenario")
-    person = {"persona": {"name": "Asha Rao", "personality": "Friendly and cooperative", "communication_style": "Direct and concise", "initial_message": "Hi, I want a Big Mac.", "languages": ["English"]}}
+    person = {
+        "persona": {
+            "name": "Asha Rao",
+            "personality": "Friendly and cooperative",
+            "communication_style": "Direct and concise",
+            "initial_message": "Hi, I want a Big Mac.",
+            "languages": ["English"],
+        }
+    }
     said = asyncio.run(submit.handler(_delta(**person)))
     assert not said.get("is_error"), said
     key = kept[0].scenario_key
-    said = asyncio.run(submit.handler(_delta(name="orders-one-big-mac", scenario_key=key, **person)))
+    said = asyncio.run(
+        submit.handler(_delta(name="orders-one-big-mac", scenario_key=key, **person))
+    )
     assert not said.get("is_error"), said
-    assert [(one.name, one.scenario_key) for one in kept] == [("orders-one-big-mac", key)]
+    assert [(one.name, one.scenario_key) for one in kept] == [
+        ("orders-one-big-mac", key)
+    ]
 
 
 def test_the_builder_renames_a_scenario_keeping_its_key(tmp_path):
@@ -7930,14 +7964,22 @@ def test_the_builder_renames_a_scenario_keeping_its_key(tmp_path):
     root, _contract, catalogue = _built_environment(tmp_path)
     kept = []
     accept_scenario(_delta(), world_root=root, catalogue=catalogue, kept=kept)
-    accept_scenario(_delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept)
+    accept_scenario(
+        _delta(name="orders-again"), world_root=root, catalogue=catalogue, kept=kept
+    )
     key = kept[0].scenario_key
-    rename = next(one for one in suite_server(root, kept).tools if one.name == "rename_scenario")
-    said = asyncio.run(rename.handler({"name": "adds-a-big-mac", "new_name": "orders-one-big-mac"}))
+    rename = next(
+        one for one in suite_server(root, kept).tools if one.name == "rename_scenario"
+    )
+    said = asyncio.run(
+        rename.handler({"name": "adds-a-big-mac", "new_name": "orders-one-big-mac"})
+    )
     assert not said.get("is_error"), said
     on_disk = {one.name: one.scenario_key for one in load_scenarios(root)}
     assert on_disk == {"orders-one-big-mac": key, "orders-again": kept[1].scenario_key}
-    taken = asyncio.run(rename.handler({"name": "orders-one-big-mac", "new_name": "orders-again"}))
+    taken = asyncio.run(
+        rename.handler({"name": "orders-one-big-mac", "new_name": "orders-again"})
+    )
     assert taken.get("is_error")
 
 
