@@ -1445,7 +1445,8 @@ def scenario_tools(
 
     @tool(
         "submit_scenario",
-        "Keep one scenario. It is put through three gates before it is kept, and told which one "
+        "Keep one new scenario. To change one already kept, use `edit_scenario` with only the "
+        "fields that change. It is put through three gates before it is kept, and told which one "
         "failed if any does:\n"
         "  1. ready     — the world is restored, setup_code runs, then ready_code. The world "
         "must end up holding what this scenario presumes.\n"
