@@ -6342,6 +6342,7 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
 
 def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_instruction(monkeypatch):
     import asyncio
+    from types import SimpleNamespace
 
     from fi.alk.harness.contract import AgentContract
     from fi.alk.harness.hosted_scheduler import CallAborted
@@ -6351,42 +6352,24 @@ def test_a_caller_that_gives_no_usable_opening_aborts_instead_of_sending_its_ins
     openings = iter(["", "Sure! Let me look that up for you."])
     sent = []
 
-    class Customer:
-        spent_usd = 0.0
-        simulator_tokens = (0, 0)
+    async def noop(*_args):
+        return None
 
-        def __init__(self, *_args, **_kwargs):
-            pass
+    async def opening(_prompt):
+        return SimpleNamespace(text=next(openings))
 
-        async def __aenter__(self):
-            return self
+    customer = SimpleNamespace(__aenter__=noop, __aexit__=noop, say=opening, spent_usd=0.0, simulator_tokens=(0, 0))
+    monkeypatch.setattr(conversation, "Stage", lambda *_a, **_k: customer)
 
-        async def __aexit__(self, *_args):
-            pass
+    async def say(text):
+        sent.append(text)
 
-        async def say(self, _prompt):
-            return type("Turn", (), {"text": next(openings)})()
-
-    class Target:
-        spent_usd = 0.0
-
-        async def open(self):
-            pass
-
-        async def say(self, text):
-            sent.append(text)
-            return "ok"
-
-        async def close(self):
-            pass
-
-    monkeypatch.setattr(conversation, "Stage", Customer)
+    target = SimpleNamespace(open=noop, say=say, close=noop, spent_usd=0.0)
     scenario = Scenario(name="s", instruction="You contact support. You open by asking about your order.")
     with pytest.raises(CallAborted) as aborted:
-        asyncio.run(conversation.converse(Target(), scenario, AgentContract()))
+        asyncio.run(conversation.converse(target, scenario, AgentContract()))
     assert aborted.value.code == "simulator_stalled"
     assert sent == []
-
 
 def test_a_refusal_scenario_is_not_vacuous_because_its_evidence_is_what_was_said():
     """Where the right behaviour is to decline and touch nothing, every check about the world holds
