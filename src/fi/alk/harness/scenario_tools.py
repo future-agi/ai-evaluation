@@ -11,6 +11,7 @@ scenario that clears all three is written out as its own folder of runnable file
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import logging
@@ -145,6 +146,17 @@ def _is_spoken(contract: Any) -> bool:
     return str(getattr(contract, "modality", "") or "").strip().lower() != "chat"
 
 
+def attached_tools(world_root: Path) -> frozenset[str]:
+    """The attached MCP servers' tools a world offers as `<id>__<tool>`: only the PostgreSQL proof
+    runs them, so the SQLite gates check readiness and leave the rest to it."""
+    from .releases import ReleaseError, attached_tool_names
+
+    try:
+        return frozenset(attached_tool_names(Path(world_root)))
+    except ReleaseError:
+        return frozenset()
+
+
 def _no_longer_hold(
     destination: Path, catalogue: Catalogue, names: list[str], world_root: Path
 ) -> list[tuple[str, str]]:
@@ -157,7 +169,9 @@ def _no_longer_hold(
         if scenario.name not in wanted:
             continue
         try:
-            proof = prove(scenario, catalogue, world_root)
+            proof = prove(
+                scenario, catalogue, world_root, postgres_only=attached_tools(world_root)
+            )
         except Exception as exc:  # noqa: BLE001 - a scenario that cannot be proved is the finding
             failed.append((scenario.name, type(exc).__name__))
             continue
@@ -768,8 +782,11 @@ def _identifiers_the_instruction_invents(scenario: Scenario, trial: Any) -> list
     ]
 
 
-def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[str]:
-    """Solution steps that call a tool, argument or declared value the agent's contract does not have."""
+def _steps_the_contract_refuses(
+    scenario: Scenario, world_root: Path, attached: frozenset[str] = frozenset()
+) -> list[str]:
+    """Solution steps that call a tool, argument or declared value the agent's contract does not
+    have. An attached server's tool is the world's, not the contract's."""
     try:
         contract = json.loads((Path(world_root) / "contract.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -779,6 +796,8 @@ def _steps_the_contract_refuses(scenario: Scenario, world_root: Path) -> list[st
         return []
     wrong = []
     for step in scenario.solution:
+        if step.tool in attached:
+            continue
         spec = tools.get(step.tool)
         if spec is None:
             wrong.append(f"{step.tool} is not one of the agent's tools")
@@ -872,6 +891,38 @@ def _credentials_the_world_lacks(scenario: Scenario, trial: Any) -> list[str]:
     ]
 
 
+async def _attached_unproved(
+    payload: dict[str, Any],
+    attached: frozenset[str],
+    catalogue: Catalogue,
+    postgres_proof: Callable[[Scenario, Catalogue], str] | None,
+) -> str:
+    """Why a scenario whose solution calls an attached tool does not hold on PostgreSQL, "" when
+    it does or calls none. Off the event loop: it starts servers and queries a database."""
+    calling = sorted(
+        {
+            str(step.get("tool"))
+            for step in payload.get("solution") or []
+            if isinstance(step, dict) and step.get("tool") in attached
+        }
+    )
+    if not calling:
+        return ""
+    if postgres_proof is None:
+        return (
+            f"Not kept. Its solution calls {', '.join(calling)}, which only a PostgreSQL proof "
+            "runs, and this session has none."
+        )
+    try:
+        scenario = Scenario.model_validate(payload)
+    except Exception:  # noqa: BLE001 - the validator reports a malformed scenario
+        return ""
+    said = await asyncio.to_thread(postgres_proof, scenario, catalogue)
+    return (
+        f"Not kept. On PostgreSQL, where {', '.join(calling)} run: {said}" if said else ""
+    )
+
+
 def accept_scenario(
     payload: dict[str, Any],
     *,
@@ -886,8 +937,12 @@ def accept_scenario(
     vocabulary: list[str] | None = None,
     spoken: bool = True,
     instructions: str = "",
+    attached: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Validate one scenario, then prove it. A plain function so both halves are testable.
+
+    ``attached`` names the attached servers' tools: a scenario calling one is checked here for
+    readiness only, because its caller proves it on PostgreSQL before keeping it.
 
     ``persist`` is off for a writer that shares the destination with siblings: writing the suite
     removes every folder not in the writer's own list, so persisting here would delete whatever
@@ -923,7 +978,7 @@ def accept_scenario(
         problems.extend(_credentials_the_world_lacks(scenario, trial))
         problems.extend(_identifiers_the_instruction_invents(scenario, trial))
         problems.extend(_fixed_sources_that_do_not_hold(scenario, trial, instructions))
-        problems.extend(_steps_the_contract_refuses(scenario, world_root))
+        problems.extend(_steps_the_contract_refuses(scenario, world_root, attached))
         problems.extend(_overlay_asserts_nothing(scenario, catalogue))
         problems.extend(_shared_check_bound_to_one_task(scenario, catalogue, kept))
     finally:
@@ -934,7 +989,7 @@ def accept_scenario(
             "Not kept. Fix these and submit again:\n  - " + "\n  - ".join(problems)
         )
 
-    proof = prove(scenario, catalogue, world_root)
+    proof = prove(scenario, catalogue, world_root, postgres_only=attached)
     if not proof.holds:
         said = f"Not kept. {proof.why()}"
         # Code written against the wrong collection shape is the commonest way setup, ready and a
@@ -999,6 +1054,9 @@ def accept_scenario(
         "The world is ready for it, and its sub-goals will be judged from the call: the "
         "recording, the transcript, every action with its arguments and the records left."
         if proof.judged_only
+        else "The world is ready for it, and on PostgreSQL, where its attached tools run, the "
+        "reference solution passes its checks and they fail when nothing is done."
+        if proof.postgres_only
         else "All three gates pass: the world is ready for it, the reference solution passes "
         "its checks, and those checks fail when nothing is done."
     )
@@ -1125,8 +1183,13 @@ def scenario_tools(
     rename_on_collision: bool | None = None,
     can_grow: bool = False,
     scenario_problem: Callable[[dict[str, Any]], str] | None = None,
+    postgres_proof: Callable[[Scenario, Catalogue], str] | None = None,
 ) -> tuple[Any, list[Scenario]]:
     """A server for writing scenarios against one built environment.
+
+    ``postgres_proof`` says why a scenario does not hold on PostgreSQL ("" when it does). A
+    scenario whose solution calls an attached server's tool is kept only when it holds there,
+    since SQLite cannot run those tools; without it such a scenario is refused.
 
     ``can_save`` is what makes several writers safe at once. Saving rewrites the index and
     removes any folder not in the saver's own list, so two writers saving concurrently delete
@@ -1158,6 +1221,7 @@ def scenario_tools(
     refused: dict[tuple[str, int], int] = {}
     external_runtime_target = _is_external_runtime(world_root)
     tool_free_target = not bool(contract.tools) or external_runtime_target
+    attached = attached_tools(world_root)
 
     # ``branch`` is required because coverage is counted on the use case and branch pair, and the
     # merge drops a repeat of that pair. A writer that leaves it out gives every scenario in its
@@ -1729,6 +1793,8 @@ def scenario_tools(
                     "for in output tokens. Submitting again under "
                     "an existing name is the only submission left to you, for fixing one of yours."
                 )
+        if said := await _attached_unproved(args, attached, catalogue, postgres_proof):
+            return _refuse(said)
         result = accept_scenario(
             args,
             world_root=world_root,
@@ -1742,6 +1808,7 @@ def scenario_tools(
             vocabulary=target.get("keywords"),
             spoken=_is_spoken(contract),
             instructions="\n".join([contract.system_prompt_excerpt, *contract.hard_constraints]),
+            attached=attached,
         )
         if not result.get("is_error"):
             exploration["since_submit"] = 0
@@ -2327,6 +2394,51 @@ def _fields_of(world: Any, collection: str) -> list[str]:
     return [str(row[1]) for row in rows]
 
 
+def _attached_summary(world_root: Path) -> list[str]:
+    """The attached servers' tools, what they reach and what they take. Nothing here can call
+    them (try_calls included); a scenario using one is proved on PostgreSQL when submitted."""
+    from .mcp_servers import REGISTRY
+    from .releases import ATTACHED, ReleaseError, load_servers
+
+    try:
+        servers = load_servers(Path(world_root))
+    except ReleaseError:
+        return []
+    if not servers:
+        return []
+    lines = [
+        (
+            "\nATTACHED SERVERS (the agent calls these tools by these names; try_calls cannot, "
+            "and a scenario whose solution calls one is proved on PostgreSQL when you submit it):"
+        )
+    ]
+    for server in servers:
+        registered = REGISTRY.get(server.server)
+        reach = (
+            f"tables {', '.join(server.attach.database_reader.tables)}"
+            if server.attach.database_reader is not None
+            else ""
+        )
+        if server.attach.directory is not None:
+            folder = Path(world_root) / server.attach.directory
+            files = sorted(
+                str(path.relative_to(folder))
+                for path in folder.rglob("*")
+                if path.is_file()
+            ) if folder.is_dir() else []
+            reach = f"the folder {server.attach.directory} ({', '.join(files[:30]) or 'empty'})"
+        lines.append(
+            f"  {', '.join(server.tool_names())}: {reach}."
+            + (f" {registered.about}." if registered is not None else "")
+        )
+    lines.append(
+        f"  Read what they return from the release's own files ({ATTACHED}/, the world's rows): a "
+        "check reads it from the call's result (`call.result`), and an attached call never "
+        "changes the world."
+    )
+    return lines
+
+
 def world_summary(world_root: Path) -> str:
     """What is in the built environment, for grounding the writer before it asks."""
     world = restore(world_root)
@@ -2349,6 +2461,7 @@ def world_summary(world_root: Path) -> str:
                 "\nSUB-GOALS already defined (reuse these, do not restate them):"
             )
             lines += [f"  {one.name}: {one.what}" for one in catalogue.sub_goals]
+        lines += _attached_summary(world_root)
         external = _is_external_runtime(world_root)
         prefix = "THE BUILT WORLD (restored fresh for every scenario):\n"
         if external:

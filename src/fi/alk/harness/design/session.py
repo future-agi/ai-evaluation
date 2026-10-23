@@ -30,6 +30,8 @@ from ..session import Stage
 from ..world.snapshot import restore
 from ..world.tools import WORLD_SERVER, world_tools
 from .contract import design_contract
+from .documents import DOCUMENTS_SERVER, DocumentTools, parsed_root
+from .proof import ViewProof
 from .tools import DESIGN_SERVER, Approve, DesignTools
 from .workspace import load_design
 
@@ -63,18 +65,23 @@ def open_for_designing(
     approve: Approve,
     postgres_dsn: Callable[[], str],
     output: Path,
+    view_proof: ViewProof,
     ask: Callable[..., Any] | None = None,
     hosted_prompt: str = "",
 ) -> tuple[Stage, DesignTools]:
+    """The design's session for its current phase. `view_proof` is the caller's, kept across
+    reopenings and closed when the design ends."""
     design = load_design(workspace)
     contract = design_contract(workspace, design)
     options: dict[str, Any] = {
         "approve": approve,
         "postgres_dsn": postgres_dsn,
         "output": output,
+        "view_proof": view_proof,
     }
     if design.stage == "suite":
         tools = DesignTools(workspace, restore(workspace), contract, **options)
+        documents = _documents(tools)
         stage = open_builder(
             contract,
             out=workspace,
@@ -83,16 +90,18 @@ def open_for_designing(
             hosted_prompt=hosted_prompt,
             brief=f"## This design\n\n{tools.brief()}",
             sealed=False,
-            more_servers={DESIGN_SERVER: tools.server()},
+            more_servers={DESIGN_SERVER: tools.server(), **documents},
             files_note=_FILES.format(out=workspace),
             without=FIXED_ENVIRONMENT_TOOLS,
             skill=DESIGNER,
+            postgres_proof=view_proof.scenario,
         )
         return stage, tools
     world_server, world = world_tools(
         contract, workspace, implementation=WORLD_IMPLEMENTATION
     )
     tools = DesignTools(workspace, world, contract, **options)
+    documents = _documents(tools)
     spec = SessionSpec(
         system_prompt=(
             load_skill(DESIGNER)
@@ -107,6 +116,7 @@ def open_for_designing(
             WORLD_SERVER: tools.guard_world(world_server, WORLD_LEFT_OUT),
             DESIGN_SERVER: tools.server(),
             KNOWLEDGE_SERVER: knowledge_server(contract, workspace),
+            **documents,
         },
         builtins=(*FILE_TOOLS, ASK_TOOL) if ask is not None else FILE_TOOLS,
         cwd=str(workspace),
@@ -115,6 +125,15 @@ def open_for_designing(
         ask=ask,
     )
     return Stage(spec, name=BUILDER), tools
+
+
+def _documents(tools: DesignTools) -> dict[str, Any]:
+    """The document tools, when the person uploaded any."""
+    if not tools.design().documents:
+        return {}
+    return {
+        DOCUMENTS_SERVER: DocumentTools(tools, parsed_root(tools.workspace)).server()
+    }
 
 
 def unfinished(stage: str) -> str:

@@ -161,9 +161,22 @@ def attached_tool_names(root: Path) -> set[str]:
 
 
 def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
+    if problems := server_problems(
+        load_servers(root), Path(root), tools, Path(root) / WORLD / "world.sqlite"
+    ):
+        raise ReleaseError("environment_servers_invalid", "; ".join(problems))
+
+
+def server_problems(
+    servers: Sequence[AttachedServer],
+    root: Path,
+    tools: Sequence[ToolDefinition],
+    world_database: Path,
+) -> list[str]:
+    """What is wrong with attaching `servers` to the environment at `root` whose own tools are
+    `tools` and whose world is `world_database`, one line each."""
     from .mcp_servers import DATABASE_READER, DIRECTORY, REGISTRY
 
-    servers = load_servers(root)
     problems: list[str] = []
     if repeated := sorted(
         name
@@ -172,7 +185,7 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
     ):
         problems.append(f"duplicate server ids: {repeated}")
     native = {tool.name for tool in tools}
-    world_tables = set(_parent_tables(Path(root) / WORLD / "world.sqlite"))
+    world_tables = set(_parent_tables(world_database))
     for server in servers:
         registered = REGISTRY.get(server.server)
         if registered is None:
@@ -181,6 +194,11 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
                 f"known: {', '.join(sorted(REGISTRY))}"
             )
             continue
+        if writes := sorted(set(server.tools) - registered.attachable):
+            problems.append(
+                f"{server.id}: not attachable (only read-only tools are): {writes}; "
+                f"attachable: {sorted(registered.attachable)}"
+            )
         if clashes := sorted(set(server.tool_names()) & native):
             problems.append(f"{server.id}: tool names clash with {clashes}")
         # The agent sees `<id>__<tool>` as a tool name; one it cannot be offered as fails only
@@ -216,8 +234,7 @@ def _check_servers(root: Path, tools: Sequence[ToolDefinition]) -> None:
                 )
         if DIRECTORY in registered.attach and directory is None:
             problems.append(f"{server.id}: {server.server} needs a directory")
-    if problems:
-        raise ReleaseError("environment_servers_invalid", "; ".join(problems))
+    return problems
 
 
 def reader_grants_sql(environment_root: Path) -> str:
@@ -1326,13 +1343,34 @@ class PostgresProof:
             f'DROP ROLE IF EXISTS "{self._target}_reader"',
         )
 
-    def checks(self, scenario: Any) -> list[tuple[str, str]]:
+    def checks(self, scenario: Any, catalogue: Any = None) -> list[tuple[str, str]]:
         return [
             (name, goal.check)
             for name in scenario.sub_goals
-            if (goal := self._catalogue.named(name)) is not None
+            if (goal := (self._catalogue if catalogue is None else catalogue).named(name))
+            is not None
             and goal.deterministic()
         ]
+
+    def attached_definitions(self) -> list[ToolDefinition]:
+        """The attached servers' tools as a fresh world offers them, read from each server's own
+        `tools/list`; raises `ToolError` when a server does not offer a tool it lists."""
+        from .world_tools import attach_servers
+
+        self._admin(
+            f'DROP DATABASE IF EXISTS "{self._target}" WITH (FORCE)',
+            f'CREATE DATABASE "{self._target}" TEMPLATE "{self._base}"',
+        )
+        attached = attach_servers(
+            self._servers, self._dsn(self._target), cwd=self._environment_root
+        )
+        if attached is None:
+            return []
+        try:
+            attached.start()
+            return list(attached.definitions)
+        finally:
+            attached.close()
 
     def attempt(
         self,
@@ -1341,9 +1379,11 @@ class PostgresProof:
         binding: AgentBindingV1 | None = None,
         *,
         observed: Sequence[Any] | None = None,
+        catalogue: Any = None,
     ) -> Attempt:
         """`calls` are `(tool, arguments)` in `binding`'s vocabulary, played in order. With
-        `observed`, nothing is played: the checks see an untouched world and those calls."""
+        `observed`, nothing is played: the checks see an untouched world and those calls.
+        `catalogue` grades with sub-goals not yet written to the suite."""
         import random
 
         from .checks import run_check
@@ -1413,13 +1453,85 @@ class PostgresProof:
             faults,
             [
                 (name, run_check(source, world, played, name=name))
-                for name, source in self.checks(scenario)
+                for name, source in self.checks(scenario, catalogue)
             ]
             if ready.ok
             else [],
             outcomes,
             played,
         )
+
+
+def postgres_verdict(
+    proof: PostgresProof, scenario: Any, *, catalogue: Any = None
+) -> tuple[dict[str, Any], str]:
+    """One scenario on PostgreSQL, canonically: it must hold with its reference solution, and fail
+    when nothing is done, when every call it made crashed, and when its state-changing calls
+    succeed without their effect. Its proof record, and why it does not hold ("" when it does)."""
+    from .prove import crashed, without_effect
+
+    state_changing = frozenset(
+        tool.name for tool in proof.environment_tools if tool.mutates_state
+    )
+    solved = proof.attempt(
+        scenario,
+        [(step.tool, dict(step.arguments)) for step in scenario.solution],
+        catalogue=catalogue,
+    )
+    untouched = proof.attempt(scenario, [], catalogue=catalogue)
+    weak = [name for name, outcome in untouched.checks if outcome.held]
+    # As on SQLite: a check that credits an attempted call without its effect, whether the call
+    # crashed or succeeded.
+    credited = [
+        name
+        for name, outcome in (
+            proof.attempt(
+                scenario, [], observed=crashed(solved.played), catalogue=catalogue
+            ).checks
+            if solved.played
+            else []
+        )
+        if outcome.held and name not in weak
+    ]
+    trusted = [
+        name
+        for name, outcome in (
+            proof.attempt(
+                scenario,
+                [],
+                observed=without_effect(solved.played, state_changing),
+                catalogue=catalogue,
+            ).checks
+            if solved.holds
+            and any(call.ok and call.name in state_changing for call in solved.played)
+            else []
+        )
+        if outcome.held and name not in weak and name not in credited
+    ]
+    holds = solved.holds and not weak and not credited and not trusted
+    record = {
+        "holds": holds,
+        "ready": solved.ready.ok,
+        "faults": solved.faults,
+        "failed": solved.failed,
+        "weak": weak,
+    }
+    if holds:
+        return record, ""
+    return record, (
+        solved.ready.said
+        if not solved.ready.ok
+        else "; ".join(
+            [
+                *solved.faults,
+                *solved.failed,
+                *(f"{name} holds untouched" for name in weak),
+                *(f"{name} holds when every call crashed" for name in credited),
+                *(f"{name} holds when no state-changing call took effect" for name in trusted),
+            ]
+        )
+        or "no deterministic check"
+    )
 
 
 def _prove_on_postgres(
@@ -1429,73 +1541,13 @@ def _prove_on_postgres(
     loaded: Sequence[tuple[SuiteScenario, Any]],
     admin_dsn: str,
 ) -> dict[str, Any]:
-    """Every scenario again, on PostgreSQL (`PostgresProof`), canonically: it must hold with its
-    reference solution, and fail when nothing is done, when every call it made crashed, and when
-    its state-changing calls succeed without their effect."""
-    from .prove import crashed, without_effect
-
+    """Every scenario again, on PostgreSQL (`postgres_verdict`)."""
     results: dict[str, Any] = {}
     failures: list[str] = []
     with PostgresProof(root, environment_root, profile, admin_dsn) as proof:
-        state_changing = frozenset(
-            tool.name for tool in proof.environment_tools if tool.mutates_state
-        )
         for entry, scenario in loaded:
-            solved = proof.attempt(
-                scenario,
-                [(step.tool, dict(step.arguments)) for step in scenario.solution],
-            )
-            untouched = proof.attempt(scenario, [])
-            weak = [name for name, outcome in untouched.checks if outcome.held]
-            # As on SQLite: a check that credits an attempted call without its effect, whether
-            # the call crashed or succeeded.
-            credited = [
-                name
-                for name, outcome in (
-                    proof.attempt(scenario, [], observed=crashed(solved.played)).checks
-                    if solved.played
-                    else []
-                )
-                if outcome.held and name not in weak
-            ]
-            trusted = [
-                name
-                for name, outcome in (
-                    proof.attempt(
-                        scenario, [], observed=without_effect(solved.played, state_changing)
-                    ).checks
-                    if solved.holds
-                    and any(call.ok and call.name in state_changing for call in solved.played)
-                    else []
-                )
-                if outcome.held and name not in weak and name not in credited
-            ]
-            holds = solved.holds and not weak and not credited and not trusted
-            results[entry.key] = {
-                "holds": holds,
-                "ready": solved.ready.ok,
-                "faults": solved.faults,
-                "failed": solved.failed,
-                "weak": weak,
-            }
-            if not holds:
-                reason = (
-                    solved.ready.said
-                    if not solved.ready.ok
-                    else "; ".join(
-                        [
-                            *solved.faults,
-                            *solved.failed,
-                            *(f"{name} holds untouched" for name in weak),
-                            *(f"{name} holds when every call crashed" for name in credited),
-                            *(
-                                f"{name} holds when no state-changing call took effect"
-                                for name in trusted
-                            ),
-                        ]
-                    )
-                    or "no deterministic check"
-                )
+            results[entry.key], reason = postgres_verdict(proof, scenario)
+            if reason:
                 failures.append(f"{entry.key}: {reason}")
     if failures:
         raise ReleaseError(

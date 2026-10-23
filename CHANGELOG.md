@@ -133,6 +133,26 @@ Post-rc.1 increments on the release branch. Each one adds gates on top of the
   agent rule and cover exactly the approved use cases. An unanswered question
   parks the design (hosted: the job ends `design_waiting` with the question
   checkpointed), and continuing asks it again and resumes.
+- Designs attach MCP servers: `attach_server` validates a `sql` or `filesystem`
+  server against the registry, the world's tables and the folder, starts it
+  against the design's world and keeps only read-only tools; `write_attached_file`
+  writes the documents a filesystem server reads. Every environment's attached
+  tools must be read-only (each registered server lists its attachable tools).
+  Attached tool names reach the scenario writers (the world summary lists them
+  with what they take), the health check and the readiness gates, and a
+  scenario whose solution calls one is proved on PostgreSQL when it is
+  submitted, off the event loop, against a template database kept per design
+  view (`design/proof.py`, sharing the seal's `postgres_verdict`).
+- Design documents (`--documents`; hosted under `/work/documents`): each upload
+  is parsed in a child process with an allow-listed environment and CPU, memory
+  and output limits (PDF with pypdf, XLSX with openpyxl, DOCX with the standard
+  library, CSV, TSV, JSON, JSONL, text; oversized zips refused), into text and
+  tables the builder reads with `list_documents` and `read_document`.
+  `import_rows` inserts a table into the world with each value coerced to its
+  column's declared type, and `attach_document` writes a document as markdown
+  under `attached/`; both can replace personal details with made-up ones, and
+  both are recorded with their source's sha256 in the sealed environment's
+  `metadata.provenance`. New `documents` extra, installed in the hosted image.
 
 ## v1.0.0-rc.1 — 2026-06-10
 

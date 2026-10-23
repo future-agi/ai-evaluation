@@ -22,23 +22,34 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..releases import (
+    _DIGEST_PATTERN,
     _SLUG_PATTERN,
     RELEASES_SUITE,
-    DigestRef,
     ReleaseError,
     environment_directory,
 )
+from .documents import parse_documents, parsed_root
 from .tools import FINISHED_MARKER, RESULT
 from .workspace import open_design
 
 OUTPUT = "design-output"
 
 
-class DesignTemplateRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _Release(BaseModel):
+    # The platform also names the release and its archive; the digest is what is unpacked.
+    model_config = ConfigDict(extra="ignore")
 
-    environment: DigestRef
-    suite: DigestRef
+    digest: str = Field(pattern=_DIGEST_PATTERN)
+
+
+class DesignTemplateRef(BaseModel):
+    """The template as the platform staged it: its environment chain (a root release, so one)
+    and the suite proved against it, under `--releases`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    environment: list[_Release] = Field(min_length=1, max_length=1)
+    suite: _Release
 
 
 class DesignJob(BaseModel):
@@ -80,19 +91,23 @@ def run_hosted(args: argparse.Namespace) -> int:
     releases = Path(args.releases)
     template = (
         (
-            environment_directory(releases, job.template.environment.digest),
+            environment_directory(releases, job.template.environment[0].digest),
             releases / RELEASES_SUITE,
         )
         if job.template is not None
         else None
     )
     try:
+        # Parsed before the design is written: the chat opens once design.json exists. A resumed
+        # design keeps its records, and its documents are parsed again for this sandbox.
+        documents = parse_documents(Path(args.documents), parsed_root(workspace))
         open_design(
             workspace,
             name=job.name,
             requirements=job.requirements,
             modality=job.modality,
             template=template,
+            documents=documents,
         )
     except ReleaseError as exc:
         return failed(output, workspace, exc.code, exc.detail[:600])

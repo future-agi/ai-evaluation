@@ -9,6 +9,7 @@ changes the environment only through the tools that prove each change.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -27,7 +28,13 @@ from .backends import (
 from .config import SKILLS_ROOT, chosen_model, discovered_skills, load_skill
 from .contract import AgentContract
 from .scenario import voicemail_enabled
-from .scenario_tools import SCENARIO_SERVER, load_scenarios, scenario_tools, world_summary
+from .scenario_tools import (
+    SCENARIO_SERVER,
+    attached_tools,
+    load_scenarios,
+    scenario_tools,
+    world_summary,
+)
 from .scenarios import writer_worker
 from .session import Stage
 from .tools import schema
@@ -163,8 +170,10 @@ def suite_server(
     contract: AgentContract | None = None,
     source_root: Path | None = None,
     sealed: bool = True,
+    postgres_proof: Callable[[Any, Any], str] | None = None,
 ) -> ToolServer:
-    """Whole-suite operations the single-scenario tools would take one call per scenario to do."""
+    """Whole-suite operations the single-scenario tools would take one call per scenario to do.
+    ``postgres_proof`` proves the scenarios that call attached servers' tools, as submitting does."""
     from .catalogue import load_catalogue
     from .prove import prove
     from .scenario_tools import write_scenarios
@@ -207,7 +216,17 @@ def suite_server(
             if scenario is None:
                 lines.append(f"{name}: not in the suite")
                 continue
-            proof = prove(scenario, catalogue, out)
+            proof = prove(scenario, catalogue, out, postgres_only=attached_tools(out))
+            if proof.postgres_only and proof.holds:
+                said = (
+                    await asyncio.to_thread(postgres_proof, scenario, catalogue)
+                    if postgres_proof is not None
+                    else "no PostgreSQL proof in this session"
+                )
+                lines.append(
+                    f"{name}: {'holds on PostgreSQL' if not said else 'does not hold on PostgreSQL. ' + said}"
+                )
+                continue
             gates = ", ".join(f"{gate} {'yes' if held else 'no'}" for gate, held in proof.gates().items())
             lines.append(
                 f"{name}: {'holds' if proof.holds else 'does not hold'} ({gates})"
@@ -408,7 +427,8 @@ def suite_health(
     problems: list[str] = []
     catalogue = load_catalogue(out)
     defined = {one.name for one in catalogue.sub_goals}
-    tools = contract.tool_names() if contract is not None else set()
+    attached = attached_tools(out)
+    tools = (contract.tool_names() | attached) if contract is not None else set()
     for scenario in kept:
         missing = [goal for goal in scenario.sub_goals if goal not in defined]
         if missing:
@@ -454,7 +474,7 @@ def suite_health(
         from .prove import prove
 
         for scenario in kept:
-            proof = prove(scenario, catalogue, out)
+            proof = prove(scenario, catalogue, out, postgres_only=attached)
             if not proof.holds:
                 problems.append(f"{scenario.name}: proof no longer holds. {proof.why()}"[:600])
     return problems
@@ -684,11 +704,13 @@ def open_builder(
     files_note: str = "",
     without: frozenset[str] = frozenset(),
     skill: str = BUILDER,
+    postgres_proof: Callable[[Any, Any], str] | None = None,
 ) -> Stage:
     """The one session that owns an environment once it has a world: every tool, every skill.
     ``sealed`` is False while the environment is still being built and has no sealed bundle yet.
     ``without`` names tools this session must not have; ``files_note`` replaces the file listing;
-    ``skill`` is the session's own method (a design's, in place of the builder's)."""
+    ``skill`` is the session's own method (a design's, in place of the builder's);
+    ``postgres_proof`` proves scenarios that call attached servers' tools."""
     existing = load_scenarios(out)
     server, kept = scenario_tools(
         contract,
@@ -697,11 +719,14 @@ def open_builder(
         wanted=max(len(existing), 1),
         can_grow=True,
         scenario_problem=scenario_problem,
+        postgres_proof=postgres_proof,
     )
     servers: dict[str, ToolServer] = {
         SCENARIO_SERVER: server,
         KNOWLEDGE_SERVER: knowledge_server(contract, out),
-        "suite": suite_server(out, kept, contract, source_root, sealed=sealed),
+        "suite": suite_server(
+            out, kept, contract, source_root, sealed=sealed, postgres_proof=postgres_proof
+        ),
     }
     if platform is not None:
         servers[platform.name] = platform

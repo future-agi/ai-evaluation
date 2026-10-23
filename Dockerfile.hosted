@@ -108,6 +108,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     export UV_LINK_MODE=copy \
     && uv export --frozen --no-dev --no-emit-project \
       --extra livekit --extra harness-ui --extra harness-stores --extra hosted-tracing \
+      --extra documents \
       --output-file /tmp/alk-requirements.txt \
     && uv pip install --python /opt/alk-venv/bin/python -r /tmp/alk-requirements.txt \
     && uv pip install --python /opt/alk-venv/bin/python --no-deps 'traceai-google-adk==0.1.5' \

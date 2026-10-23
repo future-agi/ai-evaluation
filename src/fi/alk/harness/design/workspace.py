@@ -90,6 +90,37 @@ class Proposal(BaseModel):
     use_cases: list[str] = Field(min_length=1)
 
 
+class DocumentRecord(BaseModel):
+    """One uploaded document as it was parsed: its parts (text or table) are under the parsed
+    documents' folder, named `name`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    file: str
+    sha256: str
+    size: int
+    kind: str = ""
+    parts: list[dict[str, JsonValue]] = Field(default_factory=list)
+    # Why it could not be read; a document with an error has no parts.
+    error: str = ""
+
+
+class Provenance(BaseModel):
+    """Where a world table's imported rows or an attached file came from."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # `table:<name>`, or the attached file's path under `attached/`.
+    target: str
+    document: str
+    part: str = ""
+    sha256: str
+    rows: int | None = None
+    # Personal details replaced with made-up ones, at the person's word.
+    replaced: int = 0
+
+
 class Design(BaseModel):
     """`design.json`: what the design is called, what it started from, and how far it got."""
 
@@ -114,6 +145,8 @@ class Design(BaseModel):
     # interview: nothing may be built; world: approved, the world is being built; suite: the
     # world is saved and the scenarios are being written.
     stage: Literal["interview", "world", "suite"] = "interview"
+    documents: list[DocumentRecord] = Field(default_factory=list)
+    provenance: list[Provenance] = Field(default_factory=list)
 
 
 def load_design(workspace: str | Path) -> Design:
@@ -142,15 +175,21 @@ def open_design(
     requirements: str = "",
     modality: str = "chat",
     template: tuple[Path, Path] | None = None,
+    documents: list[DocumentRecord] | None = None,
 ) -> Design:
     """The workspace's design: an empty one, or a root template's environment and suite unpacked
-    into it. `template` is `(environment_root, suite_root)`. A workspace that already holds a
-    design keeps it."""
+    into it. `template` is `(environment_root, suite_root)`; `documents` are the person's uploads
+    as parsed. A workspace that already holds a design keeps it."""
     workspace = Path(workspace)
     if (workspace / DESIGN).is_file():
         return load_design(workspace)
     try:
-        design = Design(name=name, requirements=requirements, modality=modality)
+        design = Design(
+            name=name,
+            requirements=requirements,
+            modality=modality,
+            documents=documents or [],
+        )
     except ValidationError as exc:
         raise ReleaseError("design_invalid", str(exc)) from exc
     workspace.mkdir(parents=True, exist_ok=True)
@@ -350,6 +389,22 @@ def _design_suite_problems(
     return problems
 
 
+def _provenance(design: Design, environment_root: Path) -> dict[str, JsonValue] | None:
+    """What the sealed environment's imported tables and attached files came from, for the
+    ones it still has."""
+    tables = set(_rows(environment_root / WORLD / DATABASE))
+    kept = [
+        entry.model_dump(mode="json", exclude_none=True)
+        for entry in design.provenance
+        if (
+            entry.target.removeprefix("table:") in tables
+            if entry.target.startswith("table:")
+            else (environment_root / entry.target).is_file()
+        )
+    ]
+    return {"provenance": kept} if kept else None
+
+
 def seal_design(
     workspace: str | Path, out: str | Path, *, postgres_dsn: str
 ) -> tuple[EnvironmentReleaseV1, SuiteReleaseV1]:
@@ -379,6 +434,7 @@ def seal_design(
             derived_from=f"release:{design.template.environment.digest}"
             if design.template
             else None,
+            metadata=_provenance(design, environment_root),
         )
         if drift := check_file_drift(suite_root, load_catalogue(suite_root)):
             raise ReleaseError("design_check_files_invalid", "; ".join(drift))

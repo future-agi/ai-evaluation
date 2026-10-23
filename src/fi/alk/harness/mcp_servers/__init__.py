@@ -26,6 +26,12 @@ INSTALLED = Path(os.environ.get("ALK_MCP_SERVERS_ROOT", "/opt/mcp-servers"))
 class RegisteredServer:
     argv: tuple[str, ...]
     attach: frozenset[str]
+    # What its tools take and return, for the scenario writers, who cannot call them: pinned to
+    # the version shipped here, like `argv`.
+    about: str
+    # The tools an environment may attach: read-only ones, because the world's checks and proofs
+    # treat an attached call as changing nothing.
+    attachable: frozenset[str]
 
 
 REGISTRY = {
@@ -33,6 +39,11 @@ REGISTRY = {
     "sql": RegisteredServer(
         argv=(sys.executable, "-m", "fi.alk.harness.mcp_servers.sql"),
         attach=frozenset({DATABASE_READER}),
+        about=(
+            "query(sql): one read-only SELECT over the attached tables, at most 200 rows; returns "
+            "{columns, rows, truncated}"
+        ),
+        attachable=frozenset({"query"}),
     ),
     # @modelcontextprotocol/server-filesystem 2026.1.14 (MIT), confined to the attached directory.
     "filesystem": RegisteredServer(
@@ -44,5 +55,22 @@ REGISTRY = {
             ),
         ),
         attach=frozenset({DIRECTORY}),
+        about=(
+            "read_text_file(path), list_directory(path), search_files(path, pattern) and "
+            "list_allowed_directories(), confined to the attached folder; a path is relative to "
+            "it. read_text_file returns the file's text"
+        ),
+        attachable=frozenset(
+            {
+                "read_text_file",
+                "read_multiple_files",
+                "list_directory",
+                "list_directory_with_sizes",
+                "directory_tree",
+                "search_files",
+                "get_file_info",
+                "list_allowed_directories",
+            }
+        ),
     ),
 }

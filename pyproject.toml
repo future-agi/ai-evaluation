@@ -111,6 +111,12 @@ harness-ui = [
 harness-stores = [
   "psycopg[binary]>=3.2",
 ]
+# What a design job parses uploaded documents with, in a sandboxed child process: both pure Python.
+# DOCX is read with the standard library, which avoids python-docx's compiled lxml.
+documents = [
+  "pypdf>=6.21,<7",                      # verified latest stable on PyPI 2026-10-23 (6.21.2, BSD)
+  "openpyxl>=3.1.5,<4",                  # verified latest stable on PyPI 2026-10-23 (3.1.5, MIT)
+]
 # Tracing instrumentors the hosted image installs, declared so uv.lock pins them with everything
 # else. traceai-google-adk is not here: it pins google-genai<2 while google-adk needs >=2.12, so
 # the image installs it separately without dependencies.

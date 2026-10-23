@@ -287,6 +287,8 @@ class HostedChatRuntime:
         # stops at exit; its superuser DSN stays in memory.
         self._design_cluster = ExitStack()
         self._design_dsn = ""
+        # The design view's PostgreSQL proof, kept across the session's reopenings.
+        self._view_proof: Any = None
         # True while `_ask` waits for the person, so a pending question on disk without one is
         # a parked question to ask again.
         self._asking = False
@@ -406,12 +408,17 @@ class HostedChatRuntime:
             if (self.workspace / DESIGN).is_file():
                 break
             await asyncio.sleep(2)
+        if self._view_proof is None:
+            from .design.proof import ViewProof
+
+            self._view_proof = ViewProof(self.workspace, self._design_postgres)
         stage, self.design_tools = open_for_designing(
             self.workspace,
             approve=self._approve_design,
             ask=self._ask,
             postgres_dsn=self._design_postgres,
             output=self.workspace / OUTPUT,
+            view_proof=self._view_proof,
             hosted_prompt=(
                 "\n\n## Hosted conversation behavior\n"
                 "Reply directly to the person in this conversation. Never describe work as done "
@@ -1227,6 +1234,9 @@ class HostedChatRuntime:
             with suppress(asyncio.CancelledError):
                 await activity_task
             await self.conversation.close()
+            # Its databases live on the design's cluster, so it closes first.
+            if self._view_proof is not None:
+                self._view_proof.close()
             self._design_cluster.close()
 
     async def _carry_on(self) -> bool:

@@ -157,6 +157,7 @@ async def _resumed(person: Person) -> str:
 
 async def _design(args: argparse.Namespace) -> int:
     from .. import spend
+    from .proof import ViewProof
     from .session import open_for_designing, unfinished
 
     workspace, output = Path(args.workspace), Path(args.output)
@@ -170,12 +171,17 @@ async def _design(args: argparse.Namespace) -> int:
         if args.template_environment
         else None
     )
+    from .documents import parse_documents, parsed_root
+
     open_design(
         workspace,
         name=args.name,
         requirements=requirements,
         modality=args.modality,
         template=template,
+        documents=parse_documents(Path(args.documents), parsed_root(workspace))
+        if args.documents
+        else None,
     )
     spend.journal_to(workspace / "cost.json")
     person = Person(
@@ -188,29 +194,37 @@ async def _design(args: argparse.Namespace) -> int:
     )
     if person.parked:
         return _PARKED_EXIT
-    for _ in range(_ROUNDS):
-        stage, tools = open_for_designing(
-            workspace,
-            approve=person.approve,
-            ask=person.ask,
-            postgres_dsn=lambda: args.postgres_dsn,
-            output=output,
-        )
-        async with stage:
-            await stage.say(message, on_event=_shown)
-            for _ in range(_NUDGES):
-                if tools.done or tools.reopen or person.parked:
-                    break
-                await stage.say(
-                    unfinished(load_design(workspace).stage), on_event=_shown
-                )
-        if tools.done:
-            break
-        if person.parked:
-            return _PARKED_EXIT
-        if not tools.reopen:
-            break
-        message = "[You were opened again with the tools for what you saved: carry on where you were.]"
+    view_proof = ViewProof(workspace, lambda: args.postgres_dsn)
+    try:
+        for _ in range(_ROUNDS):
+            stage, tools = open_for_designing(
+                workspace,
+                approve=person.approve,
+                ask=person.ask,
+                postgres_dsn=lambda: args.postgres_dsn,
+                output=output,
+                view_proof=view_proof,
+            )
+            async with stage:
+                await stage.say(message, on_event=_shown)
+                for _ in range(_NUDGES):
+                    if tools.done or tools.reopen or person.parked:
+                        break
+                    await stage.say(
+                        unfinished(load_design(workspace).stage), on_event=_shown
+                    )
+            if tools.done:
+                break
+            if person.parked:
+                return _PARKED_EXIT
+            if not tools.reopen:
+                break
+            message = (
+                "[You were opened again with the tools for what you saved: carry on where you "
+                "were.]"
+            )
+    finally:
+        view_proof.close()
     result_path = output / RESULT
     if not result_path.is_file():
         output.mkdir(parents=True, exist_ok=True)
@@ -243,6 +257,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--template-environment")
     run.add_argument("--template-suite")
     run.add_argument("--modality", choices=("chat", "voice"), default="chat")
+    run.add_argument("--documents", help="a folder of the person's documents")
     run.add_argument("--output", required=True)
     run.add_argument(
         "--postgres-dsn",
@@ -256,6 +271,7 @@ def _parser() -> argparse.ArgumentParser:
     hosted.add_argument("--job", required=True)
     hosted.add_argument("--releases", required=True)
     hosted.add_argument("--workspace", required=True)
+    hosted.add_argument("--documents", default="/work/documents")
     return parser
 
 
