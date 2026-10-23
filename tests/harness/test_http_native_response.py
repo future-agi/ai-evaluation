@@ -18,6 +18,7 @@ ROWS = {
     "name_path": "tool_name",
     "arguments_path": "tool_arguments",
     "result_path": "tool_result",
+    "id_path": "tool_id",
 }
 EVENTS = {
     "source": "response",
@@ -38,6 +39,7 @@ PAYLOAD = {
     "error_msg": None,
     "tool_calls": [
         {
+            "tool_id": "tool-1",
             "tool_name": "read_document",
             "tool_arguments": {"path": "fixture.txt"},
             "tool_result": "fixture 84",
@@ -163,6 +165,27 @@ def test_response_tools_recorded_once_and_never_reexecuted(native_app, paired):
         True,
     )
     assert [path for path, _, _ in state["calls"]] == ["/chat"]
+
+
+def test_cumulative_completed_rows_are_reported_once_per_thread(native_app):
+    base, state = native_app
+    wrapper = create_chat_wrapper(interface(), base, secret_values={})
+    first = invoke(wrapper)
+    state["payload"]["tool_calls"].append(
+        {
+            "tool_id": "tool-2",
+            "tool_name": "read_document",
+            "tool_arguments": {"path": "second.txt"},
+            "tool_result": "second fixture",
+        }
+    )
+    second = invoke(wrapper)
+    assert [row["result"] for row in first.metadata["native_completed_tools"]] == [
+        "fixture 84"
+    ]
+    assert [row["result"] for row in second.metadata["native_completed_tools"]] == [
+        "second fixture"
+    ]
 
 
 @pytest.mark.parametrize(
