@@ -4462,42 +4462,278 @@ def test_the_delivery_a_persona_was_rendered_with_is_recoverable_from_the_log(
 
 
 def test_every_emotion_we_can_emit_is_one_cartesia_accepts():
-    """Established against the live sonic-3 API: it validates the emotion NAME and the LEVEL
-    separately and rejects either being wrong with HTTP 400, so a bad value fails the call rather
-    than being ignored. The plugin's own TTSVoiceEmotion vocabulary ("Neutral", "Frustrated",
-    "Tired") is rejected outright, which is why nothing here is taken from the plugin's types."""
+    """A level form ("positivity:high") or one of sonic-3's named emotions; nothing invented."""
     from fi.alk.harness.simulator_voice import (
         _CARTESIA_EMOTION_LEVELS,
         _CARTESIA_EMOTION_NAMES,
+        _CARTESIA_NAMED_EMOTIONS,
         _PERSONALITY_EMOTION,
         persona_emotion,
     )
 
-    assert _CARTESIA_EMOTION_NAMES == {
-        "anger",
-        "positivity",
-        "surprise",
-        "sadness",
-        "curiosity",
-    }, "fear and disgust are rejected by the API; do not add them without re-testing"
-    assert _CARTESIA_EMOTION_LEVELS == {"lowest", "low", "high", "highest"}
-
+    assert _CARTESIA_NAMED_EMOTIONS == {"outraged"}
     for _words, emotion in _PERSONALITY_EMOTION:
+        if emotion in _CARTESIA_NAMED_EMOTIONS:
+            continue
         name, _, level = emotion.partition(":")
         assert name in _CARTESIA_EMOTION_NAMES, emotion
         assert level in _CARTESIA_EMOTION_LEVELS, emotion
 
-    # And nothing unrecognised invents one.
     assert persona_emotion({"personality": "Something nobody mapped"}) == []
     assert persona_emotion({}) == []
     assert persona_emotion(None) == []
 
 
-def test_an_impatient_caller_is_voiced_with_anger_not_formality():
-    from fi.alk.harness.simulator_voice import persona_emotion
+def test_an_angry_caller_is_voiced_angry_and_an_impatient_one_agitated():
+    from fi.alk.harness.simulator_voice import persona_emotion, persona_speech_rate
 
-    assert persona_emotion({"personality": "Impatient and direct"}) == ["anger:low"]
-    assert persona_emotion({"personality": "Furious"}) == ["anger:high"]
+    assert persona_emotion({"personality": "Frustrated and short"}) == ["outraged"]
+    assert persona_emotion({"personality": "Furious"}) == ["outraged"]
+    assert persona_emotion({"personality": "Impatient and direct"}) == ["outraged"]
+    assert persona_emotion({"personality": "Emotional"}) == ["outraged"]
+    assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Frustrated"}) >= 1.12
+    assert persona_speech_rate({"name": "Priya Sundaram", "personality": "Emotional"}) >= 1.12
+
+
+def test_a_callers_voice_follows_their_age_group_and_gender():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    for age_group, band in (("13-17", "young"), ("18-25", "young"), ("50-60", "mature"), ("60+", "elderly")):
+        for gender in ("female", "male"):
+            persona = {"name": "Alex Morgan", "gender": gender, "age_group": age_group, "accent": "American"}
+            assert cartesia_voice_for(persona) in _CARTESIA_AGE_VOICES[band][gender], (age_group, gender)
+
+    middle = {"name": "Alex Morgan", "gender": "male", "age_group": "40-50", "accent": "American"}
+    assert all(cartesia_voice_for(middle) not in voices["male"] for voices in _CARTESIA_AGE_VOICES.values())
+
+
+def test_an_angry_caller_gets_a_voice_recorded_angry_unless_elderly():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    angry = {"name": "Alex Morgan", "gender": "female", "age_group": "32-40", "accent": "Canadian", "personality": "Frustrated"}
+    assert cartesia_voice_for(angry) in _CARTESIA_AGE_VOICES["angry"]["female"]
+    older = {**angry, "gender": "male", "age_group": "60+"}
+    assert cartesia_voice_for(older) in _CARTESIA_AGE_VOICES["elderly"]["male"]
+
+
+def test_a_voice_cartesia_no_longer_serves_falls_back_to_the_next(monkeypatch):
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_DEFAULT_VOICES,
+        _cartesia_voice_candidates,
+        served_cartesia_voice,
+    )
+
+    persona = {"name": "Alex Morgan", "gender": "male", "age_group": "60+", "accent": "American"}
+    first, second = _cartesia_voice_candidates(persona)[:2]
+
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: voice != first)
+    assert served_cartesia_voice(persona) == second
+
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: False)
+    assert served_cartesia_voice(persona) == _CARTESIA_DEFAULT_VOICES["male"]
+    assert served_cartesia_voice({**persona, "gender": "female"}) == _CARTESIA_DEFAULT_VOICES["female"]
+
+    # A check that cannot reach Cartesia keeps the caller's own voice.
+    monkeypatch.setattr(simulator_voice, "_cartesia_voice_served", lambda voice, key: None)
+    assert served_cartesia_voice(persona) == first
+
+
+def test_the_voice_check_uses_the_calls_own_key_and_retries_without_one(monkeypatch):
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import _cartesia_voice_candidates, served_cartesia_voice
+
+    persona = {"name": "Priya Nair", "gender": "female", "age_group": "40-50", "accent": "Indian"}
+    first, second = _cartesia_voice_candidates(persona)[:2]
+    asked = []
+
+    def urlopen(request, timeout):
+        asked.append((request.full_url.rsplit("/", 1)[-1], request.get_header("X-api-key")))
+        if request.full_url.endswith(first):
+            raise simulator_voice.urllib.error.HTTPError(request.full_url, 404, "gone", {}, None)
+        return contextlib.nullcontext(SimpleNamespace(status=200))
+
+    monkeypatch.delenv("CARTESIA_API_KEY", raising=False)
+    monkeypatch.setattr(simulator_voice, "_SERVED", {})
+    monkeypatch.setattr(simulator_voice.urllib.request, "urlopen", urlopen)
+
+    # No key for the call (a gateway-relayed call): nothing is asked and nothing is remembered.
+    assert served_cartesia_voice(persona, "") == first
+    assert asked == [] and simulator_voice._SERVED == {}
+
+    # The call's own key is used though this process has none.
+    assert served_cartesia_voice(persona, "call-key") == second
+    assert asked == [(first, "call-key"), (second, "call-key")]
+
+
+def test_a_refusal_other_than_not_found_keeps_the_voice_and_is_asked_again(monkeypatch):
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import _cartesia_voice_candidates, served_cartesia_voice
+
+    persona = {"name": "Priya Nair", "gender": "female", "age_group": "40-50", "accent": "Indian"}
+    first = _cartesia_voice_candidates(persona)[0]
+    codes = iter([400, 401, 404])
+
+    def urlopen(request, timeout):
+        raise simulator_voice.urllib.error.HTTPError(request.full_url, next(codes), "no", {}, None)
+
+    monkeypatch.setattr(simulator_voice, "_SERVED", {})
+    monkeypatch.setattr(simulator_voice.urllib.request, "urlopen", urlopen)
+    # A bad request or a refused key says nothing about the voice: it is kept and not remembered.
+    assert served_cartesia_voice(persona, "k") == first
+    assert served_cartesia_voice(persona, "k") == first
+    assert simulator_voice._SERVED == {}
+    assert simulator_voice._cartesia_voice_served(first, "k") is False
+
+
+def test_an_unreadable_voice_age_table_is_logged_and_skipped(monkeypatch, caplog):
+    from fi.alk.harness import simulator_voice
+
+    simulator_voice._cartesia_voice_ages.cache_clear()
+    monkeypatch.setattr(simulator_voice.Path, "read_text", lambda self, encoding=None: "{not json")
+    try:
+        with caplog.at_level("ERROR", logger=simulator_voice.logger.name):
+            assert simulator_voice._cartesia_voice_ages() == {}
+        assert "cartesia_voice_ages_unreadable" in caplog.text
+    finally:
+        monkeypatch.undo()
+        simulator_voice._cartesia_voice_ages.cache_clear()
+    assert simulator_voice._cartesia_voice_ages()
+
+
+def test_every_fallback_voice_is_the_callers_gender():
+
+    from fi.alk.harness import simulator_voice
+    from fi.alk.harness.simulator_voice import _cartesia_catalog, _cartesia_voice_candidates
+
+    catalog = _cartesia_catalog()
+    by_gender = {g: {one for lang in catalog.values() for one in lang.get(g, [])} for g in ("female", "male")}
+    for gender in ("female", "male"):
+        by_gender[gender] |= {simulator_voice._CARTESIA_DEFAULT_VOICES[gender]}
+        for band in simulator_voice._CARTESIA_AGE_VOICES.values():
+            by_gender[gender] |= set(band[gender])
+        by_gender[gender] |= set(simulator_voice._CARTESIA_EMOTION_VOICES.get(gender, ()))
+        for persona in (
+            {"name": "Alex Morgan", "gender": gender, "age_group": "60+", "accent": "American"},
+            {"name": "Alex Morgan", "gender": gender, "personality": "Frustrated", "accent": "Neutral"},
+            {"name": "Lucia Gomez", "gender": gender, "languages": ["Spanish"]},
+        ):
+            assert set(_cartesia_voice_candidates(persona)) <= by_gender[gender], persona
+
+
+def test_an_angry_caller_is_louder_and_a_calm_one_keeps_the_default(monkeypatch):
+    from fi.alk.harness.simulator_voice import simulator_definition
+
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+    angry = simulator_definition(lambda name: "", {"name": "Dana Price", "personality": "Emotional"})
+    calm = simulator_definition(lambda name: "", {"name": "Dana Price", "personality": "Friendly and cooperative"})
+    assert angry.tts.volume == 1.4
+    assert calm.tts.volume is None
+
+
+def test_an_emotional_caller_does_not_ask_to_go_one_step_at_a_time():
+    from fi.alk.harness.simulator_voice import caller_habit
+
+    assert "one step at a time" not in caller_habit({"personality": "Emotional"})
+    assert "one step at a time" in caller_habit({"personality": "Anxious"})
+
+
+def test_anger_voices_apply_only_to_american_english():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    angry = {one for voices in _CARTESIA_AGE_VOICES["angry"].values() for one in voices}
+    for persona in (
+        {"name": "Alex Morgan", "gender": "male", "age_group": "32-40", "accent": "British", "personality": "Frustrated"},
+        {"name": "Lucia Gomez", "gender": "female", "age_group": "40-50", "languages": ["Spanish"], "personality": "Frustrated"},
+    ):
+        assert cartesia_voice_for(persona) not in angry, persona
+
+
+def _callers_in_every_language_and_accent(age_group):
+    from fi.alk.harness.simulator_voice import _cartesia_catalog
+
+    for gender in ("female", "male"):
+        for name in ("Alex Morgan", "Priya Nair", "Lucia Gomez", "Hans Weber", "Mei Lin"):
+            for language in _cartesia_catalog():
+                for personality in ("Friendly and cooperative", "Frustrated"):
+                    yield {"name": name, "gender": gender, "age_group": age_group, "languages": [language], "personality": personality}
+            for accent in ("American", "British", "Australian", "Indian English", "Indian", "Southern", "Irish"):
+                yield {"name": name, "gender": gender, "age_group": age_group, "accent": accent}
+
+
+def test_an_older_caller_never_gets_a_young_voice_in_any_language():
+    from fi.alk.harness.simulator_voice import _cartesia_voice_ages, _cartesia_voice_candidates
+
+    ages = _cartesia_voice_ages()
+    for age_group in ("50-60", "60+"):
+        for persona in _callers_in_every_language_and_accent(age_group):
+            # Only the last resort, served when Cartesia reports every other voice gone, is exempt.
+            assert all(ages.get(one) != "young" for one in _cartesia_voice_candidates(persona)[:-1]), persona
+
+
+def test_a_young_caller_never_gets_an_older_voice_in_any_language():
+    from fi.alk.harness.simulator_voice import _cartesia_voice_ages, _cartesia_voice_candidates
+
+    ages = _cartesia_voice_ages()
+    for age_group in ("13-17", "18-25", "25-32"):
+        for persona in _callers_in_every_language_and_accent(age_group):
+            assert all(ages.get(one) != "older" for one in _cartesia_voice_candidates(persona)), persona
+
+
+def test_an_older_caller_hears_their_own_language_first_then_an_english_voice_of_their_age():
+    from fi.alk.harness.simulator_voice import (
+        _CARTESIA_AGE_VOICES,
+        _CARTESIA_LOCAL_AGE_VOICES,
+        cartesia_voice_for,
+    )
+
+    def voice(**persona):
+        return cartesia_voice_for({"name": "Alex Morgan", "age_group": "60+", **persona})
+
+    local = _CARTESIA_LOCAL_AGE_VOICES
+    assert voice(gender="female", languages=["Spanish"]) in local["es"]["elderly"]["female"]
+    assert voice(gender="female", languages=["Hindi"]) in local["hi"]["mature"]["female"]
+    assert voice(gender="male", accent="British") in local["british"]["elderly"]["male"]
+    assert voice(gender="male", languages=["Hindi"]) in _CARTESIA_AGE_VOICES["elderly"]["male"]
+    assert voice(gender="female", languages=["Japanese"]) in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", languages=["Tamil"]) not in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", accent="British") in _CARTESIA_AGE_VOICES["elderly"]["female"]
+    assert voice(gender="female", languages=["Spanish"], age_group="18-25") in local["es"]["young"]["female"]
+
+
+def test_the_american_age_pools_pick_as_before():
+    from fi.alk.harness.simulator_voice import _CARTESIA_AGE_VOICES, cartesia_voice_for
+
+    for age_group, band in (("18-25", "young"), ("50-60", "mature"), ("60+", "elderly")):
+        for gender in ("female", "male"):
+            for name in ("Alex Morgan", "Priya Nair", "Lucia Gomez", "Hans Weber"):
+                pool = _CARTESIA_AGE_VOICES[band][gender]
+                expected = pool[sum(map(ord, name)) % len(pool)]
+                persona = {"name": name, "gender": gender, "age_group": age_group, "accent": "American"}
+                assert cartesia_voice_for(persona) == expected, persona
+
+
+def test_the_callers_voice_speaks_their_language(monkeypatch):
+    from types import SimpleNamespace
+
+    from fi.alk.harness.simulator_voice import simulator_definition
+    from fi.simulate.agent.definition import TTSConfig
+    from fi.simulate.simulation import livekit_models
+
+    monkeypatch.setenv("CARTESIA_API_KEY", "not-a-real-key")
+    language = {
+        str(languages): simulator_definition(lambda name: "", {"name": "Dana Price", "languages": languages}).tts.language
+        for languages in (["Hindi"], ["Spanish", "English"], ["English"], ["Klingon"], [])
+    }
+    assert language == {"['Hindi']": "hi", "['Spanish', 'English']": "es", "['English']": "en", "['Klingon']": None, "[]": None}
+
+    captured = {}
+    monkeypatch.setattr(livekit_models, "_import_plugin", lambda name: SimpleNamespace(TTS=lambda **kw: captured.update(kw)))
+    livekit_models._cartesia_tts(TTSConfig(provider="cartesia", model="sonic-3", voice="abc", language="ta"), None)
+    assert captured["language"] == "ta"
+    captured.clear()
+    livekit_models._cartesia_tts(TTSConfig(provider="cartesia", model="sonic-3", voice="abc"), None)
+    assert "language" not in captured
 
 
 def test_a_caller_takes_a_refusal_the_same_way_every_run():
@@ -4557,7 +4793,7 @@ def test_two_personalities_do_not_share_one_emotional_register():
     assert persona_emotion({"personality": "Professional and formal"}) == [
         "positivity:low"
     ]
-    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["anger:low"]
+    assert persona_emotion({"personality": "Impatient and abrupt"}) == ["outraged"]
     assert persona_emotion({"personality": "Curious and sceptical"}) == [
         "curiosity:high"
     ]
