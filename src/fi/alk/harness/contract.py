@@ -14,13 +14,15 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # How a person reaches an agent. This decides how it is later run — voice goes out as a live
 # call, everything else runs locally — so it is defined once and referenced, never retyped.
 MODALITIES = ("voice", "chat", "browser")
+
+
 def known_modalities() -> tuple[str, ...]:
     """The modalities a contract may declare: these, plus whatever a kind file adds."""
     from .config import declared_modalities
@@ -28,6 +30,8 @@ def known_modalities() -> tuple[str, ...]:
     known = list(MODALITIES)
     known.extend(one for one in declared_modalities() if one not in known)
     return tuple(known)
+
+
 _RUNTIME_TEMPLATE_INPUTS = frozenset(
     {
         "thread_id",
@@ -337,6 +341,34 @@ class RuntimeHttpSetupRequest(BaseModel):
         return normalized
 
 
+class RuntimeHttpFailureRule(BaseModel):
+    status_path: str = Field(min_length=1, max_length=512)
+    failure_values: list[str | int | float | bool | None] = Field(
+        min_length=1, max_length=32
+    )
+    message_path: str = Field(default="", max_length=512)
+
+    @field_validator("status_path", "message_path")
+    @classmethod
+    def _path(cls, value: str) -> str:
+        if value and not re.fullmatch(r"(?:\$\.)?[^.\s]+(?:\.[^.\s]+)*", value):
+            raise ValueError("runtime_http_failure_path_invalid")
+        return value
+
+    @field_validator("failure_values", mode="before")
+    @classmethod
+    def _scalars(cls, values):
+        import math
+
+        if not isinstance(values, list) or any(
+            type(value) not in (str, int, float, bool, type(None))
+            or (isinstance(value, float) and not math.isfinite(value))
+            for value in values
+        ):
+            raise ValueError("runtime_http_failure_values_must_be_finite_scalars")
+        return values
+
+
 class RuntimeInterface(BaseModel):
     """The submitted runtime's existing conversational ingress.
 
@@ -347,6 +379,11 @@ class RuntimeInterface(BaseModel):
 
     kind: str = ""
     protocol: str = "fi.alk"
+    model: str | None = Field(
+        default=None,
+        description="Source-owned model or profile identifier accepted by the OpenAI-compatible "
+        "endpoint. Preserve its exact value; it need not be the backing provider model.",
+    )
     port: int | None = Field(default=None, ge=1, le=65535)
     path: str = ""
     health_path: str = ""
@@ -357,6 +394,7 @@ class RuntimeInterface(BaseModel):
     # strings. Dotted/list response paths select the assistant content from arbitrary JSON/SSE.
     request_template: Any = None
     response_path: str = ""
+    failure_rule: RuntimeHttpFailureRule | None = None
     setup_requests: list[RuntimeHttpSetupRequest] = Field(
         default_factory=list, max_length=8
     )
@@ -403,31 +441,36 @@ class RuntimeInterface(BaseModel):
                 )
             if self.protocol == "json_template" and self.request_template is None:
                 raise ValueError("runtime_json_template_requires_request_template")
+            available = set(_RUNTIME_TEMPLATE_INPUTS)
+            for setup in self.setup_requests:
+                unknown = _runtime_template_names(setup.path) - available
+                if self.protocol == "json_template":
+                    unknown |= _runtime_template_names(setup.body_template) - available
+                if unknown:
+                    raise ValueError(
+                        "runtime_http_setup_unknown_placeholders: "
+                        + ", ".join(sorted(unknown))
+                    )
+                duplicate = set(setup.capture) & available
+                if duplicate:
+                    raise ValueError(
+                        "runtime_http_setup_capture_shadows_input: "
+                        + ", ".join(sorted(duplicate))
+                    )
+                available.update(setup.capture)
             if self.protocol == "json_template":
-                available = set(_RUNTIME_TEMPLATE_INPUTS)
-                for setup in self.setup_requests:
-                    unknown = (
-                        _runtime_template_names(setup.path)
-                        | _runtime_template_names(setup.body_template)
-                    ) - available
-                    if unknown:
-                        raise ValueError(
-                            "runtime_http_setup_unknown_placeholders: "
-                            + ", ".join(sorted(unknown))
-                        )
-                    duplicate = set(setup.capture) & available
-                    if duplicate:
-                        raise ValueError(
-                            "runtime_http_setup_capture_shadows_input: "
-                            + ", ".join(sorted(duplicate))
-                        )
-                    available.update(setup.capture)
                 unknown = _runtime_template_names(self.request_template) - available
                 if unknown:
                     raise ValueError(
                         "runtime_http_request_unknown_placeholders: "
                         + ", ".join(sorted(unknown))
                     )
+            unknown = _runtime_template_names(self.path) - available
+            if unknown:
+                raise ValueError(
+                    "runtime_http_request_unknown_placeholders: "
+                    + ", ".join(sorted(unknown))
+                )
         if self.kind == "websocket" and self.protocol != "fi.alk":
             raise ValueError("runtime_websocket_protocol_unsupported: expected fi.alk")
         return self
@@ -446,7 +489,10 @@ class Runtime(BaseModel):
     extras: list[str] = Field(default_factory=list)
     workdir: str = ""
     # Select one submitted Compose file when a repository contains multiple runnable stacks.
+    execution: Literal["auto", "native", "compose"] = "auto"
     compose_file: str = ""
+    service: str = ""
+    required_environment: dict[str, list[str]] = Field(default_factory=dict)
     dockerfile: str = ""
     # For repositories without container metadata, this is an argv vector for the submitted
     # process. It is optional when one conventional entrypoint can be proven from source.
@@ -464,6 +510,38 @@ class Runtime(BaseModel):
     # prompt. Empty is valid for voice/browser agents and for contracts that are not backed by a
     # repository.
     interface: RuntimeInterface | None = None
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> "Runtime":
+        if self.execution == "native" and (self.compose_file or self.service):
+            raise ValueError("runtime_selection_conflict: native cannot select Compose")
+        if self.execution == "native" and not self.command:
+            raise ValueError(
+                "runtime_native_command_missing: explicit native selection needs command"
+            )
+        if self.execution == "compose" and not (self.compose_file and self.service):
+            raise ValueError(
+                "runtime_selection_incomplete: Compose needs compose_file and service"
+            )
+        if self.service and not self.compose_file:
+            raise ValueError("runtime_selection_incomplete: service needs compose_file")
+        for path in (self.compose_file, self.dockerfile):
+            if path and (path.startswith("/") or ".." in path.split("/")):
+                raise ValueError(
+                    "runtime_selection_path_invalid: use a repository-relative path"
+                )
+        for process, names in self.required_environment.items():
+            if (
+                not process
+                or len(names) != len(set(names))
+                or any(
+                    not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in names
+                )
+            ):
+                raise ValueError("runtime_required_environment_invalid")
+        if any(any(char in path for char in "*?[]") for path in self.context_excludes):
+            raise ValueError("runtime_context_excludes_glob_unsupported")
+        return self
 
     @field_validator("command", mode="before")
     @classmethod
@@ -857,6 +935,27 @@ def is_data_free_conversation(contract: AgentContract) -> bool:
             or contract.base_environment
             or store
         )
+    )
+
+
+def validate_tool_workflow(contract: AgentContract) -> None:
+    declared = {tool.name for tool in contract.tools if tool.name.strip()}
+    for entry in contract.tool_entrypoints:
+        if entry.tool not in declared:
+            continue
+        if entry.mode == "import" and entry.module.strip() and entry.callable.strip():
+            return
+        if (
+            entry.mode == "construct"
+            and entry.module.strip()
+            and entry.callable.strip()
+            and entry.factory.strip()
+        ):
+            return
+        if entry.mode == "service" and entry.service.strip() and entry.endpoint.strip():
+            return
+    raise ValueError(
+        "required_tool_workflow_unavailable: no declared tool has an executable entrypoint"
     )
 
 

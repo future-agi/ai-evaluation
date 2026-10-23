@@ -91,26 +91,33 @@ class IsolatedChatCallRunner:
             environ=environ,
             work_directory=context.work_directory / "chat-workers",
         )
-        if "error" in result:
-            raise CallAborted(
-                f"chat_worker_failed: {result['error']}",
-                marker=result.get("error_marker"),
-                code=result.get("error_code") or "call_failed",
-            )
         artifact_ids = {}
-        for artifact in result["artifacts"]:
+        for artifact in result.get("artifacts", []):
             artifact_ids[artifact["id"]] = await self._adapter.upload_artifact(
                 base64.b64decode(artifact["data"], validate=True),
                 kind=ArtifactKind(artifact["kind"]),
                 scenario_key=scenario.scenario_key,
             )
-        outcome = result["outcome"]
-        outcome["calls"] = tuple(Call(**call) for call in outcome["calls"])
-        outcome["recording_artifacts"] = ()
-        outcome["transcript_artifact"] = artifact_ids.get(
-            outcome["transcript_artifact"]
-        )
-        return CallOutcome(**outcome)
+        raw_outcome = result.get("partial") if "error" in result else result["outcome"]
+        outcome = None
+        if raw_outcome is not None:
+            raw_outcome["calls"] = tuple(Call(**call) for call in raw_outcome["calls"])
+            raw_outcome["recording_artifacts"] = tuple(
+                artifact_ids[item]
+                for item in raw_outcome.get("recording_artifacts", [])
+            )
+            raw_outcome["transcript_artifact"] = artifact_ids.get(
+                raw_outcome["transcript_artifact"]
+            )
+            outcome = CallOutcome(**raw_outcome)
+        if "error" in result:
+            raise CallAborted(
+                f"chat_worker_failed: {result['error']}",
+                marker=result.get("error_marker"),
+                code=result.get("error_code") or "call_failed",
+                partial=outcome,
+            )
+        return outcome
 
 
 class _ArtifactCollector:
@@ -175,6 +182,10 @@ async def main() -> None:
             "error_code": exc.code,
             "error_marker": exc.marker,
         }
+        if exc.partial is not None:
+            result["partial"] = asdict(exc.partial)
+        if collector.artifacts:
+            result["artifacts"] = collector.artifacts
     except Exception as exc:  # noqa: BLE001 - return a secret-safe worker failure
         result = {"error": type(exc).__name__}
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -1,5 +1,7 @@
 import asyncio
 import json
+import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -244,7 +246,7 @@ def test_generic_repair_without_typed_patch_keeps_validation_failure(
         GenericHarnessArtifactStore, "read_world_ir", lambda self: object()
     )
 
-    async def no_patch(*args):
+    async def no_patch(*args, **kwargs):
         raise repair_authoring.RepairPatchNotSubmittedError("no patch submitted")
 
     monkeypatch.setattr(repair_authoring, "request_world_ir_patch", no_patch)
@@ -1291,7 +1293,9 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
     )
     inspected = []
 
-    async def inspect(source_root, current_contract, diagnostics):
+    async def inspect(source_root, current_contract, diagnostics, *, guidance=""):
+        assert "Preserve the submitted identifiers." in guidance
+        assert "require_tool_workflow" in guidance
         inspected.append((source_root, current_contract.agent, diagnostics[0].code))
         return RuntimePlanPatch(
             base_contract_hash=_contract_hash(current_contract),
@@ -1313,7 +1317,16 @@ def test_default_generic_repair_dispatches_unknown_runtime_to_repository_inspect
             )
         return 1
 
-    job = SimpleNamespace(metadata={"generic_harness_v1": True})
+    job = HarnessJob(
+        job_id="repair",
+        run_id="repair",
+        execution="local",
+        source={"kind": "local_repository", "local_path": str(source)},
+        agent={"connector": "auto"},
+        metadata={"generic_harness_v1": True},
+        guidance=["Preserve the submitted identifiers."],
+        require_tool_workflow=True,
+    )
     asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
 
     assert inspected == [
@@ -1507,3 +1520,147 @@ def test_scenario_repair_rejected_every_time_keeps_the_original_failure(
         )
     assert len(repairs) == RepairBudgets().scenario_patches + 1
     assert suite["value"] == "original"
+
+@pytest.mark.parametrize(
+   "declared_kind,legacy_world,expected_storage_repair",
+   [
+       (None, True, True),
+       ("postgres", True, False),
+       (None, False, False),
+       ("filesystem", False, False),
+   ],
+)
+@pytest.mark.parametrize("candidate_kind", ["filesystem", None, ""])
+def test_missing_storage_routes_to_understanding_only_when_metadata_can_help(
+   tmp_path,
+   monkeypatch,
+   declared_kind,
+   legacy_world,
+   expected_storage_repair,
+   candidate_kind,
+):
+   from fi.alk.harness import cli, runtime_repair
+   from fi.alk.harness.bundle_author_v2 import (
+       BundleAuthorError,
+       _generic_postgres_seed_artifacts,
+   )
+
+   source = tmp_path / "source"
+   authoring = tmp_path / "authoring"
+   staging = tmp_path / "staging"
+   source.mkdir()
+   authoring.mkdir()
+   (staging / "seed").mkdir(parents=True)
+   (source / "notes.py").write_text(
+       "from pathlib import Path\ndef read_note(name):\n"
+       '    return (Path("workspace") / name).read_text()\n'
+   )
+   contract = AgentContract(
+       agent="note-reader",
+       tools=[{"name": "read_note", "args": ["name"]}],
+       runtime=Runtime(execution="native", command=["python", "notes.py"]),
+       data_store={"kind": declared_kind} if declared_kind else None,
+   )
+   contract_path = authoring / "contract.json"
+   contract_path.write_text(contract.model_dump_json())
+   if legacy_world:
+       with sqlite3.connect(authoring / "world.sqlite") as connection:
+           connection.execute("CREATE TABLE task_state (id TEXT PRIMARY KEY)")
+   else:
+       (authoring / "generic-harness").mkdir()
+       (authoring / "generic-harness" / "world-ir.json").write_text("{}")
+   calls = []
+
+   async def understand(args):
+       calls.append(Path(args.out))
+       assert args.path == str(source)
+       assert "Keep the note identifiers." in "\n".join(args.guidance)
+       candidate = contract.model_dump()
+       candidate["data_store"] = (
+           {"kind": candidate_kind} if candidate_kind is not None else None
+       )
+       candidate["agent"] = "must-not-be-promoted"
+       Path(args.out, "contract.json").write_text(json.dumps(candidate))
+       return 0
+
+   async def unexpected_runtime_repair(*args, **kwargs):
+       pytest.fail("storage failure incorrectly dispatched to runtime repair")
+
+   monkeypatch.setattr(
+       runtime_repair, "request_runtime_plan_patch", unexpected_runtime_repair
+   )
+   monkeypatch.setattr(cli, "_understand", understand)
+
+   async def validate(*_args):
+       try:
+           _generic_postgres_seed_artifacts(
+               authoring,
+               staging,
+               source=source,
+               contract=json.loads(contract_path.read_text()),
+               prefix="",
+           )
+       except BundleAuthorError as exc:
+           raise RuntimeValidationError("runtime", f"{type(exc).__name__}: {exc}") from exc
+       return 1
+
+   job = HarnessJob(
+       job_id="storage-repair",
+       run_id="storage-repair",
+       execution="local",
+       source={"kind": "local_repository", "local_path": str(source)},
+       agent={"connector": "auto"},
+       metadata={"generic_harness_v1": True},
+       guidance=["Keep the note identifiers."],
+   )
+   if expected_storage_repair and not candidate_kind:
+       with pytest.raises(RuntimeValidationError):
+           asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+       assert AgentContract.model_validate_json(contract_path.read_text()) == contract
+       assert len(calls) == 1 and not calls[0].exists()
+   elif expected_storage_repair:
+       asyncio.run(validate_and_repair(job, source, authoring, validate=validate))
+       expected = contract.model_dump()
+       expected["data_store"] = AgentContract(
+           agent="note-reader", data_store={"kind": "filesystem"}
+       ).data_store.model_dump()
+       assert json.loads(contract_path.read_text()) == expected
+       assert len(calls) == 1 and not calls[0].exists()
+   else:
+       error = None
+       try:
+           asyncio.run(validate(job, source, authoring))
+       except RuntimeValidationError as exc:
+           error = exc
+       assert error is not None
+       diagnostic = _fallback_diagnostic(error, authoring=authoring)
+       assert diagnostic.code != "generated_storage_declaration_missing"
+       assert not calls
+       assert AgentContract.model_validate_json(contract_path.read_text()) == contract
+
+
+@pytest.mark.parametrize(
+   "prefix,storage_repair",
+   [
+       ("", True),
+       ("BundleAuthorError: ", True),
+       ("OtherError: ", False),
+       ("BundleAuthorError: BundleAuthorError: ", False),
+   ],
+)
+def test_storage_diagnostic_accepts_only_known_exception_wrapper(
+   tmp_path, prefix, storage_repair
+):
+   (tmp_path / "world.sqlite").touch()
+   (tmp_path / "contract.json").write_text('{"data_store": null}')
+   diagnostic = _fallback_diagnostic(
+       RuntimeValidationError(
+           "runtime",
+           prefix
+           + "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found",
+       ),
+       authoring=tmp_path,
+   )
+   assert (
+       diagnostic.code == "generated_storage_declaration_missing"
+   ) is storage_repair

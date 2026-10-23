@@ -4888,3 +4888,40 @@ def test_a_caller_reacts_differently_across_trials_but_the_same_within_one():
     assert len({persona.behavior_policy.interruption_propensity for persona in trials}) > 1
 
 
+
+
+def test_process_logs_from_close_are_uploaded_before_final_manifest():
+    async def scenario():
+        class LoggingProvisioner(FakeProvisioner):
+            async def close(self, *, work_directory):
+                await super().close(work_directory=work_directory)
+                logs = work_directory / "diagnostics" / "process-logs"
+                logs.mkdir(parents=True, exist_ok=True)
+                (logs / "worlds-w0-agent-generation.log").write_text(
+                    "sanitized process tail"
+                )
+
+        harness = _build_harness(scenarios=[], instances=1)
+        harness.deps.build_provider = lambda _capabilities, _transport: (
+            LoggingProvisioner(instances=1)
+        )
+        code = await he.run_job(
+            harness.job_path, harness.source, harness.output, deps=harness.deps
+        )
+        assert code == he.EXIT_OK
+        assert any(
+            b"sanitized process tail" in body
+            for body in harness.transport.artifacts.values()
+        )
+        digest = next(
+            key
+            for key, body in harness.transport.artifacts.items()
+            if b"sanitized process tail" in body
+        )
+        entries = harness.transport.manifests[-1]["entries"]
+        assert any(
+            entry["artifact_id"] == "sha256:" + digest and entry["kind"] == "log"
+            for entry in entries
+        )
+
+    asyncio.run(scenario())

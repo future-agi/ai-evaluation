@@ -192,7 +192,9 @@ def _without_nulls(value: Any) -> Any:
     """Treat JSON null like an omitted optional field, including in nested records."""
     if isinstance(value, dict):
         return {
-            key: _without_nulls(item) for key, item in value.items() if item is not None
+            key: item if key == "failure_values" else _without_nulls(item)
+            for key, item in value.items()
+            if item is not None
         }
     if isinstance(value, list):
         return [_without_nulls(item) for item in value if item is not None]
@@ -696,9 +698,27 @@ def contract_tools(
                             "description": "Where in the source imports resolve from, if not the "
                             "root.",
                         },
+                        "execution": {
+                            "type": "string",
+                            "enum": ["auto", "native", "compose"],
+                            "description": "Select native or compose explicitly from source evidence. auto preserves legacy discovery.",
+                        },
+                        "service": {
+                            "type": "string",
+                            "description": "Exact selected Compose service. Its dependency closure is retained.",
+                        },
+                        "required_environment": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "uniqueItems": True,
+                            },
+                            "description": "Required environment names by selected process name. Native control process is agent. No values.",
+                        },
                         "compose_file": {
                             "type": "string",
-                            "description": "Exact path to the submitted Compose file to run "
+                            "description": "Repository-relative path to the submitted Compose file to run "
                             "when the repository contains more than one. Never invent one.",
                         },
                         "dockerfile": {
@@ -745,6 +765,13 @@ def contract_tools(
                                     "envelope. Use json_template for any other source-owned JSON "
                                     "API and describe its exact envelope below.",
                                 },
+                                "model": {
+                                    "type": "string",
+                                    "description": "For openai_chat: exact source-owned model "
+                                    "or profile identifier accepted by this endpoint. Read it "
+                                    "from the source API or configuration; do not substitute "
+                                    "the backing provider model unless the endpoint expects it.",
+                                },
                                 "port": {
                                     "type": "integer",
                                     "description": "Container port the submitted chat service "
@@ -752,7 +779,9 @@ def contract_tools(
                                 },
                                 "path": {
                                     "type": "string",
-                                    "description": "Exact POST path for one conversational turn.",
+                                    "description": "Exact POST path for one conversational turn. "
+                                    "Path placeholders may use canonical inputs or prior setup "
+                                    "captures; substituted values are encoded as path segments.",
                                 },
                                 "health_path": {
                                     "type": "string",
@@ -779,6 +808,35 @@ def contract_tools(
                                     "description": "For json_template only: optional dotted path "
                                     "to assistant text in the JSON response, including numeric "
                                     "list indexes such as '-1.content.parts.0.text'.",
+                                },
+                                "failure_rule": {
+                                    "type": "object",
+                                    "required": ["status_path", "failure_values"],
+                                    "description": "Optional source-declared application failure envelope. Never infer failures from an arbitrary error field.",
+                                    "properties": {
+                                        "status_path": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 512,
+                                        },
+                                        "failure_values": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "maxItems": 32,
+                                            "items": {
+                                                "type": [
+                                                    "string",
+                                                    "number",
+                                                    "boolean",
+                                                    "null",
+                                                ]
+                                            },
+                                        },
+                                        "message_path": {
+                                            "type": "string",
+                                            "maxLength": 512,
+                                        },
+                                    },
                                 },
                                 "setup_requests": {
                                     "type": "array",

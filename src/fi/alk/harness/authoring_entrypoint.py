@@ -267,7 +267,7 @@ def main(argv: list[str] | None = None, *, validate_runtime: bool = False) -> in
         count=job.scenario_count,
         interactive=False,
         model=None,
-        guidance=[],
+        guidance=job.authoring_guidance(),
         adjustments_path=str(args.adjustments) if args.adjustments else None,
         conversation_capabilities_path=(
             str(args.conversation_capabilities)

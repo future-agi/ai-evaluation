@@ -731,3 +731,147 @@ def test_tool_world_can_import_customer_tool_from_uploaded_source(
 
     assert result is not None
     assert result.result == {"account_id": "ACC-2048", "status": "active"}
+
+
+def test_failed_second_turn_retains_partial_transcript_and_http_trace(
+    tmp_path, monkeypatch
+):
+    from fi.simulate.agent.wrappers.http import HTTPCallFailure
+
+    context = _context(tmp_path)
+    adapter = _Adapter()
+    monkeypatch.setattr(chat, "_tool_world", lambda *_args: _ToolWorld())
+
+    async def failed(*_args, **_kwargs):
+        failure = HTTPCallFailure(
+            {
+                "success": False,
+                "status_code": 502,
+                "failure_stage": "http",
+                "error": "upstream refused",
+                "response_excerpt": "upstream refused",
+            }
+        )
+        failure.partial_transcript = Transcript(
+            exchanges=[
+                Exchange("customer", "first question"),
+                Exchange("agent", "first answer"),
+                Exchange("customer", "second question"),
+            ]
+        )
+        raise failure
+
+    monkeypatch.setattr(chat, "_drive_conversation", failed)
+    runtime = EnvironmentRuntime(
+        runtime_id="runtime",
+        world_index=0,
+        bundle_digest="sha256:" + "a" * 64,
+        state=RuntimeState.READY,
+        endpoints={
+            "target_http": RuntimeEndpoint(
+                capability="target_http",
+                protocol="http",
+                address="http://localhost:18080",
+            )
+        },
+    )
+    with pytest.raises(CallAborted) as caught:
+        asyncio.run(
+            chat.HostedChatCallRunner(adapter, context).run(
+                SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+            )
+        )
+    partial = caught.value.partial
+    assert partial is not None
+    assert partial.transcript_artifact == "transcript-1"
+    assert partial.started_at and partial.ended_at
+    assert partial.turns == 3
+    assert [
+        message["content"]
+        for message in partial.messages
+        if message["role"] == "assistant"
+    ] == ["first answer"]
+    trace, transcript = [json.loads(data) for data in adapter.uploads]
+    assert trace["status_code"] == 502
+    assert len(transcript["messages"]) == 3
+
+
+@pytest.mark.parametrize("model", [None, "support-profile-v2"])
+@pytest.mark.parametrize("lane", ["hosted", "local"])
+def test_contract_endpoint_model_reaches_openai_wire_payload(
+    tmp_path, monkeypatch, model, lane
+):
+    from fi.alk.harness import provision
+    from fi.alk.harness.run import voice
+    from fi.alk.harness.run.targets import RepositoryChatTarget
+
+    context = _context(tmp_path)
+    path = context.bundle_dir / "contract.json"
+    document = json.loads(path.read_text())
+    interface = document["runtime"]["interface"]
+    interface["include_tools"] = False
+    if model is not None:
+        interface["model"] = model
+    path.write_text(json.dumps(document))
+    payloads = []
+
+    def post(self, payload, headers, *, endpoint=None):
+        payloads.append(payload)
+        return 200, {
+            "choices": [{"message": {"role": "assistant", "content": "Found."}}]
+        }
+
+    monkeypatch.setattr(HTTPAgentWrapper, "_post_json", post)
+    world = _ToolWorld()
+    if lane == "hosted":
+        monkeypatch.setattr(chat, "_tool_world", lambda *_args: world)
+        monkeypatch.setattr(chat, "_drive_conversation", _single_exchange)
+        runner = chat.HostedChatCallRunner(_Adapter(), context)
+        runtime = EnvironmentRuntime(
+            runtime_id="runtime-1",
+            world_index=0,
+            bundle_digest="sha256:" + "a" * 64,
+            state=RuntimeState.READY,
+            endpoints={
+                "target_http": RuntimeEndpoint(
+                    capability="target_http",
+                    protocol="http",
+                    address="http://fixture.invalid:8080",
+                )
+            },
+        )
+        asyncio.run(
+            runner.run(
+                SimpleNamespace(scenario_key="one", scenario_id="scenario-1"), runtime
+            )
+        )
+    else:
+        webhook = SimpleNamespace(port=1234, bind=lambda world: None, stop=lambda: None)
+        monkeypatch.setattr(
+            voice, "WorldWebhook", lambda: SimpleNamespace(start=lambda: webhook)
+        )
+        monkeypatch.setattr(provision, "connect_runner_network", lambda *args: None)
+        monkeypatch.setattr(provision, "start_runtime", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            provision,
+            "runtime_endpoint",
+            lambda *args, **kwargs: "http://fixture.invalid:8080",
+        )
+        monkeypatch.setattr(RepositoryChatTarget, "_wait_ready", lambda *args: None)
+        target = RepositoryChatTarget(
+            chat.AgentContract.model_validate_json(path.read_text()),
+            world,
+            world_root=tmp_path,
+        )
+
+        async def exercise():
+            await target.open()
+            assert await target.say("Look up account ACC-2048") == "Found."
+
+        asyncio.run(exercise())
+    assert payloads == [
+        {
+            "model": model if model is not None else "agent-learning-target",
+            "messages": [{"role": "user", "content": "Look up account ACC-2048"}],
+        }
+    ]

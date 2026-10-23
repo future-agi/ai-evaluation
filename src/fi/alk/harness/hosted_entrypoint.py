@@ -2306,8 +2306,17 @@ async def run_job(
             return EXIT_FENCED
         # the exit code comes from drain()'s own post-hoc fence check (deadline computed AFTER
         # emit_terminal, which is what arms the flush window), never a stale pre-drain read.
-        fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
+        await adapter.flush_terminal(deadline=adapter.deadline())
         await _bounded_close()
+        from .process_diagnostics import upload_process_logs
+
+        try:
+            await upload_process_logs(
+                work_directory / "diagnostics", adapter, deadline=adapter.deadline()
+            )
+        except Exception:
+            logger.exception("process diagnostic upload failed")
+        fenced = await adapter.drain(deadline=adapter.deadline(), complete=complete)
         if fenced:
             return EXIT_FENCED
         # §0.6 v1.14: the terminal was decided but the final drain could not flush it (the events
@@ -2717,6 +2726,7 @@ async def run_job(
             call_runner=call_runner,
             outbound=adapter,
             job_seed=job_seed,
+            require_tool_workflow=job.require_tool_workflow,
             cancel_requested=cancel_requested,
             judge=functools.partial(
                 _judge_sub_goal, agent_instructions=_agent_instructions(job, bundle_dir)

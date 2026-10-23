@@ -322,9 +322,19 @@ class RepositoryChatTarget:
                     base.rstrip("/") + "/", self.interface.path.lstrip("/")
                 ),
                 protocol=self.interface.protocol,
+                model=self.interface.model,
                 include_tools=self.interface.include_tools,
                 request_template=self.interface.request_template,
                 response_path=self.interface.response_path,
+                **(
+                    {
+                        "failure_rule": self.interface.failure_rule.model_dump()
+                        if self.interface.failure_rule
+                        else None
+                    }
+                    if self.interface.kind == "http"
+                    else {}
+                ),
                 setup_requests=[
                     item.model_dump(mode="python")
                     for item in self.interface.setup_requests
@@ -387,6 +397,10 @@ class RepositoryChatTarget:
             response = await self._wrapper.call(request)
             trace = dict((response.metadata or {}).get("external_agent") or {})
             if trace and not trace.get("success", False):
+                from fi.simulate.agent.wrappers.http import HTTPCallFailure
+
+                if self.interface.kind == "http":
+                    raise HTTPCallFailure(trace)
                 raise RuntimeError(
                     str(trace.get("error") or "submitted chat endpoint request failed")
                 )

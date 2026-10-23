@@ -297,7 +297,7 @@ def _generic_candidate_hash(source: Path, authoring: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _fallback_diagnostic(error):
+def _fallback_diagnostic(error, *, authoring: Path | None = None):
     from .diagnostics import HarnessDiagnostic
     from .job import HarnessStage
 
@@ -339,6 +339,17 @@ def _fallback_diagnostic(error):
         stage = HarnessStage.VALIDATING_SCENARIOS
     elif error.phase == "infrastructure":
         code = "process_dependency_timeout"
+        stage = HarnessStage.BUILDING_ENVIRONMENT
+    elif (
+        detail.removeprefix("BundleAuthorError: ")
+        == "generic_pipeline_source_schema_required: no source-owned PostgreSQL schema found"
+        and authoring is not None
+        and (authoring / "world.sqlite").is_file()
+        and json.loads(
+            (authoring / "contract.json").read_text(encoding="utf-8")
+        ).get("data_store") is None
+    ):
+        code = "generated_storage_declaration_missing"
         stage = HarnessStage.BUILDING_ENVIRONMENT
     elif error.phase == "runtime" or _looks_like_runtime_plan_failure(normalized):
         code = "generated_runtime_plan_invalid"
@@ -493,6 +504,18 @@ async def validate_once(
     from .scenario_source import does_nothing, load_scenarios
     from .source_data_invariants import author_invariants, check_invariants
     from .tool_certification import ToolAvailability, certify_tool_inventory
+
+    if getattr(job, "require_tool_workflow", False):
+        from .contract import validate_tool_workflow
+
+        try:
+            validate_tool_workflow(
+                AgentContract.model_validate_json(
+                    (authoring / "contract.json").read_text(encoding="utf-8")
+                )
+            )
+        except (ValueError, OSError) as exc:
+            raise RuntimeValidationError("environment", str(exc)) from exc
 
     external_provider = (
         getattr(getattr(job, "source", None), "kind", None) is SourceKind.PROVIDER
@@ -1016,6 +1039,11 @@ async def validate_and_repair(
     sleeper=asyncio.sleep,
 ) -> None:
     """Two repairs per phase; environment repairs cannot exhaust setup's budget."""
+    from .job import HarnessJob
+
+    base_guidance = (
+        "\n".join(job.authoring_guidance()) if isinstance(job, HarnessJob) else ""
+    )
     generic = bool(
         job is not None
         and isinstance(getattr(job, "metadata", None), dict)
@@ -1028,6 +1056,54 @@ async def validate_and_repair(
 
             if phase == "environment":
                 artifact_root = authoring / "generic-harness"
+                if generic and {item.code for item in _active_repair_diagnostics} == {
+                    "generated_storage_declaration_missing"
+                }:
+                    from .cli import _understand
+                    from .contract import AgentContract
+
+                    contract_path = authoring / "contract.json"
+                    contract = AgentContract.model_validate_json(
+                        contract_path.read_text(encoding="utf-8")
+                    )
+                    if contract.data_store is not None:
+                        return 1
+                    with tempfile.TemporaryDirectory(prefix="alk-storage-repair-") as candidate_dir:
+                        status = await _understand(
+                            argparse.Namespace(
+                                kind="repo",
+                                name=source.name,
+                                path=str(source),
+                                out=candidate_dir,
+                                interactive=False,
+                                job=job,
+                                guidance=[
+                                    guidance,
+                                    (
+                                        "Inspect source to recover the missing data_store declaration. "
+                                        "Record explicit filesystem, in_memory, none, or database storage "
+                                        "only when source supports it. Do not invent a schema or change "
+                                        "source behavior. Only data_store will be promoted. Current contract:\n"
+                                        + contract.model_dump_json(indent=2)
+                                    ),
+                                ],
+                            )
+                        )
+                        candidate_path = Path(candidate_dir) / "contract.json"
+                        if status != 0 or not candidate_path.is_file():
+                            return 1
+                        candidate = AgentContract.model_validate_json(
+                            candidate_path.read_text(encoding="utf-8")
+                        )
+                        if candidate.data_store is None or not candidate.data_store.kind.strip():
+                            return 1
+                        payload = contract.model_dump()
+                        payload["data_store"] = candidate.data_store.model_dump()
+                        repaired = AgentContract.model_validate(payload)
+                        contract_path.write_text(
+                            repaired.model_dump_json(indent=2) + "\n", encoding="utf-8"
+                        )
+                    return 0
                 if generic and _needs_runtime_plan_repair(_active_repair_diagnostics):
                     from .contract import AgentContract
                     from .runtime_repair import request_runtime_plan_patch
@@ -1036,7 +1112,7 @@ async def validate_and_repair(
                         (authoring / "contract.json").read_text(encoding="utf-8")
                     )
                     return await request_runtime_plan_patch(
-                        source, contract, _active_repair_diagnostics
+                        source, contract, _active_repair_diagnostics, guidance=guidance
                     )
                 if generic and all(
                     (artifact_root / name).is_file()
@@ -1058,6 +1134,7 @@ async def validate_and_repair(
                             store.read_source_model(),
                             store.read_world_ir(),
                             _active_repair_diagnostics,
+                            guidance=guidance,
                         )
                     except RepairPatchNotSubmittedError:
                         return 1
@@ -1118,7 +1195,9 @@ async def validate_and_repair(
             try:
                 count = await validate(job, source, authoring)
             except RuntimeValidationError as exc:
-                diagnostics = exc.diagnostics or (_fallback_diagnostic(exc),)
+                diagnostics = exc.diagnostics or (
+                    _fallback_diagnostic(exc, authoring=authoring),
+                )
                 # The repair history deliberately fingerprints diagnostics without persisting
                 # their potentially high-cardinality text. Keep the redacted evidence visible in
                 # the guest log as well, otherwise a bounded repair can appear to hang while the
@@ -1171,6 +1250,8 @@ async def validate_and_repair(
                     "Do not modify source, disable constraints, weaken checks, drop scenarios, "
                     "or invent services/tools. Resolve this complete, redacted diagnostic set:\n"
                     + _repair_guidance(diagnostics)
+                    + "\n\n"
+                    + base_guidance
                 )
                 _active_repair_diagnostics = diagnostics
                 scenarios_before = None
@@ -1339,7 +1420,7 @@ async def validate_and_repair(
                 "or scenario setup using the submitted source as authority. Do not modify source, "
                 "disable database constraints, weaken checks or ready conditions, drop scenarios, "
                 "or replace tools with invented implementations. Preserve scenario count and intent. "
-                f"Diagnostic: {str(exc)[:4000]}"
+                f"Diagnostic: {str(exc)[:4000]}" + "\n\n" + base_guidance
             )
             if await repair(exc.phase, guidance):
                 raise

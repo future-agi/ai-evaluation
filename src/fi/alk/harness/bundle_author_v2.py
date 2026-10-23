@@ -58,8 +58,11 @@ from .bundle_v2 import (
     load_bundle_v2,
     seal_bundle_v2,
 )
-from .contract import ToolEntry
-from .credentials import discover_credentials
+from .contract import Runtime, ToolEntry
+from .generated_runtime import GeneratedRuntimeError, select_python_extras
+from .credentials import assess_configuration, discover_credentials
+from .secrets import process_secret_environment_names
+from .runtime_selection import ComposeSelection, select_runtime
 from .job import HarnessJob
 from .job import ProviderExecutionMode, SourceKind
 from .process_preflight import preflight_bundle
@@ -116,14 +119,14 @@ class EnvironmentPlanV2:
             )
 
 
-_COMPOSE_NAMES = (
-    "compose.yml",
-    "compose.yaml",
-    "docker-compose.yml",
-    "docker-compose.yaml",
-)
 _IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", "node_modules"}
 _CERTIFIED_BUNDLE_DIRECTORY = "certified-bundle"
+
+
+def _catalog_image(image: str) -> tuple[str, str]:
+    repository = image.rsplit("/", 1)[-1].split("@", 1)[0]
+    name, separator, tag = repository.partition(":")
+    return name.lower(), tag if separator else ""
 
 
 def _reuse_certified_bundle(
@@ -776,7 +779,9 @@ def _documented_source_schemas(source: Path) -> list[_SourceSchemaArtifact]:
     return []
 
 
-def _compose_source_schema_paths(source: Path) -> list[Path]:
+def _compose_source_schema_paths(
+    source: Path, runtime: dict[str, Any] | None = None
+) -> list[Path]:
     """Discover repository-owned DDL mounted into a database init directory.
 
     Compose is only evidence here; it is never executed by the hosted guest. Restricting this
@@ -784,12 +789,19 @@ def _compose_source_schema_paths(source: Path) -> list[Path]:
     the freshly authored scenario world instead.
     """
 
-    compose_path = _compose_path(source)
-    if compose_path is None:
+    try:
+        selected = select_runtime(
+            source,
+            runtime or {},
+            public_environment=_declared_runtime_environment(source),
+        )
+    except ValueError as exc:
+        raise BundleAuthorError(str(exc)) from exc
+    if not isinstance(selected, ComposeSelection):
         return []
-    compose = _load_compose(compose_path)
+    compose_path = selected.compose_file
     discovered: list[Path] = []
-    for service in compose["services"].values():
+    for service in selected.services.values():
         if not isinstance(service, dict):
             continue
         for volume in service.get("volumes") or []:
@@ -804,7 +816,9 @@ def _compose_source_schema_paths(source: Path) -> list[Path]:
                 target = str(volume.get("target") or "")
             if "docker-entrypoint-initdb.d" not in target or not raw_source:
                 continue
-            path = _contained_source_path(source, raw_source)
+            path = _contained_source_path(
+                source, str((compose_path.parent / raw_source).resolve())
+            )
             if path is None:
                 continue
             if path.is_file() and _schema_like(path):
@@ -828,7 +842,7 @@ def _source_schema_paths(
     output so two fresh authoring runs compile the same source schema.
     """
 
-    candidates = _compose_source_schema_paths(source)
+    candidates = _compose_source_schema_paths(source, (contract or {}).get("runtime"))
     for conventional in ("db/schema.sql", "schema.sql"):
         path = _contained_source_path(source, conventional)
         if path is not None and path.is_file():
@@ -1025,111 +1039,6 @@ def _generic_postgres_seed_artifacts(
     return ["seed/source-schema.sql"], [f"seed/{world_path.name}"], adopted
 
 
-def _compose_path(source: Path) -> Path | None:
-    matches = [source / name for name in _COMPOSE_NAMES if (source / name).is_file()]
-    if len(matches) > 1:
-        raise BundleAuthorError(
-            "compose_ambiguous: " + ", ".join(path.name for path in matches)
-        )
-    return matches[0] if matches else None
-
-
-def _load_compose(path: Path) -> dict[str, Any]:
-    try:
-        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        raise BundleAuthorError(f"compose_invalid: {exc}") from exc
-    if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
-        raise BundleAuthorError("compose_invalid: services must be an object")
-    return body
-
-
-def _runtime_compose_services(
-    root: Path, services: dict[str, Any], workdir: str, port: int
-) -> tuple[str, dict[str, Any]]:
-    """Select a declared HTTP runtime and retain its submitted dependency graph."""
-    component = _runtime_component(root, workdir)
-    matches = []
-    for name, service in services.items():
-        if not isinstance(service, dict) or not service.get("build"):
-            continue
-        build = service["build"]
-        context = build.get("context", ".") if isinstance(build, dict) else build
-        if (root / str(context)).resolve() != component:
-            continue
-        ports = service.get("ports") or []
-        targets = [
-            str(value.get("target", ""))
-            if isinstance(value, dict)
-            else str(value).split("/")[0].rsplit(":", 1)[-1]
-            for value in ports
-            if (
-                value.get("protocol", "tcp") == "tcp"
-                if isinstance(value, dict)
-                else "/" not in str(value) or str(value).endswith("/tcp")
-            )
-        ]
-        if str(port) in targets:
-            matches.append(name)
-    if len(matches) != 1:
-        raise BundleAuthorError(
-            "control_service_ambiguous: declared runtime must match exactly one "
-            f"Compose build context and container port; found {matches}"
-        )
-    control = matches[0]
-    selected: set[str] = set()
-    pending = [control]
-    while pending:
-        name = pending.pop()
-        if name in selected:
-            continue
-        service = services.get(name)
-        if not isinstance(service, dict):
-            raise BundleAuthorError(f"compose_dependency_missing: {name}")
-        unsupported = [
-            key
-            for key in ("links", "volumes_from", "network_mode", "ipc", "pid")
-            if service.get(key)
-            and (
-                key in {"links", "volumes_from"}
-                or str(service[key]).startswith("service:")
-            )
-        ]
-        if unsupported:
-            raise BundleAuthorError(
-                f"compose_dependency_unsupported: {name} uses {', '.join(unsupported)}"
-            )
-        dependencies = service.get("depends_on") or []
-        if not isinstance(dependencies, (list, dict)) or not all(
-            isinstance(dependency, str) for dependency in dependencies
-        ):
-            raise BundleAuthorError(f"compose_dependency_invalid: {name}")
-        selected.add(name)
-        pending.extend(dependencies)
-    omitted = set(services) - selected
-    for name in selected:
-        environment = services[name].get("environment") or {}
-        values = (
-            environment.values()
-            if isinstance(environment, dict)
-            else (str(item).partition("=")[2] for item in environment)
-        )
-        for value in values:
-            value = str(value or "")
-            try:
-                hostname = urlsplit(value if "://" in value else "//" + value).hostname
-            except ValueError:
-                continue
-            if hostname in omitted:
-                raise BundleAuthorError(
-                    f"compose_dependency_undeclared: {name} environment references {hostname}; "
-                    "declare it in depends_on"
-                )
-    return control, {
-        name: service for name, service in services.items() if name in selected
-    }
-
-
 _RUNTIME_ENVIRONMENT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _SECRET_ENVIRONMENT_NAME = re.compile(
     r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_?KEY)", re.IGNORECASE
@@ -1184,7 +1093,7 @@ def _python_process(
     *,
     name: str,
     working_directory: str,
-    entry: str,
+    entry: str | None,
     control: bool,
     needs_secrets: bool,
     port: int | None = None,
@@ -1200,7 +1109,7 @@ def _python_process(
     # Discovery happens at the caller's source root; these placeholders are resolved below by
     # `_plan_python`, which replaces this conservative default where necessary.
     build = [["python3.12", "-m", "venv", ".venv"]]
-    run = [".venv/bin/python", entry]
+    run = [".venv/bin/python", *([entry] if entry is not None else [])]
     del relative_root
     return SourceProcess(
         name=name,
@@ -1219,12 +1128,22 @@ def _python_process(
     )
 
 
+def _compose_command(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return shlex.split(value)
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return value
+    raise BundleAuthorError("compose_command_invalid")
+
+
 def _plan_python(
     source: Path,
     *,
     name: str,
     root: Path,
-    entry: str,
+    entry: str | None,
     control: bool,
     needs_secrets: bool,
     port: int | None = None,
@@ -1232,7 +1151,22 @@ def _plan_python(
     depends_on: list[str] | None = None,
     livekit_download: bool = False,
     run_override: list[str] | None = None,
+    extras: list[str] | None = None,
 ) -> SourceProcess:
+    if (
+        run_override
+        and Path(run_override[0]).name in {"node", "npm", "pnpm", "yarn", "bun", "deno"}
+    ) or (
+        (root / "package.json").is_file()
+        and not any(
+            (root / name).is_file() for name in ("pyproject.toml", "requirements.txt")
+        )
+    ):
+        raise BundleAuthorError(
+            f"runtime_language_unsupported: {name} requires a non-Python installer"
+        )
+    if not run_override and entry is not None and not (root / entry).is_file():
+        raise BundleAuthorError(f"runtime_entrypoint_missing: {name}:{entry}")
     relative = root.relative_to(source).as_posix() or "."
     process = _python_process(
         name=name,
@@ -1245,8 +1179,14 @@ def _plan_python(
         depends_on=depends_on,
     )
     python = _docker_python(root)
+    try:
+        selection = select_python_extras(root, extras or [])
+    except GeneratedRuntimeError as exc:
+        raise BundleAuthorError(str(exc)) from exc
     if (root / "pyproject.toml").is_file():
-        commands = [_uv_sync_build_command(root, python)]
+        commands = [
+            _uv_sync_build_command(root, python, extra_arguments=selection.uv_arguments)
+        ]
         if livekit_download:
             commands.append(
                 [
@@ -1259,7 +1199,13 @@ def _plan_python(
                     "download-files",
                 ]
             )
-        run = ["uv", "run", "--no-sync", "python", entry]
+        run = [
+            "uv",
+            "run",
+            "--no-sync",
+            "python",
+            *([entry] if entry is not None else []),
+        ]
     elif (root / "requirements.txt").is_file():
         commands = [
             [python, "-m", "venv", ".venv"],
@@ -1272,16 +1218,18 @@ def _plan_python(
                 "requirements.txt",
             ],
         ]
-        run = [".venv/bin/python", entry]
+        run = [".venv/bin/python", *([entry] if entry is not None else [])]
     else:
         commands = []
-        run = [python, entry]
+        run = [python, *([entry] if entry is not None else [])]
     return process.model_copy(
         update={"build_commands": commands, "run_command": run_override or run}
     )
 
 
-def _uv_sync_build_command(root: Path, python: str) -> list[str]:
+def _uv_sync_build_command(
+    root: Path, python: str, *, extra_arguments: list[str] | None = None
+) -> list[str]:
     """Install runtime dependencies while preserving valid source lockfiles.
 
     Submitted source is copied into a writable build tree before this runs. A valid lock remains
@@ -1291,7 +1239,9 @@ def _uv_sync_build_command(root: Path, python: str) -> list[str]:
     a stale lock.
     """
 
-    base = ["uv", "sync", "--no-cache", "--python", python, "--no-dev"]
+    base = [
+        "uv", "sync", "--no-cache", "--python", python, "--no-dev", *(extra_arguments or [])
+    ]
     if not (root / "uv.lock").is_file():
         return base
     locked = shlex.join([*base, "--locked"])
@@ -1910,6 +1860,7 @@ def resolve_environment_plan(
     contract_modality: str | None = None,
     contract_interface_kind: str | None = None,
     contract_runtime: dict[str, Any] | None = None,
+    runtime_dependencies: list[dict[str, Any]] | None = None,
 ) -> EnvironmentPlanV2:
     """Resolve packaging once.  Authoring and provisioning consume this same immutable plan."""
     root = Path(source).resolve()
@@ -1938,7 +1889,50 @@ def resolve_environment_plan(
         reference.purpose == SecretPurpose.TARGET_PROVIDER.value
         for reference in job.agent.secret_refs.values()
     )
-    compose = _compose_path(root)
+    declared_runtime_environment = _declared_runtime_environment(root)
+    try:
+        runtime_model = Runtime.model_validate(
+            {
+                key: value
+                for key, value in (contract_runtime or {}).items()
+                if key != "interface"
+            }
+        )
+        selected = select_runtime(
+            root,
+            contract_runtime or {},
+            public_environment=declared_runtime_environment,
+        )
+    except ValueError as exc:
+        raise BundleAuthorError(str(exc)) from exc
+    compose = selected.compose_file if isinstance(selected, ComposeSelection) else None
+    if not compose and runtime_model.dockerfile:
+        raise BundleAuthorError(
+            "runtime_dockerfile_unsupported: process lane cannot execute a selected Dockerfile"
+        )
+    if runtime_model.language.lower() not in {"", "python", "py"}:
+        raise BundleAuthorError(
+            "runtime_language_unsupported: process lane supports Python source only"
+        )
+    if compose is None and runtime_dependencies:
+        for dependency in runtime_dependencies:
+            reached = dependency.get("reached") or {}
+            if dependency.get("kind", "").lower() in {
+                "datastore",
+                "database",
+                "file",
+                "queue",
+            } or reached.get("database"):
+                raise BundleAuthorError(
+                    f"runtime_dependency_unsupported: {dependency.get('name')} ({dependency.get('engine') or 'undeclared engine'}) requires a local engine declaration"
+                )
+            if dependency.get("engine") and not any(
+                reached.get(key)
+                for key in ("dsn_env", "host", "config_key", "loader_module")
+            ):
+                raise BundleAuthorError(
+                    f"runtime_dependency_unsupported: {dependency.get('name')} has no configured connection seam"
+                )
     processes: list[ManagedProcess | SourceProcess] = [_managed_world_db()]
     capabilities: dict[str, CapabilityV2] = {
         "world_db": CapabilityV2(
@@ -1949,7 +1943,6 @@ def resolve_environment_plan(
         )
     }
     readiness = [ReadinessProbeV2(capability="world_db", timeout_seconds=180)]
-    declared_runtime_environment = _declared_runtime_environment(root)
     contract_runtime = contract_runtime if isinstance(contract_runtime, dict) else {}
     runtime_command = [str(item) for item in (contract_runtime.get("command") or [])]
     runtime_workdir = str(contract_runtime.get("workdir") or "")
@@ -1981,13 +1974,8 @@ def resolve_environment_plan(
         )
 
     if compose is not None:
-        body = _load_compose(compose)
-        services = body["services"]
-        declared_control = None
-        if runtime_command and interface.get("kind") == "http" and interface_port:
-            declared_control, services = _runtime_compose_services(
-                root, services, runtime_workdir, int(interface_port)
-            )
+        services = selected.services
+        declared_control = selected.control_service or None
         # Compile the submitted topology.  Supported managed services become snapshot engines;
         # source services remain source processes.  Unknown image-only dependencies are rejected
         # explicitly instead of being silently emulated.
@@ -1995,21 +1983,31 @@ def resolve_environment_plan(
         for service_name, raw in services.items():
             service = raw if isinstance(raw, dict) else {}
             image = str(service.get("image") or "")
-            if image.startswith("postgres:"):
+            image_name, image_tag = _catalog_image(image)
+            if service.get("entrypoint") is not None:
+                raise BundleAuthorError(
+                    f"compose_entrypoint_unsupported: {service_name} declares an entrypoint; "
+                    "the process compiler cannot preserve its container launch semantics"
+                )
+            unsupported = [key for key in ("privileged", "extends", "links", "volumes_from") if service.get(key)]
+            unsupported.extend(key for key in ("network_mode", "pid", "ipc") if service.get(key) == "host")
+            if unsupported:
+                raise BundleAuthorError(f"compose_capability_unsupported: {service_name} uses {', '.join(unsupported)}")
+            if not image and not service.get("build"):
+                raise BundleAuthorError(f"source_service_unsupported: {service_name} has no local build context")
+            if image_name == "postgres" and not service.get("build"):
                 if service_name != "postgres":
                     raise BundleAuthorError(
                         f"managed_name_unsupported: postgres service must be named postgres, got {service_name}"
                     )
                 managed_names.add(service_name)
                 continue
-            if image and "redis" in image:
+            if image_name == "redis" and not service.get("build"):
                 processes.append(
                     ManagedProcess(
                         name=service_name,
                         engine=ManagedEngine.REDIS,
-                        version=image.split(":", 1)[1].split("-", 1)[0]
-                        if ":" in image
-                        else "7",
+                        version=image_tag.split("-", 1)[0] or "7",
                         user=ProcessUser.SVC_DATA,
                     )
                 )
@@ -2050,7 +2048,7 @@ def resolve_environment_plan(
                 context = str(build.get("context") or ".")
             else:
                 context = str(build)
-            service_root = (root / context).resolve()
+            service_root = (compose.parent / context).resolve()
             if not service_root.is_relative_to(root):
                 raise BundleAuthorError(f"build_context_escape: {service_name}")
             environment: dict[str, str] = {}
@@ -2058,6 +2056,11 @@ def resolve_environment_plan(
             if isinstance(raw_env, dict):
                 environment = {
                     str(k): str(v) for k, v in raw_env.items() if v is not None
+                }
+            elif isinstance(raw_env, list):
+                environment = {
+                    str(item).partition("=")[0]: str(item).partition("=")[2]
+                    for item in raw_env
                 }
             depends = (
                 list((service.get("depends_on") or {}).keys())
@@ -2077,8 +2080,9 @@ def resolve_environment_plan(
                 environment.setdefault("DATABASE_URL", "{{WORLD_DATABASE_URL}}")
             if service_name == control_name and "tools-api" in source_services:
                 environment["TOOLS_API_URL"] = "{{TOOLS_API_URL}}"
-            if is_livekit and service_name == control_name:
+            if service_name == control_name:
                 environment = {**declared_runtime_environment, **environment}
+            if is_livekit and service_name == control_name:
                 environment.setdefault(
                     "LIVEKIT_AGENT_NAME",
                     "voice-booking-{{JOB_ID}}-w{{WORLD_INDEX}}",
@@ -2103,7 +2107,7 @@ def resolve_environment_plan(
             )
             declared_runtime = service_name == declared_control
             if declared_runtime:
-                port = int(interface_port)
+                port = int(interface_port) if interface_port else port
             process = _plan_python(
                 root,
                 name=service_name,
@@ -2115,9 +2119,17 @@ def resolve_environment_plan(
                 environment=environment,
                 depends_on=[item for item in depends if item != "postgres"],
                 livekit_download=is_livekit and service_name == control_name,
-                run_override=runtime_command
+                extras=runtime_model.extras if service_name == control_name else [],
+                run_override=(
+                    runtime_command
+                    or _compose_command(service.get("command"))
+                    or _dockerfile_run(service_root)
+                )
                 if declared_runtime
-                else _dockerfile_run(service_root),
+                else (
+                    _compose_command(service.get("command"))
+                    or _dockerfile_run(service_root)
+                ),
             )
             if (
                 port
@@ -2243,7 +2255,9 @@ def resolve_environment_plan(
             "-", "_"
         ) == "callable"
         discovered_callback = (
-            None if is_livekit else _discover_callback_entrypoint(root)
+            None
+            if is_livekit or (runtime_model.execution == "native" and runtime_command)
+            else _discover_callback_entrypoint(root)
         )
         graph_entrypoint = (
             _langgraph_entrypoint(root)
@@ -2270,7 +2284,11 @@ def resolve_environment_plan(
             and runtime_command
             and contract_interface_kind == "http"
         )
-        is_declared_runtime = is_command_adapter or is_http_runtime
+        is_declared_runtime = (
+            is_command_adapter
+            or is_http_runtime
+            or bool(runtime_model.execution == "native" and runtime_command)
+        )
         entry = "agent.py"
         if is_declared_runtime or is_graph:
             component = _runtime_component(root, runtime_workdir)
@@ -2362,12 +2380,13 @@ def resolve_environment_plan(
             root,
             name=control_name,
             root=root if is_callback else component,
-            entry=entry,
+            entry=None if is_callback or is_command_adapter or is_graph else entry,
             control=True,
             needs_secrets=needs_target_secrets,
             port=port,
             environment=environment,
             livekit_download=is_livekit,
+            extras=runtime_model.extras,
             run_override=(
                 None
                 if is_callback or is_command_adapter or is_graph
@@ -2375,7 +2394,7 @@ def resolve_environment_plan(
             ),
         )
         if is_graph:
-            python_command = process.run_command[:-1]
+            python_command = process.run_command
             process = process.model_copy(
                 update={
                     "run_command": python_command + ["-c", _langgraph_adapter_source()],
@@ -2383,7 +2402,7 @@ def resolve_environment_plan(
                 }
             )
         if is_callback:
-            python_command = process.run_command[:-1]
+            python_command = process.run_command
             process = process.model_copy(
                 update={
                     "run_command": python_command + ["-c", _callback_adapter_source()],
@@ -2392,7 +2411,7 @@ def resolve_environment_plan(
             )
         if is_command_adapter:
             command = _submitted_command(process, runtime_command)
-            python_command = process.run_command[:-1]
+            python_command = process.run_command
             process = process.model_copy(
                 update={
                     "run_command": python_command
@@ -2482,6 +2501,66 @@ def resolve_environment_plan(
                 capability="mcp_toolbox", path="/health", timeout_seconds=180
             )
         )
+
+    bindings: dict[str, set[str]] = {}
+    normalized_processes: list[ManagedProcess | SourceProcess] = []
+    for process in processes:
+        if not isinstance(process, SourceProcess):
+            bindings[process.name] = set()
+            normalized_processes.append(process)
+            continue
+        purposes = {purpose.value for purpose in process.secret_purposes}
+        secret_names = process_secret_environment_names(
+            {
+                alias
+                for alias, reference in job.agent.secret_refs.items()
+                if reference.purpose in purposes
+                and reference.purpose not in {"source_checkout", "simulator_provider"}
+            }
+        )
+        environment: dict[str, str] = {}
+        for name, value in process.environment.items():
+            if "${" not in value:
+                environment[name] = value
+                continue
+            match = re.fullmatch(
+                r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])(.*))?\}", value
+            )
+            if not match:
+                raise BundleAuthorError(
+                    f"compose_interpolation_unsupported: {process.name}.{name}"
+                )
+            variable, operator, default = match.groups()
+            if variable != name and operator in {"?", ":?"}:
+                raise BundleAuthorError(
+                    f"compose_interpolation_unsupported: {process.name}.{name} aliases {variable}"
+                )
+            if variable in secret_names or variable in declared_runtime_environment:
+                if variable != name:
+                    raise BundleAuthorError(
+                        f"compose_interpolation_unsupported: {process.name}.{name} aliases {variable}"
+                    )
+                if (
+                    variable in declared_runtime_environment
+                    and variable not in secret_names
+                ):
+                    environment[name] = declared_runtime_environment[variable]
+                continue
+            environment[name] = default if operator in {"-", ":-"} else ""
+        bindings[process.name] = {
+            name for name, value in environment.items() if value
+        } | secret_names
+        normalized_processes.append(
+            process.model_copy(update={"environment": environment})
+        )
+    try:
+        admission = assess_configuration(
+            runtime=runtime_model, selected=selected, supplied_by_process=bindings
+        )
+        admission.require_no_missing_declarations()
+    except ValueError as exc:
+        raise BundleAuthorError(str(exc)) from exc
+    processes = normalized_processes
 
     return EnvironmentPlanV2(
         packaging=packaging,
@@ -2780,6 +2859,7 @@ def author_bundle_v2(
         contract_modality=contract_modality,
         contract_interface_kind=contract_interface_kind,
         contract_runtime=(runtime if isinstance(runtime, dict) else None),
+        runtime_dependencies=contract_body.get("runtime_dependencies"),
     )
     # In-process framework tools do not cross the HTTP tool proxy. Trace only source-declared
     # callable boundaries inside the target Python process; the trace is observational and
@@ -2843,25 +2923,14 @@ def author_bundle_v2(
         # credential needed by the selected generic-runtime path.
         template_secrets_required=job.metadata.get("generic_harness_v1") is not True,
     )
-    if not credential_manifest.ready:
-        missing = sorted(
-            item.environment_name for item in credential_manifest.missing_required
-        )
-        unsatisfied = sorted(
-            choice.id
-            for choice in credential_manifest.credential_choices
-            if not choice.satisfied
-        )
-        details = [*(f"environment:{name}" for name in missing)]
-        details.extend(f"credential_choice:{name}" for name in unsatisfied)
-        raise BundleAuthorError(
-            "target_runtime_configuration_missing: " + ", ".join(details)
-        )
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent)
     )
     try:
+        (temporary / "credentials.json").write_text(
+            credential_manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
         _copy_scenarios(authoring_root, temporary, count=job.scenario_count)
         adopted_catalogue = _copy_sub_goal_catalogue(authoring_root, temporary)
         adopted_chat_files = _copy_chat_authoring(authoring_root, temporary)

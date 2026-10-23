@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from fi.simulate.runtime.spec import SecretRef
 
@@ -13,6 +13,16 @@ class SecretResolutionError(RuntimeError):
 
 
 _RUNTIME_CONFIGURATION_PREFIX = "ALK_RUNTIME_VALUE_"
+
+
+PROCESS_SECRET_FILE_ENVIRONMENT = {
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": "GOOGLE_APPLICATION_CREDENTIALS",
+}
+
+
+def process_secret_environment_names(injected_names: Iterable[str]) -> set[str]:
+    """Project injected names through the runtime's existing secret-file materializers."""
+    return {PROCESS_SECRET_FILE_ENVIRONMENT.get(name, name) for name in injected_names}
 
 
 def runtime_configuration_environment(values: Mapping[str, str]) -> dict[str, str]:

@@ -295,3 +295,93 @@ The split is deliberate and worth defending:
 - Judged sub-goals are reported as judged, not actually sent to a judge yet
 - Results do not post to the platform
 - Nothing reports which of the contract's use cases have no scenario
+
+
+## Required tool workflows
+
+A `HarnessJob` accepts `guidance`, a list of operator instructions, and
+`require_tool_workflow`, which defaults to `false`. Both travel through understanding,
+environment authoring, scenario authoring, adjustment rewinds, and runtime repairs.
+Use `require_tool_workflow: true` only when every scenario must exercise a tool.
+
+With this requirement enabled, authoring rejects a contract unless a declared tool
+has an executable import, constructed callable, or service entrypoint. Runtime
+validation checks the contract again after repairs. ALK does not invent tools or
+modify submitted agent code to satisfy the requirement.
+
+Declarations do not prove execution. Local, resumed, certified, and hosted execution
+require captured tool calls in every scenario. Saved job requirements also apply to
+interactive scenario tools and cannot be disabled by a caller passing false. A conversation without tool evidence follows
+the existing `evidence_missing` retry and errored-receipt policy, even if its generated
+scenario claims tool evidence is optional. Ordinary chat and voice jobs keep their
+existing behavior when the requirement is omitted. Scenarios intended to refuse a
+request without calling tools belong in a separate job without this requirement.
+
+
+## Selected runtime and configuration
+
+Use `runtime.execution: native` with a source-owned `command`, or
+`runtime.execution: compose` with a repository-relative `compose_file` and `service`.
+Omitting execution retains automatic selection. Explicit native selection ignores
+unrelated Compose files. Explicit Compose selection preserves the selected service's
+transitive dependencies and resolves build contexts relative to its Compose file.
+Selection does not add execution support: unsupported images, engines, installers,
+and container launch semantics fail with a capability error.
+
+`runtime.required_environment` maps process names to required environment-variable
+names. Only values delivered to that process satisfy its declaration. Source-wide
+credential discovery remains an inventory of possible requirements. The preflight
+response preserves `ready_to_submit` as its legacy inventory result and separately
+reports `can_submit_for_authoring` and `configuration_status`. Submission permission
+is not proof that the selected runtime will start or complete a conversation.
+
+For an OpenAI-compatible ingress, `runtime.interface.model` records the exact model
+or profile identifier accepted by that endpoint. It is passed unchanged in the
+`openai_chat` request's `model` field; it may differ from the backing provider model.
+Omitting it preserves the legacy `agent-learning-target` default. Authoring should
+record a source-evidenced identifier when the endpoint requires one. For a custom
+JSON envelope, `json_template` can instead supply a literal `model` and
+`"messages": "{{messages}}"` in `request_template`; `openai_chat` does not use templates.
+
+`runtime.extras` selects optional dependency groups declared in the selected Python
+project. For a uv workspace root, a group absent from the root must have exactly
+one owner among included members. The installer then includes workspace packages
+and only the named extras. Root-owned groups use the root project alone; ambiguous,
+unknown, invalid, and unsupported selections fail before installation. Compose
+applies these selections only to the control process. Existing pip project paths
+install the selected `.[extras]`; requirements-only sources cannot declare extras
+without a project manifest. Locked uv installs and their stale-lock retry preserve
+the same selection. Source manifests and lockfiles are not rewritten by selection.
+`runtime.install` remains descriptive metadata; arbitrary installation instructions
+are not executed by the process compiler. Declare supported optional groups through
+`runtime.extras` rather than relying on that string.
+
+HTTP endpoint paths can reference canonical inputs and earlier setup captures, such
+as `/threads/{{session_id}}/turns`. Setup runs first; the main path then renders for
+each call without changing the stored endpoint. Each substituted value is encoded
+as one path segment, so it cannot introduce a new host, path separator, query, or
+fragment. Missing values fail before the dependent request. Placeholders outside
+the URL path are unsupported. Traces retain the endpoint template and redact captured
+values, including their encoded forms, from failure diagnostics.
+
+## Failure evidence
+
+HTTP status failures take precedence over success-response extraction. For an API
+that returns application failures with a successful HTTP status, declare
+`runtime.interface.failure_rule`, for example:
+
+```json
+{"status_path": "state", "failure_values": ["failed"], "message_path": "detail"}
+```
+
+ALK does not infer failure merely because an arbitrary response contains an `error`
+field. Failed calls retain partial conversation evidence and bounded diagnostics.
+Excerpts are omitted when the caller cannot supply credential context. HTTP bodies
+larger than 1 MiB are rejected explicitly. Process tails survive reset and teardown;
+retention reads at most 64 KiB per file, sanitizes before persistence, and retains up
+to 8,192 characters per tail with a 512-log attempt budget. This is diagnostic
+redaction, not a guarantee that arbitrary personal data has been removed.
+
+Public PEM keys and certificate-only chains may pass source and artifact checks when
+the complete bounded content parses as public material. Private, mixed, malformed,
+oversized, and credential-named files remain blocked.

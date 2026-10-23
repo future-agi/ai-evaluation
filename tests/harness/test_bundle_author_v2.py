@@ -562,9 +562,16 @@ def test_bundle_rejects_missing_runtime_configuration_after_source_checkout(
     authoring = _authoring(tmp_path)
     _write_voice_contract(authoring)
 
+    contract_path = authoring / "contract.json"
+    contract = json.loads(contract_path.read_text())
+    contract.setdefault("runtime", {})["required_environment"] = {
+        "agent": ["GOOGLE_CLOUD_PROJECT"]
+    }
+    contract_path.write_text(json.dumps(contract))
+
     with pytest.raises(
         BundleAuthorError,
-        match="target_runtime_configuration_missing: environment:GOOGLE_CLOUD_PROJECT",
+        match="target_runtime_configuration_missing: agent:GOOGLE_CLOUD_PROJECT",
     ):
         author_bundle_v2(
             source=source,
@@ -1586,7 +1593,9 @@ def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> 
     uv.chmod(0o755)
 
     completed = subprocess.run(
-        _uv_sync_build_command(tmp_path, "python3.12"),
+        _uv_sync_build_command(
+            tmp_path, "python3.12", extra_arguments=["--all-packages", "--extra", "cloud"]
+        ),
         cwd=tmp_path,
         env={
             **os.environ,
@@ -1603,6 +1612,7 @@ def test_uv_sync_repairs_only_a_stale_lock_in_the_build_copy(tmp_path: Path) -> 
     assert "--locked" not in attempts[1]
     assert "--no-dev" in attempts[0]
     assert "--no-dev" in attempts[1]
+    assert all("--all-packages --extra cloud" in attempt for attempt in attempts)
 
 
 def test_uv_sync_does_not_reinterpret_other_install_failures(tmp_path: Path) -> None:
@@ -2874,6 +2884,50 @@ def test_declared_compose_runtime_keeps_transitive_dependencies(tmp_path: Path) 
     ).depends_on == ["cache"]
 
 
+@pytest.mark.parametrize(
+    ("postgres_image", "redis_image", "redis_version"),
+    [
+        ("postgres", "redis", "7"),
+        ("registry.example/team/postgres:16", "bitnami/redis:7-alpine", "7"),
+    ],
+)
+def test_declared_compose_runtime_accepts_catalog_images_without_a_tag_or_with_a_namespace(
+    tmp_path: Path,
+    postgres_image: str,
+    redis_image: str,
+    redis_version: str,
+) -> None:
+    (tmp_path / "Dockerfile").write_text(
+        'FROM python:3.12\nCMD ["python", "main.py"]\n'
+    )
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  backend:\n    build: .\n    ports: ['8000:8000']\n"
+        "    depends_on: [cache, postgres]\n"
+        f"  cache:\n    image: {redis_image}\n"
+        f"  postgres:\n    image: {postgres_image}\n"
+    )
+
+    plan = resolve_environment_plan(
+        tmp_path,
+        _job(connector="auto"),
+        contract_modality="chat",
+        contract_interface_kind="http",
+        contract_runtime={
+            "command": ["python", "main.py"],
+            "interface": {"kind": "http", "port": 8000},
+        },
+    )
+
+    cache = next(process for process in plan.processes if process.name == "cache")
+    assert cache.version == redis_version
+    assert {process.name for process in plan.processes} == {
+        "world-db",
+        "cache",
+        "backend",
+    }
+
+
 @pytest.mark.parametrize("ports", ["8000:8000", "8001:8001", "8000:8000/udp"])
 def test_declared_compose_runtime_rejects_ambiguous_or_missing_match(
     tmp_path: Path, ports: str
@@ -3289,3 +3343,26 @@ def test_a_changed_world_reaches_a_world_ir_seed_on_reseal(tmp_path: Path) -> No
     assert "renamed" in (bundle / "seed" / "world-ir.json").read_text(encoding="utf-8")
     assert "renamed" in (artifact_root / "world-ir.json").read_text(encoding="utf-8")
     assert reseal_scenarios(authoring) == digest
+
+
+def test_bundle_retains_unused_static_credential_inventory_without_blocking(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "agent.py").write_text("print('source')")
+    (source / "optional.py").write_text(
+        "import os\ndef unused(): return os.environ['UNUSED_TOKEN']\n"
+    )
+    authoring = _authoring(tmp_path)
+    _write_voice_contract(authoring)
+    output = tmp_path / "bundle"
+    author_bundle_v2(
+        source=source, job=_job(connector="auto"), authoring=authoring, output=output
+    )
+    inventory = json.loads((output / "credentials.json").read_text())
+    unused = next(
+        item
+        for item in inventory["requirements"]
+        if item["environment_name"] == "UNUSED_TOKEN"
+    )
+    assert unused["status"] == "missing"
+    assert unused["required"] is True

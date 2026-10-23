@@ -67,6 +67,7 @@ from .job import FailureDomain
 from .job import HarnessJobMetadata
 from .job import HarnessStage
 from .livekit_source import infer_livekit_agent_name_from_source
+from .secrets import PROCESS_SECRET_FILE_ENVIRONMENT
 from .provider_import import (
     ProviderImportError,
     ProviderImportSpec,
@@ -942,7 +943,7 @@ _INHERITED_ENV_ALLOWLIST = (
     "NODE_EXTRA_CA_CERTS",
 )
 _GOOGLE_ADC_JSON_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
-_GOOGLE_ADC_PATH_ALIAS = "GOOGLE_APPLICATION_CREDENTIALS"
+_GOOGLE_ADC_PATH_ALIAS = PROCESS_SECRET_FILE_ENVIRONMENT[_GOOGLE_ADC_JSON_ALIAS]
 
 
 def _allowlisted_ambient_env(source: dict[str, str]) -> dict[str, str]:
@@ -3909,6 +3910,7 @@ class SpawnContext:
     rabbitmq_import: RabbitmqDefinitionsImporter = default_rabbitmq_definitions_importer
     bundle_dir: Path | None = None
     generic_artifact_root: Path | None = None
+    retain_process_log: Callable[[Path], None] | None = None
 
 
 @dataclass
@@ -5027,6 +5029,9 @@ def _clone_or_reset_world(
                 handle.handle,
                 prefer_interrupt=_prefers_interrupt(manifest, name),
             )
+            log_path = getattr(handle.handle, "log_path", None)
+            if log_path is not None and context.retain_process_log is not None:
+                context.retain_process_log(log_path)
 
     store_by_process = _store_by_process_name(manifest)
     baseline_by_process = {record.process_name: record for record in baseline.stores}
@@ -5716,6 +5721,9 @@ class ProcessRuntimeProvider:
         self._provider_attempt_id = provider_attempt_id
         self._provider_expires_at = provider_expires_at
         self._generic_artifact_root = generic_artifact_root
+        self._diagnostic_work_directory: Path | None = None
+        self._diagnostic_logs_retained = 0
+        self._diagnostic_engine_secrets: dict[str, str] = {}
 
         self._manifest: EnvironmentBundleV2 | None = None
         self._bundle_digest: str | None = None
@@ -6186,6 +6194,10 @@ class ProcessRuntimeProvider:
             # First call for this job identity, or the bundle changed underneath it (§2c: a
             # digest mismatch forces a rebuild) — build once, seed+freeze once, gate once.
             credentials = generate_engine_credentials(bundle, token=self._token)
+            self._diagnostic_engine_secrets = {
+                name: value.password for name, value in credentials.items()
+            }
+            self._diagnostic_work_directory = work_directory
             context = SpawnContext(
                 work_directory=work_directory,
                 port_plan=port_plan,
@@ -6212,6 +6224,7 @@ class ProcessRuntimeProvider:
                 rabbitmq_import=self._rabbitmq_import,
                 bundle_dir=bundle_dir,
                 generic_artifact_root=self._generic_artifact_root,
+                retain_process_log=self._retain_process_log,
             )
             # N3, p6-review-r2 (MAJOR): the job identity (`_manifest`/`_bundle_digest`) is
             # committed only AFTER `build_process_trees`/`freeze_baseline` both succeed —
@@ -6851,6 +6864,38 @@ class ProcessRuntimeProvider:
                     "teardown: failed to drop %s on %s: %s", world_db, process.name, exc
                 )
 
+    def _retain_process_log(self, path: Path) -> None:
+        from .process_diagnostics import retain_process_log
+
+        work = self._diagnostic_work_directory
+        if work is None or self._diagnostic_logs_retained >= 512:
+            return
+        secrets = dict(self._secret_values) if self._secrets_loaded else None
+        if secrets is not None:
+            secrets.update(self._diagnostic_engine_secrets)
+        try:
+            retain_process_log(
+                path,
+                work=work,
+                destination=self._generic_artifact_root or work / "diagnostics",
+                secrets=secrets,
+            )
+            self._diagnostic_logs_retained += 1
+        except (OSError, ValueError, RecursionError):
+            logger.warning("process diagnostic retention failed; continuing teardown")
+
+    def _retain_directory_logs(self, directory: Path) -> None:
+        if directory.is_symlink():
+            return
+        pattern = "*/*/process.log" if directory.name == "worlds" else "*/process.log"
+        try:
+            for index, path in enumerate(directory.glob(pattern)):
+                if index >= 512:
+                    break
+                self._retain_process_log(path)
+        except OSError:
+            logger.warning("process diagnostic enumeration failed; continuing teardown")
+
     def _teardown_world(self, world_index: int) -> None:
         self._destroy_provider_target(world_index)
         handles = self._world_handles.pop(world_index, {})
@@ -6875,6 +6920,7 @@ class ProcessRuntimeProvider:
             # other space-leak half of the same finding.
             world_dir = self._context.work_directory / "worlds" / f"w{world_index}"
             if world_dir.exists():
+                self._retain_directory_logs(world_dir)
                 shutil.rmtree(world_dir, ignore_errors=True)
 
     async def reset(
@@ -7075,6 +7121,9 @@ class ProcessRuntimeProvider:
         for runtime in self._runtimes.values():
             runtime.state = RuntimeState.STOPPED
 
+        self._diagnostic_work_directory = work_directory
+        for directory_name in ("worlds", "managed"):
+            self._retain_directory_logs(work_directory / directory_name)
         for directory_name in ("build", "worlds", "managed", "provider"):
             directory = work_directory / directory_name
             try:
@@ -7111,6 +7160,8 @@ class ProcessRuntimeProvider:
         self._bundle_digest = None
         self._context = None
         self._build_output = None
+        self._diagnostic_engine_secrets = {}
+        self._diagnostic_logs_retained = 0
         # Full reset, not just the spawn-state dicts `_teardown_processes_and_directories`
         # already cleared — a provider reused for a genuinely NEW job after `close()` must load
         # ITS OWN secrets file fresh, not silently run with the previous job's in-memory map (or

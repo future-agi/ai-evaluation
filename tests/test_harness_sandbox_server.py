@@ -440,6 +440,8 @@ def test_preflight_discovers_connectors_and_missing_credentials_without_values(
     body = response.json()
     assert body["source_kind"] == "local_repository"
     assert body["ready_to_submit"] is False
+    assert body["can_submit_for_authoring"] is True
+    assert body["configuration_status"] == "selection_pending"
     assert "livekit" in body["credentials"]["detected_connectors"]
     requirements = {
         item["environment_name"]: item for item in body["credentials"]["requirements"]
@@ -769,7 +771,7 @@ def test_secret_file_endpoint_rejects_invalid_google_json(tmp_path):
     assert "valid JSON object" in response.json()["detail"]
 
 
-def test_preflight_does_not_call_infrastructure_only_compose_execution_ready(
+def test_preflight_reports_selection_pending_for_infrastructure_only_compose(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "sources" / "agent"
@@ -788,6 +790,8 @@ def test_preflight_does_not_call_infrastructure_only_compose_execution_ready(
     assert payload["packaging"]["ready"] is True
     assert payload["packaging"]["agent_runtime_packaged"] is False
     assert payload["ready_to_submit"] is False
+    assert payload["can_submit_for_authoring"] is True
+    assert payload["configuration_status"] == "selection_pending"
 
 
 def test_preflight_accepts_public_github_url_and_requires_app_for_private_repo(
@@ -810,8 +814,10 @@ def test_preflight_accepts_public_github_url_and_requires_app_for_private_repo(
     assert public.status_code == 200
     assert public.json()["source_label"] == "org/agent"
     assert public.json()["ready_to_submit"] is True
+    assert public.json()["can_submit_for_authoring"] is True
     assert public.json()["checkout_required"] is True
     assert private.json()["ready_to_submit"] is False
+    assert private.json()["can_submit_for_authoring"] is False
     requirement = private.json()["credentials"]["requirements"][0]
     assert requirement["accepted_secret_types"] == ["github_app_installation"]
 
@@ -878,4 +884,51 @@ def test_retry_policy_never_retries_agent_or_grading_failures():
     )
     assert not _worker_failure_retryable(
         0, {"domain": "infrastructure", "retryable": True}, allowed
+    )
+
+
+def test_acquisition_defers_inventory_and_unselected_packaging_to_authoring(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sources" / "fixture"
+    source.mkdir(parents=True)
+    (source / "server.py").write_text("print('source')")
+    (source / "optional.py").write_text(
+        "import os\ndef unused(): return os.environ['UNUSED_TOKEN']\n"
+    )
+    (source / "compose.yaml").write_text("invalid unselected document")
+    monkeypatch.setenv("ALK_SANDBOX_SOURCE_ROOTS", str(tmp_path / "sources"))
+    launched = []
+
+    class Worker:
+        async def wait(self):
+            return 0
+
+    async def fake_worker(*args, **kwargs):
+        launched.append(args)
+        return Worker()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_worker)
+    sandbox = LocalSandbox(tmp_path / "state")
+
+    async def submit():
+        response = sandbox.submit(LocalSandboxRequest(source_path=str(source)))
+        await sandbox._tasks[response.job.job_id]
+        return response
+
+    response = asyncio.run(submit())
+    directory = sandbox.jobs_root / response.job.job_id
+    assert len(launched) == 1
+    assert json.loads((directory / "configuration-admission.json").read_text()) == {
+        "status": "selection_pending",
+        "missing": [],
+    }
+    inventory = json.loads((directory / "credentials.json").read_text())
+    assert (
+        next(
+            item
+            for item in inventory["requirements"]
+            if item["environment_name"] == "UNUSED_TOKEN"
+        )["status"]
+        == "missing"
     )

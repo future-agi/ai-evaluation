@@ -39,6 +39,8 @@ async def request_world_ir_patch(
     source: SourceModel,
     world: WorldIR,
     diagnostics: tuple[HarnessDiagnostic, ...],
+    *,
+    guidance: str = "",
 ) -> WorldIRRepairPatch:
     """Ask for one typed patch; validation happens inside the only mutating tool."""
 
@@ -132,6 +134,7 @@ tool, then stop."""
         + source.model_dump_json(indent=2)[:24000]
         + "\n\nCURRENT GENERATED WORLD IR\n"
         + world.model_dump_json(indent=2)[:32000]
+        + ("\n\nREQUIRED JOB INTENT\n" + guidance if guidance else "")
     )
     # Start with a deliberately narrow session. The complete typed source model, current World
     # IR, diagnostics, and their evidence references are already in ``briefing``; giving a model

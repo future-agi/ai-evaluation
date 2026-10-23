@@ -4566,6 +4566,47 @@ def test_call_file_written_before_setup_and_removed_after_each_scenario(
 
         assert _call_files(tmp_path) == {}
         assert not list(tmp_path.glob("worlds/*/.simulation_call_execution_id.tmp"))
+@pytest.mark.parametrize(
+    "required,with_calls,expected",
+    [(True, False, "errored"), (True, True, "passed"), (False, False, "passed")],
+)
+def test_job_tool_requirement_uses_observed_calls(required, with_calls, expected):
+    async def scenario():
+        outbound = FakeOutbound()
+        pool, _ = _pool(2, outbound=outbound)
+        await pool.start()
+
+        class Runner:
+            async def run(self, scenario, runtime):
+                calls = (
+                    (hs.Call(name="lookup", arguments={}, result="found"),)
+                    if with_calls
+                    else ()
+                )
+                return _call_outcome(turns=4, calls=calls)
+
+        scheduler = hs.HostedScheduler(
+            pool=pool,
+            world_factory=FakeWorldFactory(),
+            call_runner=Runner(),
+            outbound=outbound,
+            job_seed=1,
+            require_tool_workflow=required,
+        )
+        result = await scheduler.run(
+            [
+                FakeScenario(
+                    "lookup",
+                    "id-lookup",
+                    requires_tool_evidence=False,
+                    sub_goals=[FakeSubGoal("done", lambda world, calls: None)],
+                )
+            ]
+        )
+        receipt = result.receipts[0]
+        assert receipt.status == expected
+        if expected == "errored":
+            assert receipt.failure.code == "evidence_missing"
         await pool.close()
 
     asyncio.run(scenario())
