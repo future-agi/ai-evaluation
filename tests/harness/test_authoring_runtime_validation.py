@@ -56,11 +56,22 @@ from fi.alk.harness.world_ir import (
 
 
 def test_database_lanes_default_to_one_per_cpu(monkeypatch):
+    from fi.alk.harness import process_runtime
+
     monkeypatch.delenv("ALK_VALIDATION_DB_LANES", raising=False)
-    monkeypatch.setattr("os.sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
-    assert _database_lanes() == 4
+    monkeypatch.setattr("os.sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False)
+    monkeypatch.setattr("os.cpu_count", lambda: 64)
+    monkeypatch.setattr(process_runtime, "_cgroup_cpu_quota", lambda: None)
+    assert _database_lanes() == 3
+    monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "")
+    assert _database_lanes() == 3
+    monkeypatch.setattr(process_runtime, "_cgroup_cpu_quota", lambda: 2.0)
+    assert _database_lanes() == 2
     monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "16")
     assert _database_lanes() == 16
+    monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "abc")
+    with pytest.raises(ValueError, match="ALK_VALIDATION_DB_LANES"):
+        _database_lanes()
 
 
 def test_local_seed_handoff_opens_only_generated_seed_files(tmp_path):
@@ -1006,10 +1017,15 @@ def test_connect_only_validation_walks_only_scenarios_whose_setup_does_something
         runtime={"isolation": "dedicated_vm"},
     )
 
+    from fi.alk.harness import authoring_runtime_validation
+
+    asked = []
+    monkeypatch.setattr(authoring_runtime_validation, "_database_lanes", lambda: asked.append(1) or 3)
     assert (
         asyncio.run(validate_once(job, tmp_path, authoring, secrets_path=original)) == 4
     )
     assert calls == ["provision", "reset", "close"]
+    assert asked
 
 
 def test_local_runtime_validation_does_not_require_hosted_capabilities(
