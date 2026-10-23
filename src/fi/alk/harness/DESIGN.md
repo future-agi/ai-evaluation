@@ -141,7 +141,7 @@ was invented, tone.
 
 ## 4. Three gates on every scenario, before it is kept
 
-Terminal-bench's oracle run, which is the reason its tasks are known to be solvable.
+A reference run like this is how a benchmark's tasks are known to be solvable.
 
 ### Gate 1. Ready
 

@@ -1,0 +1,23 @@
+name: Harness tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --extra livekit --extra harness-stores --extra harness-ui --extra hosted-tracing
+      - name: Run harness tests
+        run: uv run pytest -q -p no:cacheprovider tests/test_harness.py tests/harness

@@ -685,7 +685,7 @@ conversation is the only evidence there will be. Everything else in this skill s
 - **Take the difficulty from the agent's instructions.** Its policies, required questions,
   disclosures, refusals, escalation rules and limits are the cells. A tool that fails or an account
   state are not available here.
-- `setup`/`ready` only if the caller needs a private fixture; usually both stay empty.
+- `setup_code`/`ready_code` only if the caller needs a private fixture; usually both stay empty.
 
 ## Before you submit: read it the way a reviewer will
 
