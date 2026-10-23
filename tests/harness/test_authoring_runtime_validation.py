@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from fi.alk.harness.authoring_runtime_validation import (
+    _database_lanes,
     _fallback_diagnostic,
     _make_local_seed_files_readable,
     RuntimeValidationError,
@@ -52,6 +53,14 @@ from fi.alk.harness.world_ir import (
     WorldValue,
     validate_world_ir,
 )
+
+
+def test_database_lanes_default_to_one_per_cpu(monkeypatch):
+    monkeypatch.delenv("ALK_VALIDATION_DB_LANES", raising=False)
+    monkeypatch.setattr("os.sched_getaffinity", lambda _pid: {0, 1, 2, 3}, raising=False)
+    assert _database_lanes() == 4
+    monkeypatch.setenv("ALK_VALIDATION_DB_LANES", "16")
+    assert _database_lanes() == 16
 
 
 def test_local_seed_handoff_opens_only_generated_seed_files(tmp_path):
