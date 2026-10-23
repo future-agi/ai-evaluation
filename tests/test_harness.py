@@ -6343,14 +6343,23 @@ def test_an_opening_line_in_the_agents_voice_falls_back_to_the_instruction():
 @pytest.mark.parametrize(
     "openings, first",
     [
-        (["", "Sure! Let me look that up for you."], None),
+        (["", ""], None),
         (
             ["Sure! Let me look that up for you.", "Hi, where is my order?"],
             "Hi, where is my order?",
         ),
+        (["", "Hi, let me ask about my order."], "Hi, let me ask about my order."),
+        (
+            ["Hi, let me ask about my order.", "Hi, let me ask about my order."],
+            "Hi, let me ask about my order.",
+        ),
+        (
+            ["Sure! Let me look that up for you.", ""],
+            "Sure! Let me look that up for you.",
+        ),
     ],
 )
-def test_an_unusable_opening_is_asked_again_once_then_aborts_never_sending_the_instruction(
+def test_an_unusable_opening_is_asked_again_once_and_the_instruction_is_never_sent(
     monkeypatch, openings, first
 ):
     import asyncio

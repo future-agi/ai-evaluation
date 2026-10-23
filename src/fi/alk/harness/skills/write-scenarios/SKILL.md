@@ -325,7 +325,7 @@ the checks and the judge, so everything else stays out of their reach:
   words the agent records it under), and the same for a place or description the caller gave and
   the agent writes down (the identifier the world resolves it to is fixed, from the record);
 - free text the agent composes to find something, such as a search query: many wordings find the
-  same thing, so check what it found (the record returned or acted on), not the words it searched with;
+  same thing, so check what it found (what came back, or what it acted on), not the words it used;
 - a value the agent's code fills in elsewhere, which does not fix what the agent's model passes;
 - an optional argument nothing fixes: leave it out, and the tool's default applies.
 

@@ -236,8 +236,8 @@ async def converse(
         if not said or _answered_as_the_agent(said):
             # Speaking into an empty conversation, a model sometimes says nothing or answers as
             # the agent. Ask once more.
-            said = (await customer.say(OPENING)).text.strip()
-        if not said or _answered_as_the_agent(said):
+            said = (await customer.say(OPENING)).text.strip() or said
+        if not said:
             from ..hosted_scheduler import CallAborted
 
             raise CallAborted(
