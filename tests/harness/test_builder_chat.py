@@ -283,10 +283,19 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
                 "scenario_key": "one",
                 "instruction": "ask for a refund",
                 "persona": {"name": "Ana"},
+                "solution": [
+                    {
+                        "tool": "refund",
+                        "arguments": {"id": "7"},
+                        "environment_arguments": {},
+                    }
+                ],
             }
         )
     )
-    (tmp_path / "sub_goals.json").write_text(json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]}))
+    (tmp_path / "sub_goals.json").write_text(
+        json.dumps({"sub_goals": [{"name": "refunded", "description": "x"}]})
+    )
     calls, asked, answers = [], [], []
 
     async def handler(args):
@@ -313,6 +322,13 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
         ).get("is_error")
         is None
     )
+    resubmitted = {
+        **surface,
+        "name": "uno",
+        "scenario_key": "one",
+        "solution": [{"tool": "refund", "arguments": {"id": "7"}}],
+    }
+    assert asyncio.run(submit.handler(resubmitted)).get("is_error") is None
     assert asked == []
     answers.append("No")
     assert (
@@ -340,7 +356,7 @@ def test_meaning_changes_wait_for_a_yes_to_that_call_but_surface_edits_do_not(tm
     answers.append("No")
     assert asyncio.run(submit.handler(meaning))["is_error"] is True
     assert asyncio.run(submit.handler(surface)).get("is_error") is None
-    assert len(calls) == 6
+    assert len(calls) == 7
 
 
 def test_the_harness_builds_from_an_empty_workspace_with_the_tools_for_what_exists(tmp_path, monkeypatch):

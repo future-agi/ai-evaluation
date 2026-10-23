@@ -545,7 +545,17 @@ class HostedChatRuntime:
             held = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
-        if any(field in args and args.get(field) != held.get(field) for field in fields):
+        from .scenario import Scenario
+
+        try:
+            saved_now = Scenario.model_validate(held).model_dump()
+            submitted = Scenario.model_validate({**held, **args}).model_dump()
+        except ValueError:  # an unreadable submission is never a safe unattended change
+            return True
+        if any(
+            field in args and submitted.get(field) != saved_now.get(field)
+            for field in fields
+        ):
             return True
         persona, before = args.get("persona") or {}, held.get("persona") or {}
         if whole_persona:
